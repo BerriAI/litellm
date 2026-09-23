@@ -216,6 +216,8 @@ def _responses_stream_frames(identity: str) -> tuple[bytes, ...]:
 
 def surface_reply(request: Request) -> Reply:
     """Scripted upstream that echoes the caller's marker string back as the response id."""
+    if request.method != "POST" or not request.body:
+        return Reply(status=404)
     body: Final = json.loads(request.body)
     if request.target.endswith("/chat/completions"):
         identity: Final = body["messages"][0]["content"]

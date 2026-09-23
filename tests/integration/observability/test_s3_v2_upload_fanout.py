@@ -382,7 +382,12 @@ def test_s3_v2_unknown_model_rejection_keeps_other_requests_logging(gateway: Gat
             )
             assert ghost.status_code in (400, 403, 404), ghost.text
             ids: Final = _burst(candidate, model, key, marker)
-            payloads: Final = collect_payloads(sink, REQUESTS)
+            eventually(
+                lambda: frozenset(payload["id"] for payload in sink.payloads()),
+                lambda landed: ids <= landed,
+                seconds=90,
+            )
+            payloads: Final = sink.payloads()
     assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert ids <= frozenset(payload["id"] for payload in payloads)
     extras: Final = tuple(payload for payload in payloads if payload["id"] not in ids)

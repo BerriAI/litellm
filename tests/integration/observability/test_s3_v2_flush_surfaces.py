@@ -42,7 +42,7 @@ def test_s3_v2_mixed_surface_burst_bounds_puts_one_object_per_response_id(gatewa
             answered: Final = mixed_burst(candidate, openai_model, anthropic_model, key, marker)
             payloads: Final = collect_payloads(sink, len(answered))
             targets: Final = tuple(sink.objects())
-    assert len(provider.drain()) == 48
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 48
     assert sink.peak <= 16, f"peak concurrent PUTs {sink.peak} exceeded the default bound"
     assert all(PER_REQUEST_KEY.match(target) for target in targets), list(targets)
     assert len(targets) == 48
@@ -68,7 +68,7 @@ def test_s3_v2_mixed_surface_batch_writes_ndjson_lines_per_response_id(gateway: 
             payloads: Final = collect_payloads(sink, len(answered))
             targets: Final = tuple(sink.objects())
             puts: Final = bucket.drain()
-    assert len(provider.drain()) == 48
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 48
     assert all(BATCH_KEY.match(target) for target in targets), list(targets)
     assert all(put.headers["content-type"] == "application/x-ndjson" for put in puts), [put.headers for put in puts]
     assert matched_ids(payloads, answered)
@@ -92,6 +92,6 @@ def test_s3_v2_sink_outage_mid_mixed_burst_recovers_every_response_id(gateway: G
             key: Final = scenario.key(models=[openai_model, anthropic_model])
             answered: Final = mixed_burst(candidate, openai_model, anthropic_model, key, marker)
             payloads: Final = collect_payloads(sink, len(answered), seconds=90)
-    assert len(provider.drain()) == 48
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 48
     assert matched_ids(payloads, answered)
     assert len(payloads) == 48, "a stored id was overwritten or duplicated"
