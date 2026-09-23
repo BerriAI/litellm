@@ -1,3 +1,6 @@
+import { type ClassifierType, usesLlmClassifier } from "./classifier_types";
+export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
+import type { JevClassifierConfig } from "./jev_classifier_config";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -96,8 +99,6 @@ export interface ClassifierLLMConfig {
   system_prompt?: string;
 }
 
-export type ClassifierType = "heuristic" | "llm";
-
 export type ClassifierFallback = "heuristic" | "default_model";
 
 export const DEFAULT_CLASSIFIER_FALLBACK: ClassifierFallback = "heuristic";
@@ -126,6 +127,10 @@ export const heuristicScoringRoleFor = (
 
 export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
   heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+
+export const effectiveClassifierType = (
+  value: Pick<ComplexityRouterConfigValue, "classifier_type">,
+): ClassifierType => value.classifier_type;
 
 export type AdaptiveEligible = "all" | "classified_tier";
 
@@ -590,3 +595,5 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 };
 
 export default ComplexityRouterConfig;
+
+  jev_classifier_config?: JevClassifierConfig;

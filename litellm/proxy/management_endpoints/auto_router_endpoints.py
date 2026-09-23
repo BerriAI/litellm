@@ -47,6 +47,10 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_utils.auto_router_model_naming import (
+    classify_strategy_router_model,
+    strategy_router_dependencies,
+)
 from litellm.types.management_endpoints.auto_router_endpoints import (
     SHADOW_EVAL_TURN_VALVE,
     AutoRouterBenchmarkGroup,

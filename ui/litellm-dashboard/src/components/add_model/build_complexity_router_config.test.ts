@@ -1,3 +1,4 @@
+import { describe, expect, it } from "vitest";
 import {
   buildComplexityRouterConfig,
   getPlanModeTierError,
@@ -19,6 +20,11 @@ const tiers = {
 
 const baseParams: BuildComplexityRouterConfigParams = {
   tiers,
+  defaultModel: undefined,
+  planModeMinTier: undefined,
+  classificationExamples: undefined,
+  heuristicFirstMaxTier: undefined,
+  classificationMode: undefined,
   tierLabels: undefined,
   classifierType: "heuristic",
   classifierLlmConfig: undefined,

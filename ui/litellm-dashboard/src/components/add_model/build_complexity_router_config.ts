@@ -1,4 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
+import { type JevClassifierConfig, normalizeJevClassifierConfig } from "./jev_classifier_config";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
 import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
 import {
@@ -93,6 +94,7 @@ export interface BuildComplexityRouterConfigParams {
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
+  jevClassifierConfig?: JevClassifierConfig;
   classifierContextWindowSize: number | undefined;
   classifierContextPerTurnChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
@@ -124,6 +126,7 @@ export interface ComplexityRouterConfigPayload {
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: JevClassifierConfig;
   classifier_context_window_size?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
@@ -227,7 +230,9 @@ export const getSemanticConfigError = ({
 
 export const customTierWireFields = (
   customTierSet: CustomTierSet,
+  classifierType: ClassifierType | undefined,
   classifierLlmConfig: ClassifierLLMConfig | undefined,
+  jevClassifierConfig: JevClassifierConfig | undefined,
   planModeMinTierId: string | undefined,
   classificationPrompt: string | undefined,
 ): Partial<ComplexityRouterConfigPayload> => {
@@ -238,7 +243,8 @@ export const customTierWireFields = (
     tiers: Object.fromEntries(rows.map((row) => [activeTierName(row), row.models])),
     tier_definitions: tierDefinitionsFromRows(rows),
     ...(fallback && { fallback_tier: activeTierName(fallback) }),
-    classifier_type: "llm",
+    classifier_type: classifierType === "jev" ? "jev" : "llm",
+    ...(classifierType === "jev" && { jev_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
     // Rebuilt from the two fields an edited tier set allows. The backend rejects system_prompt and
     // classification_rubric beside tier_definitions, and both live inside this object rather than at
     // the top level the omit list covers. The opening instructions ride classification_prompt below.
@@ -393,18 +399,19 @@ export const buildComplexityRouterConfig = ({
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
+    ...(classifierType === "jev" && { jev_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
     ...(classifierType === "llm" &&
       classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
     ...(classifierType === "llm" && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
-    ...(classifierType === "llm" &&
+    ...((classifierType === "llm" || classifierType === "jev") &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,
       }),
-    ...(classifierType === "llm" &&
+    ...((classifierType === "llm" || classifierType === "jev") &&
       classifierContextPerTurnChars !== undefined && {
         classifier_context_per_turn_chars: classifierContextPerTurnChars,
       }),
-    ...(classifierType === "llm" &&
+    ...((classifierType === "llm" || classifierType === "jev") &&
       classifierContextIncludeAssistantTurns !== undefined && {
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),

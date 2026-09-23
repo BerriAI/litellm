@@ -24,6 +24,9 @@ export interface RoutingDecision {
   matched_keyword?: string;
   escalation_keyword?: string;
   classifier_model?: string;
+  classifier_confidence?: number;
+  classifier_probabilities?: Record<string, number>;
+  classifier_cost?: number;
   escalated?: boolean;
   tier_boundaries?: RoutingDecisionTierBoundaries;
   reasoning_override_min_score?: number;
@@ -88,6 +91,8 @@ function describeCause(decision: RoutingDecision): string {
       return describeReasoningOverride(tierLabel, overrideFloor);
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
+    case "jev_classifier":
+      return "JEV classifier";
     case "literal_keyword_match":
       return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
     case "semantic_keyword_match":
@@ -107,9 +112,9 @@ function describeCause(decision: RoutingDecision): string {
     case "default_fallback":
       return "Default model, no route matched";
     case "classifier_fallback":
-      return "Fallback tier, LLM classifier failed";
+      return "Fallback tier, classifier failed";
     case "default_model_fallback":
-      return "Default model, LLM classifier failed";
+      return "Default model, classifier failed";
     default:
       return cause ?? "Unknown";
   }
@@ -193,6 +198,20 @@ export function RoutingDecisionCard({
         {requestType && <Row label="Request type">{requestType}</Row>}
 
         <Row label="Decided by">{describeCause(decision)}</Row>
+        {decision.classifier_model && <Row label="Classifier model">{decision.classifier_model}</Row>}
+        {decision.classifier_confidence != null && (
+          <Row label="Confidence">{(decision.classifier_confidence * 100).toFixed(1)}%</Row>
+        )}
+        {decision.classifier_probabilities && (
+          <Row label="Probabilities">
+            {Object.entries(decision.classifier_probabilities).map(([name, probability]) => (
+              <div key={name}>
+                {name}: {(probability * 100).toFixed(1)}%
+              </div>
+            ))}
+          </Row>
+        )}
+        {decision.classifier_cost != null && <Row label="Classifier cost">${decision.classifier_cost.toFixed(8)}</Row>}
 
         {score !== undefined && (
           <Row label="Score">

@@ -489,3 +489,18 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 };
 
 export default ClassificationMethodConfig;
+
+import JevClassifierConfig from "./JevClassifierConfig";
+  usesClassifierContext,
+        <Label className="items-start font-normal leading-normal">
+          <RadioGroupItem value="jev" className="mt-0.5" />
+          <span>
+            <strong className="font-semibold">JEV Classifier</strong>{" "}
+            <span className="text-muted-foreground">uses TypeSafe System One Choice to decide the tier</span>
+          </span>
+        </Label>
+      {classifierType === "jev" && <JevClassifierConfig value={value} onChange={onChange} />}
+        </div>
+      )}
+      {usesClassifierContext(classifierType) && (
+        <div className="mt-4 space-y-3">
