@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -45,8 +46,37 @@ def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
     return True
 
 
+@dataclass(frozen=True, slots=True)
+class OwnedProxy:
+    gateway: Gateway
+    process: subprocess.Popen[bytes]
+    log: Path
+
+
 @contextmanager
-def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path | None = None, remove_environment: tuple[str, ...] = ()) -> Iterator[Gateway]:
+def owned_proxy(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+    remove_environment: tuple[str, ...] = (),
+) -> Iterator[Gateway]:
+    with owned_proxy_process(
+        gateway, directory, overrides, config=config, remove_environment=remove_environment
+    ) as owned:
+        yield owned.gateway
+
+
+@contextmanager
+def owned_proxy_process(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+    remove_environment: tuple[str, ...] = (),
+) -> Iterator[OwnedProxy]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port: Final = reserve.getsockname()[1]
@@ -60,7 +90,8 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str],
     }
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
-    with (output / f"owned-proxy-{uuid.uuid4().hex}.log").open("w") as log:
+    log_path: Final = output / f"owned-proxy-{uuid.uuid4().hex}.log"
+    with log_path.open("w") as log:
         process: Final = subprocess.Popen(
             [
                 sys.executable,
@@ -95,7 +126,7 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str],
                         pass
                     assert time.monotonic() < deadline, "Owned proxy readiness deadline exceeded"
                     time.sleep(0.1)
-                yield Gateway(client, gateway.key, gateway.upstream_url)
+                yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, log_path)
         finally:
             root_stopped: Final = stop_root_process(process)
             residual: Final = group_members(process.pid)

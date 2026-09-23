@@ -2863,7 +2863,7 @@ def test_gemini_function_call_parameter_in_messages():
             mock_client.return_value = mock_response
             try:
                 completion(
-                    model="vertex_ai/gemini-2.0-flash",
+                    model="vertex_ai/gemini-2.5-flash-preview-09-2025",
                     messages=messages,
                     tools=tools,
                     tool_choice="auto",
@@ -3263,7 +3263,7 @@ def test_vertex_anthropic_completion():
         client, "post", side_effect=vertex_ai_anthropic_thinking_mock_response
     ):
         response = completion(
-            model="vertex_ai/claude-3-7-sonnet@20250219",
+            model="vertex_ai/claude-sonnet-4-6@default",
             messages=[{"role": "user", "content": "Hello, world!"}],
             vertex_ai_location="us-east5",
             vertex_ai_project="test-project",
@@ -3271,7 +3271,7 @@ def test_vertex_anthropic_completion():
             client=client,
         )
         print(response)
-        assert response.model == "claude-3-7-sonnet@20250219"
+        assert response.model == "claude-sonnet-4-6@default"
         assert response._hidden_params["response_cost"] is not None
         assert response._hidden_params["response_cost"] > 0
 
