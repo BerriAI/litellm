@@ -61,7 +61,7 @@ class _HasProxyErrorType(Protocol):
 
 _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
     (
-        re.compile(r"budget has been exceeded|max budget|exceeded.*budget|crossed budget", re.IGNORECASE),
+        re.compile(r"budget has been exceeded|max budget|exceeded.{0,64}budget|crossed budget", re.IGNORECASE),
         BUDGET_EXCEEDED,
     ),
     (re.compile(r"no healthy deployments?|no deployments available", re.IGNORECASE), NO_HEALTHY_DEPLOYMENTS),
