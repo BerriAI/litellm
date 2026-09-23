@@ -135,7 +135,6 @@ from litellm.proxy.utils import (
     normalize_route_for_root_path,
 )
 from litellm.repositories.table_repositories import TeamMembershipRepository
-from litellm.repositories.user_repository import UserRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
@@ -738,7 +737,7 @@ async def _fetch_global_spend_with_event_coordination(
 
     async def _load_global_spend() -> float | None:
         proxy_budget_row: Final = await bounded_db_lookup(
-            UserRepository(prisma_client).table.find_unique(where={"user_id": LITELLM_PROXY_BUDGET_NAME}),
+            prisma_client.db.litellm_usertable.find_unique(where={"user_id": LITELLM_PROXY_BUDGET_NAME}),
             name="proxy_budget",
         )
         return float(proxy_budget_row.spend) if proxy_budget_row is not None else None
