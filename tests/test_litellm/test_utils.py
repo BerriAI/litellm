@@ -815,6 +815,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "regional_processing_uplift_multiplier_us": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
+                "input_cost_per_reference_pixel": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
                 "input_cost_per_second": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
