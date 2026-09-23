@@ -11,6 +11,9 @@ use litellm_cost::catalog::{
 use litellm_cost::completion_input::{
     CompletionInputRequest, ResponseKind as CompletionResponseKind,
 };
+use litellm_cost::completion_response::{
+    CompletionResponseCostRequest, completion_cost_from_response,
+};
 use litellm_cost::custom_pricing::{
     CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
     normalize_cache_usage,
@@ -1231,28 +1234,62 @@ fn main() {
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "service_tier": "priority"}
     });
     let request_tier = json!("auto");
-    let prepared = ModelInfoCatalog::new(HashMap::new())
-        .prepare_completion_input(CompletionInputRequest {
-            model_selection: ModelSelectionRequest {
-                model: Some("requested"),
-                response: Some(&response),
-                hidden_params: None,
-                base_model: None,
-                custom_pricing: false,
-                provider: Some("anthropic"),
-                router_model_id: None,
-                region_name: None,
-                known_providers: &["anthropic"],
-            },
-            call_type: None,
-            response_kind: Some(CompletionResponseKind::Completion),
-            service_tier: Some(&request_tier),
-            optional_params: None,
-        })
+    let response_catalog = ModelInfoCatalog::new(HashMap::from([(
+        "anthropic/served".to_owned(),
+        json!({
+            "input_cost_per_token": 0.01,
+            "output_cost_per_token": 0.02,
+            "input_cost_per_token_priority": 0.03,
+            "output_cost_per_token_priority": 0.04
+        }),
+    )]));
+    let input_request = CompletionInputRequest {
+        model_selection: ModelSelectionRequest {
+            model: Some("requested"),
+            response: Some(&response),
+            hidden_params: None,
+            base_model: None,
+            custom_pricing: false,
+            provider: Some("anthropic"),
+            router_model_id: None,
+            region_name: None,
+            known_providers: &["anthropic"],
+        },
+        call_type: None,
+        response_kind: Some(CompletionResponseKind::Completion),
+        service_tier: Some(&request_tier),
+        optional_params: None,
+    };
+    let prepared = response_catalog
+        .prepare_completion_input(input_request)
         .unwrap();
     println!(
         "prepared_model={} prepared_tier={}",
         prepared.model_candidates[0].as_deref().unwrap(),
         prepared.service_tier.as_deref().unwrap()
     );
+    let priced_response = completion_cost_from_response(
+        &response_catalog,
+        CompletionResponseCostRequest {
+            input: input_request,
+            fallback_usage: None,
+            provider: Some("anthropic"),
+            region: None,
+            data_residency: None,
+            vertex_location: None,
+            at,
+            response_time_ms: None,
+            prompt_characters: None,
+            completion_characters: None,
+            transcription_duration_seconds: None,
+            request_model: None,
+            deployment_info: None,
+            built_in_tool_cost: 0.0,
+            additional_costs: &[],
+            discount_config: &json!({}),
+            margin_config: &json!({}),
+        },
+    )
+    .unwrap();
+    println!("response_total={:.2}", priced_response.cost.total);
 }
