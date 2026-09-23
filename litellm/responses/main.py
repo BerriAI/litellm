@@ -1313,15 +1313,21 @@ def responses(
             _raise_responses_compatibility_failure(compatibility_failure, model, custom_llm_provider)
 
         local_vars.update(kwargs)
-        # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
-        if reasoning is None and "reasoning_effort" in local_vars:
-            _mapped = LiteLLMResponsesTransformationHandler()._map_reasoning_effort(local_vars.pop("reasoning_effort"))
-            if _mapped is not None:
-                reasoning = _mapped
-                local_vars["reasoning"] = _mapped
-        # Get ResponsesAPIOptionalRequestParams with only valid parameters
+        current_reasoning: Final = cast(  # cast-ok: prompt-managed reasoning arrives as a plain dict
+            Reasoning | None, local_vars.get("reasoning")
+        )
+        reasoning_effort: Final = local_vars.get("reasoning_effort")
+        request_reasoning: Final = (
+            LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+            if current_reasoning is None and reasoning_effort is not None
+            else current_reasoning
+        )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
-            ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)
+            ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+                {  # mutable-ok: callee pops keys off the dict it is given
+                    k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"
+                }
+            )
         )
 
         _file_search_dispatch: Final = _responses_try_dispatch_emulated_file_search(
@@ -1337,7 +1343,7 @@ def responses(
             metadata=metadata,
             parallel_tool_calls=parallel_tool_calls,
             previous_response_id=previous_response_id,
-            reasoning=reasoning,
+            reasoning=request_reasoning,
             store=store,
             background=background,
             stream=stream,
@@ -2295,9 +2301,11 @@ def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | d
     if kwargs.get("reasoning") is not None:
         return None
     reasoning_effort: Final = kwargs.get("reasoning_effort")
-    if isinstance(reasoning_effort, str):
-        return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
-    return _JSON_OBJECT_ADAPTER.validate_python(reasoning_effort) if isinstance(reasoning_effort, Mapping) else None
+    if reasoning_effort is None:
+        return None
+    if isinstance(reasoning_effort, Mapping):
+        return _JSON_OBJECT_ADAPTER.validate_python(reasoning_effort)
+    return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
 
 
 _RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"input", "previous_response_id"})
