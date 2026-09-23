@@ -194,7 +194,7 @@ def _handle_128k_pricing(
     base_input_rate: Final = model_info["input_cost_per_token"] or 0.0
     above_tier: Final = input_cost_per_token_above_128k_tokens is not None and _is_above_128k(tokens=tier_tokens)
 
-    input_rate: Final = input_cost_per_token_above_128k_tokens if above_tier else base_input_rate
+    input_rate: Final = (input_cost_per_token_above_128k_tokens or base_input_rate) if above_tier else base_input_rate
 
     cache_read_rate: Final = model_info.get("cache_read_input_token_cost") or input_rate
     cache_creation_rate: Final = model_info.get("cache_creation_input_token_cost") or base_input_rate
