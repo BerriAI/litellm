@@ -368,6 +368,8 @@ ANTHROPIC_OUTPUT_JSONL = json.dumps(
                 "role": "assistant",
                 "content": [{"type": "text", "text": "hello b2"}],
                 "model": "claude-3",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
                 "usage": {"input_tokens": 1, "output_tokens": 2},
             },
         },
@@ -482,3 +484,7 @@ async def test_line_items_anthropic_shapes(recorder):
     line = next(e for e in recorder.success_events if _hidden(e).get("batch_custom_id") == "b2")
     assert _hidden(line)["batch_line_status_code"] == 200
     assert line["litellm_params"]["batch_parent_id"] == batch.id
+    payload = _payload(line)
+    assert payload["response"]["choices"][0]["message"]["content"] == "hello b2"
+    assert payload["prompt_tokens"] == 1
+    assert payload["completion_tokens"] == 2

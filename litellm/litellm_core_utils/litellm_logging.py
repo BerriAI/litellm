@@ -535,6 +535,24 @@ def _provider_response_id(source: object) -> str | None:
     return candidate if isinstance(candidate, str) and candidate else None
 
 
+def anthropic_message_to_model_response(result: Mapping[str, object], speed: str | None) -> ModelResponse:
+    import httpx
+
+    from litellm.types.llms.anthropic import AnthropicResponse
+
+    pydantic_result: Final = AnthropicResponse.model_validate(result)
+    return litellm.AnthropicConfig().transform_parsed_response(
+        completion_response=pydantic_result.model_dump(),
+        raw_response=httpx.Response(
+            status_code=200,
+            headers={},
+        ),
+        model_response=litellm.ModelResponse(id=_provider_response_id(result)),
+        json_mode=None,
+        speed=speed,
+    )
+
+
 def mask_api_base_credentials(api_base: str) -> str:
     if "key=" not in api_base:
         return api_base
@@ -4237,19 +4255,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_params={},
             )
         else:
-            from litellm.types.llms.anthropic import AnthropicResponse
-
-            pydantic_result: Final = AnthropicResponse.model_validate(result)
-            import httpx
-
-            result = litellm.AnthropicConfig().transform_parsed_response(
-                completion_response=pydantic_result.model_dump(),
-                raw_response=httpx.Response(
-                    status_code=200,
-                    headers={},
-                ),
-                model_response=litellm.ModelResponse(id=provider_response_id),
-                json_mode=None,
+            result = anthropic_message_to_model_response(
+                cast(Mapping[str, object], result),
                 speed=self.optional_params.get("speed") if self.optional_params else None,
             )
         return result
