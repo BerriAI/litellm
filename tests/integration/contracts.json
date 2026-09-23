@@ -1825,6 +1825,9 @@
     "tests/integration/pricing/test_ocr_page_pricing.py::test_ocr_annotation_pages_are_billed_at_annotation_cost_per_page": [
       "pricing.ocr.annotation_pages_billed_at_annotation_rate"
     ],
+    "tests/integration/pricing/test_realtime_cached_audio_pricing.py::test_realtime_cached_audio_tokens_bill_at_audio_cache_read_rate_not_full_audio_rate": [
+      "pricing.realtime.cached_audio_tokens_bill_at_audio_cache_read_rate"
+    ],
     "tests/integration/pricing/test_service_tier_pricing.py::test_ultrafast_service_tier_bills_ultrafast_rates_and_keeps_pricing_off_the_wire": [
       "quota_management.spend_tracking.service_tier_pricing.ultrafast_bills_ultrafast_rates"
     ],
