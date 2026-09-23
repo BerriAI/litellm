@@ -105,6 +105,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install Python dependencies for the bridge tests
+        working-directory: .
+        run: |
+          uv sync --frozen --no-install-project
+          echo "PYTHONPATH=$PWD/.venv/lib/$(ls .venv/lib)/site-packages" >> "$GITHUB_ENV"
+
       - run: rustup toolchain install --no-self-update
 
       - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
