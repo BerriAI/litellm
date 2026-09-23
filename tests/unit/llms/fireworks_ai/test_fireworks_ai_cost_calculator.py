@@ -365,7 +365,7 @@ def test_an_unknown_fireworks_model_still_falls_back_to_the_parameter_size_bucke
     assert prompt_cost > 0
 
 
-_TIERED_INPUT_PATTERN: Final = re.compile(r"^input_cost_per_token_above_(\d+)k?_tokens$")
+_TIERED_INPUT_PATTERN: Final = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")
 
 
 def _threshold_tokens(field: str) -> int:
