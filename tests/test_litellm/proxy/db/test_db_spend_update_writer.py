@@ -4555,10 +4555,13 @@ async def test_cancel_that_lands_while_the_daily_batch_is_committing_waits_for_t
     await asyncio.wait_for(db.committing.wait(), timeout=5)
     tick.cancel()
     finished, _ = await asyncio.wait({tick}, timeout=0.2)
-    assert finished == set(), "the cancelled tick must wait for the in-flight commit's outcome"
-    db.commit_release.set()
+    assert finished == {tick}, "the cancelled tick must hand the in-flight commit's outcome to the next flush"
     with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(tick, timeout=5)
+        tick.result()
+    assert len(queue.interrupted_commits) == 1
+
+    db.commit_release.set()
+    await queue.settle_interrupted_commits()
 
     assert db.transaction_outcomes == ["commit"]
     (upsert,) = _daily_upserts(db, table)
@@ -4590,10 +4593,14 @@ async def test_tag_batch_drained_from_redis_and_cancelled_while_committing_is_no
     await asyncio.wait_for(db.committing.wait(), timeout=5)
     tick.cancel()
     finished, _ = await asyncio.wait({tick}, timeout=0.2)
-    assert finished == set(), "the cancelled drain must wait for the in-flight commit's outcome"
-    db.commit_release.set()
+    assert finished == {tick}, "the cancelled drain must hand the in-flight commit's outcome to the next drain"
     with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(tick, timeout=5)
+        tick.result()
+    assert len(db_writer.interrupted_tag_commits) == 1
+
+    db.commit_release.set()
+    (settle,) = tuple(db_writer.interrupted_tag_commits)
+    await settle
 
     assert db.transaction_outcomes == ["commit"]
     assert redis_buffer.restored == [], (
@@ -4636,9 +4643,13 @@ async def test_cancel_while_committing_requeues_the_batch_when_the_commit_itself
     tick = asyncio.ensure_future(flush(db))
     await asyncio.wait_for(db.committing.wait(), timeout=5)
     tick.cancel()
-    db.commit_release.set()
+    finished, _ = await asyncio.wait({tick}, timeout=0.2)
+    assert finished == {tick}, "the cancelled tick must not eat the shutdown budget waiting on the commit"
     with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(tick, timeout=5)
+        tick.result()
+
+    db.commit_release.set()
+    await queue.settle_interrupted_commits()
 
     assert db.transaction_outcomes == ["commit_failed"]
     assert not queue.update_queue.empty(), "a batch whose COMMIT came back failed must be requeued"
@@ -4647,3 +4658,84 @@ async def test_cancel_while_committing_requeues_the_batch_when_the_commit_itself
     await flush(final_db)
     (upsert,) = _daily_upserts(final_db, "LiteLLM_DailyUserSpend")
     assert _row_values(upsert, "api_requests") == [2]
+    assert queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flush_that_lands_before_the_interrupted_commit_resolves_still_writes_a_failed_batch_once():
+    """The cancelled tick returns right away, so a COMMIT can still be in flight when the
+    shutdown flush runs. If that commit later fails, the flush must first settle it, pick the
+    requeued rows back up, and write them exactly once instead of losing them."""
+    db_writer = DBSpendUpdateWriter()
+    queue = db_writer.daily_spend_update_queue
+    await queue.add_update({"key-a": _daily_txn()})
+    await queue.add_update({"key-a": _daily_txn()})
+    db = _CommitFailingDailySpendFakeDB()
+
+    def flush(prisma_db: _DailySpendFakeDB):
+        return db_writer._flush_daily_spend_queue(
+            queue=queue,
+            entity_type="user",
+            commit=DBSpendUpdateWriter.update_daily_user_spend,
+            n_retry_times=0,
+            prisma_client=_WindowSpendFakePrisma(prisma_db),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    tick = asyncio.ensure_future(flush(db))
+    await asyncio.wait_for(db.committing.wait(), timeout=5)
+    tick.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(tick, timeout=5)
+    assert db.transaction_outcomes == [], "the COMMIT is still on the wire when the shutdown flush starts"
+
+    final_db = _DailySpendFakeDB(failing_table=None)
+    shutdown_flush = asyncio.ensure_future(flush(final_db))
+    finished, _ = await asyncio.wait({shutdown_flush}, timeout=0.2)
+    assert finished == set(), "the shutdown flush must wait for the interrupted commit's outcome"
+    assert _daily_upserts(final_db, "LiteLLM_DailyUserSpend") == []
+
+    db.commit_release.set()
+    await asyncio.wait_for(shutdown_flush, timeout=5)
+
+    (upsert,) = _daily_upserts(final_db, "LiteLLM_DailyUserSpend")
+    assert _row_values(upsert, "api_requests") == [2]
+    assert queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_that_lands_before_the_interrupted_tag_commit_resolves_restores_a_failed_batch():
+    """Same ordering for the Redis tag path: the shutdown drain must settle the interrupted
+    commit before the destructive drain, or a commit that fails late is never restored."""
+    db_writer = DBSpendUpdateWriter()
+    drained = {"key-a": cast(DailyTagSpendTransaction, _daily_entity_txn("tag"))}
+    redis_buffer = _DrainedTagRedisBuffer(drained)
+    db_writer.redis_update_buffer = cast(RedisUpdateBuffer, redis_buffer)
+    db = _CommitFailingDailySpendFakeDB()
+
+    def drain(prisma_db: _DailySpendFakeDB):
+        return db_writer._drain_and_commit_daily_tag_spend_from_redis(
+            prisma_client=_WindowSpendFakePrisma(prisma_db),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    tick = asyncio.ensure_future(drain(db))
+    await asyncio.wait_for(db.committing.wait(), timeout=5)
+    tick.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(tick, timeout=5)
+    assert db.transaction_outcomes == []
+
+    final_db = _DailySpendFakeDB(failing_table=None)
+    shutdown_drain = asyncio.ensure_future(drain(final_db))
+    finished, _ = await asyncio.wait({shutdown_drain}, timeout=0.2)
+    assert finished == set(), "the shutdown drain must wait for the interrupted commit's outcome"
+    assert _daily_upserts(final_db, "LiteLLM_DailyTagSpend") == []
+
+    db.commit_release.set()
+    await asyncio.wait_for(shutdown_drain, timeout=5)
+
+    assert redis_buffer.restored == [drained], "a tag batch whose COMMIT came back failed must be restored to Redis"
+    (upsert,) = _daily_upserts(final_db, "LiteLLM_DailyTagSpend")
+    assert _row_values(upsert, "api_requests") == [1]

@@ -297,6 +297,30 @@ def _start_daily_spend_commit(
         _daily_spend_commit_started.reset(token)
 
 
+def _track_interrupted_commit(commits: set[asyncio.Task[None]], settle: Coroutine[object, object, None]) -> None:
+    task: Final = asyncio.ensure_future(settle)
+    commits.add(task)
+    task.add_done_callback(commits.discard)
+
+
+async def _settle_interrupted_commits(commits: set[asyncio.Task[None]]) -> None:
+    while commits:
+        await asyncio.wait(tuple(commits))
+
+
+async def _restore_tag_spend_the_commit_left_behind(
+    commit_task: "asyncio.Task[None]",
+    redis_update_buffer: RedisUpdateBuffer,
+    transactions: dict[str, DailyTagSpendTransaction],
+) -> None:
+    await asyncio.wait({commit_task})
+    if commit_task.cancelled() or commit_task.exception() is None:
+        return
+    await redis_update_buffer.restore_transactions_to_redis(
+        daily_tag_spend_update_transactions=transactions,
+    )
+
+
 async def _requeue_daily_spend_the_commit_left_behind(
     commit_task: "asyncio.Task[None]",
     queue: DailySpendUpdateQueue,
@@ -442,6 +466,9 @@ class DBSpendUpdateWriter:
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
         self.window_spend_update_queue = WindowSpendUpdateQueue()
+        self.interrupted_tag_commits: set[asyncio.Task[None]] = (
+            set()
+        )  # mutable-ok: same registry as DailySpendUpdateQueue.interrupted_commits
 
     async def update_database(
         # LiteLLM management object fields
@@ -1671,7 +1698,9 @@ class DBSpendUpdateWriter:
             await asyncio.shield(commit_task)
         except asyncio.CancelledError:
             if commit_started.is_set():
-                await _requeue_daily_spend_the_commit_left_behind(commit_task, queue, entity_type, transactions)
+                queue.track_interrupted_commit(
+                    _requeue_daily_spend_the_commit_left_behind(commit_task, queue, entity_type, transactions)
+                )
                 raise
             commit_task.cancel()
             if transactions:
@@ -1897,6 +1926,7 @@ class DBSpendUpdateWriter:
         The drain is destructive, so a failed commit must push the transactions back for the next tick
         or their spend is lost permanently.
         """
+        await _settle_interrupted_commits(self.interrupted_tag_commits)
         daily_tag_spend_update_transactions: Final = (
             await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
         )
@@ -1917,11 +1947,14 @@ class DBSpendUpdateWriter:
             await asyncio.shield(commit_task)
         except BaseException:  # noqa: BLE001  # a cancel must restore the drained rows before its rollback returns
             if commit_started.is_set():
-                await asyncio.wait({commit_task})
-                if not commit_task.cancelled() and commit_task.exception() is not None:
-                    await self.redis_update_buffer.restore_transactions_to_redis(
-                        daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
-                    )
+                _track_interrupted_commit(
+                    self.interrupted_tag_commits,
+                    _restore_tag_spend_the_commit_left_behind(
+                        commit_task,
+                        self.redis_update_buffer,
+                        daily_tag_spend_update_transactions,
+                    ),
+                )
                 raise
             commit_task.cancel()
             await self.redis_update_buffer.restore_transactions_to_redis(
