@@ -658,6 +658,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Unrecognized inputs reach the decoder so the guardrail fails closed.
         return value
 
+    def _refuse_non_string_image_refs(self, image_urls: tuple[object, ...]) -> None:
+        for image_ref in image_urls:
+            if not isinstance(image_ref, str):
+                self._handle_unscannable_attachment(reason="a non-string image reference cannot be scanned")
+
     def _refuse_unscannable_image_ref(self, image_url: str) -> None:
         """Refuse an image ref that is cheaply known to be unscannable.
 
@@ -3604,9 +3609,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # from `image`/`source` blocks. Five other guardrails already consume this
         # field; Bedrock was the one that dropped it on the floor.
         image_urls: Final = tuple(inputs.get("images") or ()) if input_type == "request" else ()
-        for image_ref in image_urls:
-            if not isinstance(image_ref, str):
-                self._handle_unscannable_attachment(reason="a non-string image reference cannot be scanned")
+        self._refuse_non_string_image_refs(image_urls=image_urls)
         # Refused before the shortcuts: ApplyGuardrail has no content type for a document/file attachment.
         files: Final = tuple(inputs.get("files") or ()) if input_type == "request" else ()
         if files:
