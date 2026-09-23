@@ -82,6 +82,9 @@
     "tests/integration/authorization/test_warmed_policy.py::test_expiry_and_explicit_clear_reach_both_warmed_workers": [
       "mgmt.key.update.expiry_changes_reach_warmed_workers"
     ],
+    "tests/integration/authorization/test_bedrock_passthrough_model_access.py::test_key_scoped_to_one_model_cannot_call_another_through_bedrock_passthrough_routes": [
+      "authz.key_models.bedrock_passthrough_route_model_is_enforced"
+    ],
     "tests/integration/database/test_partition_transactions.py::test_real_partition_ddl_survives_witnessed_lock_and_is_idempotent": [
       "other.database.partitions.lock_wait_outlives_transaction_default",
       "other.database.partitions.repeat_preserves_rows"
