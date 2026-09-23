@@ -692,6 +692,27 @@ class TestAsyncPostCallStreamingIteratorHook:
         assert streamed_id == "resp_rawprovider123"
         assert not responses_id_security._is_encrypted_response_id(streamed_id)
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_response", [None, object()])
+    async def test_none_or_non_iterable_response_does_not_raise(
+        self, responses_id_security, bad_response
+    ):
+        """#42724: mid-stream chat fallbacks used to feed None into this hook."""
+        mock_auth = MagicMock()
+        mock_auth.user_id = "user-a"
+        mock_auth.team_id = "team-a"
+        mock_auth.request_route = "/chat/completions"
+
+        collected = [
+            out
+            async for out in responses_id_security.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_auth,
+                response=bad_response,
+                request_data={},
+            )
+        ]
+        assert collected == []
+
 
 class TestStreamedGenericEventIdEncryption:
     """A background stream carries event types with no typed model, which arrive as
