@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
-import pytest
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
@@ -108,7 +107,6 @@ def _spans(batches: Sequence[Request]) -> tuple[Span, ...]:
     )
 
 
-@pytest.mark.covers("other.observability.langfuse.generation_is_delivered_over_otlp_v4_with_the_caller_trace_fields")
 def test_langfuse_callback_delivers_the_generation_over_otlp_v4_with_the_caller_trace_fields(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -194,11 +192,6 @@ def test_langfuse_callback_delivers_the_generation_over_otlp_v4_with_the_caller_
         )
 
 
-@pytest.mark.covers(
-    "other.observability.langfuse.prompt_name_is_url_encoded_on_the_wire",
-    "other.observability.langfuse.prompt_fetch_retries_a_5xx_once_without_sleeping",
-    "other.observability.langfuse.prompt_fetch_failure_hides_langfuse_response_headers_from_the_client",
-)
 def test_prompt_fetch_encodes_the_name_retries_a_5xx_once_and_keeps_langfuse_headers_off_the_client(
     gateway: Gateway, tmp_path: Path
 ) -> None:
