@@ -2,7 +2,6 @@ import base64
 import json
 import os
 from datetime import datetime
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_logger
@@ -30,14 +29,12 @@ LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/ot
 LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
 LANGFUSE_INGESTION_VERSION: Final = "4"
 
-_TRACE_IDENTITY_FIELDS: Final = MappingProxyType(
-    {
-        "user_api_key_alias": "key_alias",
-        "user_api_key_user_id": "user_id",
-        "user_api_key_end_user_id": "end_user_id",
-        "user_api_key_team_id": "team_id",
-        "user_api_key_team_alias": "team_alias",
-    }
+_TRACE_IDENTITY_FIELDS: Final = (
+    "user_api_key_alias",
+    "user_api_key_user_id",
+    "user_api_key_end_user_id",
+    "user_api_key_team_id",
+    "user_api_key_team_alias",
 )
 
 
@@ -152,10 +149,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         observation_metadata: Final = log_requester_metadata(redact_user_api_key_info(metadata=request_metadata))
         safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_METADATA.value, safe_dumps(observation_metadata))
         trace_prefix: Final = LangfuseSpanAttributes.TRACE_METADATA.value
-        for source_key, target_key in _TRACE_IDENTITY_FIELDS.items():
-            value = observation_metadata.get(source_key)
+        for field in _TRACE_IDENTITY_FIELDS:
+            value = observation_metadata.get(field)
             if value is not None:
-                safe_set_attribute(span, f"{trace_prefix}.{target_key}", value)
+                safe_set_attribute(span, f"{trace_prefix}.{field}", value)
 
     @staticmethod
     def _set_observation_output(span: Span, response_obj):

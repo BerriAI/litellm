@@ -512,11 +512,11 @@ class TestLangfuseOtelIntegration:
             assert {
                 key: value for key, value in actual.items() if key.startswith("langfuse.trace.metadata.")
             } == {
-                "langfuse.trace.metadata.key_alias": "prod-key",
-                "langfuse.trace.metadata.user_id": "user-1",
-                "langfuse.trace.metadata.end_user_id": "end-user-1",
-                "langfuse.trace.metadata.team_id": "team-1",
-                "langfuse.trace.metadata.team_alias": "team-a",
+                "langfuse.trace.metadata.user_api_key_alias": "prod-key",
+                "langfuse.trace.metadata.user_api_key_user_id": "user-1",
+                "langfuse.trace.metadata.user_api_key_end_user_id": "end-user-1",
+                "langfuse.trace.metadata.user_api_key_team_id": "team-1",
+                "langfuse.trace.metadata.user_api_key_team_alias": "team-a",
             }
 
     def test_request_metadata_redaction_matches_vanilla_langfuse(self, monkeypatch):

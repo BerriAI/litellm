@@ -31,6 +31,8 @@ def _langfuse_rig(
     marker: str,
 ) -> Iterator[tuple[Gateway, Wire, Wire]]:
     def upstream(request: Request) -> Reply:
+        if request.method == "GET":
+            return Reply(body=b'{"data":[]}')
         assert request.target.endswith("/chat/completions"), request.target
         return Reply(
             body=json.dumps(
@@ -138,16 +140,16 @@ def test_langfuse_otel_emits_request_metadata_under_langfuse_observation_and_tra
         assert {
             attribute: attrs.get(attribute)
             for attribute in (
-                "langfuse.trace.metadata.key_alias",
-                "langfuse.trace.metadata.team_id",
-                "langfuse.trace.metadata.team_alias",
-                "langfuse.trace.metadata.end_user_id",
+                "langfuse.trace.metadata.user_api_key_alias",
+                "langfuse.trace.metadata.user_api_key_team_id",
+                "langfuse.trace.metadata.user_api_key_team_alias",
+                "langfuse.trace.metadata.user_api_key_end_user_id",
             )
         } == {
-            "langfuse.trace.metadata.key_alias": key_alias,
-            "langfuse.trace.metadata.team_id": team_id,
-            "langfuse.trace.metadata.team_alias": team_alias,
-            "langfuse.trace.metadata.end_user_id": end_user,
+            "langfuse.trace.metadata.user_api_key_alias": key_alias,
+            "langfuse.trace.metadata.user_api_key_team_id": team_id,
+            "langfuse.trace.metadata.user_api_key_team_alias": team_alias,
+            "langfuse.trace.metadata.user_api_key_end_user_id": end_user,
         }, attrs
 
 
