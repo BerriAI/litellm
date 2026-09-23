@@ -146,15 +146,10 @@ _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _normalize_gemini_speech_config_item(value: object) -> object:
-    if isinstance(value, Mapping):
-        normalized: (  # mutable-ok: the iterative walk fills exactly one normalized provider payload
-            dict[str, object] | list[object]
-        ) = {}  # mutable-ok: the iterative walk fills the normalized tree; rebind-ok: each shape branch initializes the shared result
-    elif isinstance(value, list):
-        normalized = []  # mutable-ok: the iterative walk fills the normalized tree; rebind-ok: each shape branch initializes the shared result
-    else:
-        return value
+def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> dict[str, object]:
+    normalized: Final[
+        dict[str, object]
+    ] = {}  # mutable-ok: iterative traversal preserves deeply nested provider payloads
 
     pending: Final[  # mutable-ok: the explicit worklist must grow while avoiding recursive traversal
         list[tuple[dict[str, object] | list[object], Mapping[object, object] | list[object]]]
@@ -164,12 +159,10 @@ def _normalize_gemini_speech_config_item(value: object) -> object:
         items = source.items() if isinstance(source, Mapping) else enumerate(source)
         for key, item in items:
             if isinstance(source, Mapping):
-                if not isinstance(key, str) or not isinstance(target, dict):
+                if not isinstance(key, str):
                     continue
                 normalized_key: str | int = _GEMINI_SPEECH_CONFIG_KEY_MAP.get(key, key)
             else:
-                if not isinstance(target, list):
-                    continue
                 normalized_key = len(target)
 
             child: object
@@ -180,9 +173,10 @@ def _normalize_gemini_speech_config_item(value: object) -> object:
             else:
                 child = item
 
-            if isinstance(target, dict) and isinstance(normalized_key, str):
+            if isinstance(target, dict):
+                assert isinstance(normalized_key, str)
                 target[normalized_key] = child
-            elif isinstance(target, list):
+            else:
                 target.append(child)
 
             if isinstance(child, (dict, list)) and isinstance(item, (Mapping, list)):
@@ -202,12 +196,7 @@ def normalize_gemini_speech_config(
         if isinstance(nested_config, Mapping)
         else value
     )
-    normalized_value: Final = _normalize_gemini_speech_config_item(config)
-    if not isinstance(normalized_value, dict):
-        return {}  # mutable-ok: provider request serialization requires a concrete empty dict
-    normalized: Final = cast(  # cast-ok: runtime dict check establishes the normalizer's concrete result shape
-        dict[str, object], normalized_value
-    )
+    normalized: Final = _normalize_gemini_speech_config_item(config)
     voice_name: Final = next(
         (normalized[key] for key in ("name", "voiceName", "voice") if isinstance(normalized.get(key), str)),
         None,

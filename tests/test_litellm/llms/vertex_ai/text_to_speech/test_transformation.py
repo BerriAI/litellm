@@ -102,6 +102,20 @@ class TestVertexAITextToSpeechConfig:
         assert "headers" in result
         assert "Authorization" in result["headers"]
 
+        raw_voice_request: Final = config.transform_text_to_speech_request(
+            model="vertex_ai/chirp",
+            input="Hello",
+            voice="en-US-Chirp3-HD-Charon",
+            optional_params={},
+            litellm_params={
+                "vertex_credentials": None,
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+            },
+            headers={},
+        )
+        assert raw_voice_request["dict_body"]["voice"]["name"] == "en-US-Chirp3-HD-Charon"
+
     def test_voice_mapping_openai_to_vertex(self):
         """Test that OpenAI voice names are correctly mapped to Vertex AI voices"""
         config = VertexAITextToSpeechConfig()
@@ -217,6 +231,75 @@ class TestVertexAITextToSpeechConfig:
             "name": "Kore",
         }
 
+    def test_gemini_tts_string_voice_reaches_cloud_tts(self):
+        config: Final = VertexAITextToSpeechConfig()
+
+        voice_name, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice="Kore",
+        )
+
+        assert voice_name == "Kore"
+        assert optional_params["vertex_voice_dict"] == {
+            "languageCode": "en-US",
+            "modelName": "gemini-3.1-flash-tts-preview",
+            "name": "Kore",
+        }
+
+    def test_gemini_tts_ignores_incomplete_speaker_entries(self):
+        config: Final = VertexAITextToSpeechConfig()
+        voice: Final = {
+            "multiSpeakerVoiceConfig": {
+                "speakerVoiceConfigs": [
+                    None,
+                    {"speakerAlias": "Ryan"},
+                    {"speakerAlias": "Katie", "speakerId": "Leda"},
+                ]
+            }
+        }
+
+        _, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+
+        assert optional_params["vertex_voice_dict"]["multiSpeakerVoiceConfig"] == {
+            "speakerVoiceConfigs": [{"speakerAlias": "Katie", "speakerId": "Leda"}]
+        }
+
+    def test_gemini_tts_ignores_non_list_speaker_entries(self):
+        config: Final = VertexAITextToSpeechConfig()
+
+        assert config._extract_gemini_tts_speaker_configs(
+            {"multiSpeakerVoiceConfig": {"speakerVoiceConfigs": "invalid"}}
+        ) == []
+
+    @pytest.mark.parametrize(
+        ("voice", "expected_name"),
+        [
+            ({"speechConfig": {"voice": "Kore"}}, "Kore"),
+            ({"speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}}, "Kore"),
+            ({"speechConfig": {"voiceConfig": {}}}, None),
+        ],
+    )
+    def test_gemini_tts_nested_voice_mapping(self, voice: dict[str, object], expected_name: str | None):
+        config: Final = VertexAITextToSpeechConfig()
+
+        _, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+
+        mapped_voice: Final = optional_params["vertex_voice_dict"]
+        if expected_name is None:
+            assert mapped_voice["speechConfig"]["voiceConfig"] == {}
+            assert "name" not in mapped_voice
+        else:
+            assert mapped_voice["name"] == expected_name
+
     @pytest.mark.parametrize(
         "voice",
         [
@@ -281,7 +364,17 @@ class TestVertexAITextToSpeechConfig:
         assert mapped_params["vertex_voice_dict"]["name"] == "Umbriel"
         assert mapped_params["vertex_voice_dict"]["modelName"] == "gemini-3.1-flash-tts-preview"
 
-    def test_dispatch_keeps_pre_mapped_cloud_tts_params(self):
+    @pytest.mark.parametrize(
+        ("voice", "expected_name"),
+        [
+            ("en-US-Chirp3-HD-Charon", "en-US-Chirp3-HD-Charon"),
+            ({"name": "en-US-Chirp3-HD-Charon"}, "en-US-Chirp3-HD-Charon"),
+            (None, None),
+        ],
+    )
+    def test_dispatch_keeps_pre_mapped_cloud_tts_params(
+        self, voice: str | dict[str, str] | None, expected_name: str | None
+    ):
         config = VertexAITextToSpeechConfig()
         handler = MagicMock()
         handler.text_to_speech_handler.return_value = "ok"
@@ -293,7 +386,7 @@ class TestVertexAITextToSpeechConfig:
         config.dispatch_text_to_speech(
             model="chirp",
             input="Hi",
-            voice="en-US-Chirp3-HD-Charon",
+            voice=voice,
             optional_params=optional_params,
             litellm_params_dict={},
             logging_obj=MagicMock(),
@@ -306,7 +399,7 @@ class TestVertexAITextToSpeechConfig:
         )
 
         call_kwargs = handler.text_to_speech_handler.call_args.kwargs
-        assert call_kwargs["voice"] == "en-US-Chirp3-HD-Charon"
+        assert call_kwargs["voice"] == expected_name
         assert call_kwargs["text_to_speech_optional_params"] is optional_params
         assert call_kwargs["text_to_speech_optional_params"]["audioEncoding"] == "OGG_OPUS"
 
@@ -533,6 +626,27 @@ def test_gemini_cloud_tts_returns_raw_g711_audio_when_duration_decoder_is_unavai
     assert result.usage.completion_tokens == 25, (
         "Google Cloud TTS pricing, 2026-09-23: https://cloud.google.com/text-to-speech/pricing"
     )
+
+
+def test_gemini_cloud_tts_rejects_audio_without_measurable_duration():
+    raw_response: Final = httpx.Response(200, json={"audioContent": base64.b64encode(b"invalid").decode()})
+    logger: Final = MagicMock()
+    logger.model_call_details = {
+        "additional_args": {
+            "complete_input_dict": {
+                "dict_body": {
+                    "input": {"text": "Hello"},
+                    "audioConfig": {"audioEncoding": "MP3", "sampleRateHertz": 24000},
+                }
+            }
+        }
+    }
+
+    with patch("litellm.llms.vertex_ai.text_to_speech.transformation.calculate_request_duration", return_value=None):
+        with pytest.raises(ValueError, match="Cannot determine Gemini TTS output duration"):
+            VertexAITextToSpeechConfig().transform_text_to_speech_response(
+                "gemini-3.1-flash-tts-preview", raw_response, logger
+            )
 
 
 class TestVertexAILyriaTextToSpeechConfig:
