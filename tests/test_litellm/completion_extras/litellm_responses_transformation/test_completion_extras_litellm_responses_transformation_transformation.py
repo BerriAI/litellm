@@ -2500,21 +2500,17 @@ def test_transform_request_never_drops_reasoning_effort(monkeypatch, reasoning_e
     monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
     handler: Final = LiteLLMResponsesTransformationHandler()
     expected_effort: Final = reasoning_effort["effort"] if isinstance(reasoning_effort, dict) else reasoning_effort
-    try:
-        result: Final = handler.transform_request(
-            model="gpt-5.4",
-            messages=[{"role": "user", "content": "hi"}],
-            optional_params={"reasoning_effort": reasoning_effort},
-            litellm_params={"custom_llm_provider": "openai"},
-            headers={},
-            litellm_logging_obj=Mock(),
-        )
-    except (litellm.BadRequestError, litellm.UnsupportedParamsError) as rejected:
-        rejection: Final = rejected
-    else:
-        assert result["reasoning"]["effort"] == expected_effort
-        return
-    assert rejection.status_code == 400
+
+    result: Final = handler.transform_request(
+        model="gpt-5.4",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"reasoning_effort": reasoning_effort},
+        litellm_params={"custom_llm_provider": "openai"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert result["reasoning"]["effort"] == expected_effort
 
 
 def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
