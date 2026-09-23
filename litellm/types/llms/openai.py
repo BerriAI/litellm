@@ -1301,8 +1301,8 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
     """TypedDict for request parameters supported by the responses API."""
 
-    input: Required[str | ResponseInputParam]
-    model: Required[str]
+    input: Required[ReadOnly[str | ResponseInputParam]]
+    model: Required[ReadOnly[str]]
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
