@@ -1224,6 +1224,7 @@ async def _common_key_generation_helper(
     # default_key_generate_params injected.
     _requested_max_budget: Final = data.max_budget
     _requested_team_id: Final = data.team_id
+    _requested_metadata: Final = data.metadata  # pyright: ignore[reportUnknownMemberType]  # request models declare `metadata` as bare dict
 
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
@@ -1313,7 +1314,7 @@ async def _common_key_generation_helper(
     )
     _check_disable_global_guardrails_caller_permission(
         data.disable_global_guardrails,
-        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        _requested_metadata,
         user_api_key_dict,
     )
 

@@ -18073,6 +18073,49 @@ async def test_generate_key_non_admin_metadata_disable_global_guardrails_rejecte
 
 
 @pytest.mark.asyncio
+async def test_generate_key_non_admin_server_default_guardrail_flag_not_treated_as_requested(monkeypatch):
+    """An admin-configured `default_key_generate_params.metadata` containing
+    `disable_global_guardrails: true` must not 403 a non-admin who sent no flag;
+    only caller-sent metadata counts as requesting the opt-out."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        {"metadata": {"disable_global_guardrails": True}},
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        max_budget=100.0,
+    )
+
+    raised: Exception | None = None
+    try:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(team_id="team-1", models=["gpt-4o"]),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    except Exception as exc:
+        raised = exc
+    assert not (isinstance(raised, HTTPException) and "disable_global_guardrails" in str(raised.detail)), raised
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                team_id="team-1",
+                models=["gpt-4o"],
+                metadata={"disable_global_guardrails": True},
+            ),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "disable_global_guardrails" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_update_key_non_admin_disable_global_guardrails_rejected(monkeypatch):
     """`_validate_update_key_data` rejects a non-admin when
     `disable_global_guardrails` is true in the request body."""
