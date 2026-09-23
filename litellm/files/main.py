@@ -176,6 +176,22 @@ def create_file(
         if logging_obj is None:
             raise ValueError("logging_obj is required")
         client: Final = kwargs.get("client")
+        if litellm_params_dict.get("passthrough") is True and (
+            custom_llm_provider != "vertex_ai" or purpose != "batch"
+        ):
+            raise litellm.exceptions.BadRequestError(
+                message=(
+                    "`passthrough=True` uploads the file bytes unchanged for a native Vertex AI batch, so it needs "
+                    f"custom_llm_provider='vertex_ai' and purpose='batch', got '{custom_llm_provider}' and '{purpose}'."
+                ),
+                model="n/a",
+                llm_provider=custom_llm_provider or "n/a",
+                response=httpx.Response(
+                    status_code=400,
+                    content="passthrough needs a vertex_ai batch",
+                    request=httpx.Request(method="create_file", url="https://github.com/BerriAI/litellm"),
+                ),
+            )
 
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600

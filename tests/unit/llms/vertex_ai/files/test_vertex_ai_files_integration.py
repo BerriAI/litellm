@@ -2,10 +2,15 @@
 Test Vertex AI files integration with main files API
 """
 
+from typing import Final
+from urllib.parse import parse_qs, urlparse
+
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 
 
@@ -91,3 +96,47 @@ class TestVertexAIFilesIntegration:
             # Verify the timeout was passed through
             call_kwargs = mock_retrieve.call_args.kwargs
             assert call_kwargs["timeout"] == 120
+
+
+NATIVE_VERTEX_ROWS: Final = (
+    b'{"request": {"contents": [{"role": "user", "parts": [{"text": "Who won the 2024 Tour de France?"}]}],'
+    b' "tools": [{"googleSearch": {"excludeDomains": ["example.com"]}}]}}\n'
+    b'{"request": {"contents": [{"role": "user", "parts": [{"text": "What is the tallest building in Tokyo?"}]}],'
+    b' "tools": [{"googleSearch": {}}]}}\n'
+)
+
+
+def _gcs_upload_transport(uploads: list[httpx.Request]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        uploads.append(request)
+        object_name: Final = parse_qs(urlparse(str(request.url)).query)["name"][0]
+        return httpx.Response(
+            200,
+            json={
+                "id": f"my-bucket/{object_name}/1758585600000000",
+                "name": object_name,
+                "size": str(len(request.read())),
+                "timeCreated": "2026-09-23T00:00:00.000Z",
+            },
+        )
+
+    return httpx.MockTransport(respond)
+
+
+def test_create_file_passthrough_kwarg_ships_native_rows_byte_for_byte_under_the_passthrough_prefix():
+    uploads: Final[list[httpx.Request]] = []
+    file_object = litellm.create_file(
+        file=("batch.jsonl", NATIVE_VERTEX_ROWS, "application/jsonl"),
+        purpose="batch",
+        custom_llm_provider="vertex_ai",
+        passthrough=True,
+        model="vertex_ai/gemini-2.5-flash",
+        gcs_bucket_name="my-bucket",
+        api_key="test-token",
+        client=HTTPHandler(client=httpx.Client(transport=_gcs_upload_transport(uploads))),
+    )
+    (upload,) = uploads
+    object_name: Final = parse_qs(urlparse(str(upload.url)).query)["name"][0]
+    assert upload.read() == NATIVE_VERTEX_ROWS
+    assert object_name.startswith("litellm-vertex-files/passthrough/publishers/google/models/gemini-2.5-flash/")
+    assert file_object.id == f"gs://my-bucket/{object_name}"

@@ -9,6 +9,7 @@ from typing_extensions import assert_never
 from litellm.proxy._types import ProxyException
 
 BATCH_LINE_REQUIRED_KEYS: Final = ("custom_id", "method", "url", "body")
+PASSTHROUGH_BATCH_LINE_REQUIRED_KEYS: Final = ("request",)
 _MB: Final = 1024 * 1024
 
 
@@ -42,6 +43,7 @@ class BatchFileLineNotObject:
 class BatchFileMissingLineKey:
     line_number: int
     key: str
+    required_keys: tuple[str, ...] = BATCH_LINE_REQUIRED_KEYS
 
 
 BatchFileValidationFailure = (
@@ -70,20 +72,20 @@ def _iter_lines(file_source: bytes | BinaryIO) -> Iterator[bytes]:
     return iter(file_source)
 
 
-def _check_line(line_number: int, raw_line: bytes) -> BatchFileValidationFailure | None:
+def _check_line(line_number: int, raw_line: bytes, required_keys: tuple[str, ...]) -> BatchFileValidationFailure | None:
     try:
         parsed: Final = json.loads(raw_line)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return BatchFileInvalidJsonLine(line_number=line_number)
     if not isinstance(parsed, dict):
         return BatchFileLineNotObject(line_number=line_number)
-    missing: Final = next((key for key in BATCH_LINE_REQUIRED_KEYS if key not in parsed), None)
+    missing: Final = next((key for key in required_keys if key not in parsed), None)
     if missing is None:
         return None
-    return BatchFileMissingLineKey(line_number=line_number, key=missing)
+    return BatchFileMissingLineKey(line_number=line_number, key=missing, required_keys=required_keys)
 
 
-def _scan_lines(file_source: bytes | BinaryIO) -> BatchFileValidationFailure | None:
+def _scan_lines(file_source: bytes | BinaryIO, required_keys: tuple[str, ...]) -> BatchFileValidationFailure | None:
     content_lines: Final = (
         (line_number, raw_line)
         for line_number, raw_line in enumerate(_iter_lines(file_source), start=1)
@@ -96,7 +98,7 @@ def _scan_lines(file_source: bytes | BinaryIO) -> BatchFileValidationFailure | N
         (
             failure
             for line_number, raw_line in chain((first_line,), content_lines)
-            for failure in (_check_line(line_number, raw_line),)
+            for failure in (_check_line(line_number, raw_line, required_keys),)
             if failure is not None
         ),
         None,
@@ -107,6 +109,7 @@ def check_batch_file_upload(
     filename: str | None,
     file_source: bytes | BinaryIO,
     max_batch_file_size_mb: int | None,
+    required_keys: tuple[str, ...] = BATCH_LINE_REQUIRED_KEYS,
 ) -> BatchFileValidationFailure | None:
     if filename is None or not filename.lower().endswith(".jsonl"):
         return BatchFileWrongExtension(filename=filename or "")
@@ -114,7 +117,7 @@ def check_batch_file_upload(
         size_bytes: Final = _file_size_bytes(file_source)
         if size_bytes > max_batch_file_size_mb * _MB:
             return BatchFileTooLarge(size_bytes=size_bytes, limit_mb=max_batch_file_size_mb)
-    scan_failure: Final = _scan_lines(file_source)
+    scan_failure: Final = _scan_lines(file_source, required_keys)
     if not isinstance(file_source, bytes):
         file_source.seek(0)
     return scan_failure
@@ -169,11 +172,11 @@ def raise_batch_file_validation_failure(failure: BatchFileValidationFailure) -> 
                 param="file",
                 code=400,
             )
-        case BatchFileMissingLineKey(line_number=line_number, key=key):
+        case BatchFileMissingLineKey(line_number=line_number, key=key, required_keys=required_keys):
             raise ProxyException(
                 message=(
                     f"Missing required parameter: '{key}' (batch input file line {line_number}). "
-                    f"Each line must be a JSON object with keys {', '.join(BATCH_LINE_REQUIRED_KEYS)}. "
+                    f"Each line must be a JSON object with keys {', '.join(required_keys)}. "
                     "The file was not forwarded to the provider."
                 ),
                 type="invalid_request_error",

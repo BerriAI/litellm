@@ -477,3 +477,19 @@ def test_list_response_none_jobs_treated_as_empty():
     out = T.transform_vertex_ai_batch_list_response_to_openai_list_response({"batchPredictionJobs": None})
     assert out["data"] == []
     assert out["first_id"] is None
+
+
+PASSTHROUGH_INPUT_FILE = (
+    "gs://litellm-testing-bucket/litellm-vertex-files/passthrough/publishers/google/models/gemini-2.5-flash/uuid-1"
+)
+
+
+def test_get_model_from_passthrough_gcs_file():
+    assert T._get_model_from_gcs_file(PASSTHROUGH_INPUT_FILE) == "publishers/google/models/gemini-2.5-flash"
+
+
+def test_get_gcs_uri_prefix_keeps_passthrough_segment_so_output_lands_beside_input():
+    assert (
+        T._get_gcs_uri_prefix_from_file(PASSTHROUGH_INPUT_FILE)
+        == "gs://litellm-testing-bucket/litellm-vertex-files/passthrough/publishers/google/models/gemini-2.5-flash"
+    )
