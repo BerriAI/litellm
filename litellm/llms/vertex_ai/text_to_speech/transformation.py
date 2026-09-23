@@ -245,10 +245,13 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         self,
         voice: dict,  # mutable-ok: provider voice payload arrives as a concrete dictionary
     ) -> str | None:
-        voice_name: Final = self._get_str_value(voice, "name", "voiceName", "voice_name")
+        voice_name: Final = self._get_str_value(voice, "name", "voiceName", "voice_name", "voice")
         if voice_name is not None:
             return voice_name
         speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
+        nested_voice_name: Final = self._get_str_value(speech_config, "name", "voiceName", "voice_name", "voice")
+        if nested_voice_name is not None:
+            return nested_voice_name
         voice_config: Final = self._get_dict_value(speech_config, "voiceConfig", "voice_config")
         if voice_config is None:
             return None
@@ -273,7 +276,12 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 "name": voice,
             }
 
-        language_code: Final = self._get_str_value(voice, "languageCode", "language_code") or self.DEFAULT_LANGUAGE_CODE
+        speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
+        language_code: Final = (
+            self._get_str_value(voice, "languageCode", "language_code")
+            or self._get_str_value(speech_config, "languageCode", "language_code")
+            or self.DEFAULT_LANGUAGE_CODE
+        )
         model_name: Final = model
         speaker_configs: Final = self._extract_gemini_tts_speaker_configs(voice)
         if speaker_configs:
