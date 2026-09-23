@@ -1924,6 +1924,9 @@
     "tests/integration/providers/test_bedrock_mantle_codex_input_wire.py::test_codex_agent_message_context_compaction_and_local_shell_call_reach_mantle_as_supported_items": [
       "other.provider_wire.bedrock_mantle.codex_history_items_reach_mantle_as_supported_types"
     ],
+    "tests/integration/providers/test_bedrock_mantle_codex_input_wire.py::test_codex_additional_tools_input_item_reaches_mantle_as_top_level_tools": [
+      "providers.bedrock_mantle.codex_additional_tools_input_item_is_hoisted_to_top_level_tools"
+    ],
     "tests/integration/providers/test_bedrock_mantle_responses_wire.py::test_codex_agent_message_compaction_and_local_shell_items_are_rewritten_for_mantle": [
       "providers.bedrock_mantle.codex_history_items_reach_the_wire_as_supported_input_items"
     ],
