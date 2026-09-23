@@ -73765,7 +73765,6 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
-<<<<<<< HEAD
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro": {
         "cache_read_input_token_cost": 6e-07,
@@ -73815,8 +73814,6 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
-||||||| 5dfaa8d620
-=======
     },
     "openrouter/anthropic/claude-opus-5.5:batch": {
         "cache_creation_input_token_cost": 2.5e-06,
@@ -74059,6 +74056,5 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
->>>>>>> origin/main
     }
 }
