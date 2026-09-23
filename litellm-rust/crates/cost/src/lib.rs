@@ -5,6 +5,7 @@ pub mod azure_ai_image_cost;
 pub mod azure_cost;
 pub mod base_rate_selection;
 pub mod batch;
+pub mod bedrock_image_cost;
 pub mod billed_token_rates;
 pub mod catalog;
 pub mod completion_cost;

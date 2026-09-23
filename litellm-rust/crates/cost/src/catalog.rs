@@ -12,6 +12,7 @@ use crate::azure_ai_image_cost::{
     AzureAiImageRequest, cost_calculator as azure_ai_image_cost_calculator,
 };
 use crate::azure_cost::output_per_second_cost;
+use crate::bedrock_image_cost::cost_calculator as bedrock_image_cost_calculator;
 use crate::billed_token_rates::{
     BilledRatesRequest, BilledTokenRates, TokenTypeCostBreakdown,
     get_billed_token_rates as calculate_billed_token_rates,
@@ -885,6 +886,17 @@ impl ModelInfoCatalog {
             self.entries.get(&format!("fal_ai/{normalized}")),
             request_body,
         )
+    }
+
+    pub fn bedrock_image_generation_cost(
+        &self,
+        model: &str,
+        image_response: &Value,
+        size: Option<&str>,
+        optional_params: &Value,
+    ) -> Result<f64, CatalogError> {
+        bedrock_image_cost_calculator(model, image_response, size, optional_params, &self.entries)
+            .ok_or(CatalogError::ModelNotFound)
     }
 
     pub fn default_image_cost_calculator(
