@@ -15,6 +15,9 @@ from integration._support.asgi import asgi_server
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import SamplingMessage, TextContent
@@ -36,6 +39,7 @@ class McpPeer:
     command: str | None = None
     args: tuple[str, ...] = ()
     record: Path | None = None
+    spec_path: Path | None = None
     consumed: list[int] = field(default_factory=lambda: [0])
 
     def drain(self) -> tuple[dict[str, object], ...]:
@@ -49,6 +53,8 @@ class McpPeer:
     def registration(self) -> dict[str, object]:
         if self.transport == "stdio":
             return {"transport": "stdio", "command": self.command, "args": list(self.args)}
+        if self.spec_path is not None:
+            return {"transport": "http", "url": self.url, "spec_path": str(self.spec_path)}
         return {"transport": self.transport, "url": self.url}
 
 
@@ -130,6 +136,10 @@ def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Qu
     return capture
 
 
+def _drain_sse_streams() -> None:
+    AppStatus.should_exit = True
+
+
 def _draining_sse_watcher(app: Callable[[Scope, Receive, Send], object]):
     """sse_starlette parks a per-loop watcher that only stops once AppStatus.should_exit flips."""
 
@@ -140,7 +150,7 @@ def _draining_sse_watcher(app: Callable[[Scope, Receive, Send], object]):
                 AppStatus.should_exit = False
                 await send({"type": "lifespan.startup.complete"})
             elif message["type"] == "lifespan.shutdown":
-                AppStatus.should_exit = True
+                _drain_sse_streams()
                 watchers: Final = tuple(
                     task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro())
                 )
@@ -152,7 +162,18 @@ def _draining_sse_watcher(app: Callable[[Scope, Receive, Send], object]):
         if scope["type"] == "lifespan":
             await lifespan(scope, receive, send)
             return
-        await app(scope, receive, send)
+        starts: Final = [0]
+
+        async def send_once(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                starts[0] += 1
+                if starts[0] == 2:
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
+            if starts[0] > 1:
+                return
+            await send(message)
+
+        await app(scope, receive, send_once)
 
     return wrapped
 
@@ -167,7 +188,9 @@ def mcp_peer(transport: Literal["http", "sse"] = "http", *, rich: bool = False) 
         else service.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
     )
     observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
-    with asgi_server(_capturing(app, observed)) as url:
+    with asgi_server(
+        _capturing(app, observed), before_stop=_drain_sse_streams if transport == "sse" else None
+    ) as url:
         yield McpPeer(url + ("/sse" if transport == "sse" else "/mcp"), observed, transport)
 
 
@@ -264,7 +287,7 @@ def echo_tool(name: str) -> ScriptedTool:
 
 
 @contextmanager
-def openapi_peer() -> Iterator[tuple[McpPeer, Path]]:
+def openapi_peer() -> Iterator[McpPeer]:
     """OpenAPI-described HTTP service plus the spec file the proxy turns into MCP tools."""
     observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
 
@@ -318,14 +341,36 @@ def openapi_peer() -> Iterator[tuple[McpPeer, Path]]:
                 },
             },
         }
-        yield McpPeer(wire.url, observed), _spec_file(spec)
+        yield McpPeer(wire.url, observed, spec_path=_spec_file(spec))
+
+
+def scratch_directory() -> Path:
+    path: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", "/tmp")) / "mcp-peers"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _spec_file(spec: JsonRpc) -> Path:
-    path: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", "/tmp")) / f"openapi-{time.monotonic_ns()}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path: Final = scratch_directory() / f"openapi-{time.monotonic_ns()}.json"
     path.write_text(json.dumps(spec))
     return path
+
+
+PeerKind = Literal["http", "sse", "stdio", "openapi"]
+PEER_KINDS: Final[tuple[PeerKind, ...]] = ("http", "sse", "stdio", "openapi")
+
+
+@contextmanager
+def peer_of(kind: PeerKind, *, rich: bool = False) -> Iterator[McpPeer]:
+    if kind == "openapi":
+        with openapi_peer() as candidate:
+            yield candidate
+    elif kind == "stdio":
+        with stdio_peer(scratch_directory(), rich=rich) as candidate:
+            yield candidate
+    else:
+        with mcp_peer(kind, rich=rich) as candidate:
+            yield candidate
 
 
 def register_mcp(scenario: Scenario, peer: McpPeer, alias: str, **fields: object) -> str:
@@ -373,6 +418,185 @@ def call_tool(gateway: Gateway, key: str, identity: str, name: str, arguments: d
         headers={"x-litellm-api-key": key},
         json={"server_id": identity, "name": name, "arguments": arguments},
     )
+
+
+EntryPoint = Literal["mcp", "server_mcp", "root", "sse", "rest"]
+ENTRY_POINTS: Final[tuple[EntryPoint, ...]] = ("mcp", "server_mcp", "root", "sse", "rest")
+INITIALIZE: Final = {
+    "protocolVersion": "2025-06-18",
+    "capabilities": {},
+    "clientInfo": {"name": "integration", "version": "1"},
+}
+
+
+@dataclass(frozen=True, slots=True)
+class Outcome:
+    """What a caller saw from one MCP operation, normalised across entry points."""
+
+    status: int
+    error: str | None
+    tools: tuple[str, ...] = ()
+    text: str | None = None
+    raw: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.status == 200 and self.error is None
+
+
+def _parse_rpc_body(response: httpx.Response) -> Mapping[str, object] | None:
+    if response.headers.get("content-type", "").startswith("text/event-stream"):
+        data: Final = tuple(line[5:].strip() for line in response.text.splitlines() if line.startswith("data:"))
+        return json.loads(data[-1]) if data else None
+    try:
+        return json.loads(response.text)
+    except ValueError:
+        return None
+
+
+def _outcome_from_rpc(response: httpx.Response) -> Outcome:
+    body: Final = _parse_rpc_body(response)
+    if response.status_code != 200 or body is None:
+        return Outcome(response.status_code, response.text or f"HTTP {response.status_code}", raw=response.text)
+    if "error" in body:
+        return Outcome(response.status_code, json.dumps(body["error"]), raw=response.text)
+    result: Final = body.get("result", {})
+    assert isinstance(result, dict)
+    if "tools" in result:
+        return Outcome(200, None, tuple(tool["name"] for tool in result["tools"]), raw=response.text)
+    content: Final = result.get("content", [])
+    text: Final = content[0].get("text") if content else None
+    if result.get("isError"):
+        return Outcome(200, text or "isError", text=text, raw=response.text)
+    return Outcome(200, None, text=text, raw=response.text)
+
+
+def _outcome_from_rest(response: httpx.Response) -> Outcome:
+    if response.status_code != 200:
+        return Outcome(response.status_code, response.text, raw=response.text)
+    body: Final = response.json()
+    if "tools" in body:
+        return Outcome(200, None, tuple(tool["name"] for tool in body["tools"]), raw=response.text)
+    content: Final = body.get("content", [])
+    text: Final = content[0].get("text") if content else None
+    if body.get("isError"):
+        return Outcome(200, text or "isError", text=text, raw=response.text)
+    return Outcome(200, None, text=text, raw=response.text)
+
+
+@dataclass(frozen=True, slots=True)
+class McpCaller:
+    """One caller's view of the gateway through a specific entry point."""
+
+    gateway: Gateway
+    key: str | None
+    entry: EntryPoint
+    alias: str | None = None
+    headers: Mapping[str, str] = field(default_factory=dict)
+
+    def _path(self) -> str:
+        if self.entry == "server_mcp":
+            assert self.alias is not None
+            return f"/{self.alias}/mcp"
+        return {"mcp": "/mcp", "root": "/mcp/", "sse": "/mcp/sse", "rest": "/mcp-rest"}[self.entry]
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            **({"x-litellm-api-key": self.key} if self.key is not None else {}),
+            "Accept": "application/json, text/event-stream",
+            **self.headers,
+        }
+
+    def rpc(self, method: str, params: JsonRpc | None = None) -> httpx.Response:
+        if self.entry == "sse":
+            return _legacy_sse_rpc(self.gateway, self._headers(), method, params)
+        return self.gateway.client.post(
+            self._path(),
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params or {})},
+            headers=self._headers(),
+        )
+
+    def initialize(self) -> Outcome:
+        if self.entry == "rest":
+            return Outcome(200, None)
+        return _outcome_from_rpc(self.rpc("initialize", INITIALIZE))
+
+    def list_tools(self, server_id: str | None = None) -> Outcome:
+        if self.entry == "rest":
+            return _outcome_from_rest(
+                self.gateway.client.get(
+                    "/mcp-rest/tools/list",
+                    headers=self._headers(),
+                    params={"server_id": server_id} if server_id else None,
+                )
+            )
+        return _outcome_from_rpc(self.rpc("tools/list"))
+
+    def call(self, name: str, arguments: JsonRpc, server_id: str | None = None) -> Outcome:
+        if self.entry == "rest":
+            return _outcome_from_rest(
+                self.gateway.client.post(
+                    "/mcp-rest/tools/call",
+                    headers=self._headers(),
+                    json={"name": name, "arguments": dict(arguments), **({"server_id": server_id} if server_id else {})},
+                )
+            )
+        return _outcome_from_rpc(self.rpc("tools/call", {"name": name, "arguments": dict(arguments)}))
+
+
+def _legacy_sse_rpc(gateway: Gateway, headers: Mapping[str, str], method: str, params: JsonRpc | None) -> httpx.Response:
+    """Drive the legacy GET /mcp/sse + POST /mcp/sse/messages pair for one request and synthesise a JSON response."""
+    with gateway.client.stream("GET", "/mcp/sse", headers=headers, timeout=15) as stream:
+        if stream.status_code != 200:
+            stream.read()
+            return httpx.Response(stream.status_code, text=stream.text)
+        lines: Final = stream.iter_lines()
+        endpoint: Final = next(line[5:].strip() for line in lines if line.startswith("data:"))
+        init: Final = gateway.client.post(
+            endpoint,
+            json={"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": INITIALIZE},
+            headers=headers,
+        )
+        assert init.status_code in (200, 202), init.text
+        gateway.client.post(
+            endpoint, json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=headers
+        )
+        posted: Final = gateway.client.post(
+            endpoint, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params or {})}, headers=headers
+        )
+        if posted.status_code not in (200, 202):
+            return httpx.Response(posted.status_code, text=posted.text)
+        for line in lines:
+            if line.startswith("data:") and '"id": 1' in line.replace('"id":1', '"id": 1'):
+                return httpx.Response(200, text=line[5:].strip(), headers={"content-type": "application/json"})
+    return httpx.Response(599, text="legacy SSE stream ended without a reply")
+
+
+def official_client_outcomes(
+    gateway: Gateway, key: str, path: str, name: str, arguments: JsonRpc, *, legacy_sse: bool = False
+) -> tuple[Outcome, Outcome]:
+    """List then call through the official MCP client session, returning both outcomes."""
+    url: Final = str(gateway.client.base_url).rstrip("/") + path
+    headers: Final = {"x-litellm-api-key": key}
+
+    async def run() -> tuple[Outcome, Outcome]:
+        transport: Final = (
+            sse_client(url, headers=headers)
+            if legacy_sse
+            else streamable_http_client(url, http_client=httpx.AsyncClient(headers=headers, timeout=30))
+        )
+        async with transport as streams, ClientSession(streams[0], streams[1]) as session:
+            await session.initialize()
+            listed: Final = await session.list_tools()
+            result: Final = await session.call_tool(name, dict(arguments))
+            content: Final = result.content[0] if result.content else None
+            text: Final = content.text if isinstance(content, TextContent) else None
+            return (
+                Outcome(200, None, tuple(tool.name for tool in listed.tools)),
+                Outcome(200, (text or "isError") if result.is_error else None, text=text),
+            )
+
+    return asyncio.run(run())
 
 
 def tool_calls(observed: tuple[dict[str, object], ...]) -> tuple[dict[str, object], ...]:
