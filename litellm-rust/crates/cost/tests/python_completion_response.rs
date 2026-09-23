@@ -879,14 +879,15 @@ fn response_cost_falls_back_to_served_model_and_bills_served_tier() {
 }
 
 #[rstest]
-fn search_response_uses_query_list_without_token_usage() {
+fn search_response_uses_query_list_and_skips_tool_and_additional_charges() {
     let catalog = ModelInfoCatalog::new(HashMap::from([(
         "exa_ai/search".to_owned(),
         json!({"input_cost_per_query": 0.002}),
     )]));
     let response = json!({"model": "search"});
     let optional_params = json!({"query": ["a", "b", "c"]});
-    let empty = json!({});
+    let discount = json!({"exa_ai": 0.5});
+    let margin = json!({"global": 0.1});
     let result = completion_cost_from_response(
         &catalog,
         CompletionResponseCostRequest {
@@ -899,6 +900,8 @@ fn search_response_uses_query_list_without_token_usage() {
                 }),
                 per_second: None,
             },
+            built_in_tool_cost: 1.0,
+            additional_costs: &[2.0],
             input: CompletionInputRequest {
                 call_type: Some("search"),
                 optional_params: Some(&optional_params),
@@ -906,8 +909,8 @@ fn search_response_uses_query_list_without_token_usage() {
                     Some(&response),
                     Some("search"),
                     Some("exa_ai"),
-                    &empty,
-                    &empty,
+                    &discount,
+                    &margin,
                 )
                 .input
             },
@@ -915,13 +918,16 @@ fn search_response_uses_query_list_without_token_usage() {
                 Some(&response),
                 Some("search"),
                 Some("exa_ai"),
-                &empty,
-                &empty,
+                &discount,
+                &margin,
             )
         },
     )
     .unwrap();
-    assert!((result.cost.total - 0.006).abs() < 1e-12);
+    assert!((result.cost.original - 0.006).abs() < 1e-12);
+    assert_eq!(result.cost.built_in_tools, 0.0);
+    assert_eq!(result.cost.additional, 0.0);
+    assert!((result.cost.total - 0.0033).abs() < 1e-12);
 }
 
 #[rstest]

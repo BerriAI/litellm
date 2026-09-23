@@ -772,7 +772,8 @@ pub fn completion_cost_from_response(
             .and_then(Value::as_str)
             .or(request.region)
     };
-    let custom_pricing = if matches!(prepared.call_type.as_str(), "search" | "asearch") {
+    let is_search = matches!(prepared.call_type.as_str(), "search" | "asearch");
+    let custom_pricing = if is_search {
         CustomPricing::NONE
     } else {
         request.custom_cost
@@ -832,12 +833,16 @@ pub fn completion_cost_from_response(
                 .map_err(CompletionResponseCostError::Cost)
         },
     )?;
-    let router_fee = (provider == Some("azure_ai") && !is_azure_model_router(&model))
+    let router_fee = (!is_search && provider == Some("azure_ai") && !is_azure_model_router(&model))
         .then(|| catalog.azure_ai_router_fee(&model, request_model, usage.prompt_tokens))
         .and_then(Result::ok)
         .flatten();
-    let additional_costs = request
-        .additional_costs
+    let supplied_additional_costs = if is_search {
+        &[]
+    } else {
+        request.additional_costs
+    };
+    let additional_costs = supplied_additional_costs
         .iter()
         .copied()
         .chain(router_fee)
@@ -845,7 +850,11 @@ pub fn completion_cost_from_response(
     let cost = completion_cost(
         prompt,
         output,
-        built_in_tool_cost(catalog, request, &model, provider, region, Some(usage)),
+        if is_search {
+            0.0
+        } else {
+            built_in_tool_cost(catalog, request, &model, provider, region, Some(usage))
+        },
         &additional_costs,
         provider,
         request.discount_config,
