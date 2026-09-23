@@ -533,6 +533,14 @@ fn main() {
             json!({"input_cost_per_second": 0.01}),
         ),
         (
+            "azure_ai/model_router".to_owned(),
+            json!({"input_cost_per_token": 0.001}),
+        ),
+        (
+            "azure_ai/routed".to_owned(),
+            json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
+        ),
+        (
             "openai/cache_savings_model".to_owned(),
             json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 4e-6, "cache_read_input_token_cost": 0.5e-6}),
         ),
@@ -853,5 +861,24 @@ fn main() {
     println!(
         "speech_cost={:.3} transcription_cost={:.3}",
         speech_cost.0, transcription_cost.0
+    );
+    let router_usage =
+        get_usage_object(&json!({"usage": {"prompt_tokens": 100, "completion_tokens": 20}}))
+            .unwrap()
+            .unwrap();
+    let router_cost = model_info_catalog
+        .azure_ai_cost_per_token(
+            ModelCostRequest {
+                model: "routed",
+                provider: Some("azure_ai"),
+                usage: &router_usage,
+                ..speech_request
+            },
+            Some("azure_ai/model_router"),
+        )
+        .unwrap();
+    println!(
+        "azure_router_prompt={:.3} azure_router_output={:.3}",
+        router_cost.0, router_cost.1
     );
 }

@@ -1,4 +1,5 @@
 pub mod anthropic_usage;
+pub mod azure_ai_cost;
 pub mod base_rate_selection;
 pub mod batch;
 pub mod billed_token_rates;

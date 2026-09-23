@@ -3,6 +3,10 @@ use std::collections::HashMap;
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::azure_ai_cost::{
+    calculate_azure_model_router_flat_cost, is_azure_model_router, router_fee_entry_name,
+    router_fee_name,
+};
 use crate::billed_token_rates::{
     BilledRatesRequest, BilledTokenRates, TokenTypeCostBreakdown,
     get_billed_token_rates as calculate_billed_token_rates,
@@ -248,6 +252,47 @@ impl ModelInfoCatalog {
         select_model_key(&self.entries, model, provider, region)
     }
 
+    pub fn azure_ai_cost_per_token(
+        &self,
+        request: ModelCostRequest<'_>,
+        request_model: Option<&str>,
+    ) -> Result<(f64, f64), CatalogError> {
+        let model_info = self
+            .select_model_key(request.model, Some("azure_ai"), request.region)
+            .and_then(|key| self.entries.get(key));
+        if let Some(cost) =
+            model_info.and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
+        {
+            return Ok(cost);
+        }
+        let (prompt, completion) = match model_info {
+            Some(info) => calculate_generic_cost_from_model_info_with_region(
+                request.usage,
+                info,
+                request.service_tier,
+                false,
+                request.data_residency,
+                request.vertex_location,
+                request.at,
+            ),
+            None if is_azure_model_router(request.model) => (0.0, 0.0),
+            None => return Err(CatalogError::ModelNotFound),
+        };
+        let Some(fee_name) = router_fee_name(request.model, request_model) else {
+            return Ok((prompt, completion));
+        };
+        let fee_entry = router_fee_entry_name(fee_name);
+        let fee_key = self
+            .select_model_key(fee_entry, Some("azure_ai"), None)
+            .ok_or(CatalogError::ModelNotFound)?;
+        let fee = calculate_azure_model_router_flat_cost(
+            fee_name,
+            request.usage.prompt_tokens,
+            &self.entries[fee_key],
+        );
+        Ok((prompt + fee, completion))
+    }
+
     pub fn speech_cost(
         &self,
         request: ModelCostRequest<'_>,
@@ -410,6 +455,9 @@ impl ModelInfoCatalog {
         &self,
         request: ModelCostRequest<'_>,
     ) -> Result<(f64, f64), CatalogError> {
+        if request.provider == Some("azure_ai") {
+            return self.azure_ai_cost_per_token(request, None);
+        }
         if request.provider == Some("perplexity")
             && let Some(cost) = request.usage.cost
         {
