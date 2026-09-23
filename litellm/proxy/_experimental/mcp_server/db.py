@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     SecretMapDecodeError,
     _get_salt_key,
@@ -510,7 +511,7 @@ async def _db_find_mcp_server_rows(
 async def _db_find_mcp_server_row(
     prisma_client: PrismaClient, server_id: str
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
-    return await _mcp_server_table_actions(prisma_client).find_unique(where={"server_id": server_id})
+    return await MCPServerRepository(WriterPinnedClient(prisma_client.db)).table.find_unique(where={"server_id": server_id})
 
 
 async def _db_update_mcp_server_row(
