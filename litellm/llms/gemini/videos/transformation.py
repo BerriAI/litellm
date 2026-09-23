@@ -1,9 +1,12 @@
 import base64
+import mimetypes
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ValidationError
 
 import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
@@ -36,6 +39,9 @@ else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
 
+_VEO_MAX_REFERENCE_IMAGES: Final = 3
+_VEO_EIGHT_SECOND_RESOLUTIONS: Final = frozenset({"1080p", "4k"})
+
 
 def _convert_image_to_gemini_format(image_file) -> dict[str, str]:
     """
@@ -55,6 +61,111 @@ def _convert_image_to_gemini_format(image_file) -> dict[str, str]:
     base64_encoded: Final = base64.b64encode(image_bytes).decode("utf-8")
 
     return {"bytesBase64Encoded": base64_encoded, "mimeType": mime_type}
+
+
+@runtime_checkable
+class _BinaryFile(Protocol):
+    def read(self) -> bytes: ...
+
+
+@runtime_checkable
+class _Seekable(Protocol):
+    def seek(self, offset: int, /) -> int: ...
+
+
+def _convert_video_to_gemini_format(video_file: _BinaryFile) -> Mapping[str, str]:
+    """The MIME type comes from the file name, falling back to video/mp4 (the format Veo generates)"""
+    guessed_type: Final = mimetypes.guess_type(str(getattr(video_file, "name", "")))[0]
+    mime_type: Final = guessed_type if guessed_type and guessed_type.startswith("video/") else "video/mp4"
+    if isinstance(video_file, _Seekable):
+        video_file.seek(0)
+    return MappingProxyType(
+        {"bytesBase64Encoded": base64.b64encode(video_file.read()).decode("utf-8"), "mimeType": mime_type}
+    )
+
+
+def _to_gemini_media(media: object, is_video: bool = False) -> object:
+    if not isinstance(media, _BinaryFile):
+        return media
+    return _convert_video_to_gemini_format(media) if is_video else _convert_image_to_gemini_format(media)
+
+
+def _to_gemini_reference_image(reference: object) -> object:
+    if isinstance(reference, Mapping) and ("image" in reference or "referenceType" in reference):
+        return MappingProxyType({**reference, "image": _to_gemini_media(reference.get("image"))})
+    return MappingProxyType({"image": _to_gemini_media(reference)})
+
+
+def _bad_request(message: str, model: str) -> litellm.BadRequestError:
+    return litellm.BadRequestError(message=f"Gemini Veo: {message}", model=model, llm_provider="gemini")
+
+
+def _is_duration_eight_seconds(duration: object) -> bool:
+    if not isinstance(duration, (int, float, str)):
+        return False
+    try:
+        return float(duration) == 8
+    except ValueError:
+        return False
+
+
+def _validate_veo_request(
+    model: str, instance: GeminiVideoGenerationInstance, parameters: Mapping[str, object]
+) -> None:
+    """
+    Reject combinations the Gemini API documents as invalid before they reach Google.
+    See https://ai.google.dev/gemini-api/docs/veo#veo-model-parameters
+    """
+    has_image: Final = instance.image is not None
+    has_video: Final = instance.video is not None
+    reference_images: Final = instance.referenceImages or ()
+    has_reference_images: Final = len(reference_images) > 0
+    resolution: Final = str(parameters.get("resolution") or "").strip().lower()
+
+    if instance.lastFrame is not None and not has_image:
+        raise _bad_request("lastFrame requires image (the first frame) to be set.", model)
+    if has_reference_images and has_image:
+        raise _bad_request("referenceImages cannot be combined with image.", model)
+    if has_video and has_image:
+        raise _bad_request("video (extension) cannot be combined with image.", model)
+    if len(reference_images) > _VEO_MAX_REFERENCE_IMAGES:
+        raise _bad_request(
+            f"at most {_VEO_MAX_REFERENCE_IMAGES} referenceImages are allowed, got {len(reference_images)}.", model
+        )
+    for reference in reference_images:
+        if reference.referenceType.lower() != "asset":
+            raise _bad_request(
+                f"referenceType '{reference.referenceType}' is not supported. The Gemini API only accepts 'asset' "
+                "reference images ('style' references are Vertex AI only).",
+                model,
+            )
+
+    if has_video and resolution not in ("", "720p"):
+        raise _bad_request(f"video extension only supports 720p resolution, got '{resolution}'.", model)
+
+    duration: Final = parameters.get("durationSeconds")
+    if duration is not None and not _is_duration_eight_seconds(duration):
+        eight_second_reasons: Final = tuple(
+            reason
+            for reason, applies in (
+                ("referenceImages", has_reference_images),
+                ("video extension", has_video),
+                (f"{resolution} resolution", resolution in _VEO_EIGHT_SECOND_RESOLUTIONS),
+            )
+            if applies
+        )
+        if eight_second_reasons:
+            raise _bad_request(
+                f"durationSeconds must be 8 when using {', '.join(eight_second_reasons)}, got {duration}.", model
+            )
+
+    person_generation: Final = parameters.get("personGeneration")
+    if person_generation is not None and (has_image or has_reference_images) and person_generation != "allow_adult":
+        raise _bad_request(
+            f"personGeneration must be 'allow_adult' for image-to-video, interpolation and "
+            f"referenceImages requests, got '{person_generation}'.",
+            model,
+        )
 
 
 def _json_payload(raw_response: httpx.Response) -> object:
@@ -265,7 +376,10 @@ class GeminiVideoConfig(BaseVideoConfig):
                     "image": {
                         "bytesBase64Encoded": "...",
                         "mimeType": "image/jpeg"
-                    }
+                    },
+                    "lastFrame": {...},        # interpolation, requires image
+                    "referenceImages": [...],  # up to 3 asset references
+                    "video": {...}             # extension of a Veo-generated video
                 }
             ],
             "parameters": {
@@ -274,25 +388,43 @@ class GeminiVideoConfig(BaseVideoConfig):
                 "resolution": "720p"
             }
         }
+
+        Media inputs (image, lastFrame, referenceImages, video) belong in
+        instances[0]; parameters only carries generation config.
         """
-        instance: Final[GeminiVideoGenerationInstance] = {"prompt": prompt}
-
         params_copy: Final = video_create_optional_request_params.copy()
+        image: Final = params_copy.pop("image", None)
+        last_frame: Final = params_copy.pop("lastFrame", None)
+        reference_images: Final = params_copy.pop("referenceImages", None)
+        video: Final = params_copy.pop("video", None)
 
-        if "image" in params_copy:
-            image: Final = params_copy.pop("image")
-            if image is not None:
-                if isinstance(image, dict):
-                    image_data = image
-                else:
-                    image_data = _convert_image_to_gemini_format(image)
-                instance["image"] = image_data
+        if reference_images is not None and not isinstance(reference_images, (list, tuple)):
+            raise _bad_request("referenceImages must be a list.", model)
+
+        try:
+            instance: Final = GeminiVideoGenerationInstance.model_validate(
+                MappingProxyType(
+                    {
+                        "prompt": prompt,
+                        "image": _to_gemini_media(image),
+                        "lastFrame": _to_gemini_media(last_frame),
+                        "referenceImages": tuple(_to_gemini_reference_image(r) for r in reference_images)
+                        if reference_images
+                        else None,
+                        "video": _to_gemini_media(video, is_video=True),
+                    }
+                )
+            )
+        except ValidationError as e:
+            raise _bad_request(f"invalid media input: {e}", model) from e
+
+        _validate_veo_request(model=model, instance=instance, parameters=params_copy)
 
         parameters: Final = GeminiVideoGenerationParameters(**params_copy)
 
         request_body_obj: Final = GeminiVideoGenerationRequest(instances=[instance], parameters=parameters)
 
-        request_data: Final = request_body_obj.model_dump(exclude_none=True)
+        request_data: Final = request_body_obj.model_dump(mode="json", exclude_none=True)
 
         return request_data, [], api_base
 
