@@ -18115,6 +18115,7 @@ async def test_update_key_non_admin_resending_stored_disable_global_guardrails_a
         metadata={"disable_global_guardrails": True, "x": 1},
     )
 
+    raised: HTTPException | None = None
     try:
         await _validate_update_key_data(
             data=data,
@@ -18126,7 +18127,8 @@ async def test_update_key_non_admin_resending_stored_disable_global_guardrails_a
             user_api_key_cache=MagicMock(),
         )
     except HTTPException as exc:
-        assert "disable_global_guardrails" not in str(exc.detail)
+        raised = exc
+    assert raised is None or "disable_global_guardrails" not in str(raised.detail)
 
 
 @pytest.mark.asyncio
