@@ -1,5 +1,6 @@
 pub mod anthropic_usage;
 pub mod azure_ai_cost;
+pub mod azure_cost;
 pub mod base_rate_selection;
 pub mod batch;
 pub mod billed_token_rates;
@@ -7,6 +8,7 @@ pub mod catalog;
 pub mod completion_cost;
 pub mod custom_pricing;
 pub mod dashscope_cost;
+pub mod databricks_cost;
 pub mod fireworks_cost;
 pub mod gemini_cost;
 pub mod generic_cost;

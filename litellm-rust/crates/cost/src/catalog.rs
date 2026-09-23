@@ -7,6 +7,7 @@ use crate::azure_ai_cost::{
     calculate_azure_model_router_flat_cost, is_azure_model_router, router_fee_entry_name,
     router_fee_name,
 };
+use crate::azure_cost::output_per_second_cost;
 use crate::billed_token_rates::{
     BilledRatesRequest, BilledTokenRates, TokenTypeCostBreakdown,
     get_billed_token_rates as calculate_billed_token_rates,
@@ -17,6 +18,7 @@ use crate::completion_cost::{
 };
 use crate::custom_pricing::CustomTokenRates;
 use crate::dashscope_cost::cost_per_token as dashscope_cost_per_token;
+use crate::databricks_cost::registry_key as databricks_registry_key;
 use crate::fireworks_cost::{
     FireworksThresholds, cost_per_token as fireworks_cost_per_token, get_base_model_for_pricing,
 };
@@ -252,6 +254,39 @@ impl ModelInfoCatalog {
         select_model_key(&self.entries, model, provider, region)
     }
 
+    pub fn databricks_cost_per_token(
+        &self,
+        request: ModelCostRequest<'_>,
+    ) -> Result<(f64, f64), CatalogError> {
+        if let Some(cost) = self
+            .select_model_key(request.model, Some("databricks"), request.region)
+            .and_then(|key| self.entries.get(key))
+            .and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
+        {
+            return Ok(cost);
+        }
+        let key = self
+            .select_model_key(
+                databricks_registry_key(request.model),
+                Some("databricks"),
+                request.region,
+            )
+            .ok_or(CatalogError::ModelNotFound)?;
+        Ok(calculate_generic_cost_from_model_info_with_region(
+            request.usage,
+            &self.entries[key],
+            None,
+            false,
+            None,
+            None,
+            request.at,
+        ))
+    }
+
+    pub fn lemonade_cost_per_token(&self, _request: ModelCostRequest<'_>) -> (f64, f64) {
+        (0.0, 0.0)
+    }
+
     pub fn azure_ai_cost_per_token(
         &self,
         request: ModelCostRequest<'_>,
@@ -458,6 +493,16 @@ impl ModelInfoCatalog {
         if request.provider == Some("azure_ai") {
             return self.azure_ai_cost_per_token(request, None);
         }
+        if request.provider == Some("databricks") {
+            return self.databricks_cost_per_token(request);
+        }
+        if request.provider == Some("lemonade") {
+            let per_second = self
+                .select_model_key(request.model, Some("lemonade"), request.region)
+                .and_then(|key| self.entries.get(key))
+                .and_then(|info| per_second_pricing_cost(info, request.response_time_ms));
+            return Ok(per_second.unwrap_or_else(|| self.lemonade_cost_per_token(request)));
+        }
         if request.provider == Some("perplexity")
             && let Some(cost) = request.usage.cost
         {
@@ -482,6 +527,11 @@ impl ModelInfoCatalog {
             .ok_or(CatalogError::ModelNotFound)?;
         let model_info = apply_provider_cache_read_default(&self.entries[key], request.provider);
         if let Some(cost) = per_second_pricing_cost(&model_info, request.response_time_ms) {
+            return Ok(cost);
+        }
+        if request.provider == Some("azure")
+            && let Some(cost) = output_per_second_cost(&model_info, request.response_time_ms)
+        {
             return Ok(cost);
         }
         if request.provider == Some("perplexity") {

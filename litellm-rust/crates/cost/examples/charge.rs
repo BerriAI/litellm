@@ -541,6 +541,14 @@ fn main() {
             json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
         ),
         (
+            "azure/speech".to_owned(),
+            json!({"mode": "audio_speech", "input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "output_cost_per_second": 0.02}),
+        ),
+        (
+            "databricks/databricks-dbrx-instruct".to_owned(),
+            json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
+        ),
+        (
             "openai/cache_savings_model".to_owned(),
             json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 4e-6, "cache_read_input_token_cost": 0.5e-6}),
         ),
@@ -880,5 +888,36 @@ fn main() {
     println!(
         "azure_router_prompt={:.3} azure_router_output={:.3}",
         router_cost.0, router_cost.1
+    );
+    let azure_speech = model_info_catalog
+        .cost_per_token(ModelCostRequest {
+            model: "speech",
+            provider: Some("azure"),
+            response_time_ms: Some(1500.0),
+            usage: &router_usage,
+            ..speech_request
+        })
+        .unwrap();
+    let databricks = model_info_catalog
+        .cost_per_token(ModelCostRequest {
+            model: "dbrx-instruct-fast",
+            provider: Some("databricks"),
+            usage: &router_usage,
+            ..speech_request
+        })
+        .unwrap();
+    let lemonade = model_info_catalog
+        .cost_per_token(ModelCostRequest {
+            model: "local",
+            provider: Some("lemonade"),
+            usage: &router_usage,
+            ..speech_request
+        })
+        .unwrap();
+    println!(
+        "azure_speech={:.3} databricks={:.3} lemonade={:.1}",
+        azure_speech.1,
+        databricks.0 + databricks.1,
+        lemonade.0 + lemonade.1
     );
 }
