@@ -21,6 +21,7 @@ export const transitionClassifierType = (
   const judgeConfig = value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS };
   const nextValue: ComplexityRouterConfigValue = {
     ...value,
+    classifier_type: classifierType,
     jev_classifier_config:
       classifierType === "jev" ? value.jev_classifier_config ?? defaultJevClassifierConfig() : undefined,
     classification_prompt: classifierType === "jev" ? undefined : value.classification_prompt,

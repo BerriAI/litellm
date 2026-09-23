@@ -1,3 +1,4 @@
+import { transitionClassifierType } from "./classifier_type_transition";
 import JevClassifierConfig from "./JevClassifierConfig";
 import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -33,12 +34,10 @@ import {
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_RUBRIC,
-  NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
   ClassificationRubric,
   effectiveTierLabel,
   heuristicScoringRole,
   usesLlmClassifier,
-  DEFAULT_HEURISTIC_FIRST_MAX_TIER,
   usesClassifierContext,
   DEFAULT_HYBRID_BOUNDARY_MARGIN,
   HEURISTIC_FIRST_MAX_TIER_KEYS,
@@ -270,34 +269,8 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const explicitlySupportedClassifierEfforts = effortOptionsByModel[classifierModel];
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
-    const nextValue: ComplexityRouterConfigValue = {
-      ...value,
-      classifier_type: classifierType,
-      classifier_llm_config: usesLlmClassifier(classifierType)
-        ? value.classifier_llm_config ?? {
-            model: "",
-            timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
-            classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
-          }
-        : undefined,
-      classifier_context_window_size: usesLlmClassifier(classifierType)
-        ? value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
-        : undefined,
-      classifier_context_budget_chars: usesLlmClassifier(classifierType)
-        ? value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS
-        : undefined,
-      classifier_context_include_assistant_turns: usesLlmClassifier(classifierType)
-        ? value.classifier_context_include_assistant_turns
-        : undefined,
-      classifier_fallback: usesLlmClassifier(classifierType) ? value.classifier_fallback : undefined,
-      heuristic_first_max_tier:
-        classifierType === "heuristic_first"
-          ? value.heuristic_first_max_tier ?? DEFAULT_HEURISTIC_FIRST_MAX_TIER
-          : undefined,
-      hybrid_boundary_margin:
-        classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
-    };
-    onChange(nextValue);
+
+    onChange(transitionClassifierType(value, classifierType));
   };
 
   const handleHeuristicFirstMaxTierChange = (tier: string) => {

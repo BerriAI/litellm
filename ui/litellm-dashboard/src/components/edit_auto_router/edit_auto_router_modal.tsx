@@ -63,7 +63,9 @@ import ComplexityRouterConfig, {
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityRouterConfigValue,
-  ComplexityTiers,
+
+  effectiveClassifierType,
+  heuristicScoringRole,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -340,9 +342,8 @@ export const buildUpdatedComplexityRouterConfig = (
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
-    if (key === "classifier_context_per_turn_chars") {
+    if (key === "classifier_context_per_turn_chars")
       return !usesClassifierContext(effectiveClassifierType(value)) || Object.prototype.hasOwnProperty.call(value, key);
-    }
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
