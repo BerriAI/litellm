@@ -20,6 +20,7 @@ import opentelemetry.trace as otel_trace
 import pytest
 from langfuse import LangfuseOtelSpanAttributes as A
 from langfuse.api.core.api_error import ApiError
+from langfuse.api.core.request_options import RequestOptions
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
@@ -1064,6 +1065,74 @@ def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(sta
     assert monotonic() - started < 0.5
 
 
+@pytest.mark.parametrize("status", [500, 503, 429], ids=["http-500", "http-503", "http-429"])
+def test_cold_prompt_miss_makes_one_round_trip_when_langfuse_is_down(status: int):
+    """A cold ``get_prompt`` fetches inline on the event loop; with the generated client's default retries a
+    429 carrying ``Retry-After: 30`` used to hold the loop for a minute."""
+    requests: list[httpx.Request] = []
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(status, request=request, headers={"retry-after": "30"}, json={"message": "down"})
+
+    client = build_langfuse_client(
+        public_key="pk",
+        secret_key="sk",
+        base_url="http://127.0.0.1:1",
+        httpx_client=httpx.Client(transport=httpx.MockTransport(fail)),
+    )
+
+    started = monotonic()
+    with pytest.raises(ApiError):
+        client.get_prompt("greeting")
+    assert len(requests) == 1
+    assert monotonic() - started < 0.5
+
+
+_TEXT_PROMPT_BODY: Final[dict[str, object]] = {
+    "type": "text",
+    "name": "n",
+    "version": 1,
+    "config": {},
+    "labels": ["production"],
+    "tags": [],
+    "prompt": "hello",
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "encoded"),
+    [
+        ("what?", "what%3F"),
+        ("folder/greeting", "folder%2Fgreeting"),
+        ("my-prompt?label=staging", "my-prompt%3Flabel%3Dstaging"),
+        ("100% sure#1", "100%25%20sure%231"),
+    ],
+    ids=["question-mark", "folder-slash", "query-injection", "percent-space-hash"],
+)
+def test_prompt_name_is_url_encoded_into_the_request_path(name: str, encoded: str):
+    """The v2 client quoted the name before building the path and the v4 SDK's ``get_prompt`` does too; the
+    generated client alone puts the raw name into the URL, so ``what?`` fetched prompt ``what`` and
+    ``a/b`` left the prompts route."""
+    requests: list[httpx.Request] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, request=request, json=_TEXT_PROMPT_BODY)
+
+    client = build_langfuse_client(
+        public_key="pk",
+        secret_key="sk",
+        base_url="http://127.0.0.1:1",
+        httpx_client=httpx.Client(transport=httpx.MockTransport(record)),
+    )
+
+    client.get_prompt(name, label="staging")
+
+    (request,) = requests
+    assert request.url.raw_path == f"/api/public/v2/prompts/{encoded}?label=staging".encode()
+
+
 def test_rest_client_reports_the_project_id_and_a_passing_auth_check():
     requests: list[httpx.Request] = []
     client = build_langfuse_client(
@@ -1527,9 +1596,10 @@ class _RecordingPromptsApi:
         self.prompts = self
         self.requests: list[tuple[str, int | None, str | None]] = []  # mutable-ok: test-side call log
 
-    def get(self, name: str, *, version: int | None, label: str | None):
+    def get(self, name: str, *, version: int | None, label: str | None, request_options: RequestOptions):
         from langfuse.api import Prompt_Text
 
+        assert request_options.get("max_retries") == 0, "a prompt fetch must not sleep through the client's retries"
         self.requests.append((name, version, label))
         return Prompt_Text(
             name=name,
@@ -1549,9 +1619,9 @@ class _BlockingPromptsApi(_RecordingPromptsApi):
         self.release = threading.Event()
         self.fail_refresh = False
 
-    def get(self, name: str, *, version: int | None, label: str | None):
+    def get(self, name: str, *, version: int | None, label: str | None, request_options: RequestOptions):
         is_refresh = bool(self.requests)
-        prompt = super().get(name, version=version, label=label)
+        prompt = super().get(name, version=version, label=label, request_options=request_options)
         if is_refresh:
             assert self.release.wait(5), "refresh was never released"
             if self.fail_refresh:

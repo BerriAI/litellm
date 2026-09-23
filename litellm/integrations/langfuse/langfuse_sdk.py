@@ -16,6 +16,7 @@ from itertools import chain
 from time import monotonic, sleep
 from types import MappingProxyType
 from typing import Final, Literal
+from urllib.parse import quote
 
 import httpx
 import opentelemetry.trace as otel_trace
@@ -1129,7 +1130,9 @@ class LangfuseApiClient:
 
     def _fetch(self, key: _PromptKey) -> PromptClient:
         name, version, label = key
-        fetched: Final = _prompt_client(self.api.prompts.get(name, version=version, label=label))
+        fetched: Final = _prompt_client(
+            self.api.prompts.get(quote(name, safe=""), version=version, label=label, request_options=_NO_REST_RETRIES)
+        )
         with self._lock:
             self._prompts[key] = _CachedPrompt(prompt=fetched, fetched_at=monotonic())
         return fetched
