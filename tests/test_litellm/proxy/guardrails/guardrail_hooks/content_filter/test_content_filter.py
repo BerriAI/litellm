@@ -8,8 +8,6 @@ from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
-
-
 from fastapi import HTTPException
 
 from litellm.constants import (
@@ -2460,6 +2458,35 @@ class TestContentFilterGuardrail:
         )
         # Should pass - 'minors' and 'romantic' are in different sentences
         assert len(result["texts"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_conditional_category_identifier_requires_word_boundary(self):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-sql-identifier-boundary",
+            categories=[
+                {
+                    "category": "prompt_injection_sql",
+                    "enabled": True,
+                    "action": "BLOCK",
+                }
+            ],
+        )
+
+        benign = await guardrail.apply_guardrail(
+            inputs={"texts": ["Can the executive review this for 10 or 15 minutes?"]},
+            request_data={},
+            input_type="request",
+        )
+        assert benign["texts"] == ["Can the executive review this for 10 or 15 minutes?"]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["SELECT name FROM users WHERE id = 1 OR 1=1"]},
+                request_data={},
+                input_type="request",
+            )
+        assert exc_info.value.status_code == 400
+        assert "prompt_injection_sql" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_conditional_racial_bias_category(self):
