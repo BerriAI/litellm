@@ -278,15 +278,16 @@ async def test_mcp_native_structured_replacement_must_match_returned_content(
     )
     logging_obj.dynamic_success_callbacks = [NativeReplacement()]
     returned = await logging_obj.async_post_mcp_tool_call_hook(
-        kwargs={"original_response": result}, response_obj=result,
-        start_time=datetime.datetime.now(), end_time=datetime.datetime.now(),
+        kwargs={"original_response": result},
+        response_obj=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
     )
     assert returned is result
     assert result.content == [TextContent(type="text", text="native-safe" if same_content else "final-safe")]
     assert result.structured_content == ({"result": "native-safe"} if replace_structured and same_content else None)
     assert result.is_error is not (replace_structured and same_content)
     assert "SECRET-1234" not in result.model_dump_json()
-
 
 
 @pytest.mark.asyncio
@@ -306,8 +307,10 @@ async def test_mcp_direct_content_edit_invalidates_stale_structured_data(logging
     )
     logging_obj.dynamic_success_callbacks = [DirectRedactor()]
     returned = await logging_obj.async_post_mcp_tool_call_hook(
-        kwargs={"original_response": result}, response_obj=result,
-        start_time=datetime.datetime.now(), end_time=datetime.datetime.now(),
+        kwargs={"original_response": result},
+        response_obj=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
     )
     assert returned is result
     assert result.content == [TextContent(type="text", text="[REDACTED]")]
@@ -8389,8 +8392,6 @@ def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost()
     assert logging_obj._response_cost_calculator(result=assembled) == 0.0042
 
 
-
-
 def test_response_cost_calculator_prices_terminal_responses_event_from_its_response():
     logging_obj: Final = _responses_stream_logging_obj()
     inner_response: Final = ResponsesAPIResponse(
@@ -8426,3 +8427,182 @@ class TestBudgetReservationBinding:
 
         assert logging_obj.litellm_params["metadata"]["user_api_key_budget_reservation"] is reservation
         assert reservation["callback_bound"] is False
+
+
+@pytest.mark.asyncio
+async def test_standard_logging_payload_keeps_message_content_when_message_logging_is_on(monkeypatch):
+    import json
+
+    from openai import AsyncOpenAI
+
+    outbound: Final = asyncio.Queue()
+    logs: Final = asyncio.Queue()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-smoke",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "smoke-marker-reply"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+
+    async def capture(kwargs, response_obj, start_time, end_time):
+        logs.put_nowait(kwargs["standard_logging_object"])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
+        await litellm.acompletion(
+            model="openai/gpt-5.6",
+            api_key="transport-only",
+            client=client,
+            messages=[{"role": "user", "content": "smoke-marker-request"}],
+            success_callback=[capture],
+            num_retries=0,
+            max_retries=0,
+        )
+        payload: Final = await asyncio.wait_for(logs.get(), timeout=10)
+        request: Final = await asyncio.wait_for(outbound.get(), timeout=10)
+        assert outbound.empty()
+        assert request["messages"][0]["content"] == "smoke-marker-request"
+        assert payload["messages"][0]["content"] == "smoke-marker-request"
+        assert payload["response"]["choices"][0]["message"]["content"] == "smoke-marker-reply"
+
+
+@pytest.mark.asyncio
+async def test_standard_logging_payload_redacts_message_content_when_message_logging_is_off(monkeypatch):
+    import json
+
+    from openai import AsyncOpenAI
+
+    outbound: Final = asyncio.Queue()
+    logs: Final = asyncio.Queue()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-smoke",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "smoke-marker-reply"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+
+    async def capture(kwargs, response_obj, start_time, end_time):
+        logs.put_nowait(kwargs["standard_logging_object"])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
+        await litellm.acompletion(
+            model="openai/gpt-5.6",
+            api_key="transport-only",
+            client=client,
+            messages=[{"role": "user", "content": "smoke-marker-request"}],
+            turn_off_message_logging=True,
+            success_callback=[capture],
+            num_retries=0,
+            max_retries=0,
+        )
+        payload: Final = await asyncio.wait_for(logs.get(), timeout=10)
+        assert outbound.qsize() == 1
+        assert "smoke-marker-request" not in json.dumps(payload["messages"])
+        assert "smoke-marker-reply" not in json.dumps(payload["response"])
+        assert payload["model"]
+        assert payload["total_tokens"] == 15
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_delivers_standard_logging_payload_to_custom_logger():
+    events: Final = asyncio.Queue()
+
+    class SuccessRecorder(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            events.put_nowait((kwargs, response_obj))
+
+    recorder: Final = SuccessRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "smoke-callback-request"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="smoke-callback-success",
+        function_id="smoke-callback-success",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}, "proxy_server_request": {}}
+    result: Final = ModelResponse(
+        model="openai/gpt-5.6",
+        choices=[
+            {"index": 0, "message": {"role": "assistant", "content": "smoke-callback-reply"}, "finish_reason": "stop"}
+        ],
+        usage=litellm.Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    now: Final = datetime.datetime.now()
+
+    await logging_obj.async_success_handler(result=result, start_time=now, end_time=now, cache_hit=False)
+
+    kwargs, response_obj = await asyncio.wait_for(events.get(), timeout=10)
+    assert response_obj is result
+    payload: Final = kwargs["standard_logging_object"]
+    assert payload["status"] == "success"
+    assert payload["model"] == "openai/gpt-5.6"
+    assert payload["total_tokens"] == 15
+    assert events.empty()
+
+
+@pytest.mark.asyncio
+async def test_async_failure_handler_delivers_failure_payload_to_custom_logger():
+    events: Final = asyncio.Queue()
+
+    class FailureRecorder(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            events.put_nowait((kwargs, response_obj))
+
+    recorder: Final = FailureRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "smoke-callback-request"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="smoke-callback-failure",
+        function_id="smoke-callback-failure",
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}, "proxy_server_request": {}}
+    failure: Final = ValueError("smoke-failure")
+    now: Final = datetime.datetime.now()
+
+    await logging_obj.async_failure_handler(exception=failure, traceback_exception="", start_time=now, end_time=now)
+
+    kwargs, response_obj = await asyncio.wait_for(events.get(), timeout=10)
+    assert kwargs["exception"] is failure
+    payload: Final = kwargs["standard_logging_object"]
+    assert payload["status"] == "failure"
+    assert "smoke-failure" in payload["error_str"]
+    assert payload["model"] == "openai/gpt-5.6"
+    assert events.empty()

@@ -160,10 +160,6 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
-
-
-
-
 def test_realtime_stream_combines_text_and_audio_token_details():
     """Realtime response.done usage with input_token_details / output_token_details."""
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
@@ -1041,8 +1037,6 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     print(f"Cost with cache: {cost_with_cache}")
 
 
-
-
 def test_gemini_25_explicit_caching_cost_direct_usage():
     """
     Test that Gemini 2.5 models correctly calculate costs with explicit caching.
@@ -1609,8 +1603,6 @@ def test_cost_margin_with_discount(monkeypatch):
     print(f"  - Base cost: ${base_cost:.6f}")
     print(f"  - Cost with 5% discount + 10% margin: ${cost_with_both:.6f}")
     print(f"  - Expected: ${expected_cost:.6f}")
-
-
 
 
 def test_completion_cost_extracts_service_tier_from_response(_local_model_cost_map):
@@ -2361,8 +2353,6 @@ def test_gemini_without_cache_tokens_details():
     assert usage.prompt_tokens_details.text_tokens >= 0
 
     print("✅ Gemini without cacheTokensDetails works correctly")
-
-
 
 
 def test_additional_costs_only_for_azure_ai(_local_model_cost_map):
@@ -4633,3 +4623,49 @@ def test_gemini_live_native_audio_limits_and_capabilities_match_vendor_model_car
     assert info["supports_response_schema"] is False
     assert info["supports_url_context"] is False
     assert info["supports_pdf_input"] is False
+
+
+def test_completion_cost_charges_explicit_per_token_rates_over_registered_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "smoke-priced-model",
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "openai", "mode": "chat"},
+    )
+    response: Final = ModelResponse(
+        model="smoke-priced-model",
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="smoke-priced-model",
+        custom_llm_provider="openai",
+        custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+    )
+
+    assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
+
+
+def test_completion_cost_is_zero_when_explicit_rates_are_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "smoke-priced-model",
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "openai", "mode": "chat"},
+    )
+    response: Final = ModelResponse(
+        model="smoke-priced-model",
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="smoke-priced-model",
+        custom_llm_provider="openai",
+        custom_cost_per_token={"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+    )
+
+    assert cost == 0.0
