@@ -101,14 +101,19 @@ impl ResolvedCache {
             let resolved = runtime
                 .getattr("native")?
                 .extract::<PyRef<'_, ResolvedCache>>()?;
-            match resolved
-                .guard
-                .as_ref()
-                .filter(|guard| guard.matches(py, cache).unwrap_or(false))
-                .and_then(|_| resolved.native_service().transpose())
-                .transpose()?
-            {
-                Some(service) => CacheBinding::Native(service),
+            match resolved.native_service()? {
+                Some(service) => {
+                    if !resolved
+                        .guard
+                        .as_ref()
+                        .is_some_and(|guard| guard.matches(py, cache).unwrap_or(false))
+                    {
+                        return Err(RustBridgeDeclined::new_err(
+                            "native cache runtime no longer matches its facade",
+                        ));
+                    }
+                    CacheBinding::Native(service)
+                }
                 None => CacheBinding::PythonCallback(PythonCallback::new(cache.clone().unbind())),
             }
         } else {
