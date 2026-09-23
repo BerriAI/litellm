@@ -2306,6 +2306,7 @@ class ProxyLogging:
         data: None,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
+        skip_guardrails: bool = False,
     ) -> None:
         pass
 
@@ -2316,6 +2317,7 @@ class ProxyLogging:
         data: dict,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
+        skip_guardrails: bool = False,
     ) -> dict:
         pass
 
@@ -2325,6 +2327,7 @@ class ProxyLogging:
         data: dict | None,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
+        skip_guardrails: bool = False,
     ) -> dict | None:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -2339,6 +2342,9 @@ class ProxyLogging:
         Use it to scan a payload that is not itself a request, such as one record of a batch file.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
+
+        if guardrails_only and skip_guardrails:
+            raise ValueError("guardrails_only and skip_guardrails are mutually exclusive")
 
         if not guardrails_only:
             self._init_response_taking_too_long_task(data=data)
@@ -2387,16 +2393,19 @@ class ProxyLogging:
 
         try:
             # Execute guardrail pipelines before the normal callback loop
-            data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
-                event_hook="pre_call",
-                raw_request_snapshot=raw_request_snapshot,
-            )
+            if not skip_guardrails:
+                data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                    event_hook="pre_call",
+                    raw_request_snapshot=raw_request_snapshot,
+                )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            pipeline_managed: Final = pipeline_managed_guardrail_names(data, "pre_call")
+            pipeline_managed: Final[frozenset[str]] = (
+                frozenset() if skip_guardrails else pipeline_managed_guardrail_names(data, "pre_call")
+            )
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -2405,7 +2414,7 @@ class ProxyLogging:
             # ``time.time()`` x2 per registered callback for the common
             # "callbacks=[]" case on small / dev deployments.
             if (
-                not caps.has_guardrail
+                (skip_guardrails or not caps.has_guardrail)
                 and not caps.has_content_enforcer
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
@@ -2413,12 +2422,16 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data)
                 return data
 
-            parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = tuple(
-                cb
-                for cb in caps.resolved_callbacks
-                if isinstance(cb, CustomGuardrail)
-                and getattr(cb, "run_in_parallel", False)
-                and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
+            parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
+                ()
+                if skip_guardrails
+                else tuple(
+                    cb
+                    for cb in caps.resolved_callbacks
+                    if isinstance(cb, CustomGuardrail)
+                    and getattr(cb, "run_in_parallel", False)
+                    and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
+                )
             )
 
             deferred_route_exc: SensitiveDataRouteException | None = None
@@ -2426,6 +2439,9 @@ class ProxyLogging:
                 start_time = time.time()
                 try:
                     if isinstance(_callback, CustomGuardrail) and data is not None:
+                        if skip_guardrails:
+                            continue
+
                         # Skip guardrails managed by a pipeline
                         if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
                             continue

@@ -588,7 +588,9 @@ async def test_message_send_reports_an_unresolvable_entra_credential_as_internal
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
     downstream = AsyncMock()
 
@@ -956,7 +958,9 @@ async def test_subscribe_to_task_calls_pre_call_hook():
             yield chunk
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
     mock_proxy_logging.async_post_call_streaming_iterator_hook = _passthrough_iterator
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
 
@@ -1089,7 +1093,9 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
     mock_handler.post = AsyncMock(side_effect=RuntimeError("upstream failed"))
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
 
     with ExitStack() as stack:
@@ -1154,7 +1160,9 @@ async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400()
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
 
     with ExitStack() as stack:

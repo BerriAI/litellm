@@ -424,7 +424,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return {}
 
-        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type):
+        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type, skip_guardrails=False):
             data_copy = copy.deepcopy(data)
             return data_copy
 
@@ -520,7 +520,7 @@ class TestProxyBaseLLMRequestProcessing:
                 },
             }
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             data["messages"] = [{"role": "user", "content": "my ssn is <MASKED>"}]
             return data
 
@@ -565,7 +565,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return copy.deepcopy(request_body)
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             data.setdefault("metadata", {}).setdefault("tags", []).extend(guardrail_tags)
             return data
 
@@ -745,7 +745,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def retry_add_litellm_data_to_request(*args, **kwargs):
             return first_pass_data
 
-        async def idempotent_pre_call_hook(user_api_key_dict, data, call_type):
+        async def idempotent_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return data
 
         monkeypatch.setattr(
@@ -888,7 +888,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         seen_metadata: dict = {}
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             seen_metadata.update(data.get("metadata") or {})
             return data
 
@@ -959,7 +959,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return {}
 
-        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type):
+        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type, skip_guardrails=False):
             data_copy = copy.deepcopy(data)
             return data_copy
 
@@ -1960,7 +1960,7 @@ class TestProxyBaseLLMRequestProcessing:
             data["metadata"] = data.get("metadata", {})
             return data
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -6912,7 +6912,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         limiter_models: list[str] = []
 
         async def run_limiter(
-            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
         ) -> dict[str, object]:
             limiter_models.append(str(data["model"]))
             await limiter.async_pre_call_hook(
@@ -7132,7 +7135,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         run_limiter = rig[0].pre_call_hook
 
         async def limiter_then_guardrail(
-            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
         ) -> dict[str, object]:
             limited = await run_limiter(user_api_key_dict=user_api_key_dict, data=data, call_type=call_type)
             if guardrail not in (limited["metadata"].get("guardrails") or []):
@@ -7958,7 +7964,7 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -8007,7 +8013,7 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -8046,7 +8052,7 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -9729,7 +9735,10 @@ class TestBackgroundResponseRetrievalGovernance:
             return data
 
         async def decrypting_pre_call_hook(
-            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
         ) -> dict[str, object]:
             if data.get("response_id") == client_facing_response_id:
                 data["response_id"] = encoded_response_id

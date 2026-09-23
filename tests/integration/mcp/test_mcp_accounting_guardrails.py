@@ -142,7 +142,7 @@ def _content_filter(gateway: Gateway, mode: str) -> Iterator[str]:
 def test_pre_mcp_call_guardrail_blocks_before_the_peer_and_still_logs_spend(
     gateway: Gateway, entry: EntryPoint
 ) -> None:
-    with _content_filter(gateway, "pre_mcp_call") as guardrail, mcp_peer() as peer, gateway.scenario() as scenario:
+    with _content_filter(gateway, "pre_mcp_call"), mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "guard" + uuid.uuid4().hex[:8]
         identity: Final = _priced_server(scenario, peer, alias)
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
@@ -158,12 +158,8 @@ def test_pre_mcp_call_guardrail_blocks_before_the_peer_and_still_logs_spend(
         assert len(rows) == 2, rows
         failures: Final = [row for row in rows if row["status"] == "failure"]
         assert len(failures) == 1, rows
-        if failures[0]["model"] == "":
-            pytest.skip(
-                f"BUG: guardrail-blocked MCP call on {entry} logs a spend row with an empty model and no tool name "
-                f"(guardrail {guardrail})"
-            )
         assert failures[0]["model"] == f"MCP: {alias}-add", failures[0]
+        assert _tool_metadata(failures[0])["mcp_server_name"] == alias, failures[0]
 
 
 def test_guardrail_blocked_call_never_reaches_peer_through_the_official_client(gateway: Gateway) -> None:
