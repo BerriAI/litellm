@@ -99,6 +99,10 @@ LIT012  TypedDict field without a `ReadOnly[...]` qualifier. A writable key lets
         the functional form (`X = TypedDict("X", {...})`) is checked too. A base
         imported from another module is out of reach without import resolution.
         Suppress with `# writable-ok: <reason>`.
+LIT013  A `# <token>-ok: <reason>` suppression on a line where none of the rules
+        that token suppresses fires. Like ruff's RUF100: a marker that suppresses
+        nothing rots in place and hides real violations that land on the line
+        later. Delete it.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -118,10 +122,10 @@ import os
 import re
 import sys
 import tokenize
-from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import NamedTuple
  
 # Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
@@ -192,6 +196,17 @@ OK_SUPPRESSIONS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("rebind-ok", REBIND_OK_RE),
     ("writable-ok", WRITABLE_OK_RE),
 )
+
+# The rule codes each `*-ok` token suppresses (LIT013). A token on a line where
+# none of these fire is dead weight: the marker suppresses nothing.
+SUPPRESSED_CODES: Mapping[str, frozenset[str]] = MappingProxyType({
+    "mutable-ok": frozenset(("LIT001", "LIT002")),
+    "cast-ok": frozenset(("LIT006",)),
+    "guard-ok": frozenset(("LIT007",)),
+    "kwargs-ok": frozenset(("LIT008",)),
+    "rebind-ok": frozenset(("LIT010", "LIT011")),
+    "writable-ok": frozenset(("LIT012",)),
+})
  
  
 class Violation(NamedTuple):
@@ -204,16 +219,7 @@ class Violation(NamedTuple):
         return f"{self.path}:{self.line}: {self.code} {self.message}"
  
  
-@dataclass(frozen=True, slots=True)
-class Comments:
-    """The lines carrying each valid `*-ok` suppression."""
 
-    mutable_ok_lines: frozenset[int]
-    cast_ok_lines: frozenset[int]
-    guard_ok_lines: frozenset[int]
-    kwargs_ok_lines: frozenset[int]
-    rebind_ok_lines: frozenset[int]
-    writable_ok_lines: frozenset[int]
  
  
 # --------------------------------------------------------------------------- #
@@ -261,7 +267,10 @@ def _comment_violations(path: Path, line_no: int, text: str) -> Iterator[Violati
                             "ignore requires a reason: `# pyright: ignore[ruleName]  # <reason>`")
  
  
-def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, ...]]:
+def scan_comments(
+    path: Path, source: str
+) -> tuple[Mapping[str, frozenset[int]], tuple[Violation, ...]]:
+    """Tokenize comments into (token -> lines with a valid reasoned marker, comment violations)."""
     try:
         tokens = tokenize.generate_tokens(io.StringIO(source).readline)
         comment_toks = tuple((t.start[0], t.string) for t in tokens if t.type == tokenize.COMMENT)
@@ -269,20 +278,13 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
         # tokenize raises TokenError (EOF mid-construct) or a SyntaxError subclass
         # (IndentationError / TabError) on malformed source; defer to ast.parse below,
         # which re-raises and is reported as LIT000 rather than crashing the run.
-        return Comments(frozenset(), frozenset(), frozenset(), frozenset(), frozenset(), frozenset()), ()
-
-    def _lines_with(regex: re.Pattern[str]) -> frozenset[int]:
-        return frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
+        return {token: frozenset() for token, _ in OK_SUPPRESSIONS}, ()
 
     return (
-        Comments(
-            mutable_ok_lines=_lines_with(MUTABLE_OK_RE),
-            cast_ok_lines=_lines_with(CAST_OK_RE),
-            guard_ok_lines=_lines_with(GUARD_OK_RE),
-            kwargs_ok_lines=_lines_with(KWARGS_OK_RE),
-            rebind_ok_lines=_lines_with(REBIND_OK_RE),
-            writable_ok_lines=_lines_with(WRITABLE_OK_RE),
-        ),
+        MappingProxyType({
+            token: frozenset(line for line, text in comment_toks if _valid_ok(regex, text))
+            for token, regex in OK_SUPPRESSIONS
+        }),
         tuple(v for line, text in comment_toks for v in _comment_violations(path, line, text)),
     )
  
@@ -346,34 +348,33 @@ def _mutable_ann(path: Path, line: int, name: str, where: str) -> Violation:
 
 
 def _annotation_violations(
-    path: Path, annotation: ast.expr | None, line: int, where: str, ok_lines: frozenset[int]
+    path: Path, annotation: ast.expr | None, line: int, where: str
 ) -> Iterator[Violation]:
-    if annotation is None or line in ok_lines:
+    if annotation is None:
         return
     yield from (_mutable_ann(path, line, name, where) for name in mutable_names_in(annotation))
  
  
 def _function_violations(
-    path: Path, node: ast.FunctionDef | ast.AsyncFunctionDef, comments: Comments
+    path: Path, node: ast.FunctionDef | ast.AsyncFunctionDef
 ) -> Iterator[Violation]:
-    mutable_ok = comments.mutable_ok_lines
     args = node.args
     for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
         yield from _annotation_violations(
-            path, arg.annotation, arg.lineno, f"parameter `{arg.arg}` of `{node.name}`", mutable_ok
+            path, arg.annotation, arg.lineno, f"parameter `{arg.arg}` of `{node.name}`"
         )
 
     # *args is allowed when typed (it's just a tuple); ruff ANN002 forces the
     # annotation, so here we only add the LIT001 mutable-collection check on the element type.
     if args.vararg is not None:
         yield from _annotation_violations(
-            path, args.vararg.annotation, args.vararg.lineno, f"`*args` of `{node.name}`", mutable_ok
+            path, args.vararg.annotation, args.vararg.lineno, f"`*args` of `{node.name}`"
         )
 
     # **kwargs is banned outright (LIT008): it erases the keyword contract and forces
     # Any-typing on everything it carries. ruff can require it be typed (ANN003) but
     # cannot ban the syntax, so this rule does.
-    if args.kwarg is not None and args.kwarg.lineno not in comments.kwargs_ok_lines:
+    if args.kwarg is not None:
         yield Violation(
             path, args.kwarg.lineno, "LIT008",
             f"`**{args.kwarg.arg}` is banned: it erases the keyword contract and forces "
@@ -384,23 +385,22 @@ def _function_violations(
 
     if node.returns is not None:
         yield from _annotation_violations(
-            path, node.returns, node.returns.lineno, f"return type of `{node.name}`", mutable_ok
+            path, node.returns, node.returns.lineno, f"return type of `{node.name}`"
         )
  
  
-def iter_annotation_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+def iter_annotation_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
     # Every annotation is in scope: signatures (params / *args / return) plus every
     # `x: T` -- class attribute, local, or module global. The latter three are all
     # ast.AnnAssign, so one walk covers them; only the signature annotations (which
     # are not AnnAssign) need the dedicated helper.
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            yield from _function_violations(path, node, comments)
+            yield from _function_violations(path, node)
         elif isinstance(node, ast.AnnAssign):
             target = node.target.id if isinstance(node.target, ast.Name) else "<target>"
             yield from _annotation_violations(
-                path, node.annotation, node.lineno,
-                f"the type of `{target}`", comments.mutable_ok_lines,
+                path, node.annotation, node.lineno, f"the type of `{target}`"
             )
 
 
@@ -421,9 +421,9 @@ def _is_cast_call(node: ast.Call) -> bool:
     )
 
 
-def iter_cast_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+def iter_cast_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _is_cast_call(node) and node.lineno not in comments.cast_ok_lines:
+        if isinstance(node, ast.Call) and _is_cast_call(node):
             yield Violation(
                 path, node.lineno, "LIT006",
                 "cast() is an unchecked assertion (the type checker takes it on faith); "
@@ -432,7 +432,7 @@ def iter_cast_violations(path: Path, tree: ast.AST, comments: Comments) -> Itera
             )
 
 
-def iter_guard_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+def iter_guard_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
     # TypeGuard/TypeIs are legal only as a function's return annotation (`-> TypeGuard[int]`),
     # so the walk is confined to `node.returns`; a runtime name that merely happens to read
     # `TypeGuard` is not a narrowing predicate. ruff bans the import; this flags the use.
@@ -445,7 +445,7 @@ def iter_guard_violations(path: Path, tree: ast.AST, comments: Comments) -> Iter
                 else sub.attr if isinstance(sub, ast.Attribute)
                 else None
             )
-            if name in UNSAFE_GUARDS and sub.lineno not in comments.guard_ok_lines:
+            if name in UNSAFE_GUARDS:
                 yield Violation(
                     path, sub.lineno, "LIT007",
                     f"`{name}` narrowing predicate: the checker never verifies the body, so a "
@@ -591,7 +591,7 @@ def _construction_kind(node: ast.expr) -> str | None:
     return None
 
 
-def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+def iter_construction_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
     in_annotation = _annotation_node_ids(tree)
     frozen_arguments = _frozen_argument_ids(tree)
     typeddict_builds = _typeddict_build_ids(tree)
@@ -604,7 +604,7 @@ def iter_construction_violations(path: Path, tree: ast.AST, comments: Comments) 
         ):
             continue
         kind = _construction_kind(node)
-        if kind is None or node.lineno in comments.mutable_ok_lines:
+        if kind is None:
             continue
         yield Violation(
             path, node.lineno, "LIT002",
@@ -812,7 +812,7 @@ def _is_config_surface(path: Path) -> bool:
     return path.parts[-2:] == CONFIG_SURFACE_PARTS
 
 
-def iter_final_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+def iter_final_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
     for scope in iter_scopes(tree):
         if isinstance(scope, ast.Module) and _is_config_surface(path):
             continue
@@ -827,7 +827,7 @@ def iter_final_violations(path: Path, tree: ast.AST, comments: Comments) -> Iter
         for i, b in enumerate(bindings):
             if b.name in declared or b.name in params or b.in_loop:
                 continue
-            if _exempt_final_name(b.name) or b.line in comments.rebind_ok_lines:
+            if _exempt_final_name(b.name):
                 continue
             if b.form in ASSIGN_FORMS:
                 yield Violation(
@@ -908,7 +908,7 @@ def _param_owners(
     return {**{p: own_name for p in _function_params(scope)}, **nonlocal_params}
 
 
-def iter_param_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+def iter_param_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
     for scope, enclosing in _iter_param_scopes(tree):
         bindings = scope_bindings(scope)
         owners = _param_owners(scope, bindings, enclosing)
@@ -917,8 +917,6 @@ def iter_param_violations(path: Path, tree: ast.AST, comments: Comments) -> Iter
         for b in bindings:
             if b.form in SCOPE_STATEMENT_FORMS or b.name not in owners:
                 continue
-            if b.line in comments.rebind_ok_lines:
-                continue
             yield Violation(
                 path, b.line, "LIT011",
                 f"parameter `{b.name}` of `{owners[b.name]}` is re-bound: the name silently "
@@ -926,7 +924,7 @@ def iter_param_violations(path: Path, tree: ast.AST, comments: Comments) -> Iter
                 f"(suppress: `# rebind-ok: <reason>`)",
             )
         for name, line in _mutation_sites(scope):
-            if name not in owners or name in SELF_PARAMS or line in comments.rebind_ok_lines:
+            if name not in owners or name in SELF_PARAMS:
                 continue
             yield Violation(
                 path, line, "LIT011",
@@ -1016,13 +1014,13 @@ def _functional_fields(tree: ast.AST) -> Iterator[_Field]:
                 yield _Field(owner, key.value, value, value.lineno)
 
 
-def iter_typeddict_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
+def iter_typeddict_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
     fields = (
         *(f for cls in _typeddict_classes(tree) for f in _class_fields(cls)),
         *_functional_fields(tree),
     )
     for field in fields:
-        if _has_readonly_qualifier(field.annotation) or field.line in comments.writable_ok_lines:
+        if _has_readonly_qualifier(field.annotation):
             continue
         yield Violation(
             path, field.line, "LIT012",
@@ -1031,6 +1029,37 @@ def iter_typeddict_violations(path: Path, tree: ast.AST, comments: Comments) -> 
             f"`ReadOnly[...]` (PEP 705; nests freely with Required/NotRequired/Annotated) "
             f"(suppress: `# writable-ok: <reason>`)",
         )
+
+
+# --------------------------------------------------------------------------- #
+# Suppression application and unused suppressions (LIT013)
+# --------------------------------------------------------------------------- #
+
+
+def apply_suppressions(
+    path: Path,
+    raw: Sequence[Violation],
+    suppressions: Mapping[str, frozenset[int]],
+) -> tuple[Violation, ...]:
+    """Drop raw violations a valid `*-ok` marker suppresses; flag markers that suppress nothing."""
+    kept = tuple(
+        v for v in raw
+        if not any(
+            v.line in lines and v.code in SUPPRESSED_CODES[token]
+            for token, lines in suppressions.items()
+        )
+    )
+    unused = (
+        Violation(
+            path, line, "LIT013",
+            f"`# {token}` suppresses nothing: no "
+            f"{'/'.join(sorted(SUPPRESSED_CODES[token]))} violation on this line, so delete it",
+        )
+        for token, lines in suppressions.items()
+        for line in sorted(lines)
+        if not any(v.line == line and v.code in SUPPRESSED_CODES[token] for v in raw)
+    )
+    return (*kept, *unused)
 
 
 # --------------------------------------------------------------------------- #
@@ -1044,7 +1073,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
     except (OSError, UnicodeDecodeError) as exc:
         return (Violation(path, 0, "LIT000", f"could not read file: {exc}"),)
  
-    comments, violations = scan_comments(path, source)
+    suppressions, violations = scan_comments(path, source)
  
     try:
         tree = ast.parse(source, filename=str(path))
@@ -1053,13 +1082,19 @@ def check_file(path: Path) -> tuple[Violation, ...]:
  
     return (
         *violations,
-        *iter_annotation_violations(path, tree, comments),
-        *iter_cast_violations(path, tree, comments),
-        *iter_guard_violations(path, tree, comments),
-        *iter_construction_violations(path, tree, comments),
-        *iter_final_violations(path, tree, comments),
-        *iter_param_violations(path, tree, comments),
-        *iter_typeddict_violations(path, tree, comments),
+        *apply_suppressions(
+            path,
+            (
+                *iter_annotation_violations(path, tree),
+                *iter_cast_violations(path, tree),
+                *iter_guard_violations(path, tree),
+                *iter_construction_violations(path, tree),
+                *iter_final_violations(path, tree),
+                *iter_param_violations(path, tree),
+                *iter_typeddict_violations(path, tree),
+            ),
+            suppressions,
+        ),
     )
  
  

@@ -40,17 +40,17 @@ def test_scan_comments_tokenizes_every_comment():
     # was tokenized, and the valid cast-ok suppression line must be captured. A crash in the
     # readline path would leave both empty.
     source = "x = 1  # noqa\ny = 2  # cast-ok: validated upstream by the caller\n"
-    comments, violations = checker.scan_comments(Path("snippet.py"), source)
+    suppressions, violations = checker.scan_comments(Path("snippet.py"), source)
     assert [v.code for v in violations] == ["LIT003"]
-    assert comments.cast_ok_lines == frozenset({2})
+    assert suppressions["cast-ok"] == frozenset({2})
 
 
 def test_scan_comments_does_not_crash_on_malformed_source():
     # A dedent mismatch makes tokenize raise IndentationError (a SyntaxError subclass);
     # scan_comments must swallow it, not propagate and crash the whole run.
-    comments, violations = checker.scan_comments(Path("x.py"), "if True:\n    a = 1\n  b = 2\n")
+    suppressions, violations = checker.scan_comments(Path("x.py"), "if True:\n    a = 1\n  b = 2\n")
     assert violations == ()
-    assert comments.cast_ok_lines == frozenset()
+    assert suppressions["cast-ok"] == frozenset()
 
 
 def test_malformed_source_degrades_to_lit000(tmp_path):
@@ -105,6 +105,43 @@ def test_ok_suppression_without_reason_is_flagged(tmp_path):
     codes = _codes(tmp_path, "y = []  # mutable-ok\n")
     assert "LIT005" in codes  # reasonless suppression
     assert "LIT002" in codes  # and it does not suppress, so the construction still trips
+
+
+# --------------------------------------------------------------------------- #
+# Unused suppressions (LIT013)
+# --------------------------------------------------------------------------- #
+
+
+def test_mutable_ok_on_a_real_violation_suppresses_and_is_not_lit013(tmp_path):
+    codes = _codes(tmp_path, "x: Final = []  # mutable-ok: seed\n")
+    assert "LIT002" not in codes
+    assert "LIT013" not in codes
+
+
+def test_mutable_ok_on_a_clean_line_is_lit013(tmp_path):
+    f = tmp_path / "snippet.py"
+    f.write_text("x: Final = (1, 2)  # mutable-ok: stale\n", encoding="utf-8")
+    found = checker.check_file(f)
+    assert [v.code for v in found] == ["LIT013"]
+    assert "mutable-ok" in found[0].message
+
+
+def test_mutable_ok_does_not_suppress_rebind_codes(tmp_path):
+    codes = _codes(tmp_path, "x = 1  # mutable-ok: wrong token\n")
+    assert "LIT010" in codes
+    assert "LIT013" in codes
+
+
+def test_rebind_ok_on_a_real_param_rebind_is_not_lit013(tmp_path):
+    codes = _codes(tmp_path, "def f(p: int) -> None:\n    p = 2  # rebind-ok: reset\n")
+    assert "LIT011" not in codes
+    assert "LIT013" not in codes
+
+
+def test_reasonless_ok_on_a_clean_line_is_lit005_not_lit013(tmp_path):
+    codes = _codes(tmp_path, "x: Final = (1, 2)  # mutable-ok\n")
+    assert "LIT005" in codes
+    assert "LIT013" not in codes
 
 
 # --------------------------------------------------------------------------- #
