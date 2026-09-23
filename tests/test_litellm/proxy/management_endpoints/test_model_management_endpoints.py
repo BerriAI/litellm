@@ -1489,7 +1489,18 @@ class TestUpdateModel:
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
         mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=updated_row)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=TestUpdateModel._team_row(existing.model_info.team_id)
+        )
         return mock_prisma
+
+    @staticmethod
+    def _team_row(team_id: str | None) -> MagicMock | None:
+        if team_id is None:
+            return None
+        team_row = MagicMock()
+        team_row.model_dump.return_value = LiteLLM_TeamTable(team_id=team_id).model_dump()
+        return team_row
 
     @contextlib.contextmanager
     def _legacy_update_env(self, mock_prisma: MagicMock, model_id: str):
@@ -1500,10 +1511,6 @@ class TestUpdateModel:
             patch("litellm.proxy.proxy_server.llm_router", mock_router),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
             patch("litellm.proxy.proxy_server.premium_user", True),
-            patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-                new=AsyncMock(return_value=None),
-            ),
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
                 side_effect=lambda value, **kwargs: value,
