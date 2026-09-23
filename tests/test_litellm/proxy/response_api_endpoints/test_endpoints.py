@@ -3,6 +3,7 @@ Test for response_api_endpoints/endpoints.py
 """
 
 import unittest
+from collections.abc import Mapping
 from typing import Any, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +15,7 @@ from httpx import Response
 
 import litellm
 from litellm.proxy.proxy_server import app
+from litellm.types.llms.openai import ResponsesAPIResponse
 
 
 @pytest.mark.asyncio
@@ -2196,7 +2198,10 @@ class TestCursorGateRecognizesRoutingGroups:
 BLOCK_MESSAGE = "Content flagged by policy, response withheld"
 
 
-def _post_blocked_responses(original_response, payload=None):
+def _post_blocked_responses(
+    original_response: ResponsesAPIResponse | litellm.ModelResponse | None,
+    payload: Mapping[str, object] | None = None,
+) -> httpx.Response:
     from litellm.integrations.custom_guardrail import ModifyResponseException
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -2230,7 +2235,7 @@ def _post_blocked_responses(original_response, payload=None):
         app.dependency_overrides.pop(user_api_key_auth, None)
 
 
-def _assert_blocked_output_item(item, text):
+def _assert_blocked_output_item(item: Mapping[str, object], text: str) -> None:
     assert item["type"] == "message"
     assert item["id"].startswith("msg_")
     assert item["role"] == "assistant"
@@ -2239,7 +2244,7 @@ def _assert_blocked_output_item(item, text):
     assert item["content"][0]["text"] == text
 
 
-def _sse_data_frames(text):
+def _sse_data_frames(text: str) -> list[str]:
     return [line.removeprefix("data: ").strip() for line in text.splitlines() if line.startswith("data: ")]
 
 
