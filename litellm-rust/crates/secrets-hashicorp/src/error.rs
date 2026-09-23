@@ -4,6 +4,8 @@ pub enum Error {
     EnterpriseRequired,
     #[error("invalid secret name")]
     InvalidSecretName(#[from] litellm_secrets_types::Error),
+    #[error("HashiCorp Vault received an incompatible operation context")]
+    InvalidOperationContext,
     #[error("HashiCorp Vault client failed")]
     Client(
         #[from]
@@ -29,6 +31,8 @@ pub enum Error {
     MalformedPayload,
     #[error("HashiCorp Vault secret value is not a string")]
     NonStringValue,
+    #[error("HashiCorp Vault operation timed out")]
+    Timeout,
     #[error("invalid HashiCorp Vault refresh interval")]
     RefreshInterval,
 }

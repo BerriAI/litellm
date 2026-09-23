@@ -159,6 +159,12 @@
     "tests/integration/routing/test_redis_recovery.py::test_owned_redis_outage_recovers_requests_and_real_response_cache": [
       "other.routing.redis.owned_outage_recovers_serving_and_response_cache"
     ],
+    "tests/integration/providers/test_anthropic_wire.py::test_anthropic_bare_string_content_item_is_rejected_as_client_error_before_the_wire[type_word]": [
+      "other.provider_wire.anthropic.bare_string_content_item_is_client_error"
+    ],
+    "tests/integration/providers/test_anthropic_wire.py::test_anthropic_bare_string_content_item_is_rejected_as_client_error_before_the_wire[plain]": [
+      "other.provider_wire.anthropic.bare_string_content_item_is_client_error"
+    ],
     "tests/integration/providers/test_anthropic_wire.py::test_anthropic_tool_history_and_cache_tokens_keep_wire_and_accounting_contracts": [
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
@@ -168,6 +174,12 @@
     ],
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_video_failed_result_reports_failed_status_and_fal_error": [
       "other.provider_wire.fal_ai.video_failed_result_surfaces_fal_error"
+    ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_h3_auto_duration_omits_duration_and_queues": [
+      "other.provider_wire.fal_ai.h3_auto_duration_omits_duration_and_queues"
+    ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_h3_oversized_size_uses_top_resolution_tier_and_queues": [
+      "other.provider_wire.fal_ai.h3_oversized_size_uses_top_resolution_tier"
     ],
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_row": [
       "other.provider_wire.fal_ai.gpt_image_generation_quality_size_wire_and_keyed_pricing"
@@ -184,6 +196,12 @@
     "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_charges_and_polls_pass_through_free": [
       "other.provider_wire.fal_ai.passthrough_queue_submit_charges_and_polls_do_not"
     ],
+    "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_prices_string_resolution_like_the_integer": [
+      "other.provider_wire.fal_ai.passthrough_queue_submit_prices_string_resolution_like_integer"
+    ],
+    "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_to_catalog_key_the_pricer_cannot_price_is_rejected_not_forwarded": [
+      "other.provider_wire.fal_ai.passthrough_queue_submit_rejects_unpriceable_catalog_key"
+    ],
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row": [
       "other.provider_wire.fal_ai.image_edit_json_data_urls_and_keyed_pricing"
     ],
@@ -192,6 +210,12 @@
     ],
     "tests/integration/providers/test_fal_ai_chat_wire.py::test_fal_moondream3_chat_sends_prompt_image_and_reasoning": [
       "other.provider_wire.fal_ai.moondream3_chat_query_wire_and_token_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_chat_wire.py::test_fal_moondream3_chat_rejects_non_string_reasoning_effort_before_the_wire": [
+      "other.provider_wire.fal_ai.chat_non_string_reasoning_effort_rejected_before_wire"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_without_deployment_api_base_uses_global_api_base": [
+      "other.provider_wire.fal_ai.global_api_base_routes_image_generation"
     ],
     "tests/integration/providers/test_xiaomi_mimo_wire.py::test_xiaomi_mimo_nonstream_surfaces_reasoning_and_charges_registry_price[mimo-v2.6-pro]": [
       "other.provider_wire.xiaomi_mimo.reasoning_content_and_registry_pricing"
@@ -208,6 +232,15 @@
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_h3_video_create_uses_canonical_body_and_status_path": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
     ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_result_probe_carries_the_deployment_extra_headers": [
+      "other.provider_wire.fal_ai.video_result_probe_forwards_extra_headers"
+    ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_result_probe_reuses_the_ssl_verify_false_client": [
+      "other.provider_wire.fal_ai.video_result_probe_honors_ssl_verify"
+    ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_provider_hanging_up_on_the_result_probe_keeps_the_completed_status": [
+      "other.provider_wire.fal_ai.video_result_probe_hangup_stays_completed"
+    ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit": [
       "mcp.call_tool.saved_headers.reach_actual_transport"
     ],
@@ -220,6 +253,9 @@
     "tests/integration/observability/test_callback_delivery.py::test_concurrent_success_and_failure_join_callbacks_and_rows_without_credentials": [
       "other.observability.callbacks.credentials_stay_out_of_event_bodies",
       "other.observability.callbacks.concurrent_results_join_complete_events_and_rows"
+    ],
+    "tests/integration/observability/test_otel_text_completion_choices.py::test_otel_weave_output_keeps_text_completion_provider_fields_beside_the_synthesized_message": [
+      "other.observability.otel.text_completion_choices_keep_provider_fields"
     ],
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
       "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
@@ -244,6 +280,15 @@
     ],
     "tests/integration/spend/test_filtered_ledger.py::test_rotated_keys_users_and_model_groups_preserve_success_failure_cache_ledger": [
       "quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals"
+    ],
+    "tests/integration/spend/test_shutdown_flush.py::test_daily_spend_batch_cancelled_while_waiting_for_a_pool_connection_is_written_by_the_final_flush": [
+      "quota_management.spend_tracking.shutdown_cancel_keeps_in_flight_daily_batch"
+    ],
+    "tests/integration/spend/test_shutdown_flush.py::test_daily_spend_batch_cancelled_while_waiting_for_a_row_lock_is_written_exactly_once": [
+      "quota_management.spend_tracking.shutdown_cancel_keeps_in_flight_daily_batch"
+    ],
+    "tests/integration/spend/test_spend_calculate.py::test_spend_calculate_rejects_unpriced_model_with_400": [
+      "quota_management.spend_tracking.spend_calculate.rejects_unpriced_model"
     ],
     "tests/integration/management/test_partial_update_sequences.py::test_restricted_actor_cannot_detach_key_from_project": [
       "mgmt.key.update.project_detach_denied_to_restricted_actor"
@@ -1737,6 +1782,18 @@
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[chat]": [
+      "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[embeddings]": [
+      "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[responses]": [
+      "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
+      "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
     ]
   },
   "browser": {
