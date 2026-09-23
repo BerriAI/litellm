@@ -147,7 +147,7 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
               <Label
                 htmlFor={`${field.id}-value`}
                 data-testid="metadata-schema-label"
-                className="h-9 flex-1 items-center truncate px-3 font-medium"
+                className="h-9 w-full flex-1 items-center truncate px-3 font-medium"
               >
                 {schemaLabel}
               </Label>
