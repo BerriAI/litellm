@@ -11,11 +11,6 @@ well-formed OCR document comes back. Per the e2e hard-fail contract, a case
 fails when no proxy answers and also fails once a request reaches it: the proxy
 fetches each provider's referenced secrets, so a
 missing credential surfaces as a live provider error rather than silent green.
-
-The Mistral key is shared with the suites that run alongside this one and the
-deployment has no fallback group, so the OCR call tolerates a bounded number of
-provider 429s the proxy relays (tolerate_provider_rate_limit); a 429 the proxy
-issues itself still fails the case at once.
 """
 
 from __future__ import annotations

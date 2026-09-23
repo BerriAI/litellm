@@ -356,15 +356,8 @@ def tolerate_provider_rate_limit[R: BaseModel](
     attempts: int = PROVIDER_RATE_LIMIT_ATTEMPTS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Result[R]:
-    """Bounded, opt-in retry of one call the PROVIDER throttled, for a deployment
-    with no fallback group whose provider key is shared with the suites that run
-    alongside this one. The transport never retries a 429 (see request_with_retry),
-    and this helper only absorbs the 429s the proxy relayed from the provider, which
-    litellm's exception mapping prefixes with its exception class; the proxy's own
-    limiter and budget 429s never carry that prefix and come back untouched, so
-    every assertion on those still sees them. The wait honors Retry-After when the
-    provider sent one and backs off geometrically otherwise, and every retry prints
-    so the throttling stays visible in the run log instead of vanishing into green."""
+    """Retry a call up to `attempts` times while the proxy relays the provider's own 429;
+    any other outcome, the proxy's own 429 included, comes back at once."""
     for attempt in range(1, attempts):
         match issue():
             case RateLimitedError(body=body, retry_after_seconds=retry_after) if PROVIDER_RATE_LIMIT_MARKER in body:

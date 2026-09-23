@@ -1,5 +1,4 @@
-"""Unit tests for the reliability helpers that read provider bodies, driven with
-the verbatim shapes the proxy relays; nothing here needs a proxy or a provider."""
+"""Contract tests for the helpers that read provider bodies; no proxy or provider needed."""
 
 from __future__ import annotations
 

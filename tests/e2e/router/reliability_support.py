@@ -377,13 +377,8 @@ class _AzureAnnotatedChatBody(BaseModel):
 
 
 def azure_prompt_filter_skipped(resp: StreamingResponse) -> bool:
-    """True when Azure answered without running its prompt content filter: the body
-    carries ``prompt_filter_results`` whose ``content_filter_results`` are all empty,
-    where a filter that ran records a verdict per category (jailbreak included).
-    Azure does this intermittently and it says nothing about the prompt, so a test
-    that needs the filter's verdict sends the prompt again instead of reading a
-    skipped filter as a pass. A body without the field (an OpenAI completion served
-    by a fallback, or an error body) is not a skipped filter."""
+    """True when Azure's 200 recorded no prompt-filter verdict (every `content_filter_results`
+    empty), so the prompt has to be sent again."""
     try:
         annotated: Final = _AzureAnnotatedChatBody.model_validate_json(resp.body)
     except ValidationError:
