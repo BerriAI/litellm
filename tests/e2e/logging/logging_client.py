@@ -17,35 +17,40 @@ import base64
 import json
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Literal
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
-
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation
-from proxy_client import ProxyClient
 from e2e_http import (
     URL,
     AuthHeaders,
-    require_successful_call,
     NoBody,
+    Result,
     StreamingResponse,
     Success,
     get,
+    require_successful_call,
     unwrap,
 )
 from models import (
     AnthropicMessagesBody,
+    CallbackDeleteBody,
+    CallbackDeleteResponse,
     ChatBody,
     ChatMessage,
     ChatResponse,
     ChatTool,
     ChatToolFunction,
+    ConfigCallbacksResponse,
+    ConfigUpdateCallbacksBody,
+    ConfigUpdateResponse,
     KeyGenerateBody,
     KeyLoggingCallback,
     KeyLoggingCallbackVars,
     KeyMetadata,
+    LitellmCallbackSettings,
     LiteLLMParamsBody,
     OrgDeleteBody,
     OrgNewBody,
@@ -58,6 +63,8 @@ from models import (
     UserNewBody,
     UserNewResponse,
 )
+from proxy_client import ProxyClient
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 # Deliberately invalid *upstream provider* key for failure-path tests.
 # Not a LiteLLM virtual key; OpenAI must reject it after the proxy accepts the call.
@@ -487,6 +494,56 @@ class LoggingClient:
 
     def delete_model(self, model_id: str) -> None:
         self.proxy.delete_model(model_id)
+
+    # ---- global callback configuration (Admin UI Logging & Alerts surface) ----
+
+    def set_litellm_callbacks(self, settings: LitellmCallbackSettings) -> ConfigUpdateResponse:
+        """POST /config/update, the route the Admin UI's Logging page uses to add
+        a callback."""
+        return unwrap(
+            self.proxy.transport.post(
+                "/config/update",
+                headers=self.proxy.transport.master,
+                json=ConfigUpdateCallbacksBody(litellm_settings=settings),
+                response_type=ConfigUpdateResponse,
+            )
+        )
+
+    def clear_litellm_callbacks(self, *keys: Literal["callbacks", "failure_callback"]) -> None:
+        """Empty the given litellm_settings callback lists so teardown leaves the
+        stored row as it was. success_callback is absent on purpose: /config/update
+        unions that key instead of replacing it, so entries there can only leave
+        through /config/callback/delete."""
+        _ = self.set_litellm_callbacks(
+            LitellmCallbackSettings(
+                callbacks=[] if "callbacks" in keys else None,
+                failure_callback=[] if "failure_callback" in keys else None,
+            )
+        )
+
+    def config_callback_names(self) -> set[str]:
+        """Every name GET /get/config/callbacks lists as an active callback."""
+        return {
+            entry.name
+            for entry in unwrap(
+                self.proxy.transport.get(
+                    "/get/config/callbacks",
+                    headers=self.proxy.transport.master,
+                    params=NoBody(),
+                    response_type=ConfigCallbacksResponse,
+                )
+            ).callbacks
+        }
+
+    def delete_config_callback(self, callback_name: str) -> Result[CallbackDeleteResponse]:
+        """POST /config/callback/delete. Returns the raw Result so the caller can
+        unwrap for the success contract or ignore it for best-effort cleanup."""
+        return self.proxy.transport.post(
+            "/config/callback/delete",
+            headers=self.proxy.transport.master,
+            json=CallbackDeleteBody(callback_name=callback_name),
+            response_type=CallbackDeleteResponse,
+        )
 
     def chat(self, key: str, model: str, text: str) -> ChatResponse:
         return unwrap(

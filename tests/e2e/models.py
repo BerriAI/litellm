@@ -1147,6 +1147,55 @@ class ConfigFieldList(RootModel[tuple[ConfigField, ...]]):
     """GET /config/list answers with a bare array of general_settings fields."""
 
 
+class LitellmCallbackSettings(BaseModel):
+    """The litellm_settings callback lists /config/update merges. Unset keys are
+    left out of the request so the proxy keeps whatever the stored row holds."""
+
+    model_config = ConfigDict(extra="ignore")
+    success_callback: list[str] | None = None
+    failure_callback: list[str] | None = None
+    callbacks: list[str] | None = None
+
+
+class ConfigUpdateCallbacksBody(BaseModel):
+    """POST /config/update body: the same shape the Admin UI's Logging page
+    sends when an admin adds a callback (litellm_settings plus, in the UI's
+    case, environment_variables the test does not need)."""
+
+    litellm_settings: LitellmCallbackSettings
+
+
+class ConfigUpdateResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    message: str
+
+
+class ConfigCallbackEntry(BaseModel):
+    """One row of GET /get/config/callbacks `callbacks`. `type` is which
+    configured list the entry came from (success, failure, success_and_failure)."""
+
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    type: str | None = None
+    read_only: bool | None = None
+
+
+class ConfigCallbacksResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    callbacks: list[ConfigCallbackEntry] = []
+
+
+class CallbackDeleteBody(BaseModel):
+    callback_name: str
+
+
+class CallbackDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    message: str
+    removed_callback: str
+    remaining_callbacks: list[str] = []
+
+
 class CostMapEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_provider: str | None = None
