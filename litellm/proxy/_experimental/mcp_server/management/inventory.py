@@ -22,11 +22,15 @@ INVENTORY_PATH: Final = Path(__file__).with_name("inventory.json")
 
 
 def catalog_inventory(catalog: ManagementCatalog) -> dict[str, dict[str, str]]:
-    inventory: Final = {
-        **{f"{tool.method} {tool.path_template}": {"tool": name} for name, tool in catalog.tools.items()},
-        **{key: {"excluded": reason} for key, reason in catalog.exclusions.items()},
+    tool_entries: Final = {  # mutable-ok: JSON inventory tool entries
+        f"{tool.method} {tool.path_template}": {"tool": name}  # mutable-ok: inventory entry body
+        for name, tool in catalog.tools.items()
     }
-    return dict(sorted(inventory.items()))
+    excluded_entries: Final = {  # mutable-ok: JSON inventory excluded entries
+        key: {"excluded": reason}  # mutable-ok: inventory entry body
+        for key, reason in catalog.exclusions.items()
+    }
+    return dict(sorted((tool_entries | excluded_entries).items()))  # mutable-ok: sorted JSON inventory mapping
 
 
 def render_inventory(catalog: ManagementCatalog) -> str:

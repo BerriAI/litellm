@@ -30,6 +30,7 @@ from litellm.proxy._experimental.mcp_server.management.dispatcher import (
     Dispatch,
     ManagementRequestContext,
     build_management_asgi_app,
+    build_management_client,
     call_tool,
     error_result,
     set_dispatch,
@@ -113,7 +114,14 @@ async def start_management_mcp_server(general_settings: Mapping[str, object], ap
     if not general_settings.get("enable_management_mcp"):
         return
     catalog: Final = build_catalog(app.openapi())
-    set_dispatch(Dispatch(catalog=catalog, internal_app=build_management_asgi_app(app)))
+    internal_app: Final = build_management_asgi_app(app)
+    set_dispatch(
+        Dispatch(
+            catalog=catalog,
+            internal_app=internal_app,
+            http_client=build_management_client(internal_app),
+        )
+    )
     server: Final = ManagementMCPServer(catalog)
     await server.start()
     _active_server = server
@@ -126,7 +134,9 @@ async def shutdown_management_mcp_server() -> None:
     global _active_server
     server: Final = _active_server
     _active_server = None
-    set_dispatch(None)
+    dispatch: Final = set_dispatch(None)
+    if dispatch is not None:
+        await dispatch.http_client.aclose()
     if server is not None:
         await server.close()
 

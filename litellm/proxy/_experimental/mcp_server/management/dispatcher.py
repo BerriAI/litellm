@@ -11,6 +11,7 @@ import asyncio
 import json
 import re
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Final, cast
 from urllib.parse import urlencode
@@ -70,14 +71,37 @@ class ManagementRequestContext:
 class Dispatch:
     catalog: ManagementCatalog
     internal_app: ASGIApp
+    http_client: httpx.AsyncClient
 
 
 _active_dispatch: Dispatch | None = None
+_call_context: Final = ContextVar[ManagementRequestContext | None]("management_mcp_call_context", default=None)
 
 
-def set_dispatch(dispatch: Dispatch | None) -> None:
+def build_management_client(internal_app: ASGIApp) -> httpx.AsyncClient:
+    """One shared client over the internal ASGI transport for the server lifetime.
+
+    The transport is fixed, so the per-call client tuple and root path are
+    stamped onto the scope through ``_call_context`` instead of rebuilding a
+    client per tool call (a shared client is also what the async-client budget
+    checker requires).
+    """
+
+    async def scoped_app(scope: Scope, receive: Receive, send: Send) -> None:
+        ctx: Final = _call_context.get()
+        if ctx is not None:
+            scope["client"] = ctx.client or ("127.0.0.1", 0)
+            scope["root_path"] = ctx.root_path
+        await internal_app(scope, receive, send)
+
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=scoped_app), base_url=_INTERNAL_BASE_URL)
+
+
+def set_dispatch(dispatch: Dispatch | None) -> Dispatch | None:
     global _active_dispatch
+    previous: Final = _active_dispatch
     _active_dispatch = dispatch
+    return previous
 
 
 def build_management_asgi_app(app: FastAPI) -> ASGIApp:
@@ -191,12 +215,10 @@ def _target_url(tool: ManagementTool, path_args: Mapping[str, object], query_arg
 
 
 def _forwarded_headers(ctx: ManagementRequestContext) -> dict[str, str]:
-    headers: Final = dict(
-        {  # mutable-ok: header map assembled for httpx
-            "content-type": "application/json",
-            ctx.credential_header: ctx.credential_value,
-        }
-    )
+    headers: Final = {  # mutable-ok: header map assembled for httpx
+        "content-type": "application/json",
+        ctx.credential_header: ctx.credential_value,
+    }
     if ctx.litellm_changed_by is not None:
         headers["litellm-changed-by"] = ctx.litellm_changed_by
     if ctx.request_id is not None:
@@ -224,27 +246,23 @@ async def _execute(
     url: str,
     body: Mapping[str, object] | None,
     ctx: ManagementRequestContext,
-    internal_app: ASGIApp,
+    client: httpx.AsyncClient,
 ) -> mcp_types.CallToolResult:
     is_mutation: Final = tool.method != "GET"
     try:
         async with asyncio.timeout(_HANDLER_TIMEOUT_SECONDS):
-            transport: Final = httpx.ASGITransport(
-                app=internal_app,
-                client=ctx.client or ("127.0.0.1", 0),
-                root_path=ctx.root_path,
-            )
-            async with (
-                httpx.AsyncClient(transport=transport, base_url=_INTERNAL_BASE_URL) as client,
-                client.stream(
+            token: Final = _call_context.set(ctx)
+            try:
+                async with client.stream(
                     tool.method,
                     url,
                     content=json.dumps(body).encode() if body is not None else None,
                     headers=_forwarded_headers(ctx),
-                ) as response,
-            ):
-                status: Final = response.status_code
-                raw: Final = await _read_capped_body(response)
+                ) as response:
+                    status: Final = response.status_code
+                    raw: Final = await _read_capped_body(response)
+            finally:
+                _call_context.reset(token)
     except _ResultTooLarge:
         if is_mutation:
             return error_result(
@@ -298,4 +316,4 @@ async def call_tool(
         url: Final = _target_url(tool, path_args, query_args)
     except ValueError as exc:
         return error_result(400, str(exc))
-    return await _execute(tool, url, body_args, ctx, dispatch.internal_app)
+    return await _execute(tool, url, body_args, ctx, dispatch.http_client)

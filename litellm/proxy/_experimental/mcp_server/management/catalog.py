@@ -181,7 +181,9 @@ def _exclusion_reason(path: str, method: str, operation: Mapping[str, object]) -
         return "excluded path prefix"
     request_body: Final = operation.get("requestBody")
     if isinstance(request_body, Mapping):
-        body_map: Final = cast(Mapping[str, object], request_body)  # cast-ok: spec JSON object
+        body_map: Final = cast(  # cast-ok: spec JSON object
+            Mapping[str, object], request_body
+        )
         content: Final = _json_object(body_map.get("content"))
         if _JSON_MEDIA_TYPE not in content:
             return "non-JSON request body"
@@ -263,17 +265,19 @@ def _build_tool(
     operation: Mapping[str, object],
     components: Mapping[str, object],
 ) -> ManagementTool:
-    resolved: Final = resolve_operation_params(
-        cast(
-            "_OpenAPIOperation", dict(operation)
-        ),  # cast-ok: spec JSON node  # mutable-ok: node copy for the typed resolver signature
-        cast(
-            "_OpenAPIPathItem", dict(path_item)
-        ),  # cast-ok: spec JSON node  # mutable-ok: node copy for the typed resolver signature
-        cast(
-            "_OpenAPIComponents", dict(components)
-        ),  # cast-ok: spec JSON node  # mutable-ok: node copy for the typed resolver signature
+    operation_typed: Final = cast(  # cast-ok: spec JSON node
+        "_OpenAPIOperation",
+        dict(operation),  # mutable-ok: node copy for resolver
     )
+    path_item_typed: Final = cast(  # cast-ok: spec JSON node
+        "_OpenAPIPathItem",
+        dict(path_item),  # mutable-ok: node copy for resolver
+    )
+    components_typed: Final = cast(  # cast-ok: spec JSON node
+        "_OpenAPIComponents",
+        dict(components),  # mutable-ok: node copy for resolver
+    )
+    resolved: Final = resolve_operation_params(operation_typed, path_item_typed, components_typed)
     parameters: Final = tuple(resolved.get("parameters", ()))
     path_section: Final = _params_object(parameters, "path")
     query_section: Final = _params_object(parameters, "query")
@@ -295,11 +299,10 @@ def _build_tool(
         properties["query"] = query_section
     if body_section is not None:
         properties["body"] = body_section
-        if isinstance(request_body, Mapping) and cast(
+        body_map: Final = cast(  # cast-ok: spec JSON object
             Mapping[str, object], request_body
-        ).get(  # cast-ok: spec JSON object
-            "required"
-        ):
+        )
+        if body_map.get("required"):
             required.append("body")
 
     fragments: Final = tuple(properties.values())

@@ -10,6 +10,7 @@ from litellm.proxy._experimental.mcp_server.management.dispatcher import (
     Dispatch,
     ManagementRequestContext,
     build_management_asgi_app,
+    build_management_client,
     call_tool,
     set_dispatch,
 )
@@ -72,7 +73,14 @@ def _fixture_app() -> FastAPI:
 @pytest.fixture(autouse=True)
 def _dispatch_fixture():
     app = _fixture_app()
-    set_dispatch(Dispatch(catalog=build_catalog(app.openapi()), internal_app=build_management_asgi_app(app)))
+    internal_app = build_management_asgi_app(app)
+    set_dispatch(
+        Dispatch(
+            catalog=build_catalog(app.openapi()),
+            internal_app=internal_app,
+            http_client=build_management_client(internal_app),
+        )
+    )
     yield app
     set_dispatch(None)
 
