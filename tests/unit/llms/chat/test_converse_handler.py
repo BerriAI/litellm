@@ -1,4 +1,5 @@
 import json
+from collections.abc import AsyncIterator
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -144,7 +145,7 @@ class TestBedrockRegionInModelPath:
         assert optional_params["aws_region_name"] == "eu-west-1"
 
 
-def _stream_completion_with_spied_iter_bytes(model: str, **kwargs) -> MagicMock:
+def _stream_completion_with_spied_iter_bytes(model: str, stream_chunk_size: int | None = None) -> MagicMock:
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.iter_bytes = MagicMock(return_value=iter([]))
@@ -159,7 +160,7 @@ def _stream_completion_with_spied_iter_bytes(model: str, **kwargs) -> MagicMock:
         aws_access_key_id="fake",
         aws_secret_access_key="fake",
         aws_region_name="us-east-1",
-        **kwargs,
+        stream_chunk_size=stream_chunk_size,
     )
     return mock_response.iter_bytes
 
@@ -281,7 +282,7 @@ async def test_async_converse_completion_forwards_bedrock_response_headers():
 
 @pytest.mark.asyncio
 async def test_async_converse_streaming_forwards_bedrock_response_headers():
-    async def _no_bytes(chunk_size=None):
+    async def _no_bytes(chunk_size: int | None = None) -> AsyncIterator[bytes]:
         return
         yield b""
 
@@ -305,7 +306,7 @@ async def test_async_converse_streaming_forwards_bedrock_response_headers():
     assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-def"
 
 
-def test_completion_plumbs_stream_chunk_size_through_converse():
+def test_completion_plumbs_stream_chunk_size_through_converse() -> None:
     iter_bytes_spy = _stream_completion_with_spied_iter_bytes(
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
     )
@@ -319,7 +320,7 @@ def test_completion_plumbs_stream_chunk_size_through_converse():
 
 
 def _stream_converse_completion_with_spied_client(
-    monkeypatch: pytest.MonkeyPatch, **kwargs
+    monkeypatch: pytest.MonkeyPatch, stream_chunk_size: int | None = None
 ) -> tuple[MagicMock, MagicMock, LitellmParamsRecorder]:
     recorder: Final = record_litellm_params(monkeypatch)
     mock_response = MagicMock()
@@ -336,14 +337,14 @@ def _stream_converse_completion_with_spied_client(
         aws_access_key_id="fake",
         aws_secret_access_key="fake",
         aws_region_name="us-east-1",
-        **kwargs,
+        stream_chunk_size=stream_chunk_size,
     )
     return mock_response.iter_bytes, client.post, recorder
 
 
 def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     iter_bytes_spy, post_spy, recorder = _stream_converse_completion_with_spied_client(
         monkeypatch, stream_chunk_size=64
     )
@@ -355,7 +356,7 @@ def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body(
     assert recorder.seen[0]["stream_chunk_size"] == 64
 
 
-def test_completion_without_stream_chunk_size_uses_default_chunking(monkeypatch: pytest.MonkeyPatch):
+def test_completion_without_stream_chunk_size_uses_default_chunking(monkeypatch: pytest.MonkeyPatch) -> None:
     iter_bytes_spy, _, recorder = _stream_converse_completion_with_spied_client(monkeypatch)
 
     iter_bytes_spy.assert_called_once_with(chunk_size=None)
@@ -364,9 +365,9 @@ def test_completion_without_stream_chunk_size_uses_default_chunking(monkeypatch:
 
 
 async def _astream_converse_completion_with_spied_client(
-    monkeypatch: pytest.MonkeyPatch, **kwargs
+    monkeypatch: pytest.MonkeyPatch, stream_chunk_size: int | None = None
 ) -> tuple[MagicMock, AsyncMock, LitellmParamsRecorder]:
-    async def _no_bytes():
+    async def _no_bytes(chunk_size: int | None = None) -> AsyncIterator[bytes]:
         return
         yield b""
 
@@ -386,7 +387,7 @@ async def _astream_converse_completion_with_spied_client(
         aws_access_key_id="fake",
         aws_secret_access_key="fake",
         aws_region_name="us-east-1",
-        **kwargs,
+        stream_chunk_size=stream_chunk_size,
     )
     return aiter_bytes_spy, client.post, recorder
 
@@ -394,7 +395,7 @@ async def _astream_converse_completion_with_spied_client(
 @pytest.mark.asyncio
 async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_converse_body(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     aiter_bytes_spy, post_spy, recorder = await _astream_converse_completion_with_spied_client(
         monkeypatch, stream_chunk_size=64
     )
@@ -407,7 +408,9 @@ async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_convers
 
 
 @pytest.mark.asyncio
-async def test_acompletion_without_stream_chunk_size_uses_default_chunking(monkeypatch: pytest.MonkeyPatch):
+async def test_acompletion_without_stream_chunk_size_uses_default_chunking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     aiter_bytes_spy, _, recorder = await _astream_converse_completion_with_spied_client(monkeypatch)
 
     aiter_bytes_spy.assert_called_once_with(chunk_size=None)
