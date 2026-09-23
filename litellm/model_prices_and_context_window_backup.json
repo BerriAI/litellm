@@ -56322,6 +56322,38 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
+    "openai.gpt-6-sol": {
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_vision": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "global.openai.gpt-6-sol": {
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
@@ -56331,6 +56363,38 @@
         "cache_read_input_token_cost_above_272k_tokens": 4e-07,
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_vision": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "openai.gpt-6-luna": {
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_272k_tokens": 2e-07,
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-08,
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_above_272k_tokens": 7.5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
@@ -64072,7 +64136,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 6.6e-06,
-        "source": "https://www.baseten.co/library/glm-53-fast/",
+        "source": "https://inference.baseten.co/v1/models",
         "supported_modalities": [
             "text",
             "image"
@@ -64357,6 +64421,24 @@
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_web_search": false
+    },
+    "openrouter/qwen/qwen3.8-max-prime": {
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 1.2e-05,
+        "cache_read_input_token_cost": 5e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_video_input": true,
+        "supports_prompt_caching": true
     },
     "openrouter/deepseek/deepseek-v4-flash-0731": {
         "input_cost_per_token": 4e-08,
@@ -72219,14 +72301,15 @@
         "supports_web_search": false
     },
     "openrouter/stealth/space-bunny-alpha": {
-        "input_cost_per_token": 0,
+        "deprecation_date": "2098-12-31",
+        "input_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 0,
-        "source": "https://openrouter.ai/stealth/space-bunny-alpha",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/api/v1/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -72729,6 +72812,7 @@
     },
     "openrouter/z-ai/glm-5.3-flashx": {
         "cache_read_input_token_cost": 7.5e-08,
+        "deprecation_date": "2098-12-31",
         "input_cost_per_token": 3.7e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
