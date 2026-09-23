@@ -59,7 +59,7 @@ function ConfiguredLiteAdmin({ session }: { session: ManagementSession }) {
     : null;
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger render={<Button className="fixed right-5 bottom-5 z-floating rounded-full shadow-lg" />}>
+      <PopoverTrigger render={<Button className="m-3 shrink-0 self-end rounded-full shadow-lg" />}>
         <Sparkles className="size-4" />
         LiteAdmin
       </PopoverTrigger>
