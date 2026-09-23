@@ -165,6 +165,9 @@
     "tests/integration/providers/test_anthropic_wire.py::test_anthropic_bare_string_content_item_is_rejected_as_client_error_before_the_wire[plain]": [
       "other.provider_wire.anthropic.bare_string_content_item_is_client_error"
     ],
+    "tests/integration/providers/test_anthropic_messages_timeout_wire.py::test_messages_endpoint_honors_configured_timeout_against_stalled_upstream": [
+      "providers.anthropic_messages.configured_timeout_aborts_stalled_upstream"
+    ],
     "tests/integration/providers/test_anthropic_wire.py::test_anthropic_tool_history_and_cache_tokens_keep_wire_and_accounting_contracts": [
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
