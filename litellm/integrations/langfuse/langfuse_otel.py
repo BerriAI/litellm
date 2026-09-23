@@ -134,7 +134,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(span, enum_attr.value, value)
 
     @staticmethod
-    def _set_request_metadata_attributes(span: Span, kwargs: dict) -> None:
+    def _set_request_metadata_attributes(span: Span, kwargs: dict[str, object]) -> None:
         from litellm.integrations.arize._utils import safe_set_attribute
         from litellm.integrations.langfuse.langfuse import log_requester_metadata
         from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
@@ -146,12 +146,15 @@ class LangfuseOtelLogger(OpenTelemetry):
         )
         if not isinstance(request_metadata, dict):
             return
-        observation_metadata: Final = log_requester_metadata(redact_user_api_key_info(metadata=request_metadata))
+        observation_metadata: Final = {
+            key: value
+            for key, value in log_requester_metadata(redact_user_api_key_info(metadata=request_metadata)).items()
+            if value is not None
+        }
         safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_METADATA.value, safe_dumps(observation_metadata))
         trace_prefix: Final = LangfuseSpanAttributes.TRACE_METADATA.value
         for field in _TRACE_IDENTITY_FIELDS:
-            value = observation_metadata.get(field)
-            if value is not None:
+            if (value := observation_metadata.get(field)) is not None:
                 safe_set_attribute(span, f"{trace_prefix}.{field}", value)
 
     @staticmethod
