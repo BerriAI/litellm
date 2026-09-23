@@ -314,7 +314,9 @@ def _run_named_request(
     response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
     root: Final = _start_root(logger)
     logger.log_pre_api_call(
-        model="gpt-5.4-mini", messages=[], kwargs={"litellm_call_id": "call_1", "litellm_params": litellm_params}
+        model="gpt-5.4-mini",
+        messages=[],
+        kwargs={"litellm_call_id": "call_1", "litellm_params": litellm_params, "call_type": "acompletion"},
     )
     root.end()
     payload: Final = {
@@ -367,12 +369,13 @@ def test_body_metadata_trace_name_names_the_root_and_the_generation():
     assert generation_attrs[TRACE_NAME_ATTR] == "from-body"
 
 
-def test_unnamed_request_leaves_the_trace_name_off_both_spans():
+def test_unnamed_request_derives_the_trace_name_on_both_spans():
     logger, exporter = _logger()
 
     root_attrs, generation_attrs = _run_named_request(logger, exporter, {"proxy_server_request": {"headers": {}}})
 
-    assert TRACE_NAME_ATTR not in root_attrs and TRACE_NAME_ATTR not in generation_attrs
+    assert root_attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
+    assert generation_attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
 
 
 @pytest.mark.parametrize("capture", ["span_only", "no_content"])
@@ -397,7 +400,7 @@ def test_body_metadata_user_session_and_tags_land_on_the_root_and_the_generation
         assert attrs["user.id"] == "user-42"
         assert attrs["session.id"] == "session-7"
         assert tuple(attrs["langfuse.trace.tags"]) == ("prod", "eval", "nightly")
-        assert TRACE_NAME_ATTR not in attrs
+        assert attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
 
 
 def test_langfuse_user_and_session_headers_beat_body_metadata_on_both_spans():
@@ -461,11 +464,16 @@ def test_a_request_without_trace_controls_stamps_none_of_them():
     logger, exporter = _logger()
 
     root_attrs, generation_attrs = _run_named_request(
-        logger, exporter, {"metadata": {"user_api_key_team_id": "t1", "tags": []}, "proxy_server_request": {"headers": {}}}
+        logger,
+        exporter,
+        {"metadata": {"user_api_key_team_id": "t1", "tags": []}, "proxy_server_request": {"headers": {}}},
     )
 
-    assert set(TRACE_CONTROL_ATTRS).isdisjoint(root_attrs)
-    assert set(TRACE_CONTROL_ATTRS).isdisjoint(generation_attrs)
+    caller_only: Final = tuple(attr for attr in TRACE_CONTROL_ATTRS if attr != TRACE_NAME_ATTR)
+    assert set(caller_only).isdisjoint(root_attrs)
+    assert set(caller_only).isdisjoint(generation_attrs)
+    assert root_attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
+    assert generation_attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
 
 
 @pytest.mark.parametrize(

@@ -95,7 +95,6 @@ class LangfuseOtelLogger(OpenTelemetry):
             "mask_output": LangfuseSpanAttributes.MASK_OUTPUT,
             "trace_user_id": LangfuseSpanAttributes.TRACE_USER_ID,
             "session_id": LangfuseSpanAttributes.SESSION_ID,
-            "tags": LangfuseSpanAttributes.TAGS,
             "trace_name": LangfuseSpanAttributes.TRACE_NAME,
             "trace_id": LangfuseSpanAttributes.TRACE_ID,
             "trace_metadata": LangfuseSpanAttributes.TRACE_METADATA,
@@ -126,97 +125,41 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(span, enum_attr.value, value)
 
     @staticmethod
-    def _set_observation_output(span: Span, response_obj):
-        """Helper to set observation output attributes."""
-        from litellm.integrations.arize._utils import safe_set_attribute
-        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
+    def _observation_output(response_obj) -> str | None:
+        """Serialized observation output, or None when the response yields nothing."""
         if not response_obj or not hasattr(response_obj, "get"):
-            return
+            return None
+        return _extract_output_items(response_obj) or _extract_choices_output(response_obj)
 
-        choices: Final = response_obj.get("choices", [])
-        if choices:
-            first_choice: Final = choices[0]
-            message: Final = first_choice.get("message", {})
-            tool_calls: Final = message.get("tool_calls")
-            if tool_calls:
-                transformed_tool_calls: Final = []
-                for tool_call in tool_calls:
-                    function = tool_call.get("function", {})
-                    arguments_str = function.get("arguments", "{}")
-                    try:
-                        arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
-                    except json.JSONDecodeError:
-                        arguments_obj = {}
-                    langfuse_tool_call = {
-                        "id": response_obj.get("id", ""),
-                        "name": function.get("name", ""),
-                        "call_id": tool_call.get("id", ""),
-                        "type": "function_call",
-                        "arguments": arguments_obj,
-                    }
-                    transformed_tool_calls.append(langfuse_tool_call)
-                safe_set_attribute(
-                    span,
-                    LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
-                    safe_dumps(transformed_tool_calls),
-                )
-            else:
-                output_data: Final = {}
-                if message.get("role"):
-                    output_data["role"] = message.get("role")
-                if message.get("content") is not None:
-                    output_data["content"] = message.get("content")
-                if output_data:
-                    safe_set_attribute(
-                        span,
-                        LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
-                        safe_dumps(output_data),
-                    )
+    @staticmethod
+    def _trace_tags(kwargs: dict, metadata: dict) -> tuple[str, ...]:
+        """Order-preserving dedupe of caller tags, request tags and langfuse_default_tags expansions."""
+        import litellm
 
-        output: Final = response_obj.get("output", [])
-        if output:
-            output_items_data: Final[list[dict]] = []
-            for item in output:
-                if hasattr(item, "type"):
-                    item_type = item.type
-                    if item_type == "reasoning" and hasattr(item, "summary"):
-                        for summary in item.summary:
-                            if hasattr(summary, "text"):
-                                output_items_data.append(
-                                    {
-                                        "role": "reasoning_summary",
-                                        "content": summary.text,
-                                    }
-                                )
-                    elif item_type == "message":
-                        output_items_data.append(
-                            {
-                                "role": getattr(item, "role", "assistant"),
-                                "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
-                            }
-                        )
-                    elif item_type == "function_call":
-                        arguments_str = getattr(item, "arguments", "{}")
-                        arguments_obj = (
-                            safe_json_loads(arguments_str, default={})
-                            if isinstance(arguments_str, str)
-                            else arguments_str
-                        )
-                        langfuse_tool_call = {
-                            "id": getattr(item, "id", ""),
-                            "name": getattr(item, "name", ""),
-                            "call_id": getattr(item, "call_id", ""),
-                            "type": "function_call",
-                            "arguments": arguments_obj,
-                        }
-                        output_items_data.append(langfuse_tool_call)
-            if output_items_data:
-                safe_set_attribute(
-                    span,
-                    LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
-                    safe_dumps(output_items_data),
-                )
+        caller_tags: Final = metadata.get("tags")
+        request_tags: Final = (kwargs.get("standard_logging_object") or {}).get("request_tags")
+        default_tags: Final = litellm.langfuse_default_tags
+
+        def _default_tag(key: str) -> str | None:
+            if key == "cache_hit":
+                return f"cache_hit:{kwargs.get('cache_hit', False)}"
+            if key == "cache_key":
+                hidden_params: Final = metadata.get("hidden_params", {}) or {}
+                return f"cache_key:{hidden_params.get('cache_key')}"
+            if key == "proxy_base_url":
+                proxy_base_url: Final = os.environ.get("PROXY_BASE_URL")
+                return f"proxy_base_url:{proxy_base_url}" if proxy_base_url is not None else None
+            if key in metadata and metadata[key] is not None:
+                return f"{key}:{metadata[key]}"
+            return None
+
+        expanded: Final = tuple(_default_tag(key) for key in default_tags) if isinstance(default_tags, list) else ()
+        candidates: Final = (
+            (tuple(tag for tag in caller_tags if isinstance(tag, str)) if isinstance(caller_tags, list) else ())
+            + (tuple(tag for tag in request_tags if isinstance(tag, str)) if isinstance(request_tags, list) else ())
+            + tuple(tag for tag in expanded if tag is not None)
+        )
+        return tuple(dict.fromkeys(candidates))
 
     @staticmethod
     def _set_langfuse_specific_attributes(span: Span, kwargs, response_obj):
@@ -245,15 +188,26 @@ class LangfuseOtelLogger(OpenTelemetry):
         metadata: Final = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
 
-        messages: Final = kwargs.get("messages")
-        if messages:
+        if metadata.get("trace_name") is None and metadata.get("existing_trace_id") is None:
             safe_set_attribute(
                 span,
-                LangfuseSpanAttributes.OBSERVATION_INPUT.value,
-                safe_dumps(messages),
+                LangfuseSpanAttributes.TRACE_NAME.value,
+                f"litellm-{kwargs.get('call_type') or 'completion'}",
             )
 
-        LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
+        tags: Final = LangfuseOtelLogger._trace_tags(kwargs, metadata)
+        if tags:
+            safe_set_attribute(span, LangfuseSpanAttributes.TAGS.value, json.dumps(list(tags)))
+
+        input_json: Final = safe_dumps(kwargs.get("messages")) if kwargs.get("messages") else None
+        if input_json is not None:
+            safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_INPUT.value, input_json)
+            safe_set_attribute(span, LangfuseSpanAttributes.TRACE_INPUT.value, input_json)
+
+        output_json: Final = LangfuseOtelLogger._observation_output(response_obj)
+        if output_json is not None:
+            safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, output_json)
+            safe_set_attribute(span, LangfuseSpanAttributes.TRACE_OUTPUT.value, output_json)
 
     @staticmethod
     def _get_langfuse_otel_host() -> str | None:
@@ -445,3 +399,83 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         Langfuse should not receive service failure logs.
         """
+
+
+def _extract_choices_output(response_obj) -> str | None:
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    choices: Final = response_obj.get("choices", [])
+    if not choices:
+        return None
+    message: Final = choices[0].get("message", {})
+    tool_calls: Final = message.get("tool_calls")
+    if tool_calls:
+        transformed_tool_calls: Final = [
+            {
+                "id": response_obj.get("id", ""),
+                "name": tool_call.get("function", {}).get("name", ""),
+                "call_id": tool_call.get("id", ""),
+                "type": "function_call",
+                "arguments": _tool_call_arguments(tool_call.get("function", {}).get("arguments", "{}")),
+            }
+            for tool_call in tool_calls
+        ]
+        return safe_dumps(transformed_tool_calls)
+    output_data: Final = {
+        key: value
+        for key, value in (
+            ("role", message.get("role")),
+            ("content", message.get("content")),
+        )
+        if value is not None
+    }
+    return safe_dumps(output_data) if output_data else None
+
+
+def _tool_call_arguments(arguments: object) -> object:
+    if not isinstance(arguments, str):
+        return arguments
+    try:
+        return json.loads(arguments)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _extract_output_items(response_obj) -> str | None:
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    output: Final = response_obj.get("output", [])
+    if not output:
+        return None
+    output_items: Final = tuple(_output_item(item) for item in output)
+    rendered: Final = tuple(item for item in output_items if item is not None)
+    return safe_dumps(list(rendered)) if rendered else None
+
+
+def _output_item(item) -> dict | None:
+    if not hasattr(item, "type"):
+        return None
+    if item.type == "reasoning" and hasattr(item, "summary"):
+        return next(
+            (
+                {"role": "reasoning_summary", "content": summary.text}
+                for summary in item.summary
+                if hasattr(summary, "text")
+            ),
+            None,
+        )
+    if item.type == "message":
+        return {
+            "role": getattr(item, "role", "assistant"),
+            "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
+        }
+    if item.type == "function_call":
+        arguments: Final = getattr(item, "arguments", "{}")
+        return {
+            "id": getattr(item, "id", ""),
+            "name": getattr(item, "name", ""),
+            "call_id": getattr(item, "call_id", ""),
+            "type": "function_call",
+            "arguments": safe_json_loads(arguments, default={}) if isinstance(arguments, str) else arguments,
+        }
+    return None

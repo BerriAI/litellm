@@ -257,6 +257,24 @@
     "tests/integration/observability/test_otel_text_completion_choices.py::test_otel_weave_output_keeps_text_completion_provider_fields_beside_the_synthesized_message": [
       "other.observability.otel.text_completion_choices_keep_provider_fields"
     ],
+    "tests/integration/observability/test_langfuse_otel_trace_fields.py::test_chat_completion_derives_trace_name_input_and_output": [
+      "other.observability.langfuse_otel.chat_derives_trace_fields"
+    ],
+    "tests/integration/observability/test_langfuse_otel_trace_fields.py::test_parented_chat_completion_derives_trace_fields_inside_inbound_trace": [
+      "other.observability.langfuse_otel.parented_chat_derives_trace_fields_and_keeps_parent"
+    ],
+    "tests/integration/observability/test_langfuse_otel_trace_fields.py::test_streaming_chat_completion_derives_trace_fields": [
+      "other.observability.langfuse_otel.streaming_chat_derives_trace_fields"
+    ],
+    "tests/integration/observability/test_langfuse_otel_trace_fields.py::test_caller_supplied_trace_name_and_tags_are_emitted": [
+      "other.observability.langfuse_otel.caller_trace_name_and_tags_win"
+    ],
+    "tests/integration/observability/test_langfuse_otel_trace_fields.py::test_responses_call_derives_trace_fields": [
+      "other.observability.langfuse_otel.responses_derives_trace_fields"
+    ],
+    "tests/integration/observability/test_langfuse_otel_trace_fields.py::test_otel_v2_derives_trace_name_input_and_output": [
+      "other.observability.langfuse_otel.v2_derives_trace_fields"
+    ],
     "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
       "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
     ],
