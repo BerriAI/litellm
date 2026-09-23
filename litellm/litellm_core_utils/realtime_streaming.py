@@ -19,6 +19,7 @@ from litellm.constants import (
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
+from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
@@ -551,19 +552,21 @@ class RealTimeStreaming:
             return
         if event_obj.get("type") == "session.closed":
             usage: Final = event_obj.get("usage")
-            output_seconds: Final = usage.get("output_seconds") if isinstance(usage, dict) else None
-            input_seconds: Final = usage.get("input_seconds") if isinstance(usage, dict) else None
+            output_seconds: Final = (
+                normalized_audio_duration_seconds(usage.get("output_seconds")) if isinstance(usage, dict) else None
+            )
+            input_seconds: Final = (
+                normalized_audio_duration_seconds(usage.get("input_seconds")) if isinstance(usage, dict) else None
+            )
             synthetic_output_seconds: Final = (
                 self._translation_output_audio_bytes / self._translation_output_bytes_per_second
                 if self._translation_output_audio_bytes > 0
                 else None
             )
-            resolved_output_seconds: Final = (
-                output_seconds if isinstance(output_seconds, (int, float)) else synthetic_output_seconds
-            )
-            if isinstance(input_seconds, (int, float)) or resolved_output_seconds is not None:
+            resolved_output_seconds: Final = output_seconds if output_seconds is not None else synthetic_output_seconds
+            if input_seconds is not None or resolved_output_seconds is not None:
                 if self._should_store_message(event_obj):
-                    if not isinstance(output_seconds, (int, float)) and synthetic_output_seconds is not None:
+                    if output_seconds is None and synthetic_output_seconds is not None:
                         self.messages.append(
                             OpenAIRealtimeTranslationClosedEvent(
                                 type="session.closed",
@@ -576,10 +579,10 @@ class RealTimeStreaming:
                     normalized_usage: Final = (
                         OpenAIRealtimeTranslationDurationUsage(
                             type="duration",
-                            input_seconds=float(input_seconds),
+                            input_seconds=input_seconds,
                             output_seconds=float(resolved_output_seconds or 0.0),
                         )
-                        if isinstance(input_seconds, (int, float))
+                        if input_seconds is not None
                         else OpenAIRealtimeTranslationDurationUsage(
                             type="duration", output_seconds=float(resolved_output_seconds or 0.0)
                         )
@@ -634,9 +637,9 @@ class RealTimeStreaming:
             if event.get("type") != "session.closed":
                 continue
             event_usage = event.get("usage")  # rebind-ok: each close event carries independent usage
-            if isinstance(event_usage, dict) and (
-                isinstance(event_usage.get("input_seconds"), (int, float))
-                or isinstance(event_usage.get("output_seconds"), (int, float))
+            if (
+                isinstance(event_usage, dict)
+                and normalized_audio_duration_seconds(event_usage.get("output_seconds")) is not None
             ):
                 self._translation_usage_finalized = True
                 return
