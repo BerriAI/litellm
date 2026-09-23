@@ -49,8 +49,7 @@ def _webp_dimensions(head: bytes) -> tuple[int, int] | None:
         case b"VP8L":
             bits: Final = int.from_bytes(head[21:25], "little")
             return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
-        case _:
-            return None
+    return None
 
 
 def _jpeg_sof_dimensions(stream: IO[bytes], start: int, offset: int, segments_left: int) -> tuple[int, int] | None:
@@ -86,8 +85,7 @@ def _header_dimensions(stream: IO[bytes], position: int) -> tuple[int, int] | No
             return _webp_dimensions(head)
         case "jpeg":
             return _jpeg_sof_dimensions(stream, position, _JPEG_FIRST_SEGMENT_OFFSET, _MAX_JPEG_SEGMENTS)
-        case _:
-            return None
+    return None
 
 
 def measure_reference_image(image: FileTypes) -> tuple[int, int] | None:
