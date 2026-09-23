@@ -495,7 +495,7 @@ const classifierWireFields = (
     | "classifierContextIncludeAssistantTurns"
   >,
 ): Partial<ComplexityRouterConfigPayload> => ({
-  ...(usesClassifierContext(effectiveType) &&
+  ...(usesLlmClassifier(effectiveType) &&
     classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
   ...(usesClassifierContext(effectiveType) &&
     classifierFallback !== undefined && { classifier_fallback: classifierFallback }),

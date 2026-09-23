@@ -69,7 +69,7 @@ import ComplexityRouterConfig, {
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityRouterConfigValue,
-  ComplexityTiers,
+  effectiveClassifierType,
   heuristicScoringRole,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
@@ -166,7 +166,6 @@ export const hydrateComplexityRouterConfig = (
     plan_mode_min_tier: hydratePlanModeMinTier(parsedConfig.plan_mode_min_tier, custom_tier_set),
     tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
     classifier_type: parsedConfig.classifier_type || "heuristic",
-    classifier_llm_config: parsedConfig.classifier_llm_config,
     classifier_llm_config: parsedConfig.classifier_type === "jev" ? undefined : parsedConfig.classifier_llm_config,
     jev_classifier_config:
       parsedConfig.classifier_type === "jev"
@@ -352,9 +351,8 @@ export const buildUpdatedComplexityRouterConfig = (
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
-    if (key === "classifier_context_per_turn_chars") {
+    if (key === "classifier_context_per_turn_chars")
       return !usesClassifierContext(effectiveClassifierType(value)) || Object.prototype.hasOwnProperty.call(value, key);
-    }
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
