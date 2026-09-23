@@ -136,6 +136,7 @@ def _proxy_with_one_seeded_row(gateway: Gateway, tmp_path: Path, pool_limit: int
                 "SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS": "5",
             },
             config=_config_with_pool_limit(tmp_path, pool_limit),
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
         ) as owned:
             key: Final = string_value(
                 owned.gateway.post("/key/generate", {"user_id": owner, "team_id": team, "models": [model]})["key"]
