@@ -11,7 +11,7 @@ import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at im
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
 
-LOOPBACK_HOSTS: Final = ["127.0.0.1", "::1"]
+LOOPBACK_HOSTS: Final = ["127.0.0.1", "localhost", "::1"]
 AMBIENT_AZURE_CREDENTIAL_ENV_VARS: Final = (
     "AZURE_AD_TOKEN",
     "AZURE_TENANT_ID",
