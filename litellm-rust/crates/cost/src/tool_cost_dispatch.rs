@@ -1,5 +1,9 @@
 use serde_json::Value;
 
+use crate::anthropic_cost::{
+    get_anthropic_web_search_requests_from_response, get_cost_for_anthropic_web_search,
+    get_web_search_requests_from_usage,
+};
 use crate::gemini_cost::{cost_per_google_maps_grounding_request, cost_per_web_search_request};
 use crate::responses_usage::ChatUsage;
 use crate::tool_call_cost_tracking::{
@@ -73,9 +77,11 @@ fn provider_web_search_cost(
     let usage = request.usage;
     match provider {
         "gemini" => usage.map(|usage| cost_per_web_search_request(usage, model_info)),
-        "anthropic" => {
-            web_search_requests(request).map(|count| context_rate(model_info) * count as f64)
-        }
+        "anthropic" => match usage.and_then(get_web_search_requests_from_usage) {
+            Some(_) => Some(get_cost_for_anthropic_web_search(Some(model_info), usage)),
+            None => get_anthropic_web_search_requests_from_response(request.response)
+                .map(|count| context_rate(model_info) * count as f64),
+        },
         "perplexity" => Some(0.0),
         "xai" => usage.map(|usage| {
             crate::xai_cost::cost_per_web_search_request(

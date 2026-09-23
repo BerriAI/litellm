@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::anthropic_cost::fast_speed_multiplier;
 use crate::azure_ai_cost::{
     calculate_azure_model_router_flat_cost, is_azure_model_router, router_fee_entry_name,
     router_fee_name,
@@ -561,7 +562,7 @@ impl ModelInfoCatalog {
                 request.at,
             ));
         }
-        Ok(calculate_generic_cost_from_model_info_with_region(
+        let cost = calculate_generic_cost_from_model_info_with_region(
             request.usage,
             &model_info,
             request.service_tier,
@@ -569,7 +570,13 @@ impl ModelInfoCatalog {
             request.data_residency,
             request.vertex_location,
             request.at,
-        ))
+        );
+        let speed = if request.provider == Some("anthropic") {
+            fast_speed_multiplier(&model_info, request.usage)
+        } else {
+            1.0
+        };
+        Ok((cost.0 * speed, cost.1 * speed))
     }
 
     pub fn get_billed_token_rates(

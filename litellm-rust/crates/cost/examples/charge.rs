@@ -541,6 +541,10 @@ fn main() {
             json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
         ),
         (
+            "anthropic/fast".to_owned(),
+            json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003, "provider_specific_entry": {"fast": 2.0, "us": 1.1}, "search_context_cost_per_query": {"search_context_size_medium": 0.005}}),
+        ),
+        (
             "azure/speech".to_owned(),
             json!({"mode": "audio_speech", "input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "output_cost_per_second": 0.02}),
         ),
@@ -919,5 +923,25 @@ fn main() {
         azure_speech.1,
         databricks.0 + databricks.1,
         lemonade.0 + lemonade.1
+    );
+    let anthropic_usage = get_usage_object(&json!({"usage": {"prompt_tokens": 100, "completion_tokens": 20, "speed": "fast", "inference_geo": "us", "server_tool_use": {"web_search_requests": 2}}}))
+        .unwrap()
+        .unwrap();
+    let anthropic_cost = model_info_catalog
+        .cost_per_token(ModelCostRequest {
+            model: "fast",
+            provider: Some("anthropic"),
+            usage: &anthropic_usage,
+            ..speech_request
+        })
+        .unwrap();
+    let anthropic_search = litellm_cost::anthropic_cost::get_cost_for_anthropic_web_search(
+        Some(&json!({"search_context_cost_per_query": {"search_context_size_medium": 0.005}})),
+        Some(&anthropic_usage),
+    );
+    println!(
+        "anthropic_fast={:.3} anthropic_search={:.3}",
+        anthropic_cost.0 + anthropic_cost.1,
+        anthropic_search
     );
 }
