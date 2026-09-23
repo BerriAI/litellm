@@ -215,6 +215,7 @@ fn completion_cost_counts_prompt_and_completion_without_response() {
     )
     .unwrap();
     assert!((result.cost.total - 0.11).abs() < 1e-12);
+    assert_eq!(result.token_breakdown, None);
 }
 
 #[rstest]
@@ -464,6 +465,10 @@ fn custom_cache_rates_match_python_anthropic_usage() {
     )
     .unwrap();
     assert!((result.cost.total - 0.284).abs() < 1e-12);
+    let breakdown = result.token_breakdown.unwrap();
+    assert!((breakdown.cache_read_cost - 4.0 * 0.001).abs() < 1e-12);
+    assert!((breakdown.cache_creation_cost - 2.0 * 0.03).abs() < 1e-12);
+    assert_eq!(breakdown.rates.unwrap().cache_read_input_token_cost, 0.001);
 }
 
 #[rstest]
@@ -720,6 +725,9 @@ fn response_cost_falls_back_to_served_model_and_bills_served_tier() {
     assert_eq!(result.prepared.service_tier.as_deref(), Some("priority"));
     assert!((result.cost.original - 0.65).abs() < 1e-12);
     assert!((result.cost.total - 0.702).abs() < 1e-12);
+    let rates = result.token_breakdown.unwrap().rates.unwrap();
+    assert_eq!(rates.input_cost_per_token, 0.03);
+    assert_eq!(rates.output_cost_per_token, 0.04);
 }
 
 #[rstest]

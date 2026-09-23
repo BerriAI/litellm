@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use crate::a2a_cost::{A2ACostError, calculate_a2a_cost};
 use crate::azure_ai_cost::is_azure_model_router;
+use crate::billed_token_rates::TokenTypeCostBreakdown;
 use crate::catalog::{
     CatalogCallError, CatalogError, CatalogImageError, CostCall, ModelCostRequest, ModelInfoCatalog,
 };
@@ -75,6 +76,7 @@ pub struct PricedCompletionResponse {
     pub model: String,
     pub prepared: PreparedCompletionInput,
     pub cost: CompletionCost,
+    pub token_breakdown: Option<TokenTypeCostBreakdown>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -158,6 +160,7 @@ fn flat_priced(
         model,
         prepared,
         cost: completion_cost(total, 0.0, 0.0, &[], None, &Value::Null, &Value::Null),
+        token_breakdown: None,
     }
 }
 
@@ -625,6 +628,7 @@ fn price_responses_websocket(
         model,
         prepared,
         cost,
+        token_breakdown: None,
     })
 }
 
@@ -818,9 +822,26 @@ pub fn completion_cost_from_response(
         request.discount_config,
         request.margin_config,
     );
+    let token_breakdown = prepared.usage.as_ref().map(|response_usage| {
+        catalog.get_token_type_cost_breakdown(
+            ModelCostRequest {
+                model: &model,
+                provider,
+                region,
+                usage: response_usage,
+                service_tier: prepared.service_tier.as_deref(),
+                data_residency: request.data_residency,
+                vertex_location: request.vertex_location,
+                at: request.at,
+                response_time_ms: None,
+            },
+            request.custom_cost.token,
+        )
+    });
     Ok(PricedCompletionResponse {
         model,
         prepared,
         cost,
+        token_breakdown,
     })
 }
