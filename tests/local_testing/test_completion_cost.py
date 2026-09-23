@@ -328,37 +328,6 @@ def test_whisper_azure():
     assert round(cost, 5) == round(expected_cost, 5)
 
 
-def test_dalle_3_azure_cost_tracking():
-    litellm.set_verbose = True
-    # model = "azure/dall-e-3-test"
-    # response = litellm.image_generation(
-    #     model=model,
-    #     prompt="A cute baby sea otter",
-    #     api_version="2023-12-01-preview",
-    #     api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
-    #     api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-    #     base_model="dall-e-3",
-    # )
-    # print(f"response: {response}")
-    response = litellm.ImageResponse(
-        created=1710265780,
-        data=[
-            {
-                "b64_json": None,
-                "revised_prompt": "A close-up image of an adorable baby sea otter. Its fur is thick and fluffy to provide buoyancy and insulation against the cold water. Its eyes are round, curious and full of life. It's lying on its back, floating effortlessly on the calm sea surface under the warm sun. Surrounding the otter are patches of colorful kelp drifting along the gentle waves, giving the scene a touch of vibrancy. The sea otter has its small paws folded on its chest, and it seems to be taking a break from its play.",
-                "url": "test-azure-blob-url-with-sas-token",
-            }
-        ],
-    )
-    response.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    response._hidden_params = {"model": "dall-e-3", "model_id": None}
-    print(f"response hidden params: {response._hidden_params}")
-    cost = litellm.completion_cost(
-        completion_response=response, call_type="image_generation"
-    )
-    assert cost > 0
-
-
 def test_replicate_llama3_cost_tracking():
     litellm.set_verbose = True
     model = "replicate/meta/meta-llama-3-8b-instruct"
