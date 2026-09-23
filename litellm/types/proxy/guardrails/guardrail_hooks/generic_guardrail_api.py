@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import (
@@ -15,13 +15,22 @@ from litellm.types.utils import ChatCompletionMessageToolCall
 class GuardrailToolParam(BaseModel):
     """A tool forwarded verbatim to the guardrail for inspection.
 
-    Built-in tools (code_interpreter, file_search, ...) have no ``function`` block
-    and stash their config in tool-specific keys, so only ``type`` is required and
-    ``extra="allow"`` preserves the rest instead of stripping it.
+    OpenAI-style tools carry a ``type`` (function / code_interpreter / file_search,
+    ...). Provider-native tools such as Gemini ``{"googleSearch": {}}`` have neither
+    ``type`` nor ``function``; ``extra="allow"`` keeps their keys intact so the
+    guardrail still sees the original payload. ``type`` is therefore optional.
     """
 
     model_config = ConfigDict(extra="allow")
-    type: str
+    type: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_null_type(self, handler):
+        """Keep provider-native tools free of a synthetic ``type: null`` field."""
+        data = handler(self)
+        if isinstance(data, dict) and data.get("type") is None:
+            data.pop("type", None)
+        return data
 
 
 class GenericGuardrailAPIMetadata(TypedDict, total=False):
