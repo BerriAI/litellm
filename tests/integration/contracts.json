@@ -2061,6 +2061,9 @@
         ],
         "tests/integration/authorization/test_jwt_mapped_key_email_backfill.py::test_jwt_mapped_key_request_backfills_null_user_email_from_token_claims": [
             "authorization.jwt.mapped_key_backfills_null_user_email_from_claims"
+        ],
+        "tests/integration/spend/test_spend_log_write_batching.py::test_prompt_carrying_spend_rows_flushed_together_are_written_in_byte_bounded_statements": [
+            "quota_management.spend_tracking.prompt_rows_are_written_in_byte_bounded_statements"
         ]
     },
     "browser": {
