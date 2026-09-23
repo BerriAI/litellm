@@ -6,6 +6,8 @@ import http.server
 import json
 import math
 import os
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -32,6 +34,7 @@ import litellm
 import litellm.caching.caching as caching_module
 from litellm.caching.azure_blob_cache import AzureBlobCache
 from litellm.caching.caching import Cache, disable_cache, enable_cache, update_cache
+from litellm.caching.caching_handler import LLMCachingHandler, in_memory_cache_obj
 from litellm.caching.disk_cache import DiskCache
 from litellm.caching.gcs_cache import GCSCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -2168,6 +2171,69 @@ async def test_python_facade_and_rust_resolver_share_the_selected_native_cache(m
 
         await native.async_store(request("rust-write"), {"source": "rust"})
         assert await facade.async_get_cache(cache_key="rust-write") == {"source": "rust"}
+
+
+async def test_native_redis_handler_reads_the_same_store_as_rust(
+    monkeypatch: pytest.MonkeyPatch, redis_url: str
+) -> None:
+    require_rust(monkeypatch, LiteLLMCacheType.REDIS)
+    facade: Final = redis_facade(redis_url)
+    native_runtime(facade)
+    key: Final = f"redis-parity-{uuid4().hex}"
+    with rebound(litellm, "cache", facade):
+        facade.add_cache({"source": "redis"}, cache_key=key)
+        in_memory_cache_obj.set_cache(key, {"timestamp": time.time(), "response": {"source": "stale-memory"}})
+        try:
+            handler: Final = LLMCachingHandler(lambda: None, {}, datetime.now())
+            assert handler.dual_cache is None
+            assert await facade.async_get_cache(dynamic_cache_object=handler.dual_cache, cache_key=key) == {
+                "source": "redis"
+            }
+            native: Final = _CacheTestResolver(litellm).resolve()
+            assert native.lookup(request(key)) == {"source": "redis"}
+
+            override: Final = InMemoryCache()
+            override.set_cache(key, {"timestamp": time.time(), "response": {"source": "custom"}})
+            assert await facade.async_get_cache(dynamic_cache_object=override, cache_key=key) == {"source": "custom"}
+        finally:
+            in_memory_cache_obj._remove_key(key)  # pyright: ignore[reportPrivateUsage]  # clean up the test-owned entry
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+def test_native_cache_is_rebound_after_a_worker_forks() -> None:
+    script: Final = """
+import os
+from litellm.caching.caching import Cache
+from litellm.rust_bridge import catalog
+from litellm.rust_bridge.catalog import CacheRule
+from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.response_cache import select_response_cache
+
+catalog.RULES = (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({'local'})), *catalog.RULES)
+cache = Cache(type='local')
+read_fd, write_fd = os.pipe()
+child = os.fork()
+if child == 0:
+    os.close(read_fd)
+    cache.add_cache({'answer': 7}, cache_key='worker-key')
+    selected = select_response_cache(cache)
+    result = cache.get_cache(cache_key='worker-key')
+    os.write(write_fd, f'{selected.kind if selected is not None else "python"}:{result}'.encode())
+    os._exit(0)
+os.close(write_fd)
+print(os.read(read_fd, 4096).decode())
+os.waitpid(child, 0)
+"""
+    completed: Final = subprocess.run(
+        [sys.executable, "-P", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
+        env={**os.environ, "LITELLM_RUST": "1", "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+    )
+
+    assert completed.stdout.strip() == "native:{'answer': 7}"
 
 
 async def test_dynamic_backend_overrides_native_facade_for_reads_and_writes(monkeypatch: pytest.MonkeyPatch) -> None:

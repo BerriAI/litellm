@@ -208,6 +208,7 @@ class LLMCachingHandler:
         start_time: datetime.datetime,
     ):
         from litellm.caching import DualCache, RedisCache
+        from litellm.rust_bridge.response_cache import select_response_cache
 
         self.async_streaming_chunks: list[ModelResponse] = []
         self.sync_streaming_chunks: list[ModelResponse] = []
@@ -215,7 +216,11 @@ class LLMCachingHandler:
         self.preset_cache_key: str | None = None
         self.original_function = original_function
         self.start_time = start_time
-        if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
+        if (
+            litellm.cache is not None
+            and isinstance(litellm.cache.cache, RedisCache)
+            and select_response_cache(litellm.cache) is None
+        ):
             self.dual_cache: DualCache | None = DualCache(
                 redis_cache=litellm.cache.cache,
                 in_memory_cache=in_memory_cache_obj,

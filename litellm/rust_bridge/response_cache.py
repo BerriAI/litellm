@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Awaitable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final, Protocol, cast
 
 from typing_extensions import ReadOnly, Required, TypedDict, assert_never
@@ -13,6 +14,8 @@ from litellm.rust_bridge.configuration import Decision
 
 
 class CacheFacade(Protocol):
+    _native_cache: ResponseCacheRuntime | None
+
     @property
     def type(self) -> object: ...
 
@@ -80,6 +83,7 @@ _RUNTIME: Final = NativeBinding("_ResponseCacheRuntime", validate=_runtime_facto
 @dataclass(frozen=True, slots=True)
 class ResponseCacheRuntime:
     native: NativeResponseCacheRuntime
+    pid: int = field(default_factory=os.getpid)
 
     @property
     def kind(self) -> str:
@@ -152,6 +156,9 @@ class ResponseCacheRuntime:
 
 
 def select_response_cache(cache: CacheFacade) -> ResponseCacheRuntime | None:
+    current: Final = cache._native_cache
+    if isinstance(current, ResponseCacheRuntime) and current.pid != os.getpid():
+        cache._native_cache = resolve_response_cache(cache)
     factory: Final = _RUNTIME.load()
     if factory is None:
         return None
