@@ -263,7 +263,7 @@ def test_trimming_should_not_change_original_messages():
     assert messages == messages_copy
 
 
-@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-sonnet-4-6"])
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "claude-sonnet-4-6"])
 def test_trimming_with_model_cost_max_input_tokens(model):
     messages = [
         {"role": "system", "content": "This is a normal system message"},
@@ -1180,10 +1180,10 @@ def test_validate_chat_completion_tool_choice(tool_choice, expected_bool):
     from litellm.utils import validate_chat_completion_tool_choice
 
     if expected_bool:
-        validate_chat_completion_tool_choice(tool_choice=tool_choice)
+        validate_chat_completion_tool_choice(tool_choice=tool_choice, model="gpt-5.6-sol")
     else:
-        with pytest.raises(Exception, match="Invalid tool choice"):
-            validate_chat_completion_tool_choice(tool_choice=tool_choice)
+        with pytest.raises(litellm.BadRequestError, match="Invalid tool choice"):
+            validate_chat_completion_tool_choice(tool_choice=tool_choice, model="gpt-5.6-sol")
 
 
 def test_models_by_provider():

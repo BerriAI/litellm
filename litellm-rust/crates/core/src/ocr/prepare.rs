@@ -1,199 +1,89 @@
-use litellm_callbacks::event::{Passthrough, RequestContext, WireRequest};
-use serde::Serialize;
-use serde_json::{Map, Value};
+use litellm_auth::{InputSource, SecretValue, Sourced};
+use litellm_llms::base_llm::ocr::{
+    handler::OcrClient,
+    transformation::{OcrConnection, OcrCredentialInputs, PreparedOcrRequest},
+};
+use litellm_secrets::source::Secrets;
 
-use super::OcrClient;
-use super::route::OcrHost;
-use super::types::{OcrConnection, OcrDocument, PreparedOcrRequest, ResolvedOcrRequest};
-
-pub(crate) async fn transform_request_body<B>(
-    client: &OcrClient,
-    request: &PreparedOcrRequest,
-    url: &str,
-    headers: &[(String, String)],
-    body: B,
-    validate: impl Fn(&Value) -> Result<(), super::Error>,
-) -> Result<reqwest::Request, super::Error>
-where
-    B: Serialize,
-{
-    let composed = crate::call_arguments::compose_body(
-        &request.optional_params,
-        &body,
-        request.config.get_supported_ocr_params(&request.model),
-    )?;
-    validate(&composed)?;
-    let passthrough_fields = Passthrough::unchanged(&caller_inputs(request)?, &composed);
-    let changed = request
-        .host
-        .before_send(
-            wire_request(url, headers, composed),
-            request_context(request, passthrough_fields),
-        )
-        .await?;
-    if !changed.body.is_object() {
-        return Err(super::Error::RequestField {
-            path: "guardrail.body".into(),
-        });
-    }
-    validate(&changed.body)?;
-    build_http_request(client, request, url, &changed.headers, &changed.body)
-}
-
-fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireRequest {
-    WireRequest {
-        url: url.into(),
-        headers: headers.to_vec(),
-        body,
-    }
-}
-
-fn caller_inputs(request: &PreparedOcrRequest) -> Result<Map<String, Value>, super::Error> {
-    let document = request
-        .caller_document
-        .then(|| serde_json::to_value(&request.document))
-        .transpose()
-        .map_err(|_| super::Error::RequestField {
-            path: "document".into(),
-        })?;
-    let params: Map<String, Value> = request.optional_params.clone().into();
-    Ok(params
-        .into_iter()
-        .chain(document.map(|document| ("document".to_string(), document)))
-        .collect())
-}
-
-fn request_context(
-    request: &PreparedOcrRequest,
-    passthrough_fields: Passthrough,
-) -> RequestContext {
-    RequestContext {
-        model: request.model.clone(),
-        custom_llm_provider: request.provider_name().into(),
-        optional_params: Value::Object(request.optional_params.clone().into()),
-        passthrough_fields,
-        secret_fields: request
-            .optional_params
-            .keys()
-            .filter(|name| super::arguments::is_secret_param(name))
-            .cloned()
-            .collect(),
-    }
-}
-
-pub(crate) fn build_http_request<B: Serialize>(
-    client: &OcrClient,
-    request: &PreparedOcrRequest,
-    url: &str,
-    headers: &[(String, String)],
-    body: &B,
-) -> Result<reqwest::Request, super::Error> {
-    let builder = client
-        .provider_http()
-        .post(url)
-        .json(body)
-        .timeout(request.connection.timeout);
-    crate::http_utils::with_headers(builder, headers, crate::http_utils::HeaderPolicy::All)
-        .build()
-        .map_err(crate::transport::Error::from)
-        .map_err(super::Error::from)
-}
-
-pub(crate) async fn guardrail_document(
-    request: &PreparedOcrRequest,
-    url: &str,
-    headers: &[(String, String)],
-) -> Result<(OcrDocument, Vec<(String, String)>), super::Error> {
-    let body = serde_json::to_value(&request.document).map_err(|_| super::Error::RequestField {
-        path: "document".into(),
-    })?;
-    let changed = request
-        .host
-        .before_send(
-            wire_request(url, headers, body),
-            request_context(request, Passthrough::default()),
-        )
-        .await?;
-    let document = super::json::decode_request_value(changed.body, "guardrail.document")?;
-    Ok((document, changed.headers))
-}
-
-pub(crate) fn body_document(body: &Value) -> Result<OcrDocument, super::Error> {
-    let document = body
-        .get("document")
-        .and_then(Value::as_object)
-        .ok_or_else(|| super::Error::RequestField {
-            path: "body.document".into(),
-        })?;
-    let source = document
-        .iter()
-        .filter(|(name, _)| matches!(name.as_str(), "type" | "image_url" | "document_url"))
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
-    super::json::decode_request_value(Value::Object(source), "body.document")
-}
-
-pub(crate) fn credential_env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
-}
+use super::provider_config::OcrProvider;
+use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
 
 pub(crate) fn prepare_request(
     request: ResolvedOcrRequest,
-    host: OcrHost,
     caller_document: bool,
+    client: &OcrClient,
+    secrets: Secrets,
 ) -> PreparedOcrRequest {
-    use litellm_auth::{InputSource, Sourced};
-
     let credentials = request.credentials.clone();
-    let api_base_env = match request.config.provider() {
-        super::provider_config::OcrProvider::Mistral => Some("MISTRAL_API_BASE"),
-        super::provider_config::OcrProvider::AzureAi => Some("AZURE_AI_API_BASE"),
-        super::provider_config::OcrProvider::Cohere
-        | super::provider_config::OcrProvider::Reducto
-        | super::provider_config::OcrProvider::VertexAi => None,
+    let (preferred_api_key_env, api_base_env) = match request.config.provider() {
+        OcrProvider::Mistral => (
+            Some("MISTRAL_AZURE_API_KEY"),
+            Some("MISTRAL_AZURE_API_BASE"),
+        ),
+        OcrProvider::AzureAi => (None, Some("AZURE_AI_API_BASE")),
+        OcrProvider::AwsTextract
+        | OcrProvider::Cohere
+        | OcrProvider::Reducto
+        | OcrProvider::VertexAi => (None, None),
     };
+    let secret = |name: &str| secrets.truthy(name);
     let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {
         credentials.api_key.clone().or_else(|| {
-            request
-                .config
-                .get_api_key_env_var()
-                .and_then(credential_env)
-                .map(|value| Sourced::new(value, InputSource::Environment))
+            preferred_api_key_env
+                .into_iter()
+                .chain(request.config.get_api_key_env_var())
+                .find_map(secret)
+                .map(|value| Sourced::new(SecretValue::new(value), InputSource::Environment))
         })
     });
     let dynamic_api_base = credentials.dynamic_api_base.or_else(|| {
         credentials.api_base.clone().or_else(|| {
             api_base_env
-                .and_then(credential_env)
+                .and_then(secret)
                 .map(|value| Sourced::new(value, InputSource::Environment))
         })
     });
     let resolved = request
         .config
-        .resolve_connection_params(super::types::OcrCredentialInputs {
+        .resolve_connection_params(OcrCredentialInputs {
             dynamic_api_key,
             dynamic_api_base,
             ..credentials
         });
-    let transport = request.transport.clone();
-    PreparedOcrRequest::new(
-        request,
-        OcrConnection::new(resolved, transport),
-        host,
+    let LiteLLMOcrRequest {
+        model,
+        document,
+        transport,
+        optional_params,
+        input_sources,
+        azure_ad_token_provider,
+        ..
+    } = request;
+    PreparedOcrRequest {
+        model,
+        document,
+        connection: OcrConnection::new(resolved, transport, client.settings().clone(), secrets),
         caller_document,
-    )
+        optional_params,
+        input_sources,
+        azure_ad_token_provider,
+    }
 }
 
 #[cfg(test)]
 pub(crate) fn prepare_request_for_test(request: ResolvedOcrRequest) -> PreparedOcrRequest {
-    prepare_request(request, OcrHost::detached(), true)
+    prepare_request(
+        request,
+        true,
+        &OcrClient::for_test(reqwest::Client::new(), reqwest::Client::new()),
+        std::sync::Arc::new(litellm_core_utils::settings::ProcessEnvironment),
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use litellm_core_utils::call_arguments::{CallArguments, compose_body, parse_options};
     use serde_json::json;
-
-    use crate::call_arguments::{CallArguments, compose_body, parse_options};
 
     #[derive(serde::Deserialize)]
     struct KnownParams {

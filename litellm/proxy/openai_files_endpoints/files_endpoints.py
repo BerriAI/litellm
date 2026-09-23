@@ -7,7 +7,7 @@
 
 import asyncio
 import traceback
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, BinaryIO, Final, TypedDict, cast, get_args
 
 import httpx
@@ -32,10 +32,15 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.batches_endpoints.litellm_executed_batches import (
+    litellm_executed_provider_of,
+    resolve_litellm_executed_provider,
+)
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -67,9 +72,10 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     add_internal_model_credentials,
     apply_team_provider_credentials,
+    authorize_model_for_key,
     encode_file_id_with_model,
     extract_file_creation_params,
-    get_credentials_for_model,
+    get_authorized_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
     validate_file_list_limit,
@@ -86,7 +92,7 @@ from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     coerce_optional_str_list_setting,
     raise_upload_validation_failure,
 )
-from litellm.proxy.utils import ProxyLogging, is_known_model
+from litellm.proxy.utils import PrismaClient, ProxyLogging, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
@@ -98,6 +104,64 @@ from litellm.types.llms.openai import (
 )
 
 router: Final = APIRouter()
+
+
+def _names_a_litellm_executed_provider(llm_router: Router, candidate: str, team_id: str | None) -> bool:
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=candidate, team_id=team_id)
+    return credentials is not None and litellm_executed_provider_of(credentials) is not None
+
+
+async def _litellm_executed_batch_input_model(
+    llm_router: Router | None,
+    purpose: OpenAIFilesPurpose,
+    model: str | None,
+    target_model_names_list: Sequence[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    explicit_storage: str | None,
+) -> str | None:
+    if llm_router is None:
+        return None
+    candidates: Final = (model,) if model is not None else tuple(target_model_names_list)
+    team_id: Final = user_api_key_dict.team_id
+    await asyncio.gather(
+        *(
+            authorize_model_for_key(model_id=candidate, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+            for candidate in candidates
+            if _names_a_litellm_executed_provider(llm_router, candidate, team_id)
+        )
+    )
+    if explicit_storage is not None:
+        return None
+    providers: Final = await asyncio.gather(
+        *(resolve_litellm_executed_provider(llm_router, candidate, team_id) for candidate in candidates)
+    )
+    executed: Final = tuple(
+        candidate for candidate, provider in zip(candidates, providers, strict=True) if provider is not None
+    )
+    if not executed:
+        return None
+    if purpose != "batch":
+        raise ProxyException(
+            message=(
+                f"The server behind {', '.join(executed)} has no Files API, so LiteLLM keeps only batch input "
+                f"files for it and runs the batch itself: upload with purpose=batch; got purpose={purpose}"
+            ),
+            type="invalid_request_error",
+            param="purpose",
+            code=400,
+        )
+    if len(candidates) == 1:
+        return executed[0]
+    raise ProxyException(
+        message=(
+            f"LiteLLM runs batches for {', '.join(executed)} itself and keeps their input files, so a batch "
+            f"input file can target only that one model; got target_model_names={', '.join(candidates)}"
+        ),
+        type="invalid_request_error",
+        param="target_model_names",
+        code=400,
+    )
+
 
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
 _LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
@@ -244,36 +308,48 @@ async def route_create_file(
     5. Else -> use custom_llm_provider with files_settings
     """
 
-    # Handle custom storage backend
-    if target_storage and target_storage != "default":
+    explicit_storage: Final = target_storage if target_storage and target_storage != "default" else None
+    if explicit_storage == LITELLM_DB_STORAGE_BACKEND_NAME:
+        raise ProxyException(
+            message=(
+                f"target_storage={LITELLM_DB_STORAGE_BACKEND_NAME} is not a storage a caller can pick: LiteLLM "
+                "chooses it on its own for the batch input files of a model whose batches it runs itself, so "
+                "upload with purpose=batch and name that model instead of target_storage"
+            ),
+            type="invalid_request_error",
+            param="target_storage",
+            code=400,
+        )
+    executed_model: Final = await _litellm_executed_batch_input_model(
+        llm_router, purpose, model, target_model_names_list, user_api_key_dict, explicit_storage
+    )
+    storage: Final = explicit_storage or (LITELLM_DB_STORAGE_BACKEND_NAME if executed_model is not None else None)
+    if storage is not None:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             extract_file_data,
         )
         from litellm.proxy.openai_files_endpoints.storage_backend_service import (
             StorageBackendFileService,
         )
+        from litellm.proxy.proxy_server import prisma_client
 
-        # Extract file data
-        file_data: Final = extract_file_data(cast(Any, _create_file_request.get("file")))
-
-        # Use storage backend service to handle upload
-        file_object: Final = await StorageBackendFileService.upload_file_to_storage_backend(
-            file_data=file_data,
-            target_storage=target_storage,
-            target_model_names=target_model_names_list,
+        return await StorageBackendFileService.upload_file_to_storage_backend(
+            file_data=extract_file_data(cast(Any, _create_file_request.get("file"))),
+            target_storage=storage,
+            target_model_names=(executed_model,) if executed_model is not None else target_model_names_list,
             purpose=purpose,
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
-
-        return file_object
 
     # NEW: Handle model-based routing (no DB required)
     if model is not None:
         # Get credentials from model_list via router
-        credentials: Final = get_credentials_for_model(
+        credentials: Final = await get_authorized_credentials_for_model(
             llm_router=llm_router,
             model_id=model,
+            user_api_key_dict=user_api_key_dict,
             operation_context="file upload",
         )
 
@@ -499,8 +575,8 @@ async def create_file(
         # Parse expires_after if provided
         expires_after: FileExpiresAfter | None = None
         form_data_raw: Final = await request.form()
-        form_data_dict: Final[dict[str, Any]] = dict(form_data_raw)
-        extracted_litellm_metadata: Final[dict[str, Any] | None] = extract_nested_form_metadata(
+        form_data_dict: Final[Mapping[str, object]] = dict(form_data_raw)
+        extracted_litellm_metadata: Final[Mapping[str, object] | None] = extract_nested_form_metadata(
             form_data=form_data_dict, prefix="litellm_metadata["
         )
         expires_after_anchor: Final = form_data_raw.get("expires_after[anchor]")
@@ -847,7 +923,7 @@ async def get_file_content(
 
             # Check if file is stored in a storage backend (check DB)
             if hasattr(managed_files_obj, "prisma_client") and getattr(managed_files_obj, "prisma_client", None):
-                prisma_client: Final = getattr(managed_files_obj, "prisma_client")
+                prisma_client: Final[PrismaClient] = getattr(managed_files_obj, "prisma_client")
                 db_file: Final = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": file_id}
                 )
@@ -862,7 +938,7 @@ async def get_file_content(
 
                     try:
                         # Get storage backend (uses same env vars as callback)
-                        storage_backend: Final = get_storage_backend(storage_backend_name)
+                        storage_backend: Final = get_storage_backend(storage_backend_name, prisma_client=prisma_client)
                         file_content: Final = await storage_backend.download_file(storage_url)
 
                         # Return file content
@@ -916,11 +992,12 @@ async def get_file_content(
                 model_used,
                 original_file_id,
                 credentials,
-            ) = handle_model_based_routing(
+            ) = await handle_model_based_routing(
                 file_id=file_id,
                 request=request,
                 llm_router=llm_router,
                 data=data,
+                user_api_key_dict=user_api_key_dict,
                 check_file_id_encoding=True,
             )
 
@@ -1131,15 +1208,16 @@ async def get_file(
             model_used,
             original_file_id,
             credentials,
-        ) = handle_model_based_routing(
+        ) = await handle_model_based_routing(
             file_id=file_id,
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
         )
 
-        if should_route:
+        if should_route and credentials is not None:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(
                 data=data,
@@ -1148,7 +1226,10 @@ async def get_file(
                 include_internal_credentials=True,
             )
 
-            response = await litellm.afile_retrieve(**data)
+            response = await litellm.afile_retrieve(
+                custom_llm_provider=credentials["custom_llm_provider"],
+                **data,
+            )
 
             # Keep the encoded ID in response if it was originally encoded
             if original_file_id and response and hasattr(response, "id") and response.id:
@@ -1341,11 +1422,12 @@ async def delete_file(
             model_used,
             original_file_id,
             credentials,
-        ) = handle_model_based_routing(
+        ) = await handle_model_based_routing(
             file_id=file_id,
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
         )
 
@@ -1534,11 +1616,12 @@ async def list_files(
         response: Any | None = None
 
         # Check for model-based credential routing (no file_id encoding check for list)
-        should_route, model_used, _, credentials = handle_model_based_routing(
+        should_route, model_used, _, credentials = await handle_model_based_routing(
             file_id="",  # No file_id for list endpoint
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=False,
         )
 
@@ -1565,9 +1648,10 @@ async def list_files(
                     status_code=500,
                     detail="LLM Router not initialized. Ensure models added to proxy.",
                 )
-            credentials = get_credentials_for_model(
+            credentials = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=target_model_names_list[0],
+                user_api_key_dict=user_api_key_dict,
                 operation_context="file list",
             )
             prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)

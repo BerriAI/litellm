@@ -1,11 +1,17 @@
 import asyncio
+import base64
 import copy
 import json
 import os
+import struct
+import zlib
 from datetime import datetime
 from types import SimpleNamespace
+from collections.abc import AsyncIterator, Mapping, Sequence
+from typing import Final
 from unittest.mock import Mock
 
+import httpx
 import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
@@ -1650,6 +1656,92 @@ def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
     assert set(result).issubset(cfg.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS)
 
 
+@pytest.mark.parametrize(
+    "client_beta_header",
+    ["dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14", "interleaved-thinking-2025-05-14"],
+    ids=["client_sends_beta", "client_omits_beta"],
+)
+def test_bedrock_messages_forwards_safeguards_with_dangerous_tool_use_beta(local_beta_headers_config, client_beta_header):
+    """
+    Claude Code's server-side auto-mode classifier sends `safeguards` alongside the
+    dangerous-tool-use-2026-09-03 beta. Bedrock Invoke accepts the pair, answers
+    "safeguards: Extra inputs are not permitted" for the field alone, and returns
+    `safeguard_results: []` for the beta alone, so the field reaches it unchanged
+    and the beta rides along whether or not the client sent it, as every other
+    body-driven beta does here.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "safeguards": safeguards},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": client_beta_header},
+    )
+
+    assert result["safeguards"] == safeguards
+    assert result["anthropic_beta"].count("dangerous-tool-use-2026-09-03") == 1
+
+
+def test_bedrock_messages_does_not_add_dangerous_tool_use_beta_without_safeguards(local_beta_headers_config):
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "safeguards" not in result
+    assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
+
+
+def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
+    """Bedrock streams the classifier verdicts on message_start and on the final message_delta, exactly as api.anthropic.com does."""
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")
+    tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
+    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
+
+    message_start = decoder._chunk_parser(
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 3, "output_tokens": 0},
+                "safeguard_results": safeguard_results,
+            },
+        }
+    )
+
+    assert isinstance(message_start, dict)
+    assert message_start["message"]["safeguard_results"] == safeguard_results
+
+    message_delta = decoder._chunk_parser(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None, "safeguard_results": safeguard_results},
+            "usage": {"output_tokens": 1},
+            "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3, "outputTokenCount": 1},
+        }
+    )
+
+    assert isinstance(message_delta, dict)
+    assert message_delta["delta"]["safeguard_results"] == safeguard_results
+
+
 def test_bedrock_messages_filters_user_provided_unsupported_beta_header():
     """
     In proxy deployments the client (e.g. Claude Code) doesn't know the backend
@@ -3244,3 +3336,161 @@ def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_mo
     )
 
     assert result.get("output_config") == {"format": schema_format}
+
+
+FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
+
+
+def _invoke_request_with_tools(
+    tools: list[dict[str, object]], headers: dict[str, str] | None = None
+) -> dict[str, object]:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "write a big file"}],
+        anthropic_messages_optional_request_params={"max_tokens": 4096, "tools": copy.deepcopy(tools), "stream": True},
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers or {},
+    )
+
+
+def _eager_invoke_tool(name: str, eager_input_streaming: bool) -> dict[str, object]:
+    return {
+        "name": name,
+        "description": f"{name} tool",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        "eager_input_streaming": eager_input_streaming,
+    }
+
+
+def test_bedrock_invoke_eager_input_streaming_tool_adds_beta_and_strips_key():
+    result = _invoke_request_with_tools(
+        [
+            _eager_invoke_tool("write_file", True),
+            _eager_invoke_tool("read_file", False),
+            {"name": "list_files", "input_schema": {"type": "object", "properties": {}}},
+        ]
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+    assert [tool["name"] for tool in result["tools"]] == ["write_file", "read_file", "list_files"]
+    assert all("eager_input_streaming" not in tool for tool in result["tools"])
+    assert result["tools"][0]["description"] == "write_file tool"
+    assert result["tools"][0]["input_schema"] == {"type": "object", "properties": {"path": {"type": "string"}}}
+
+
+def test_bedrock_invoke_eager_input_streaming_false_strips_key_without_beta():
+    result = _invoke_request_with_tools([_eager_invoke_tool("write_file", False)])
+
+    assert "anthropic_beta" not in result
+    assert result["tools"] == [
+        {
+            "name": "write_file",
+            "description": "write_file tool",
+            "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        }
+    ]
+
+
+def test_bedrock_invoke_eager_input_streaming_beta_not_duplicated_with_client_header():
+    result = _invoke_request_with_tools(
+        [_eager_invoke_tool("write_file", True)],
+        headers={"anthropic-beta": FINE_GRAINED_TOOL_STREAMING_BETA},
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+
+
+def _bedrock_event_frame(payload: Mapping[str, object]) -> bytes:
+    def _header(name: str, value: str) -> bytes:
+        return (
+            bytes([len(name)])
+            + name.encode()
+            + bytes([7])
+            + struct.pack(">H", len(value))
+            + value.encode()
+        )
+
+    headers: Final = (
+        _header(":message-type", "event")
+        + _header(":event-type", "chunk")
+        + _header(":content-type", "application/json")
+    )
+    body: Final = json.dumps(
+        {"bytes": base64.b64encode(json.dumps(payload).encode()).decode()}
+    ).encode()
+    prelude: Final = struct.pack(">II", 12 + len(headers) + len(body) + 4, len(headers))
+    prelude_crc: Final = struct.pack(">I", zlib.crc32(prelude))
+    message_crc: Final = struct.pack(">I", zlib.crc32(prelude + prelude_crc + headers + body))
+    return prelude + prelude_crc + headers + body + message_crc
+
+
+class _GatedAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: Sequence[bytes], gate: asyncio.Event) -> None:
+        self._chunks = chunks
+        self._gate = gate
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._chunks[0]
+        await self._gate.wait()
+        for chunk in self._chunks[1:]:
+            yield chunk
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_get_async_streaming_response_iterator_yields_small_frame_before_upstream_pauses():
+    gate: Final = asyncio.Event()
+    response: Final = httpx.Response(
+        200,
+        stream=_GatedAsyncByteStream(
+            chunks=(
+                _bedrock_event_frame(
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_test",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [],
+                            "model": "us.anthropic.claude-sonnet-4-6",
+                            "usage": {"input_tokens": 3, "output_tokens": 1},
+                        },
+                    }
+                ),
+                _bedrock_event_frame(
+                    {
+                        "type": "message_stop",
+                        "usage": {"input_tokens": 3, "output_tokens": 9},
+                    }
+                ),
+            ),
+            gate=gate,
+        ),
+    )
+
+    iterator: Final = AmazonAnthropicClaudeMessagesConfig().get_async_streaming_response_iterator(
+        model="us.anthropic.claude-sonnet-4-6",
+        httpx_response=response,
+        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/us.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_small_frame_before_upstream_pauses",
+            function_id="test_small_frame_before_upstream_pauses",
+        ),
+    )
+
+    first: Final = await asyncio.wait_for(anext(iterator), timeout=10)
+    assert first.startswith(b"event: message_start\n"), first
+
+    gate.set()
+    remaining: Final = tuple([chunk async for chunk in iterator])
+    assert any(chunk.startswith(b"event: message_stop\n") for chunk in remaining), remaining
+    await iterator.aclose()

@@ -1,13 +1,14 @@
+use crate::logger::{run_async, run_sync};
 use litellm_core::audio_transcription::{
-    AudioTranscriptionRequest, Error, audio_transcription as run_audio_transcription,
+    Error, audio_transcription as run_audio_transcription, types::AudioTranscriptionRequest,
 };
-use litellm_host_python::{from_py_argument, run_async, run_sync};
+use litellm_host_python::from_py_argument;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
-use crate::errors::audio_transcription_error_to_pyerr;
-use crate::marshal::{
-    RouteOptions, extra_headers_argument, optional_params_argument, optional_timeout,
+use crate::{
+    errors::audio_transcription_error_to_pyerr,
+    marshal::{RouteOptions, extra_headers_argument, optional_params_argument, optional_timeout},
 };
 
 async fn execute(

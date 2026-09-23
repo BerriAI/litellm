@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 
@@ -38,3 +40,66 @@ class VertexSpeechToTextResponseMetadata(BaseModel):
 class VertexSpeechToTextRecognizeResponse(BaseModel):
     results: list[VertexSpeechToTextResult] = []
     metadata: VertexSpeechToTextResponseMetadata | None = None
+
+
+class VertexSpeechStreamingConfigure(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    kind: Literal["configure"] = "configure"
+    model: str
+    language_codes: tuple[str, ...]
+    sample_rate_hertz: int
+
+
+class VertexSpeechStreamingFinishTurn(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    kind: Literal["finish_turn"] = "finish_turn"
+
+
+class VertexSpeechStreamingDiscardTurn(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    kind: Literal["discard_turn"] = "discard_turn"
+
+
+VertexSpeechStreamingCommandUnion = (
+    VertexSpeechStreamingConfigure | VertexSpeechStreamingFinishTurn | VertexSpeechStreamingDiscardTurn
+)
+VertexSpeechStreamingCommand = Annotated[VertexSpeechStreamingCommandUnion, Field(discriminator="kind")]
+
+
+class VertexSpeechStreamingResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    transcript: str
+    is_final: bool
+
+
+class VertexSpeechStreamingResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    kind: Literal["response"] = "response"
+    speech_event: Literal["none", "begin", "end"]
+    results: tuple[VertexSpeechStreamingResult, ...]
+    billed_seconds: float
+
+
+class VertexSpeechStreamingConfigured(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    kind: Literal["configured"] = "configured"
+
+
+class VertexSpeechStreamingTurnFinished(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    kind: Literal["turn_finished"] = "turn_finished"
+
+
+class VertexSpeechStreamingTurnDiscarded(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    kind: Literal["turn_discarded"] = "turn_discarded"
+    billed_seconds: float
+
+
+VertexSpeechStreamingEventUnion = (
+    VertexSpeechStreamingResponse
+    | VertexSpeechStreamingConfigured
+    | VertexSpeechStreamingTurnFinished
+    | VertexSpeechStreamingTurnDiscarded
+)
+VertexSpeechStreamingEvent = Annotated[VertexSpeechStreamingEventUnion, Field(discriminator="kind")]

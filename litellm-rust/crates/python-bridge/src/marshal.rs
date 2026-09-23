@@ -1,13 +1,12 @@
-use std::collections::{BTreeMap, HashMap};
-use std::time::Duration;
-
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use serde_json::{Map, Value};
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::Duration,
+};
 
 use litellm_auth::InputSource;
 use litellm_host_python::{from_py, from_py_argument};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use serde_json::{Map, Value};
 
 /// The keyword arguments every value route shares, validated at the Python boundary.
 pub(crate) struct RouteOptions {
@@ -17,10 +16,6 @@ pub(crate) struct RouteOptions {
     pub(crate) custom_llm_provider: Option<String>,
     pub(crate) extra_headers: Option<Map<String, Value>>,
     pub(crate) timeout: Option<Duration>,
-}
-
-pub(crate) fn body_argument(value: &Bound<'_, PyAny>) -> PyResult<Map<String, Value>> {
-    required_object("body", from_py_argument(value)?)
 }
 
 pub(crate) fn messages_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
@@ -156,9 +151,10 @@ pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pyo3::exceptions::PyTypeError;
     use serde_json::json;
+
+    use super::*;
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
@@ -176,6 +172,60 @@ mod tests {
         request_input_sources(&kwargs, names.iter().copied())
     }
 
+    #[serde_with::serde_as]
+    #[derive(Debug, serde::Deserialize, serde::Serialize, PartialEq)]
+    struct Numbers {
+        #[serde_as(deserialize_as = "Option<Vec<litellm_core_utils::serde_compat::LaxI64>>")]
+        integers: Option<Vec<i64>>,
+        #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::FiniteF64>")]
+        float: Option<f64>,
+    }
+
+    #[test]
+    fn numeric_adapters_agree_across_json_and_python_boundaries() {
+        Python::initialize();
+        Python::attach(|py| {
+            for input in [
+                json!({}),
+                json!({"integers": null, "float": null}),
+                json!({"integers": [i64::MIN, i64::MAX, "9007199254740993.0", " +1_000.00 ", true, 3.0], "float": " 1.25 "}),
+                json!({"integers": [u64::MAX]}),
+                json!({"integers": ["1.0000000000000001"]}),
+                json!({"integers": [2.5]}),
+                json!({"float": "NaN"}),
+                json!({"float": "inf"}),
+                json!({"float": "1e999"}),
+                json!({"float": true}),
+                json!({"float": u64::MAX}),
+            ] {
+                let expected = serde_json::from_value::<Numbers>(input.clone());
+                let python = litellm_host_python::to_py(py, &input).unwrap();
+                let actual = from_py::<Numbers>(python.bind(py));
+                match (expected, actual) {
+                    (Ok(expected), Ok(actual)) => {
+                        assert_eq!(actual, expected);
+                        let serialized = litellm_host_python::to_py(py, &actual).unwrap();
+                        assert_eq!(
+                            from_py::<Value>(serialized.bind(py)).unwrap(),
+                            serde_json::to_value(expected).unwrap()
+                        );
+                    }
+                    (Err(_), Err(_)) => {}
+                    mismatch => panic!("boundary mismatch for {input}: {mismatch:?}"),
+                }
+            }
+            for source in [
+                c"{'float': float('nan')}",
+                c"{'float': float('inf')}",
+                c"{'integers': [float('inf')]}",
+                c"{'integers': [2 ** 100]}",
+            ] {
+                let value = py.eval(source, None, None).unwrap();
+                assert!(from_py::<Numbers>(&value).is_err());
+            }
+        });
+    }
+
     #[test]
     fn argument_converters_keep_nested_values_and_accept_explicit_none() {
         Python::initialize();
@@ -190,18 +240,6 @@ mod tests {
             assert_eq!(
                 Value::Array(messages_argument(&messages).unwrap()),
                 json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
-            );
-
-            let body = py
-                .eval(
-                    c"{'model': 'claude', 'metadata': {'user': '1'}}",
-                    None,
-                    None,
-                )
-                .unwrap();
-            assert_eq!(
-                Value::Object(body_argument(&body).unwrap()),
-                json!({"model": "claude", "metadata": {"user": "1"}})
             );
 
             let params = py.eval(c"{'temperature': 0.2}", None, None).unwrap();

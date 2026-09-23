@@ -1,11 +1,11 @@
-use litellm_providers::base_llm::chat::transformation::ChatCompletionsAuth;
+use litellm_llms::base_llm::chat::transformation::RequestAuth;
 use serde_json::{Map, Value, json};
 
 use super::{
     Error,
     prepare::{prepare_provider_request, resolve_request},
-    types::{ChatCompletionsRequest, ProviderChatCompletionsRequest},
 };
+use crate::chat_completions::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
 
 fn prepare_chat_completions_call(
     request: ChatCompletionsRequest<'_>,
@@ -90,7 +90,7 @@ fn adds_the_auth_and_default_headers() {
     );
     assert!(matches!(
         prepared.auth,
-        ChatCompletionsAuth::Header {
+        RequestAuth::Header {
             name: "x-api-key",
             ..
         }
@@ -265,7 +265,7 @@ fn rejects_non_string_extra_headers() {
     call.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
     assert_eq!(
         decline(call),
-        Error::Headers(crate::http_utils::HeaderError {
+        Error::Headers(litellm_http::request::HeaderError {
             context: "chat completions",
             name: "x-trace".to_string(),
             actual: "number",
@@ -289,8 +289,9 @@ fn prepares_a_bedrock_call_without_resolving_credentials() {
     );
     assert_eq!(
         prepared.auth,
-        ChatCompletionsAuth::AwsSigV4 {
-            region: "us-east-1".to_string()
+        RequestAuth::AwsSigV4 {
+            region: "us-east-1".to_string(),
+            service: "bedrock",
         }
     );
     // SigV4 signs the serialized body, so prepare must not have added an
@@ -326,15 +327,14 @@ async fn a_forwarded_client_header_does_not_enter_the_bedrock_signature() {
         json!("abc-123"),
     )]));
     let prepared = prepare_chat_completions_call(call).expect("prepares");
-    let signed = super::handler::signed_headers(&prepared, br#"{"a":1}"#)
+    let signed = super::handler::outbound_request(&prepared)
         .await
         .expect("signs");
 
     let authorization = signed
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-        .map(|(_, value)| value.clone())
-        .expect("carries an authorization header");
+        .header("authorization")
+        .expect("carries an authorization header")
+        .to_string();
     assert!(
         authorization.starts_with("AWS4-HMAC-SHA256"),
         "expected a SigV4 signature, got {authorization}"
@@ -346,6 +346,7 @@ async fn a_forwarded_client_header_does_not_enter_the_bedrock_signature() {
     // It still goes on the wire, it is just not part of the signature.
     assert!(
         signed
+            .headers()
             .iter()
             .any(|(name, value)| name == "x-request-id" && value == "abc-123"),
         "forwarded header was dropped instead of reattached"
@@ -376,7 +377,7 @@ async fn a_forwarded_header_the_signer_computes_declines_to_python() {
         call.api_key = None;
         call.extra_headers = Some(Map::from_iter([(forwarded.to_string(), json!("forged"))]));
         let prepared = prepare_chat_completions_call(call).expect("prepares");
-        let error = super::handler::signed_headers(&prepared, br#"{"a":1}"#)
+        let error = super::handler::outbound_request(&prepared)
             .await
             .expect_err("{forwarded} should decline instead of being signed");
         assert!(
@@ -466,7 +467,7 @@ fn a_bedrock_api_key_is_sent_as_a_bearer_token_instead_of_being_signed() {
     .expect("prepares");
     assert_eq!(
         prepared.auth,
-        ChatCompletionsAuth::Bearer {
+        RequestAuth::Bearer {
             token: "sk-test".to_string()
         }
     );
@@ -771,7 +772,7 @@ mod round_trip {
         assert!(
             matches!(
                 err,
-                Error::Transport(crate::transport::Error::Http { status: 429, .. })
+                Error::Transport(litellm_http::transport::Error::Http { status: 429, .. })
             ),
             "expected a 429, got {err:?}"
         );
@@ -796,7 +797,10 @@ mod round_trip {
         .await
         .expect_err("nothing is listening");
         assert!(
-            matches!(err, Error::Transport(crate::transport::Error::Connect(_))),
+            matches!(
+                err,
+                Error::Transport(litellm_http::transport::Error::Connect(_))
+            ),
             "expected a pre-send connect failure, got {err:?}"
         );
     }
@@ -819,11 +823,11 @@ mod round_trip {
         }
         // An upstream status is already unambiguous, so it survives intact.
         assert!(matches!(
-            as_response_error(Error::Transport(crate::transport::Error::Http {
+            as_response_error(Error::Transport(litellm_http::transport::Error::Http {
                 status: 500,
                 body: "boom".to_string()
             })),
-            Error::Transport(crate::transport::Error::Http { status: 500, .. })
+            Error::Transport(litellm_http::transport::Error::Http { status: 500, .. })
         ));
     }
 }
