@@ -2554,6 +2554,83 @@ async def test_apply_to_output_streaming_gemini_sse_bytes_are_forwarded_incremen
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_first_frame_split_across_transport_chunks_is_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    message_start = _anthropic_sse(
+        "message_start",
+        {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+    )
+    split_at = message_start.index(b'"message_') + len(b'"message_')
+    byte_chunks = [
+        message_start[:split_at],
+        message_start[split_at:],
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_first_frame_split_across_transport_chunks_streams_incrementally():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    first = _gemini_sse("Partial one from John Smith. ")
+    second = _gemini_sse("Partial two. ")
+    collected: list[object] = []
+
+    async def mock_stream():
+        yield first[:20]
+        yield first[20:]
+        yield second
+        raise ConnectionError("upstream closed mid-stream")
+
+    async def collect() -> None:
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+    with pytest.raises(ConnectionError):
+        await collect()
+
+    assert collected == [first, second]
+
+
+@pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_sse_bytes_fail_closed_when_presidio_is_unreachable():
     """
     The raw SSE stream is fully drained before masking, so a Presidio outage

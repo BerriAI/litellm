@@ -94,6 +94,39 @@ def _json_escaped_len(text: str) -> int:
     return len(json.dumps(text).encode("utf-8")) - 2  # strip the surrounding quotes
 
 
+def _holds_complete_sse_frame(raw: bytes) -> bool:
+    """Whether ``raw`` contains at least one SSE event terminated by a blank line."""
+    return b"\n\n" in raw or b"\r\n\r\n" in raw
+
+
+async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+    """
+    Join leading raw ``bytes`` chunks until they hold one complete SSE event, so
+    the stream shape is decided on a whole frame rather than a transport fragment.
+    Everything after that first frame is forwarded untouched.
+    """
+    pending = b""
+    try:
+        async for chunk in stream:
+            if not isinstance(chunk, bytes):
+                yield chunk
+                continue
+            pending += chunk
+            if _holds_complete_sse_frame(pending):
+                break
+        else:
+            if pending:
+                yield pending
+            return
+    except Exception:
+        if pending:
+            yield pending
+        raise
+    yield pending
+    async for chunk in stream:
+        yield chunk
+
+
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
@@ -1357,7 +1390,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         all_chunks: list[ModelResponseStream] = []
         passthrough_due_to_unknown_stream_shape = False
         try:
-            stream: Final = response.__aiter__()
+            stream: Final = _coalesce_first_sse_frame(response.__aiter__())
             async for chunk in stream:
                 if isinstance(chunk, ModelResponseStream):
                     if passthrough_due_to_unknown_stream_shape:
