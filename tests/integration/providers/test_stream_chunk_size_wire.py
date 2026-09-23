@@ -273,7 +273,6 @@ def provider_wire_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
 
-@pytest.mark.covers("other.provider_wire.stream_chunk_size_never_serialized")
 @pytest.mark.parametrize("provider", PROVIDERS)
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
