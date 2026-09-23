@@ -2793,16 +2793,20 @@ async def test_batch_file_groups_raw_elements_by_key_parent() -> None:
     plain = s3BatchLoggingElement(
         s3_object_key="logs/2026-01-01/c.json", payload={"id": "c"}, s3_object_download_filename="c.json"
     )
-    logger.log_queue = [alpha, beta, plain]
+    root = s3BatchLoggingElement(
+        s3_object_key="solo.json", payload={"id": "d"}, s3_object_download_filename="solo.json"
+    )
+    logger.log_queue = [alpha, beta, plain, root]
 
     await logger.async_send_batch()
 
-    assert len(calls) == 3
+    assert len(calls) == 4
     by_parent = {
-        re.sub(r"/batch_\d{2}-\d{2}-\d{2}_[0-9a-f]{32}\.jsonl$", "", url.split(".com/", 1)[-1]): (url, data)
+        re.sub(r"(^|/)batch_\d{2}-\d{2}-\d{2}_[0-9a-f]{32}\.jsonl$", "", url.split(".com/", 1)[-1]): (url, data)
         for url, data in calls
     }
-    assert sorted(by_parent) == ["logs/2026-01-01", "logs/alpha/2026-01-01", "logs/beta/2026-01-01"]
+    assert sorted(by_parent) == ["", "logs/2026-01-01", "logs/alpha/2026-01-01", "logs/beta/2026-01-01"]
+    assert [line for line in by_parent[""][1].splitlines()] == [json.dumps({"id": "d"})]
     assert [line for line in by_parent["logs/alpha/2026-01-01"][1].splitlines()] == [json.dumps({"id": "a"})]
     assert [line for line in by_parent["logs/beta/2026-01-01"][1].splitlines()] == [json.dumps({"id": "b"})]
     assert [line for line in by_parent["logs/2026-01-01"][1].splitlines()] == [json.dumps({"id": "c"})]
