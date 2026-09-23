@@ -1,0 +1,1778 @@
+{
+ "python_commit": "b401bc9be2509e46fc0126087db2542b129ad56c",
+ "generic": [
+  {
+   "id": "audio_mixed_modalities",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 500,
+    "prompt_tokens_details": {
+     "audio_tokens": 200
+    },
+    "completion_tokens_details": {
+     "audio_tokens": 150,
+     "text_tokens": 350,
+     "reasoning_tokens": 0
+    }
+   },
+   "model_info": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 4e-06,
+    "input_cost_per_audio_token": 1e-05,
+    "output_cost_per_audio_token": 2e-05,
+    "output_cost_per_reasoning_token": 8e-06
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.0036,
+   "expected_output_cost": 0.0044
+  },
+  {
+   "id": "anthropic_cache_ttl_split",
+   "usage": {
+    "prompt_tokens": 10000,
+    "completion_tokens": 900,
+    "prompt_tokens_details": {
+     "cached_tokens": 8000
+    },
+    "completion_tokens_details": {
+     "text_tokens": 800,
+     "reasoning_tokens": 100
+    }
+   },
+   "model_info": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 3e-07,
+    "output_cost_per_reasoning_token": 6e-06,
+    "litellm_provider": "anthropic"
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.0084,
+   "expected_output_cost": 0.0126
+  },
+  {
+   "id": "cache_write_plus_inclusive_threshold",
+   "usage": {
+    "prompt_tokens": 130000,
+    "completion_tokens": 2000,
+    "prompt_tokens_details": {
+     "cached_tokens": 40000,
+     "cache_write_tokens": 5000
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 1e-05,
+    "cache_creation_input_token_cost": 5e-06,
+    "input_cost_per_token_above_128k_tokens": 4e-06,
+    "output_cost_per_token_above_128k_tokens": 2e-05,
+    "litellm_provider": "xai"
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.525,
+   "expected_output_cost": 0.04
+  },
+  {
+   "id": "exclusive_threshold_at_boundary",
+   "usage": {
+    "prompt_tokens": 128000,
+    "completion_tokens": 500,
+    "prompt_tokens_details": {
+     "cached_tokens": 1000
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 1e-05,
+    "input_cost_per_token_above_128k_tokens": 4e-06,
+    "output_cost_per_token_above_128k_tokens": 2e-05,
+    "litellm_provider": "openai"
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.256,
+   "expected_output_cost": 0.005
+  },
+  {
+   "id": "service_tier_priority_rates",
+   "usage": {
+    "prompt_tokens": 5000,
+    "completion_tokens": 1000,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+     "reasoning_tokens": 400
+    }
+   },
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "input_cost_per_token_priority": 3e-06,
+    "output_cost_per_token_priority": 6e-06,
+    "output_cost_per_reasoning_token_priority": 9e-06
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": "priority",
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.015000000000000001,
+   "expected_output_cost": 0.0072
+  },
+  {
+   "id": "service_tier_flex_uses_flex_rates",
+   "usage": {
+    "prompt_tokens": 5000,
+    "completion_tokens": 1000,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "input_cost_per_token_flex": 5e-07,
+    "output_cost_per_token_flex": 1e-06
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": "flex",
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.0025,
+   "expected_output_cost": 0.001
+  },
+  {
+   "id": "service_tier_unpriced_falls_back_to_base",
+   "usage": {
+    "prompt_tokens": 5000,
+    "completion_tokens": 1000,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": "flex",
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.005,
+   "expected_output_cost": 0.002
+  },
+  {
+   "id": "data_residency_uplift",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "regional_processing_uplift_multiplier_eu": 1.5
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": "eu",
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.0015,
+   "expected_output_cost": 0.0006
+  },
+  {
+   "id": "image_output_tokens",
+   "usage": {
+    "prompt_tokens": 500,
+    "completion_tokens": 700,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+     "image_tokens": 600,
+     "text_tokens": 100
+    }
+   },
+   "model_info": {
+    "input_cost_per_token": 5e-07,
+    "output_cost_per_token": 1e-06,
+    "output_cost_per_image_token": 5e-06
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.00025,
+   "expected_output_cost": 0.0031
+  },
+  {
+   "id": "free_cache_read_and_write",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": {
+     "cached_tokens": 500,
+     "cache_write_tokens": 300
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 4e-06,
+    "cache_read_input_token_cost": 0.0,
+    "cache_creation_input_token_cost": 0.0
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.00039999999999999996,
+   "expected_output_cost": 0.0007999999999999999
+  },
+  {
+   "id": "reasoning_default_follows_output",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 600,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+     "text_tokens": 350,
+     "reasoning_tokens": 250
+    }
+   },
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 4e-06
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.001,
+   "expected_output_cost": 0.0024000000000000002
+  },
+  {
+   "id": "off_peak_window_active",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+     "reasoning_tokens": 50
+    }
+   },
+   "model_info": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 4e-06,
+    "off_peak_pricing": {
+     "input_cost_per_token": 1e-06,
+     "output_cost_per_token": 2e-06,
+     "output_cost_per_reasoning_token": 1e-06,
+     "hours_utc": "22:00-06:00"
+    }
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": "2026-03-12T02:30:00+00:00",
+   "expected_input_cost": 0.001,
+   "expected_output_cost": 0.00034999999999999994
+  },
+  {
+   "id": "off_peak_window_inactive",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+     "reasoning_tokens": 50
+    }
+   },
+   "model_info": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 4e-06,
+    "off_peak_pricing": {
+     "input_cost_per_token": 1e-06,
+     "output_cost_per_token": 2e-06,
+     "hours_utc": "22:00-06:00"
+    }
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": "2026-03-12T14:00:00+00:00",
+   "expected_input_cost": 0.002,
+   "expected_output_cost": 0.0007999999999999999
+  },
+  {
+   "id": "off_peak_weekday_calendar",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 4e-06,
+    "off_peak_pricing": {
+     "input_cost_per_token": 1e-06,
+     "output_cost_per_token": 2e-06,
+     "hours_utc": "00:00-00:00",
+     "weekdays": [
+      "sat",
+      "sun"
+     ],
+     "weekday_timezone": "America/New_York"
+    }
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": "2026-03-14T12:00:00+00:00",
+   "expected_input_cost": 0.001,
+   "expected_output_cost": 0.00039999999999999996
+  },
+  {
+   "id": "off_peak_weekday_blocked_on_weekday",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 4e-06,
+    "off_peak_pricing": {
+     "input_cost_per_token": 1e-06,
+     "output_cost_per_token": 2e-06,
+     "hours_utc": "00:00-00:00",
+     "weekdays": [
+      "sat",
+      "sun"
+     ],
+     "weekday_timezone": "America/New_York"
+    }
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": "2026-03-12T12:00:00+00:00",
+   "expected_input_cost": 0.001,
+   "expected_output_cost": 0.00039999999999999996
+  },
+  {
+   "id": "tiered_base_costs_low_tier",
+   "usage": {
+    "prompt_tokens": 500,
+    "completion_tokens": 100,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+     "reasoning_tokens": 40
+    }
+   },
+   "model_info": {
+    "tiered_pricing": [
+     {
+      "range": [
+       0,
+       16000
+      ],
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06,
+      "output_cost_per_reasoning_token": 3e-06
+     },
+     {
+      "range": [
+       16000,
+       128000
+      ],
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 4e-06,
+      "output_cost_per_reasoning_token": 6e-06
+     }
+    ]
+   },
+   "custom_llm_provider": "dashscope",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.0005,
+   "expected_output_cost": 0.00023999999999999998
+  },
+  {
+   "id": "tiered_base_costs_high_tier",
+   "usage": {
+    "prompt_tokens": 50000,
+    "completion_tokens": 100,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+     "reasoning_tokens": 40
+    }
+   },
+   "model_info": {
+    "tiered_pricing": [
+     {
+      "range": [
+       0,
+       16000
+      ],
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06,
+      "output_cost_per_reasoning_token": 3e-06
+     },
+     {
+      "range": [
+       16000,
+       128000
+      ],
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 4e-06,
+      "output_cost_per_reasoning_token": 6e-06
+     }
+    ]
+   },
+   "custom_llm_provider": "dashscope",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.09999999999999999,
+   "expected_output_cost": 0.00047999999999999996
+  },
+  {
+   "id": "tier_boundary_stays_in_lower_tier",
+   "usage": {
+    "prompt_tokens": 16000,
+    "completion_tokens": 100,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+     "reasoning_tokens": 40
+    }
+   },
+   "model_info": {
+    "tiered_pricing": [
+     {
+      "range": [
+       0,
+       16000
+      ],
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06,
+      "output_cost_per_reasoning_token": 3e-06
+     },
+     {
+      "range": [
+       16000,
+       128000
+      ],
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 4e-06,
+      "output_cost_per_reasoning_token": 6e-06
+     }
+    ]
+   },
+   "custom_llm_provider": "dashscope",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.016,
+   "expected_output_cost": 0.00023999999999999998
+  },
+  {
+   "id": "tier_cache_rates_fall_back_to_tier_input",
+   "usage": {
+    "prompt_tokens": 20000,
+    "completion_tokens": 100,
+    "prompt_tokens_details": {
+     "cached_tokens": 5000,
+     "cache_write_tokens": 1000
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 1e-05,
+    "cache_read_input_token_cost": 1e-06,
+    "tiered_pricing": [
+     {
+      "range": [
+       0,
+       16000
+      ],
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06
+     },
+     {
+      "range": [
+       16000,
+       128000
+      ],
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 4e-06
+     }
+    ]
+   },
+   "custom_llm_provider": "dashscope",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.04,
+   "expected_output_cost": 0.00039999999999999996
+  },
+  {
+   "id": "cache_read_falls_back_to_input_rate",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": {
+     "cached_tokens": 600
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 9e-06,
+    "litellm_provider": "openai"
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.003,
+   "expected_output_cost": 0.0018
+  },
+  {
+   "id": "fireworks_cache_read_default_applies",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": {
+     "cached_tokens": 600
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 2e-07,
+    "output_cost_per_token": 6e-07,
+    "litellm_provider": "fireworks_ai"
+   },
+   "custom_llm_provider": "fireworks_ai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.00014,
+   "expected_output_cost": 0.00011999999999999999
+  },
+  {
+   "id": "fireworks_cache_read_default_off_peak_untouched",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": {
+     "cached_tokens": 600
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 2e-07,
+    "output_cost_per_token": 6e-07,
+    "litellm_provider": "fireworks_ai",
+    "off_peak_pricing": {
+     "input_cost_per_token": 1e-07,
+     "hours_utc": "00:00-00:00"
+    }
+   },
+   "custom_llm_provider": "fireworks_ai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": "2026-03-12T02:30:00+00:00",
+   "expected_input_cost": 7e-05,
+   "expected_output_cost": 0.00011999999999999999
+  },
+  {
+   "id": "zero_rated_everything",
+   "usage": {
+    "prompt_tokens": 10000,
+    "completion_tokens": 5000,
+    "prompt_tokens_details": {
+     "cached_tokens": 5000
+    },
+    "completion_tokens_details": {
+     "reasoning_tokens": 1000
+    }
+   },
+   "model_info": {
+    "input_cost_per_token": 0.0,
+    "output_cost_per_token": 0.0
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected_input_cost": 0.0,
+   "expected_output_cost": 0.0
+  },
+  {
+   "id": "vertex_regional_endpoint_uplift",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "regional_endpoint_uplift_multiplier": 1.1
+   },
+   "custom_llm_provider": "vertex_ai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": "us-east1",
+   "current_time": null,
+   "expected_input_cost": 0.0011,
+   "expected_output_cost": 0.00044
+  },
+  {
+   "id": "vertex_global_location_no_uplift",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "regional_endpoint_uplift_multiplier": 1.1
+   },
+   "custom_llm_provider": "vertex_ai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": "global",
+   "current_time": null,
+   "expected_input_cost": 0.001,
+   "expected_output_cost": 0.00039999999999999996
+  }
+ ],
+ "batch": [
+  {
+   "id": "single_batch_threshold_crossed",
+   "usage": {
+    "prompt_tokens": 150000,
+    "completion_tokens": 20000,
+    "prompt_tokens_details": {
+     "cached_tokens": 2000,
+     "cache_write_tokens": 1000
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "input_cost_per_token_batches": 1.5e-06,
+    "output_cost_per_token_batches": 7.5e-06,
+    "input_cost_per_token_above_100k_tokens_batches": 7.5e-07,
+    "output_cost_per_token_above_100k_tokens_batches": 3.75e-06
+   },
+   "custom_llm_provider": "anthropic",
+   "expected_input": 7.5e-07,
+   "expected_output": 3.75e-06,
+   "expected_cache_read": null,
+   "expected_cache_creation": null
+  },
+  {
+   "id": "batch_threshold_not_crossed",
+   "usage": {
+    "prompt_tokens": 99999,
+    "completion_tokens": 20000,
+    "prompt_tokens_details": {
+     "cached_tokens": 2000,
+     "cache_write_tokens": 1000
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "input_cost_per_token_batches": 1.5e-06,
+    "output_cost_per_token_batches": 7.5e-06,
+    "input_cost_per_token_above_100k_tokens_batches": 7.5e-07,
+    "output_cost_per_token_above_100k_tokens_batches": 3.75e-06
+   },
+   "custom_llm_provider": "anthropic",
+   "expected_input": 1.5e-06,
+   "expected_output": 7.5e-06,
+   "expected_cache_read": null,
+   "expected_cache_creation": null
+  },
+  {
+   "id": "inclusive_batch_provider_at_boundary",
+   "usage": {
+    "prompt_tokens": 100000,
+    "completion_tokens": 20000,
+    "prompt_tokens_details": {
+     "cached_tokens": 2000,
+     "cache_write_tokens": 1000
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "input_cost_per_token_batches": 1.5e-06,
+    "output_cost_per_token_batches": 7.5e-06,
+    "input_cost_per_token_above_100k_tokens_batches": 7.5e-07,
+    "output_cost_per_token_above_100k_tokens_batches": 3.75e-06
+   },
+   "custom_llm_provider": "vertex_ai",
+   "expected_input": 1.5e-06,
+   "expected_output": 7.5e-06,
+   "expected_cache_read": null,
+   "expected_cache_creation": null
+  },
+  {
+   "id": "batch_cache_rates_use_batch_fractions",
+   "usage": {
+    "prompt_tokens": 50000,
+    "completion_tokens": 10000,
+    "prompt_tokens_details": {
+     "cached_tokens": 2000,
+     "cache_write_tokens": 1000
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 3e-07,
+    "cache_creation_input_token_cost": 3.75e-06,
+    "input_cost_per_token_batches": 1.5e-06,
+    "output_cost_per_token_batches": 7.5e-06,
+    "cache_read_input_token_cost_batches": 1.5e-07,
+    "cache_creation_input_token_cost_batches": 1.875e-06
+   },
+   "custom_llm_provider": "anthropic",
+   "expected_input": 1.5e-06,
+   "expected_output": 7.5e-06,
+   "expected_cache_read": 1.5e-07,
+   "expected_cache_creation": 1.875e-06
+  },
+  {
+   "id": "batch_cache_rates_absent_stay_none",
+   "usage": {
+    "prompt_tokens": 50000,
+    "completion_tokens": 10000,
+    "prompt_tokens_details": {
+     "cached_tokens": 2000,
+     "cache_write_tokens": 1000
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 3e-07,
+    "input_cost_per_token_batches": 1.5e-06,
+    "output_cost_per_token_batches": 7.5e-06
+   },
+   "custom_llm_provider": "anthropic",
+   "expected_input": 1.5e-06,
+   "expected_output": 7.5e-06,
+   "expected_cache_read": null,
+   "expected_cache_creation": null
+  },
+  {
+   "id": "no_batch_rates_falls_back_to_base",
+   "usage": {
+    "prompt_tokens": 50000,
+    "completion_tokens": 10000,
+    "prompt_tokens_details": {
+     "cached_tokens": 2000,
+     "cache_write_tokens": 1000
+    },
+    "completion_tokens_details": null
+   },
+   "model_info": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05
+   },
+   "custom_llm_provider": "anthropic",
+   "expected_input": null,
+   "expected_output": null,
+   "expected_cache_read": null,
+   "expected_cache_creation": null
+  }
+ ],
+ "billed_rates": [
+  {
+   "id": "geo_multiplier_applies",
+   "model": "fixture-billed/geo-multiplier-applies",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "usage_extra": {
+    "inference_geo": "us"
+   },
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "provider_specific_entry": {
+     "us": 1.1
+    }
+   },
+   "custom_llm_provider": "anthropic",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected": {
+    "input_cost_per_token": 1.1e-06,
+    "output_cost_per_token": 2.2e-06,
+    "cache_read_input_token_cost": 1.1e-06,
+    "cache_read_input_audio_token_cost": 1.1e-06,
+    "cache_creation_input_token_cost": 1.1e-06,
+    "cache_creation_input_token_cost_above_1hr": 1.1e-06,
+    "output_cost_per_reasoning_token": 2.2e-06
+   }
+  },
+  {
+   "id": "geo_global_is_neutral",
+   "model": "fixture-billed/geo-global-is-neutral",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "usage_extra": {
+    "inference_geo": "global"
+   },
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "provider_specific_entry": {
+     "us": 1.1
+    }
+   },
+   "custom_llm_provider": "anthropic",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "cache_read_input_token_cost": 1e-06,
+    "cache_read_input_audio_token_cost": 1e-06,
+    "cache_creation_input_token_cost": 1e-06,
+    "cache_creation_input_token_cost_above_1hr": 1e-06,
+    "output_cost_per_reasoning_token": 2e-06
+   }
+  },
+  {
+   "id": "all_multipliers_compose",
+   "model": "fixture-billed/all-multipliers-compose",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "usage_extra": {
+    "inference_geo": "us"
+   },
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "cache_read_input_token_cost": 1e-07,
+    "provider_specific_entry": {
+     "us": 1.1
+    },
+    "regional_processing_uplift_multiplier_eu": 1.5,
+    "regional_endpoint_uplift_multiplier": 1.1
+   },
+   "custom_llm_provider": "anthropic",
+   "service_tier": null,
+   "data_residency": "eu",
+   "vertex_location": "us-east1",
+   "current_time": null,
+   "expected": {
+    "input_cost_per_token": 1.8150000000000004e-06,
+    "output_cost_per_token": 3.630000000000001e-06,
+    "cache_read_input_token_cost": 1.8150000000000003e-07,
+    "cache_read_input_audio_token_cost": 1.8150000000000003e-07,
+    "cache_creation_input_token_cost": 1.8150000000000004e-06,
+    "cache_creation_input_token_cost_above_1hr": 1.8150000000000004e-06,
+    "output_cost_per_reasoning_token": 3.630000000000001e-06
+   }
+  },
+  {
+   "id": "service_tier_priority_rates",
+   "model": "fixture-billed/service-tier-priority-rates",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": null
+   },
+   "usage_extra": {},
+   "model_info": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "input_cost_per_token_priority": 3e-06,
+    "output_cost_per_token_priority": 6e-06
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": "priority",
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": null,
+   "expected": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 6e-06,
+    "cache_read_input_token_cost": 3e-06,
+    "cache_read_input_audio_token_cost": 3e-06,
+    "cache_creation_input_token_cost": 3e-06,
+    "cache_creation_input_token_cost_above_1hr": 3e-06,
+    "output_cost_per_reasoning_token": 6e-06
+   }
+  },
+  {
+   "id": "off_peak_rates_and_reasoning",
+   "model": "fixture-billed/off-peak-rates-and-reasoning",
+   "usage": {
+    "prompt_tokens": 1000,
+    "completion_tokens": 200,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+     "reasoning_tokens": 50
+    }
+   },
+   "usage_extra": {},
+   "model_info": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 4e-06,
+    "cache_read_input_token_cost": 2e-07,
+    "cache_creation_input_token_cost": 5e-06,
+    "off_peak_pricing": {
+     "input_cost_per_token": 1e-06,
+     "output_cost_per_token": 2e-06,
+     "output_cost_per_reasoning_token": 1e-06,
+     "hours_utc": "22:00-06:00"
+    }
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "data_residency": null,
+   "vertex_location": null,
+   "current_time": "2026-03-12T02:30:00+00:00",
+   "expected": {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "cache_read_input_token_cost": 2e-07,
+    "cache_read_input_audio_token_cost": 2e-07,
+    "cache_creation_input_token_cost": 5e-06,
+    "cache_creation_input_token_cost_above_1hr": 5e-06,
+    "output_cost_per_reasoning_token": 1e-06
+   }
+  }
+ ],
+ "off_peak": [
+  {
+   "id": "simple_window_02:30",
+   "off_peak": {
+    "hours_utc": "22:00-06:00"
+   },
+   "current_time": "2026-03-12T02:30:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "simple_window_14:00",
+   "off_peak": {
+    "hours_utc": "22:00-06:00"
+   },
+   "current_time": "2026-03-12T14:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "simple_window_12:00",
+   "off_peak": {
+    "hours_utc": "22:00-06:00"
+   },
+   "current_time": "2026-03-14T12:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "simple_window_20:00",
+   "off_peak": {
+    "hours_utc": "22:00-06:00"
+   },
+   "current_time": "2026-03-14T20:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "simple_window_01:00",
+   "off_peak": {
+    "hours_utc": "22:00-06:00"
+   },
+   "current_time": "2026-07-04T01:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "multi_window_02:30",
+   "off_peak": {
+    "hours_utc": [
+     "00:30-02:00",
+     "22:00-23:30"
+    ]
+   },
+   "current_time": "2026-03-12T02:30:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "multi_window_14:00",
+   "off_peak": {
+    "hours_utc": [
+     "00:30-02:00",
+     "22:00-23:30"
+    ]
+   },
+   "current_time": "2026-03-12T14:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "multi_window_12:00",
+   "off_peak": {
+    "hours_utc": [
+     "00:30-02:00",
+     "22:00-23:30"
+    ]
+   },
+   "current_time": "2026-03-14T12:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "multi_window_20:00",
+   "off_peak": {
+    "hours_utc": [
+     "00:30-02:00",
+     "22:00-23:30"
+    ]
+   },
+   "current_time": "2026-03-14T20:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "multi_window_01:00",
+   "off_peak": {
+    "hours_utc": [
+     "00:30-02:00",
+     "22:00-23:30"
+    ]
+   },
+   "current_time": "2026-07-04T01:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "weekend_only_02:30",
+   "off_peak": {
+    "hours_utc": "00:00-00:00",
+    "weekdays": [
+     "sat",
+     "sun"
+    ]
+   },
+   "current_time": "2026-03-12T02:30:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "weekend_only_14:00",
+   "off_peak": {
+    "hours_utc": "00:00-00:00",
+    "weekdays": [
+     "sat",
+     "sun"
+    ]
+   },
+   "current_time": "2026-03-12T14:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "weekend_only_12:00",
+   "off_peak": {
+    "hours_utc": "00:00-00:00",
+    "weekdays": [
+     "sat",
+     "sun"
+    ]
+   },
+   "current_time": "2026-03-14T12:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "weekend_only_20:00",
+   "off_peak": {
+    "hours_utc": "00:00-00:00",
+    "weekdays": [
+     "sat",
+     "sun"
+    ]
+   },
+   "current_time": "2026-03-14T20:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "weekend_only_01:00",
+   "off_peak": {
+    "hours_utc": "00:00-00:00",
+    "weekdays": [
+     "sat",
+     "sun"
+    ]
+   },
+   "current_time": "2026-07-04T01:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "weekday_calendar_est_02:30",
+   "off_peak": {
+    "hours_utc": "00:00-00:00",
+    "weekdays": [
+     "mon",
+     "wed"
+    ],
+    "weekday_timezone": "America/New_York"
+   },
+   "current_time": "2026-03-12T02:30:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "weekday_calendar_est_14:00",
+   "off_peak": {
+    "hours_utc": "00:00-00:00",
+    "weekdays": [
+     "mon",
+     "wed"
+    ],
+    "weekday_timezone": "America/New_York"
+   },
+   "current_time": "2026-03-12T14:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "weekday_calendar_est_12:00",
+   "off_peak": {
+    "hours_utc": "00:00-00:00",
+    "weekdays": [
+     "mon",
+     "wed"
+    ],
+    "weekday_timezone": "America/New_York"
+   },
+   "current_time": "2026-03-14T12:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "weekday_calendar_est_20:00",
+   "off_peak": {
+    "hours_utc": "00:00-00:00",
+    "weekdays": [
+     "mon",
+     "wed"
+    ],
+    "weekday_timezone": "America/New_York"
+   },
+   "current_time": "2026-03-14T20:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "weekday_calendar_est_01:00",
+   "off_peak": {
+    "hours_utc": "00:00-00:00",
+    "weekdays": [
+     "mon",
+     "wed"
+    ],
+    "weekday_timezone": "America/New_York"
+   },
+   "current_time": "2026-07-04T01:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "window_rules_with_weekdays_02:30",
+   "off_peak": {
+    "windows": [
+     {
+      "hours_utc": "00:00-06:00",
+      "weekdays": [
+       "sat",
+       "sun"
+      ]
+     }
+    ]
+   },
+   "current_time": "2026-03-12T02:30:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "window_rules_with_weekdays_14:00",
+   "off_peak": {
+    "windows": [
+     {
+      "hours_utc": "00:00-06:00",
+      "weekdays": [
+       "sat",
+       "sun"
+      ]
+     }
+    ]
+   },
+   "current_time": "2026-03-12T14:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "window_rules_with_weekdays_12:00",
+   "off_peak": {
+    "windows": [
+     {
+      "hours_utc": "00:00-06:00",
+      "weekdays": [
+       "sat",
+       "sun"
+      ]
+     }
+    ]
+   },
+   "current_time": "2026-03-14T12:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "window_rules_with_weekdays_20:00",
+   "off_peak": {
+    "windows": [
+     {
+      "hours_utc": "00:00-06:00",
+      "weekdays": [
+       "sat",
+       "sun"
+      ]
+     }
+    ]
+   },
+   "current_time": "2026-03-14T20:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "window_rules_with_weekdays_01:00",
+   "off_peak": {
+    "windows": [
+     {
+      "hours_utc": "00:00-06:00",
+      "weekdays": [
+       "sat",
+       "sun"
+      ]
+     }
+    ]
+   },
+   "current_time": "2026-07-04T01:00:00+00:00",
+   "expected_is_off_peak": true
+  },
+  {
+   "id": "window_rule_wrong_weekday_02:30",
+   "off_peak": {
+    "windows": [
+     {
+      "hours_utc": "00:00-06:00",
+      "weekdays": [
+       "mon"
+      ]
+     }
+    ]
+   },
+   "current_time": "2026-03-12T02:30:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "window_rule_wrong_weekday_14:00",
+   "off_peak": {
+    "windows": [
+     {
+      "hours_utc": "00:00-06:00",
+      "weekdays": [
+       "mon"
+      ]
+     }
+    ]
+   },
+   "current_time": "2026-03-12T14:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "window_rule_wrong_weekday_12:00",
+   "off_peak": {
+    "windows": [
+     {
+      "hours_utc": "00:00-06:00",
+      "weekdays": [
+       "mon"
+      ]
+     }
+    ]
+   },
+   "current_time": "2026-03-14T12:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "window_rule_wrong_weekday_20:00",
+   "off_peak": {
+    "windows": [
+     {
+      "hours_utc": "00:00-06:00",
+      "weekdays": [
+       "mon"
+      ]
+     }
+    ]
+   },
+   "current_time": "2026-03-14T20:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "window_rule_wrong_weekday_01:00",
+   "off_peak": {
+    "windows": [
+     {
+      "hours_utc": "00:00-06:00",
+      "weekdays": [
+       "mon"
+      ]
+     }
+    ]
+   },
+   "current_time": "2026-07-04T01:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "malformed_window_ignored_02:30",
+   "off_peak": {
+    "hours_utc": "22-06"
+   },
+   "current_time": "2026-03-12T02:30:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "malformed_window_ignored_14:00",
+   "off_peak": {
+    "hours_utc": "22-06"
+   },
+   "current_time": "2026-03-12T14:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "malformed_window_ignored_12:00",
+   "off_peak": {
+    "hours_utc": "22-06"
+   },
+   "current_time": "2026-03-14T12:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "malformed_window_ignored_20:00",
+   "off_peak": {
+    "hours_utc": "22-06"
+   },
+   "current_time": "2026-03-14T20:00:00+00:00",
+   "expected_is_off_peak": false
+  },
+  {
+   "id": "malformed_window_ignored_01:00",
+   "off_peak": {
+    "hours_utc": "22-06"
+   },
+   "current_time": "2026-07-04T01:00:00+00:00",
+   "expected_is_off_peak": false
+  }
+ ],
+ "responses_usage": [
+  {
+   "id": "cached_details_with_web_search",
+   "raw": {
+    "input_tokens": 1200,
+    "output_tokens": 300,
+    "input_token_details": {
+     "cached_tokens": 800,
+     "web_search_requests": 2
+    },
+    "output_token_details": {
+     "reasoning_tokens": 100
+    }
+   },
+   "expected": {
+    "completion_tokens": 300,
+    "prompt_tokens": 1200,
+    "total_tokens": 1500,
+    "completion_tokens_details": {
+     "reasoning_tokens": 100
+    },
+    "prompt_tokens_details": {
+     "cached_tokens": 800,
+     "web_search_requests": 2
+    }
+   }
+  },
+  {
+   "id": "realtime_plural_details",
+   "raw": {
+    "input_tokens": 900,
+    "output_tokens": 250,
+    "input_token_details": {
+     "text_tokens": 700,
+     "cached_tokens": 200,
+     "audio_tokens": 0
+    },
+    "output_token_details": {
+     "text_tokens": 150,
+     "audio_tokens": 100
+    }
+   },
+   "expected": {
+    "completion_tokens": 250,
+    "prompt_tokens": 900,
+    "total_tokens": 1150,
+    "completion_tokens_details": {
+     "audio_tokens": 100,
+     "text_tokens": 150
+    },
+    "prompt_tokens_details": {
+     "audio_tokens": 0,
+     "cached_tokens": 200,
+     "text_tokens": 700
+    }
+   }
+  },
+  {
+   "id": "missing_totals_derived",
+   "raw": {
+    "input_tokens": 410,
+    "output_tokens": 90
+   },
+   "expected": {
+    "completion_tokens": 90,
+    "prompt_tokens": 410,
+    "total_tokens": 500
+   }
+  },
+  {
+   "id": "already_chat_shaped_passthrough",
+   "raw": {
+    "prompt_tokens": 500,
+    "completion_tokens": 100,
+    "total_tokens": 600
+   },
+   "expected": {
+    "completion_tokens": 100,
+    "prompt_tokens": 500,
+    "total_tokens": 600
+   }
+  },
+  {
+   "id": "nested_cached_details",
+   "raw": {
+    "input_tokens": 1000,
+    "output_tokens": 200,
+    "input_token_details": {
+     "text_tokens": 400,
+     "cached_tokens": 600
+    }
+   },
+   "expected": {
+    "completion_tokens": 200,
+    "prompt_tokens": 1000,
+    "total_tokens": 1200,
+    "prompt_tokens_details": {
+     "cached_tokens": 600,
+     "text_tokens": 400
+    }
+   }
+  }
+ ],
+ "caching_savings": [
+  {
+   "id": "anthropic_read_discount_write_premium",
+   "model_info": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 3e-07,
+    "cache_creation_input_token_cost": 3.75e-06,
+    "litellm_provider": "anthropic"
+   },
+   "usage": {
+    "prompt_tokens": 10000,
+    "completion_tokens": 500,
+    "prompt_tokens_details": {
+     "cached_tokens": 8000,
+     "cache_write_tokens": 1500
+    },
+    "completion_tokens_details": null
+   },
+   "custom_llm_provider": "anthropic",
+   "service_tier": null,
+   "expected_savings": 0.020475
+  },
+  {
+   "id": "openai_cache_savings",
+   "model_info": {
+    "input_cost_per_token": 1.25e-06,
+    "output_cost_per_token": 1e-05,
+    "cache_read_input_token_cost": 6.25e-08,
+    "cache_creation_input_token_cost": 1.25e-06,
+    "litellm_provider": "openai"
+   },
+   "usage": {
+    "prompt_tokens": 50000,
+    "completion_tokens": 2000,
+    "prompt_tokens_details": {
+     "cached_tokens": 45000,
+     "cache_write_tokens": 3000
+    },
+    "completion_tokens_details": null
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "expected_savings": 0.053437500000000006
+  },
+  {
+   "id": "unpriced_cache_no_savings",
+   "model_info": {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 8e-06,
+    "litellm_provider": "openai"
+   },
+   "usage": {
+    "prompt_tokens": 10000,
+    "completion_tokens": 500,
+    "prompt_tokens_details": {
+     "cached_tokens": 8000
+    },
+    "completion_tokens_details": null
+   },
+   "custom_llm_provider": "openai",
+   "service_tier": null,
+   "expected_savings": 0.0
+  },
+  {
+   "id": "priority_tier_discount",
+   "model_info": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "cache_read_input_token_cost": 3e-07,
+    "cache_creation_input_token_cost": 3.75e-06,
+    "input_cost_per_token_priority": 6e-06,
+    "litellm_provider": "anthropic"
+   },
+   "usage": {
+    "prompt_tokens": 10000,
+    "completion_tokens": 500,
+    "prompt_tokens_details": {
+     "cached_tokens": 8000,
+     "cache_write_tokens": 1500
+    },
+    "completion_tokens_details": null
+   },
+   "custom_llm_provider": "anthropic",
+   "service_tier": "priority",
+   "expected_savings": 0.048975000000000005
+  }
+ ],
+ "anthropic_usage": [
+  {
+   "id": "plain_input_output",
+   "raw": {
+    "input_tokens": 1000,
+    "output_tokens": 300
+   },
+   "reasoning_content": null,
+   "response_has_thinking_block": false,
+   "expected": {
+    "completion_tokens": 300,
+    "prompt_tokens": 1000,
+    "total_tokens": 1300,
+    "completion_tokens_details": {
+     "reasoning_tokens": 0,
+     "text_tokens": 300
+    },
+    "prompt_tokens_details": {
+     "cached_tokens": 0,
+     "text_tokens": 1000,
+     "cache_write_tokens": 0,
+     "cache_creation_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+   }
+  },
+  {
+   "id": "cache_creation_and_read",
+   "raw": {
+    "input_tokens": 5000,
+    "output_tokens": 200,
+    "cache_creation_input_tokens": 2000,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 1500,
+     "ephemeral_1h_input_tokens": 500
+    },
+    "cache_read_input_tokens": 3000
+   },
+   "reasoning_content": null,
+   "response_has_thinking_block": false,
+   "expected": {
+    "completion_tokens": 200,
+    "prompt_tokens": 10000,
+    "total_tokens": 10200,
+    "completion_tokens_details": {
+     "reasoning_tokens": 0,
+     "text_tokens": 200
+    },
+    "prompt_tokens_details": {
+     "cached_tokens": 3000,
+     "text_tokens": 5000,
+     "cache_write_tokens": 2000,
+     "cache_creation_tokens": 2000,
+     "cache_creation_token_details": {
+      "ephemeral_5m_input_tokens": 1500,
+      "ephemeral_1h_input_tokens": 500
+     }
+    },
+    "cache_creation_input_tokens": 2000,
+    "cache_read_input_tokens": 3000
+   }
+  },
+  {
+   "id": "iterations_with_thinking_tokens",
+   "raw": {
+    "input_tokens": 600,
+    "output_tokens": 300,
+    "iterations": [
+     {
+      "input_tokens": 100,
+      "output_tokens": 150,
+      "output_tokens_details": {
+       "thinking_tokens": 90
+      }
+     },
+     {
+      "input_tokens": 200,
+      "output_tokens": 150,
+      "output_tokens_details": {
+       "thinking_tokens": 60
+      }
+     }
+    ]
+   },
+   "reasoning_content": null,
+   "response_has_thinking_block": false,
+   "expected": {
+    "completion_tokens": 300,
+    "prompt_tokens": 300,
+    "total_tokens": 600,
+    "completion_tokens_details": {
+     "reasoning_tokens": 150,
+     "text_tokens": 150
+    },
+    "prompt_tokens_details": {
+     "cached_tokens": 0,
+     "text_tokens": 300,
+     "cache_write_tokens": 0,
+     "cache_creation_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "iterations": [
+     {
+      "input_tokens": 100,
+      "output_tokens": 150,
+      "output_tokens_details": {
+       "thinking_tokens": 90
+      }
+     },
+     {
+      "input_tokens": 200,
+      "output_tokens": 150,
+      "output_tokens_details": {
+       "thinking_tokens": 60
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "iterations_usage",
+   "raw": {
+    "input_tokens": 600,
+    "output_tokens": 250,
+    "server_tool_use": {
+     "web_search_requests": 3
+    }
+   },
+   "reasoning_content": null,
+   "response_has_thinking_block": false,
+   "expected": {
+    "completion_tokens": 250,
+    "prompt_tokens": 600,
+    "total_tokens": 850,
+    "completion_tokens_details": {
+     "reasoning_tokens": 0,
+     "text_tokens": 250
+    },
+    "prompt_tokens_details": {
+     "cached_tokens": 0,
+     "text_tokens": 600,
+     "cache_write_tokens": 0,
+     "cache_creation_tokens": 0
+    },
+    "server_tool_use": {
+     "web_search_requests": 3
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+   }
+  }
+ ]
+}

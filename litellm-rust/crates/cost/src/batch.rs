@@ -262,6 +262,34 @@ fn selected_model_rate(
         })
 }
 
+pub fn batch_cost_rates_from_model_info(
+    model_info: &Value,
+    prompt_tokens: u64,
+    inclusive: bool,
+) -> BatchCostRates {
+    let policy = if inclusive {
+        ThresholdPolicy::Inclusive
+    } else {
+        ThresholdPolicy::Exclusive
+    };
+    BatchCostRates {
+        input: selected_model_rate(model_info, "input_cost_per_token", prompt_tokens, policy),
+        output: selected_model_rate(model_info, "output_cost_per_token", prompt_tokens, policy),
+        cache_read: selected_model_rate(
+            model_info,
+            "cache_read_input_token_cost",
+            prompt_tokens,
+            policy,
+        ),
+        cache_creation: selected_model_rate(
+            model_info,
+            "cache_creation_input_token_cost",
+            prompt_tokens,
+            policy,
+        ),
+    }
+}
+
 pub fn batch_cost_from_model_info(
     model_info: &Value,
     usage: &ChatUsage,
