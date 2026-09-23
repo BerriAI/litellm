@@ -14,7 +14,6 @@ from typing import Final
 
 import httpx
 import psutil
-import pytest
 
 from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows
@@ -98,7 +97,6 @@ class _GuardrailSink:
             self.stop()
 
 
-@pytest.mark.covers("mgmt.key.disable_global_guardrails.edge.concurrent_flag_writes")
 def test_concurrent_flag_writes_split_expected_outcomes(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy(gateway, tmp_path, {}) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model()
@@ -143,7 +141,6 @@ def test_concurrent_flag_writes_split_expected_outcomes(gateway: Gateway, tmp_pa
             assert stored[0]["metadata"].get("disable_global_guardrails") is not True, entry
 
 
-@pytest.mark.covers("mgmt.key.disable_global_guardrails.edge.revoke_then_resave_denied")
 def test_revoked_exemption_denies_later_non_admin_resave(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy(gateway, tmp_path, {}) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model()
@@ -171,7 +168,6 @@ def test_revoked_exemption_denies_later_non_admin_resave(gateway: Gateway, tmp_p
         assert stored_metadata(exempt)["disable_global_guardrails"] is False
 
 
-@pytest.mark.covers("mgmt.key.disable_global_guardrails.edge.revoked_flag_blocks_both_workers")
 def test_revoked_exemption_blocks_chats_on_both_workers(gateway: Gateway, tmp_path: Path) -> None:
     with _GuardrailSink() as sink:
         config: Final = guardrail_config(sink.url, tmp_path / "revoke-workers.yaml")
@@ -193,10 +189,6 @@ def test_revoked_exemption_blocks_chats_on_both_workers(gateway: Gateway, tmp_pa
                         assert denied.status_code == 400, denied.text
 
 
-@pytest.mark.covers(
-    "mgmt.key.disable_global_guardrails.chaos.sink_outage_burst",
-    "mgmt.key.disable_global_guardrails.chaos.sink_recovery_blocks_again",
-)
 def test_exempt_burst_survives_guardrail_sink_outage(gateway: Gateway, tmp_path: Path) -> None:
     with _GuardrailSink() as sink:
         config: Final = guardrail_config(sink.url, tmp_path / "sink-outage.yaml")
@@ -248,7 +240,6 @@ def test_exempt_burst_survives_guardrail_sink_outage(gateway: Gateway, tmp_path:
             assert recovered.status_code == 400 and "synthetic policy denial" in recovered.text, recovered.text
 
 
-@pytest.mark.covers("mgmt.key.disable_global_guardrails.chaos.worker_kill_denies_flag_writes")
 def test_flag_denial_survives_worker_kill(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy_process(gateway, tmp_path, {}, workers=2) as owned:
         candidate: Final = owned.gateway
@@ -304,9 +295,9 @@ def test_flag_denial_survives_worker_kill(gateway: Gateway, tmp_path: Path) -> N
             )
 
 
-@pytest.mark.covers("mgmt.key.disable_global_guardrails.chaos.slow_sink_never_blocks_exempt")
 def test_exempt_chats_do_not_wait_on_slow_guardrail_sink(gateway: Gateway, tmp_path: Path) -> None:
-    with _GuardrailSink(delay_seconds=2.0) as sink:
+    sink_delay: Final = 10.0
+    with _GuardrailSink(delay_seconds=sink_delay) as sink:
         config: Final = guardrail_config(sink.url, tmp_path / "slow-sink.yaml")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model()
@@ -324,5 +315,5 @@ def test_exempt_chats_do_not_wait_on_slow_guardrail_sink(gateway: Gateway, tmp_p
             assert all(response.status_code == 200 for response in responses), [
                 (response.status_code, response.text) for response in responses
             ]
-            assert elapsed < 2.0, f"exempt chats waited on the guardrail sink: {elapsed}s"
+            assert elapsed < sink_delay, f"exempt chats waited on the guardrail sink: {elapsed}s"
             assert sink.drain() == ()

@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import pytest
 from anthropic import Anthropic
 from openai import AsyncOpenAI, OpenAI
 
@@ -96,9 +95,6 @@ def _responses(candidate: Gateway, model: str, key: str, marker: str, *, stream:
     )
 
 
-@pytest.mark.covers(
-    "mgmt.key.disable_global_guardrails.runtime.denied_on_all_surfaces",
-)
 def test_guardrail_denies_non_exempt_key_on_all_surfaces(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(denying_guardrail) as policy, wire_server(_anthropic_provider) as anthropic_wire:
         config: Final = guardrail_config(policy.url, tmp_path / "denied.yaml")
@@ -128,9 +124,6 @@ def test_guardrail_denies_non_exempt_key_on_all_surfaces(gateway: Gateway, tmp_p
                     assert _wire_hits(anthropic_wire, marker) == 0
 
 
-@pytest.mark.covers(
-    "mgmt.key.disable_global_guardrails.runtime.exempt_on_all_surfaces_and_clients",
-)
 def test_guardrail_skipped_for_admin_exempt_key_on_all_surfaces_and_clients(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(denying_guardrail) as policy, wire_server(_anthropic_provider) as anthropic_wire:
         config: Final = guardrail_config(policy.url, tmp_path / "exempt.yaml")
@@ -191,11 +184,6 @@ def test_guardrail_skipped_for_admin_exempt_key_on_all_surfaces_and_clients(gate
             assert _wire_hits(anthropic_wire, anthropic_marker) == 1
 
 
-@pytest.mark.covers(
-    "mgmt.key.disable_global_guardrails.runtime.team_level_flag_exempts_key",
-    "mgmt.key.disable_global_guardrails.runtime.resaved_exempt_key_still_exempt",
-    "mgmt.key.disable_global_guardrails.runtime.spend_log_exactly_once",
-)
 def test_team_flag_resaved_key_and_spend_log(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(denying_guardrail) as policy:
         config: Final = guardrail_config(policy.url, tmp_path / "team-exempt.yaml")

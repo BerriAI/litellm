@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import pytest
 import yaml
 
 from integration._support.client import Gateway, Scenario, object_value, string_value
@@ -20,7 +19,6 @@ from integration.authorization._guardrail_opt_out import (
 _KEY_ROUTES: Final = ["/key/generate", "/key/update", "/key/regenerate", "/v1/chat/completions"]
 
 
-@pytest.mark.covers("mgmt.key.disable_global_guardrails.non_admin_denied_and_default_on_guardrail_still_runs")
 def test_non_admin_cannot_opt_key_out_of_default_on_guardrail(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(denying_guardrail) as policy:
         config: Final = guardrail_config(policy.url, tmp_path / "default_on.yaml")
@@ -104,13 +102,6 @@ def _drop_created_key(scenario: Scenario, response: httpx.Response) -> None:
         scenario.cleanups.callback(scenario.delete_key, string_value(response.json()["key"]))
 
 
-@pytest.mark.covers(
-    "mgmt.key.disable_global_guardrails.non_admin_denied_on_key_write_routes",
-    "mgmt.key.disable_global_guardrails.non_admin_denied_smuggled_metadata",
-    "mgmt.key.disable_global_guardrails.non_admin_denied_conflicting_flag_channels",
-    "mgmt.key.disable_global_guardrails.non_admin_denied_path_regenerate",
-    "mgmt.key.disable_global_guardrails.non_admin_denied_service_account",
-)
 def test_non_admin_flag_denied_on_every_key_write_route(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(denying_guardrail) as policy:
         config: Final = guardrail_config(policy.url, tmp_path / "denied-routes.yaml")
@@ -168,7 +159,6 @@ def test_non_admin_flag_denied_on_every_key_write_route(gateway: Gateway, tmp_pa
             ), service_denied.text
 
 
-@pytest.mark.covers("mgmt.team.disable_global_guardrails.non_admin_denied_on_team_new")
 def test_non_admin_flag_denied_on_team_new(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(denying_guardrail) as policy:
         config: Final = guardrail_config(policy.url, tmp_path / "denied-team.yaml")
@@ -192,10 +182,6 @@ def test_non_admin_flag_denied_on_team_new(gateway: Gateway, tmp_path: Path) -> 
             assert "disable_global_guardrails" in denied.text, denied.text
 
 
-@pytest.mark.covers(
-    "mgmt.key.disable_global_guardrails.admin_writes_succeed_on_all_routes",
-    "mgmt.team.disable_global_guardrails.admin_writes_succeed_on_all_routes",
-)
 def test_admin_flag_writes_succeed_on_all_routes(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(denying_guardrail) as policy:
         config: Final = guardrail_config(policy.url, tmp_path / "admin-routes.yaml")
@@ -235,11 +221,6 @@ def test_admin_flag_writes_succeed_on_all_routes(gateway: Gateway, tmp_path: Pat
             assert _team_metadata(team)["disable_global_guardrails"] is True
 
 
-@pytest.mark.covers(
-    "mgmt.key.disable_global_guardrails.resending_stored_flag_allowed",
-    "mgmt.key.disable_global_guardrails.omitting_flag_on_exempt_key_allowed",
-    "mgmt.key.disable_global_guardrails.stored_false_does_not_exempt",
-)
 def test_non_admin_resave_omit_and_revoke_sequences(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(denying_guardrail) as policy:
         config: Final = guardrail_config(policy.url, tmp_path / "resave.yaml")
@@ -283,7 +264,6 @@ def test_non_admin_resave_omit_and_revoke_sequences(gateway: Gateway, tmp_path: 
             assert stored_metadata(exempt)["disable_global_guardrails"] is False
 
 
-@pytest.mark.covers("mgmt.key.disable_global_guardrails.server_default_metadata_does_not_trip_gate")
 def test_generate_ignores_server_default_metadata_flag(gateway: Gateway, tmp_path: Path) -> None:
     raw: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     raw.setdefault("litellm_settings", {})["default_key_generate_params"] = {
@@ -313,11 +293,6 @@ def test_generate_ignores_server_default_metadata_flag(gateway: Gateway, tmp_pat
         assert "disable_global_guardrails" in explicit.text, explicit.text
 
 
-@pytest.mark.covers(
-    "mgmt.key.disable_global_guardrails.sad_inputs_rejected_or_ignored",
-    "mgmt.key.disable_global_guardrails.unauthenticated_flag_write_rejected",
-    "mgmt.key.disable_global_guardrails.repeated_denied_write_creates_nothing",
-)
 def test_sad_flag_inputs_on_key_generate(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy(gateway, tmp_path, {}) as candidate, candidate.scenario() as scenario:
         model: Final = scenario.model()
@@ -367,9 +342,6 @@ def test_sad_flag_inputs_on_key_generate(gateway: Gateway, tmp_path: Path) -> No
         assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = %s', (repeat_alias,)) == []
 
 
-@pytest.mark.covers(
-    "mgmt.key.disable_global_guardrails.falsy_metadata_flag_stays_stored_and_guarded",
-)
 def test_falsy_metadata_flag_shapes_stay_stored_and_guarded(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(denying_guardrail) as policy:
         config: Final = guardrail_config(policy.url, tmp_path / "falsy.yaml")
