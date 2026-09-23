@@ -1867,6 +1867,9 @@
     "tests/integration/spend/test_team_member_spend.py::test_member_added_without_any_budget_is_charged_on_its_membership_row": [
       "spend.team_member.member_without_budget_gets_membership_row_and_spend"
     ],
+    "tests/integration/spend/test_legacy_spend_logs_row_cap.py::test_legacy_spend_logs_returns_only_the_cap_of_most_recent_rows_and_flags_truncation": [
+      "spend.legacy_spend_logs.row_count_is_capped_at_the_most_recent_rows_and_flagged_truncated"
+    ],
     "tests/integration/management/test_vector_store_config_ownership.py::test_config_store_is_listed_beside_db_store_and_survives_listing": [
       "mgmt.vector_store.list.keeps_config_store_beside_db_stores"
     ],
