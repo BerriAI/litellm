@@ -1783,6 +1783,27 @@
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
     ],
+    "tests/integration/management/test_mcp_user_env_vars.py::test_stored_value_is_forwarded_rotated_and_cleared": [
+      "mcp.user_env_vars.lifecycle.store_rotate_clear_reach_upstream"
+    ],
+    "tests/integration/management/test_mcp_user_env_vars.py::test_store_merges_per_variable_and_drops_undeclared_or_empty_values": [
+      "mcp.user_env_vars.store.merges_and_ignores_undeclared_and_empty"
+    ],
+    "tests/integration/management/test_mcp_user_env_vars.py::test_malformed_bodies_missing_users_and_foreign_servers_are_rejected": [
+      "mcp.user_env_vars.errors.malformed_unauthenticated_and_foreign_servers_are_rejected"
+    ],
+    "tests/integration/management/test_mcp_user_env_vars.py::test_status_list_keeps_fully_set_servers_and_is_scoped_to_the_caller": [
+      "mcp.user_env_vars.status_list.reports_set_servers_and_omits_global_only"
+    ],
+    "tests/integration/management/test_mcp_user_env_vars.py::test_store_and_clear_on_one_process_are_honored_by_the_other": [
+      "mcp.user_env_vars.cross_process.store_and_clear_converge_within_cache_ttl"
+    ],
+    "tests/integration/management/test_mcp_user_env_vars.py::test_concurrent_users_across_processes_never_leak_and_survive_a_killed_process": [
+      "mcp.user_env_vars.chaos.concurrent_users_survive_process_loss_without_leakage"
+    ],
+    "tests/integration/management/test_mcp_user_env_vars.py::test_concurrent_stores_of_different_variables_do_not_lose_an_update": [
+      "mcp.user_env_vars.store.concurrent_writes_to_different_variables_both_land"
+    ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[chat]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
     ],
@@ -1802,6 +1823,21 @@
     ],
     "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::per-user MCP env var stays updatable and clearable from the card after it is set": [
       "mcp.user_env_vars.ui.update_and_clear_after_set"
+    ],
+    "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::cancelling the clear confirmation keeps the stored value and sends no delete": [
+      "mcp.user_env_vars.ui.cancelled_clear_keeps_value"
+    ],
+    "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::pressing Enter on Update opens the credentials modal instead of the server editor": [
+      "mcp.user_env_vars.ui.keyboard_update_does_not_open_editor"
+    ],
+    "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::a server with two per-user variables reports the remaining gap until both are saved": [
+      "mcp.user_env_vars.ui.partial_multi_variable_state"
+    ],
+    "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::a server without per-user variables shows no credential row": [
+      "mcp.user_env_vars.ui.no_user_variables_no_row"
+    ],
+    "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::clearing credentials for a server deleted underneath the modal reports the failure without losing the page": [
+      "mcp.user_env_vars.ui.clear_after_server_deletion_fails_visibly"
     ]
   }
 }
