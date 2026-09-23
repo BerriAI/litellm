@@ -1348,14 +1348,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
         return (convert_model_response_to_streaming(assembled),)
 
-    async def _mask_raw_sse_stream(
-        self, first_chunk: bytes, stream: AsyncIterator[object], request_data: dict
-    ) -> tuple[object, ...] | None:
-        """Mask a raw SSE stream when its first frame is an Anthropic event; None means pass it through untouched."""
-        if not is_anthropic_sse_stream((first_chunk,)):
-            return None
-        return await self._mask_anthropic_sse_stream(first_chunk, stream, request_data)
-
     async def _stream_apply_output_masking(
         self,
         response: AsyncIterable[object],
@@ -1373,15 +1365,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     else:
                         all_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    if passthrough_due_to_unknown_stream_shape or all_chunks:
+                    first_frame_is_anthropic = (
+                        not passthrough_due_to_unknown_stream_shape
+                        and not all_chunks
+                        and is_anthropic_sse_stream((chunk,))
+                    )
+                    if not first_frame_is_anthropic:
+                        passthrough_due_to_unknown_stream_shape = (
+                            passthrough_due_to_unknown_stream_shape or not all_chunks
+                        )
                         yield chunk
                         continue
-                    masked_sse: Final = await self._mask_raw_sse_stream(chunk, stream, request_data)
-                    if masked_sse is None:
-                        passthrough_due_to_unknown_stream_shape = True
-                        yield chunk
-                        continue
-                    for masked_chunk in masked_sse:
+                    for masked_chunk in await self._mask_anthropic_sse_stream(chunk, stream, request_data):
                         yield masked_chunk
                     return
                 else:
