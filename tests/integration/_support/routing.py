@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
@@ -186,8 +187,6 @@ def dump_observation(observation: Observation) -> str:
 
 
 def _maintenance_url() -> str:
-    from urllib.parse import urlsplit, urlunsplit
-
     parsed: Final = urlsplit(os.environ["DATABASE_URL"])
     return urlunsplit(parsed._replace(path="/postgres"))
 
