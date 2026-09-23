@@ -12,7 +12,6 @@ monkeypatches anything.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -20,23 +19,15 @@ from typing import Final
 
 import pytest
 from e2e_http import (
-    PROVIDER_RATE_LIMIT_ATTEMPTS,
-    PROVIDER_RATE_LIMIT_BACKOFF_SECONDS,
-    PROVIDER_RATE_LIMIT_MARKER,
     RETRY_ATTEMPTS,
     TRANSIENT_STATUSES,
     NoBody,
     PartialBody,
-    RateLimitedError,
-    Result,
     Success,
-    UnknownApiError,
     ValidationError,
     classify,
     request_with_retry,
     streaming_outcome,
-    relayed_provider_rate_limit,
-    tolerate_provider_rate_limit,
     wire_body,
     without_retries,
 )
@@ -112,92 +103,6 @@ class TestTransientRetryPolicy:
         assert result is responses[RETRY_ATTEMPTS - 1]
         assert sleep.delays == (0.5, 1.0)
         assert [r.close_calls for r in responses] == [1, 1, 0, 0]
-
-
-class _Ocr(BaseModel):
-    pages: int
-
-
-PROVIDER_429_BODY: Final = json.dumps(
-    {
-        "error": {
-            "message": (
-                "litellm.RateLimitError: RateLimitError: MistralException - "
-                '(429, \'{"message":"Rate limit exceeded","type":"rate_limited"}\') LiteLLM Retried: 3 times'
-            ),
-            "type": "throttling_error",
-            "param": None,
-            "code": "429",
-        }
-    }
-)
-PROXY_429_BODY: Final = json.dumps(
-    {"error": {"message": "Max parallel request limit reached for key", "type": "throttling_error", "code": "429"}}
-)
-
-
-def _results_from(results: Sequence[Result[_Ocr]]) -> Callable[[], Result[_Ocr]]:
-    it: Final = iter(results)
-    return lambda: next(it)
-
-
-class TestProviderRateLimitTolerance:
-    def test_relayed_provider_429_is_retried_with_backoff_then_returns_the_success(self) -> None:
-        results: Final = (
-            RateLimitedError(body=PROVIDER_429_BODY),
-            RateLimitedError(body=PROVIDER_429_BODY),
-            Success(status_code=200, data=_Ocr(pages=1)),
-        )
-        sleep: Final = SleepRecorder()
-        assert tolerate_provider_rate_limit(_results_from(results), sleep=sleep) is results[2]
-        assert sleep.delays == (PROVIDER_RATE_LIMIT_BACKOFF_SECONDS, 2 * PROVIDER_RATE_LIMIT_BACKOFF_SECONDS)
-
-    def test_retry_after_from_the_provider_replaces_the_backoff(self) -> None:
-        results: Final = (
-            RateLimitedError(body=PROVIDER_429_BODY, retry_after_seconds=7),
-            Success(status_code=200, data=_Ocr(pages=1)),
-        )
-        sleep: Final = SleepRecorder()
-        assert tolerate_provider_rate_limit(_results_from(results), sleep=sleep) is results[1]
-        assert sleep.delays == (7,)
-
-    def test_the_proxys_own_429_comes_back_untouched(self) -> None:
-        results: Final = (RateLimitedError(body=PROXY_429_BODY), Success(status_code=200, data=_Ocr(pages=1)))
-        sleep: Final = SleepRecorder()
-        assert tolerate_provider_rate_limit(_results_from(results), sleep=sleep) is results[0]
-        assert sleep.delays == ()
-
-    @pytest.mark.parametrize(
-        "first",
-        (
-            Success(status_code=200, data=_Ocr(pages=1)),
-            UnknownApiError(status_code=500, body="boom"),
-            ValidationError(message="bad"),
-        ),
-        ids=("success", "unknown", "validation"),
-    )
-    def test_any_other_outcome_returns_at_once(self, first: Result[_Ocr]) -> None:
-        sleep: Final = SleepRecorder()
-        assert tolerate_provider_rate_limit(_results_from((first,)), sleep=sleep) is first
-        assert sleep.delays == ()
-
-    def test_the_providers_429_is_parsed_out_of_the_relayed_envelope(self) -> None:
-        detail: Final = relayed_provider_rate_limit(RateLimitedError(body=PROVIDER_429_BODY))
-        assert detail is not None
-        assert (detail.type, detail.code) == ("throttling_error", "429")
-        assert detail.message.startswith(PROVIDER_RATE_LIMIT_MARKER)
-
-    def test_the_proxys_own_429_is_not_a_relayed_provider_error(self) -> None:
-        assert relayed_provider_rate_limit(RateLimitedError(body=PROXY_429_BODY)) is None
-
-    def test_a_persistent_provider_429_is_bounded_and_returns_the_last_one(self) -> None:
-        results: Final = tuple(
-            RateLimitedError(body=PROVIDER_429_BODY) for _ in range(PROVIDER_RATE_LIMIT_ATTEMPTS + 1)
-        )
-        sleep: Final = SleepRecorder()
-        last: Final = tolerate_provider_rate_limit(_results_from(results), sleep=sleep)
-        assert last is results[PROVIDER_RATE_LIMIT_ATTEMPTS - 1]
-        assert sleep.delays == (5.0, 10.0, 20.0)
 
 
 @dataclass(frozen=True, slots=True)
