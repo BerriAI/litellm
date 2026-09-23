@@ -1,6 +1,3 @@
-"""OAuth 2.1 authorization-server double: metadata, DCR, PKCE authorization code, refresh, client credentials,
-token exchange and revocation, every request recorded."""
-
 import base64
 import hashlib
 import json

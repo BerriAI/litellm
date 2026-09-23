@@ -1,5 +1,3 @@
-"""Stdio MCP peer the proxy spawns; every inbound JSON-RPC line is appended to the record file."""
-
 import sys
 from pathlib import Path
 
