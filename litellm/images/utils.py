@@ -50,6 +50,10 @@ def _gif_dimensions(head: bytes) -> tuple[int, int] | None:
 def _bmp_dimensions(head: bytes) -> tuple[int, int] | None:
     if len(head) < _MIN_BMP_HEADER_SIZE:
         return None
+    if int.from_bytes(head[14:18], "little") == 12:
+        core_width: Final = int.from_bytes(head[18:20], "little")
+        core_height: Final = int.from_bytes(head[20:22], "little")
+        return core_width, core_height
     width: Final = int.from_bytes(head[18:22], "little", signed=True)
     height: Final = int.from_bytes(head[22:26], "little", signed=True)
     return width, abs(height)
@@ -128,7 +132,7 @@ def measure_reference_pixels(images: Sequence[FileTypes]) -> int | None:
     dimensions: Final = tuple(size for size in measured if size is not None)
     if len(dimensions) != len(measured):
         verbose_logger.debug(
-            "Reference image %d has no readable PNG, JPEG or WebP header; billing generated pixels only",
+            "Reference image %d has no readable PNG, JPEG, WebP, GIF or BMP header; billing generated pixels only",
             measured.index(None),
         )
         return None

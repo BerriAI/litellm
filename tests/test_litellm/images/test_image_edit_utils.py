@@ -131,6 +131,11 @@ def _bmp(width: int, height: int) -> bytes:
         pytest.param(_bmp(1024, 768), (1024, 768), id="bmp-positive-height"),
         pytest.param(_bmp(1024, -768), (1024, 768), id="bmp-negative-height"),
         pytest.param(b"BM" + bytes(18), None, id="bmp-shorter-than-26-bytes"),
+        pytest.param(
+            b"BM" + bytes(12) + struct.pack("<I", 12) + struct.pack("<HH", 640, 480) + bytes(4),
+            (640, 480),
+            id="bmp-coreheader",
+        ),
         pytest.param(b"II*\x00" + bytes(28), None, id="unknown-format"),
     ),
 )
