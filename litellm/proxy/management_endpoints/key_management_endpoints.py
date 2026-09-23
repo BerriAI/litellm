@@ -2840,18 +2840,18 @@ async def _process_single_key_update(
         await prisma_client.update_data(token=key_request.key, data=_data),
     )
 
-    # Delete cache
-    await _delete_cache_key_object(
-        hashed_token=_hash_token_if_needed(key_request.key),
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+    # Permission row first: a key-object miss between the two evictions would re-cache stale grants
     await invalidate_cached_object_permissions(
         object_permission_ids=(
             existing_key_row.object_permission_id,
             non_default_values.get("object_permission_id"),
         ),
         user_api_key_cache=user_api_key_cache,
+    )
+    await _delete_cache_key_object(
+        hashed_token=_hash_token_if_needed(key_request.key),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     # After the key's own cache entry is dropped, so a failure here cannot leave the key
@@ -3463,17 +3463,17 @@ async def update_key_fn(
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
-        await _delete_cache_key_object(
-            hashed_token=_hash_token_if_needed(key),
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
         await invalidate_cached_object_permissions(
             object_permission_ids=(
                 existing_key_row.object_permission_id,
                 non_default_values.get("object_permission_id"),
             ),
             user_api_key_cache=user_api_key_cache,
+        )
+        await _delete_cache_key_object(
+            hashed_token=_hash_token_if_needed(key),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
         # After the key's own cache entry is dropped, so a failure here cannot leave the key
@@ -5584,12 +5584,6 @@ async def _execute_virtual_key_regeneration(
     updated_token_dict["key"] = new_token
     updated_token_dict["token_id"] = updated_token_dict.pop("token")
 
-    if hashed_api_key or key:
-        await _delete_cache_key_object(
-            hashed_token=_hash_token_if_needed(key),
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
     await invalidate_cached_object_permissions(
         object_permission_ids=(
             key_in_db.object_permission_id,
@@ -5597,6 +5591,12 @@ async def _execute_virtual_key_regeneration(
         ),
         user_api_key_cache=user_api_key_cache,
     )
+    if hashed_api_key or key:
+        await _delete_cache_key_object(
+            hashed_token=_hash_token_if_needed(key),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
