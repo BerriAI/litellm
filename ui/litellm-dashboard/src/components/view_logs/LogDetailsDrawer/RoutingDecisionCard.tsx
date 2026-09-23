@@ -53,6 +53,7 @@ const ROUTER_TYPE_LABELS: Record<string, string> = {
   complexity: "Auto-Router v2",
   adaptive: "Adaptive router",
   quality: "Quality router",
+  semantic: "Semantic router",
 };
 
 /**

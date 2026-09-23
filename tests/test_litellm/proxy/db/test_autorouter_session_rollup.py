@@ -7,6 +7,7 @@ request-time transaction builder and the flush contract with an injected fake cl
 """
 
 import asyncio
+import dataclasses
 import json
 from datetime import datetime
 from types import SimpleNamespace
@@ -353,8 +354,6 @@ class TestFlush:
         )
 
     def test_a_semantic_turn_marshals_its_router_type_into_the_upsert(self) -> None:
-        import dataclasses
-
         client: Final = _FakeClient()
         asyncio.run(
             flush_autorouter_turn_transactions(client, [dataclasses.replace(_transaction(), router_type="semantic")])
