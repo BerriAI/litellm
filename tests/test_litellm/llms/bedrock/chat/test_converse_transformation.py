@@ -7671,3 +7671,49 @@ def test_supports_sampling_params_prefixed_and_anthropic_fallback(monkeypatch: p
     )
     assert AmazonConverseConfig._supports_sampling_params("custom-test-reasoning-model") is False
     assert AmazonConverseConfig._supports_sampling_params("anthropic.claude-custom-unregistered") is True
+
+
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+}
+
+
+@pytest.mark.parametrize(
+    "request_params",
+    (
+        pytest.param({"tools": [_WEATHER_TOOL], "tool_choice": "required"}, id="tools"),
+        pytest.param(
+            {"response_format": {"type": "json_schema", "json_schema": {"name": "w", "schema": {"type": "object"}}}},
+            id="json-schema",
+        ),
+        pytest.param({"temperature": 0.2, "top_p": 0.9, "max_tokens": 50}, id="sampling"),
+    ),
+)
+@pytest.mark.parametrize(
+    "model",
+    (
+        pytest.param("converse/us.openai.gpt-99-unmapped", id="unmapped-us"),
+        pytest.param("converse/global.openai.gpt-99-unmapped", id="unmapped-global"),
+        pytest.param("us.openai.gpt-6-astra", id="mapped-without-sampling-flag"),
+    ),
+)
+def test_openai_gpt_model_without_cost_map_flags_maps_params_like_gpt_5_6(
+    model: str, request_params: dict[str, object], local_model_cost_map: None
+) -> None:
+    def converse_params(target: str) -> dict[str, object]:
+        return litellm.utils.get_optional_params(
+            model=target, custom_llm_provider="bedrock", drop_params=True, **request_params
+        )
+
+    assert converse_params(model) == converse_params("converse/us.openai.gpt-5.6-sol")
+
+
+def test_supports_sampling_params_flag_still_wins_for_openai_gpt_models(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "us.openai.gpt-99-sampling", {"supports_sampling_params": True})
+
+    assert AmazonConverseConfig._supports_sampling_params("us.openai.gpt-99-sampling") is True
+    assert AmazonConverseConfig._supports_sampling_params("us.openai.gpt-99-unmapped") is False
+    assert AmazonConverseConfig._supports_sampling_params("openai.gpt-oss-120b-1:0") is True
