@@ -20,7 +20,7 @@ import httpx
 import pytest
 
 from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import EmbeddingResponse, LlmProviders, ModelResponse
 
 # AWS JobStatus -> OpenAI BatchJobStatus, exactly as encoded in transformation.py
 # (both transform_create_batch_response and transform_retrieve_batch_response).
@@ -941,3 +941,25 @@ def test_retrieve_request_accepts_partition_arns(config: BedrockBatchesConfig, a
             batch_id=arn, optional_params={}, litellm_params={}
         )
     assert result["url"].startswith(expected_prefix)
+
+
+def test_transform_batch_output_line_dispatches_on_shape(config: BedrockBatchesConfig) -> None:
+    titan = config.transform_batch_output_line(
+        {"embedding": [0.1, 0.2], "inputTextTokenCount": 4}, model="amazon.titan-embed"
+    )
+    assert isinstance(titan, EmbeddingResponse)
+    assert titan.data[0]["embedding"] == [0.1, 0.2]
+    assert titan.usage.prompt_tokens == 4
+
+    converse = config.transform_batch_output_line(
+        {
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 5, "outputTokens": 6, "totalTokens": 11},
+        },
+        model="amazon.nova-lite",
+    )
+    assert isinstance(converse, ModelResponse)
+    assert converse.choices[0].message.content == "hi"
+
+    assert config.transform_batch_output_line({"foo": 1}, model="x") is None

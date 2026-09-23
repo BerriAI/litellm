@@ -625,16 +625,27 @@ async def test_line_items_bedrock_shapes(recorder):
 
     by_id = {_hidden(e).get("batch_custom_id"): e for e in recorder.success_events}
 
-    anthropic_line = _payload(by_id["br-anth"])
+    anthropic_event = by_id["br-anth"]
+    assert anthropic_event["call_type"] == "acompletion"
+    assert _hidden(anthropic_event)["batch_custom_id"] == "br-anth"
+    anthropic_line = _payload(anthropic_event)
+    assert any(m.get("content") == "hi br-anth" for m in anthropic_line["messages"])
     assert anthropic_line["response"]["choices"][0]["message"]["content"] == "bedrock claude hi"
     assert anthropic_line["prompt_tokens"] == 2
     assert anthropic_line["completion_tokens"] == 3
 
-    titan_line = _payload(by_id["br-titan"])
+    titan_event = by_id["br-titan"]
+    assert titan_event["call_type"] == "aembedding"
+    assert _hidden(titan_event)["batch_custom_id"] == "br-titan"
+    titan_line = _payload(titan_event)
+    assert titan_event["optional_params"]["inputText"] == "embed me"
     assert titan_line["response"]["data"][0]["embedding"] == [0.1, 0.2]
     assert titan_line["prompt_tokens"] == 4
 
-    converse_line = _payload(by_id["br-conv"])
+    converse_event = by_id["br-conv"]
+    assert converse_event["call_type"] == "acompletion"
+    converse_line = _payload(converse_event)
+    assert any(m.get("content") == "hi br-conv" for m in converse_line["messages"])
     assert converse_line["response"]["choices"][0]["message"]["content"] == "converse hi"
     assert converse_line["prompt_tokens"] == 5
     assert converse_line["completion_tokens"] == 6

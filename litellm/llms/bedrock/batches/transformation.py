@@ -144,6 +144,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK
 
+    def transform_batch_output_line(
+        self, model_output: Mapping[str, object], model: str
+    ) -> ModelResponse | EmbeddingResponse | None:
+        return bedrock_batch_line_to_response(model_output, model)
+
     @classmethod
     def _get_bare_model_name_from_s3_key(cls, object_key: str) -> str | None:
         if not object_key.startswith(BEDROCK_MANAGED_S3_BATCH_PREFIX):
