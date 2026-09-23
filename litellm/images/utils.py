@@ -89,7 +89,7 @@ def _jpeg_sof_dimensions(stream: IO[bytes], start: int, offset: int, segments_le
             stream.seek(start + segment_offset)
             fill = stream.read(_JPEG_FILL_CHUNK)
             run = len(fill) - len(fill.lstrip(b"\xff"))
-            segment_offset += run if run == len(fill) else run - 1
+            segment_offset += run - 1
             continue
         if marker[1] in _JPEG_SOF_MARKERS:
             sof = stream.read(_JPEG_SOF_PAYLOAD_SIZE)
