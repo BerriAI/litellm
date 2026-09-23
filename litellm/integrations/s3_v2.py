@@ -487,7 +487,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         failed: Final = tuple(element for element, ok in zip(uploads, results, strict=True) if not ok)
         if not failed:
             return
-        self.log_queue[:] = [*failed, *self.log_queue[len(batch) :]]
+        self.log_queue = [*failed, *self.log_queue[len(batch) :]]
         raise S3BatchUploadError(failed=len(failed), total=len(uploads))
 
     def _batch_file_mode_active(self) -> bool:
