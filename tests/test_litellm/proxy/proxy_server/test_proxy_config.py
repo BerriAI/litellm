@@ -3891,6 +3891,7 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_daily_tag_spend_ret
 async def test_ProxyConfig__update_general_settings_updates_daily_tag_spend_retention(monkeypatch):
     settings = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", settings)
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", None)
     pc = ProxyConfig()
     reschedule = AsyncMock()
     monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
@@ -3899,6 +3900,22 @@ async def test_ProxyConfig__update_general_settings_updates_daily_tag_spend_rete
 
     assert proxy_server.general_settings["maximum_daily_tag_spend_retention_period"] == "90d"
     reschedule.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_schedules_cleanup_when_db_row_was_already_applied(monkeypatch):
+    """A config reload applies the db row to the store before the side effects run, so the
+    before/after snapshot is equal; the job must still be scheduled when none is running."""
+    fake_scheduler = MagicMock()
+    fake_scheduler.get_job.return_value = None
+    monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    pc = ProxyConfig()
+    pc.settings.apply_db_row("general_settings", {"maximum_daily_tag_spend_retention_period": "90d"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
+    await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
+    assert fake_scheduler.add_job.call_count == 1
+    assert fake_scheduler.add_job.call_args.kwargs["id"] == "spend_log_cleanup_job"
 
 
 # ---------------------------------------------------------------------------
@@ -4032,6 +4049,7 @@ async def test_ProxyConfig__update_general_settings_skips_redundant_retention_re
     pc = ProxyConfig()
     reschedule: Final = AsyncMock()
     monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "scheduler", MagicMock())
     monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
 
     await pc._update_general_settings({"maximum_health_check_retention_period": "30d"})

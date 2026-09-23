@@ -7640,7 +7640,10 @@ class ProxyConfig:
         db_values: Mapping[str, SettingsJsonValue],
         previous_retention_values: tuple[SettingsJsonValue | None, ...],
     ) -> None:
-        if previous_retention_values != self._resolved_retention_values():
+        resolved: Final = self._resolved_retention_values()
+        wants_job: Final = any(value is not None for value in resolved)
+        has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
+        if previous_retention_values != resolved or wants_job != has_job:
             await self._reschedule_spend_log_cleanup_job()
 
     async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
