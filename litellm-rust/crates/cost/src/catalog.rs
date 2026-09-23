@@ -32,7 +32,7 @@ use crate::image_response_cost::{
     gemini_image_generation_cost, resolve_image_model_info, vertex_image_edit_cost,
     vertex_image_generation_cost,
 };
-use crate::non_token::Error as NonTokenError;
+use crate::non_token::{Error as NonTokenError, ImageRates, ImageUsage, calculate_image};
 use crate::per_second::per_second_pricing_cost;
 use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
 use crate::prompt_caching_savings::{
@@ -115,6 +115,16 @@ pub struct AzureAiImageCatalogRequest<'a> {
     pub optional_params: &'a Value,
     pub supplied_model_info: Option<&'a Value>,
     pub at: Timestamp,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DefaultImageCostRequest<'a> {
+    pub model: &'a str,
+    pub provider: Option<&'a str>,
+    pub quality: Option<&'a str>,
+    pub n: Option<u64>,
+    pub size: Option<&'a str>,
+    pub supplied_model_info: Option<&'a Value>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -817,6 +827,77 @@ impl ModelInfoCatalog {
         let model_info = resolve_image_model_info(shared, supplied_model_info)
             .ok_or(CatalogError::ModelNotFound)?;
         Ok(flat_image_cost(image_response, &model_info))
+    }
+
+    pub fn default_image_cost_calculator(
+        &self,
+        request: DefaultImageCostRequest<'_>,
+    ) -> Result<f64, CatalogImageError> {
+        let raw_size = request.size.unwrap_or("1024-x-1024");
+        let size = if raw_size.contains("-x-") {
+            raw_size.to_owned()
+        } else {
+            raw_size.replace('x', "-x-")
+        };
+        let (height, width) = size
+            .split_once("-x-")
+            .ok_or(NonTokenError::InvalidQuantity)?;
+        let height = height
+            .parse::<u32>()
+            .map_err(|_| NonTokenError::InvalidQuantity)?;
+        let width = width
+            .parse::<u32>()
+            .map_err(|_| NonTokenError::InvalidQuantity)?;
+        let provider_prefix = request.provider.map(|provider| format!("{provider}/"));
+        let without_provider = provider_prefix
+            .as_deref()
+            .and_then(|prefix| request.model.strip_prefix(prefix));
+        let base = match (request.provider, without_provider) {
+            (Some(provider), Some(model)) => format!("{provider}/{size}/{model}"),
+            _ => format!("{size}/{}", request.model),
+        };
+        let model_tail = request.model.rsplit('/').next().unwrap_or(request.model);
+        let without_prefix = format!("{size}/{model_tail}");
+        let candidates = [
+            request.quality.map(|quality| format!("{quality}/{base}")),
+            Some(base.clone()),
+            Some(format!("high/{base}")),
+            request
+                .quality
+                .map(|quality| format!("{quality}/{without_prefix}")),
+            Some(without_prefix),
+            Some(request.model.to_owned()),
+            without_provider.map(str::to_owned),
+        ];
+        let shared = candidates
+            .iter()
+            .flatten()
+            .find_map(|candidate| self.entries.get(candidate));
+        if shared.is_none() && request.supplied_model_info.is_none() {
+            return Err(CatalogError::ModelNotFound.into());
+        }
+        let rate = |info: &Value, key: &str| {
+            crate::generic_input::get_cost_per_unit(info, key, None)
+                .map_or(crate::Rate::Missing, crate::Rate::Value)
+        };
+        let tables = [request.supplied_model_info, shared]
+            .into_iter()
+            .flatten()
+            .map(|info| ImageRates {
+                input_per_image: rate(info, "input_cost_per_image"),
+                output_per_image: rate(info, "output_cost_per_image"),
+                input_per_pixel: rate(info, "input_cost_per_pixel"),
+            })
+            .collect::<Vec<_>>();
+        Ok(calculate_image(
+            &tables,
+            ImageUsage {
+                count: request.n.unwrap_or(1),
+                width,
+                height,
+            },
+        )?
+        .total)
     }
 
     pub fn rerank_cost(

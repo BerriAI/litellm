@@ -23,6 +23,7 @@ fn request<'a>(
         provider: Some(provider),
         image_response: response,
         call_type: Some("image_generation"),
+        quality: None,
         size: None,
         n: None,
         optional_params: &Value::Null,
@@ -163,4 +164,61 @@ fn route_azure_ai_image_uses_optional_size_when_response_has_none() {
     )
     .unwrap();
     assert!((cost - 2.0 * 20.0 * 10.0 * 0.0001).abs() < 1e-12);
+}
+
+#[rstest]
+#[case(None, Some("low"), 0.04)]
+#[case(Some("high"), Some("low"), 0.08)]
+#[case(None, None, 0.06)]
+fn route_default_image_cost_uses_response_then_requested_quality(
+    #[case] response_quality: Option<&str>,
+    #[case] requested_quality: Option<&str>,
+    #[case] expected: f64,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "xai/model".to_owned(),
+            json!({"input_cost_per_image": 0.06}),
+        ),
+        (
+            "low/1024-x-1024/model".to_owned(),
+            json!({"input_cost_per_image": 0.04}),
+        ),
+        (
+            "high/1024-x-1024/model".to_owned(),
+            json!({"input_cost_per_image": 0.08}),
+        ),
+    ]));
+    let response = json!({"data": [{}], "quality": response_quality});
+    let params = json!({"quality": requested_quality});
+    let cost = route_image_generation_cost_calculator(
+        &catalog,
+        ImageCostRouteRequest {
+            optional_params: &params,
+            ..request("xai/model", "xai", &response)
+        },
+    )
+    .unwrap();
+    assert_eq!(cost, expected);
+}
+
+#[rstest]
+fn route_default_image_cost_uses_requested_size_and_deployment_override() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "low/1536-x-1024/model".to_owned(),
+        json!({"input_cost_per_image": 0.05}),
+    )]));
+    let response = json!({"data": [{}, {}]});
+    let params = json!({"quality": "low", "size": "1536x1024"});
+    let supplied = json!({"input_cost_per_image": "0.07"});
+    let cost = route_image_generation_cost_calculator(
+        &catalog,
+        ImageCostRouteRequest {
+            optional_params: &params,
+            supplied_model_info: Some(&supplied),
+            ..request("xai/model", "xai", &response)
+        },
+    )
+    .unwrap();
+    assert_eq!(cost, 0.14);
 }

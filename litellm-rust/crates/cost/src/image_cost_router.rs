@@ -2,7 +2,8 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::catalog::{
-    AzureAiImageCatalogRequest, CatalogError, CatalogImageError, ModelInfoCatalog,
+    AzureAiImageCatalogRequest, CatalogError, CatalogImageError, DefaultImageCostRequest,
+    ModelInfoCatalog,
 };
 use crate::generic_input::get_cost_per_unit;
 
@@ -12,6 +13,7 @@ pub struct ImageCostRouteRequest<'a> {
     pub provider: Option<&'a str>,
     pub image_response: &'a Value,
     pub call_type: Option<&'a str>,
+    pub quality: Option<&'a str>,
     pub size: Option<&'a str>,
     pub n: Option<u64>,
     pub optional_params: &'a Value,
@@ -22,7 +24,7 @@ pub struct ImageCostRouteRequest<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageCostRouteError {
     Catalog(CatalogError),
-    AzureAi(CatalogImageError),
+    Image(CatalogImageError),
     UnsupportedProvider,
 }
 
@@ -34,7 +36,7 @@ impl From<CatalogError> for ImageCostRouteError {
 
 impl From<CatalogImageError> for ImageCostRouteError {
     fn from(value: CatalogImageError) -> Self {
-        Self::AzureAi(value)
+        Self::Image(value)
     }
 }
 
@@ -77,6 +79,33 @@ pub fn route_image_generation_cost_calculator(
     request: ImageCostRouteRequest<'_>,
 ) -> Result<f64, ImageCostRouteError> {
     let pricing = deployment_pricing(request.supplied_model_info);
+    let resolved_size = request
+        .size
+        .or_else(|| request.image_response.get("size").and_then(Value::as_str))
+        .or_else(|| requested_image_size(request.optional_params))
+        .or(Some("1024-x-1024"));
+    let resolved_quality = request
+        .quality
+        .or_else(|| {
+            request
+                .image_response
+                .get("quality")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            request
+                .optional_params
+                .get("quality")
+                .and_then(Value::as_str)
+        })
+        .or(Some("standard"));
+    let resolved_n = request.n.or_else(|| {
+        request
+            .image_response
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|data| data.len() as u64)
+    });
     match request.provider {
         Some("vertex_ai") => Ok(catalog.google_image_generation_cost(
             request.model,
@@ -105,12 +134,8 @@ pub fn route_image_generation_cost_calculator(
             AzureAiImageCatalogRequest {
                 model: request.model,
                 image_response: request.image_response,
-                size: request
-                    .size
-                    .or_else(|| request.image_response.get("size").and_then(Value::as_str))
-                    .or_else(|| requested_image_size(request.optional_params))
-                    .or(Some("1024-x-1024")),
-                n: request.n,
+                size: resolved_size,
+                n: resolved_n,
                 optional_params: request.optional_params,
                 supplied_model_info: pricing.as_ref(),
                 at: request.at,
@@ -123,6 +148,19 @@ pub fn route_image_generation_cost_calculator(
                 request.image_response,
                 pricing.as_ref(),
             )?),
-        _ => Err(ImageCostRouteError::UnsupportedProvider),
+        Some("bedrock" | "fal_ai") => Err(ImageCostRouteError::UnsupportedProvider),
+        Some("openai" | "azure") if request.model.to_ascii_lowercase().contains("gpt-image") => {
+            Err(ImageCostRouteError::UnsupportedProvider)
+        }
+        _ => Ok(
+            catalog.default_image_cost_calculator(DefaultImageCostRequest {
+                model: request.model,
+                provider: request.provider,
+                quality: resolved_quality,
+                n: resolved_n,
+                size: resolved_size,
+                supplied_model_info: pricing.as_ref(),
+            })?,
+        ),
     }
 }

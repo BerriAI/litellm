@@ -552,6 +552,14 @@ fn main() {
             json!({"output_cost_per_image": 0.25}),
         ),
         (
+            "xai/default-sample".to_owned(),
+            json!({"input_cost_per_image": 0.06}),
+        ),
+        (
+            "low/1024-x-1024/default-sample".to_owned(),
+            json!({"input_cost_per_image": 0.04}),
+        ),
+        (
             "anthropic/fast".to_owned(),
             json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003, "provider_specific_entry": {"fast": 2.0, "us": 1.1}, "search_context_cost_per_query": {"search_context_size_medium": 0.005}}),
         ),
@@ -1020,6 +1028,7 @@ fn main() {
             provider: Some("recraft"),
             image_response: &json!({"data": [{}, {}]}),
             call_type: Some("image_generation"),
+            quality: None,
             size: None,
             n: None,
             optional_params: &json!({}),
@@ -1029,4 +1038,21 @@ fn main() {
     )
     .unwrap();
     println!("routed_image_generation={routed_image:.3}");
+    let default_image = route_image_generation_cost_calculator(
+        &model_info_catalog,
+        ImageCostRouteRequest {
+            model: "xai/default-sample",
+            provider: Some("xai"),
+            image_response: &json!({"data": [{}, {}]}),
+            call_type: Some("image_generation"),
+            quality: None,
+            size: None,
+            n: None,
+            optional_params: &json!({"quality": "low"}),
+            supplied_model_info: None,
+            at,
+        },
+    )
+    .unwrap();
+    println!("default_image_generation={default_image:.3}");
 }

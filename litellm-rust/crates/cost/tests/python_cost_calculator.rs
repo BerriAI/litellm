@@ -1,13 +1,17 @@
+use std::collections::HashMap;
+
 use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchTier, BatchUsage, ModalityRates, batch_cost_calculator,
     get_batch_cost_rates,
 };
+use litellm_cost::catalog::{DefaultImageCostRequest, ModelInfoCatalog};
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, Unit, VideoRates, calculate_image,
     calculate_ocr_batch, calculate_ocr_with_tables, calculate_video,
 };
 use litellm_cost::{Rate, ThresholdPolicy};
 use rstest::rstest;
+use serde_json::json;
 
 fn ocr_rates(credit: Rate, page: Rate, annotation: Rate) -> OcrRates {
     OcrRates {
@@ -481,4 +485,85 @@ fn batch_cost_calculator_applies_regional_uplift_to_both_directions() {
     let cost = batch_cost_calculator(&pricing, batch_usage(1000, 500)).unwrap();
     assert!((cost.prompt - 0.0011).abs() < 1e-12);
     assert!((cost.completion - 0.0022).abs() < 1e-12);
+}
+
+#[rstest]
+#[case(Some("low"), Some("1024x1024"), 0.04)]
+#[case(Some("low"), Some("1536-x-1024"), 0.05)]
+#[case(Some("high"), Some("1024x1024"), 0.08)]
+fn default_image_cost_calculator_selects_quality_and_normalized_size(
+    #[case] quality: Option<&str>,
+    #[case] size: Option<&str>,
+    #[case] expected: f64,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "xai/model".to_owned(),
+            json!({"input_cost_per_image": 0.06}),
+        ),
+        (
+            "low/1024-x-1024/model".to_owned(),
+            json!({"input_cost_per_image": 0.04}),
+        ),
+        (
+            "low/1536-x-1024/model".to_owned(),
+            json!({"input_cost_per_image": 0.05}),
+        ),
+        (
+            "high/1024-x-1024/model".to_owned(),
+            json!({"input_cost_per_image": 0.08}),
+        ),
+    ]));
+    let cost = catalog
+        .default_image_cost_calculator(DefaultImageCostRequest {
+            model: "xai/model",
+            provider: Some("xai"),
+            quality,
+            n: Some(1),
+            size,
+            supplied_model_info: None,
+        })
+        .unwrap();
+    assert!((cost - expected).abs() < 1e-12);
+}
+
+#[rstest]
+fn default_image_cost_calculator_prefers_deployment_rate_and_explicit_zero() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/dall-e".to_owned(),
+        json!({"output_cost_per_image": 0.03}),
+    )]));
+    for (rate, expected) in [(0.07, 0.14), (0.0, 0.0)] {
+        let supplied = json!({"input_cost_per_image": rate});
+        let cost = catalog
+            .default_image_cost_calculator(DefaultImageCostRequest {
+                model: "dall-e",
+                provider: Some("openai"),
+                quality: Some("standard"),
+                n: Some(2),
+                size: Some("1024x1024"),
+                supplied_model_info: Some(&supplied),
+            })
+            .unwrap();
+        assert_eq!(cost, expected);
+    }
+}
+
+#[rstest]
+fn default_image_cost_calculator_prices_pixels_after_image_rates() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "provider/model".to_owned(),
+        json!({"input_cost_per_pixel": 0.0001}),
+    )]));
+    let cost = catalog
+        .default_image_cost_calculator(DefaultImageCostRequest {
+            model: "provider/model",
+            provider: Some("provider"),
+            quality: None,
+            n: Some(2),
+            size: Some("20x10"),
+            supplied_model_info: None,
+        })
+        .unwrap();
+    assert!((cost - 2.0 * 20.0 * 10.0 * 0.0001).abs() < 1e-12);
 }
