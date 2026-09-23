@@ -1,9 +1,9 @@
 import React from "react";
 import { CircleAlert, Info } from "lucide-react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod/v4";
 import { MCPServer, MCPUserEnvVarsStatus, MCPUserEnvVarSpec } from "@/components/mcp_tools/types";
-import { getMCPUserEnvVars, storeMCPUserEnvVars } from "@/components/networking";
+import { clearMCPUserEnvVars, getMCPUserEnvVars, storeMCPUserEnvVars } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -28,6 +28,7 @@ interface UserEnvVarsFormProps {
   required: readonly MCPUserEnvVarSpec[];
   isSaving: boolean;
   onCancel: () => void;
+  onClear?: () => void;
   onSubmit: (values: Record<string, string>) => void;
 }
 
@@ -41,7 +42,7 @@ const buildSchema = (required: readonly MCPUserEnvVarSpec[]) =>
 const emptyValues = (required: readonly MCPUserEnvVarSpec[]): Record<string, string> =>
   Object.fromEntries(required.map((spec) => [spec.name, ""]));
 
-const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, onCancel, onSubmit }) => {
+const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, onCancel, onClear, onSubmit }) => {
   const form = useZodForm(buildSchema(required), { defaultValues: emptyValues(required) });
 
   return (
@@ -73,6 +74,11 @@ const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, o
         ))}
       </FieldGroup>
       <div className="mt-6 flex items-center justify-end gap-2 border-t border-border pt-2">
+        {onClear && (
+          <Button type="button" variant="destructive" className="mr-auto" onClick={onClear} disabled={isSaving}>
+            Clear
+          </Button>
+        )}
         <Button type="button" variant="outline" onClick={onCancel} disabled={isSaving}>
           Cancel
         </Button>
@@ -93,12 +99,14 @@ const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, o
  * description as the placeholder.
  */
 const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, accessToken, onClose, onSaved }) => {
+  const queryClient = useQueryClient();
+  const queryKey = ["mcpUserEnvVars", server?.server_id];
   const {
     data: status,
     isLoading,
     isError,
   } = useQuery<MCPUserEnvVarsStatus>({
-    queryKey: ["mcpUserEnvVars", server?.server_id],
+    queryKey,
     queryFn: () => getMCPUserEnvVars(accessToken!, server!.server_id),
     enabled: open && !!server && !!accessToken,
   });
@@ -106,12 +114,26 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
   const saveMutation = useMutation({
     mutationFn: (values: Record<string, string>) => storeMCPUserEnvVars(accessToken!, server!.server_id, values),
     onSuccess: (saved) => {
+      queryClient.setQueryData(queryKey, saved);
       toast.success("Credentials saved");
       onSaved?.(saved);
       onClose();
     },
     onError: (err) => {
       toast.fromError(`Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`);
+    },
+  });
+
+  const clearMutation = useMutation({
+    mutationFn: () => clearMCPUserEnvVars(accessToken!, server!.server_id),
+    onSuccess: (cleared) => {
+      queryClient.setQueryData(queryKey, cleared);
+      toast.success("Credentials cleared");
+      onSaved?.(cleared);
+      onClose();
+    },
+    onError: (err) => {
+      toast.fromError(`Failed to clear env vars: ${err instanceof Error ? err.message : String(err)}`);
     },
   });
 
@@ -126,7 +148,8 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
 
   const displayName = server?.server_name || server?.alias || server?.server_id || "MCP Server";
   const required = status?.required ?? [];
-  const isSaving = saveMutation.isPending;
+  const isSaving = saveMutation.isPending || clearMutation.isPending;
+  const canClear = !!server && !!accessToken && required.some((spec) => spec.is_set);
 
   return (
     <Dialog open={open} onOpenChange={(opened) => !opened && onClose()}>
@@ -161,7 +184,13 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
                 credentials. Saved values are never shown back; leave an already-set field blank to keep it, or enter a
                 value to set or change it.
               </span>
-              <UserEnvVarsForm required={required} isSaving={isSaving} onCancel={onClose} onSubmit={handleSave} />
+              <UserEnvVarsForm
+                required={required}
+                isSaving={isSaving}
+                onCancel={onClose}
+                onClear={canClear ? () => clearMutation.mutate() : undefined}
+                onSubmit={handleSave}
+              />
             </>
           )}
         </div>

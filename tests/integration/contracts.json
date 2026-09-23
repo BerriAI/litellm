@@ -1799,6 +1799,9 @@
   "browser": {
     "tests/e2e/ui/tests/integrationCritical/projectDetachment.spec.ts::project creation and explicit detachment preserve saved scope and restore serving": [
       "mgmt.key.ui.project_create_clear_preserves_serving_scope"
+    ],
+    "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::per-user MCP env var stays updatable and clearable from the card after it is set": [
+      "mcp.user_env_vars.ui.update_and_clear_after_set"
     ]
   }
 }

@@ -10,6 +10,7 @@ import { MCPServer, MCPUserEnvVarsStatus } from "@/components/mcp_tools/types";
 vi.mock("@/components/networking", () => ({
   getMCPUserEnvVars: vi.fn(),
   storeMCPUserEnvVars: vi.fn(),
+  clearMCPUserEnvVars: vi.fn(),
 }));
 
 const createQueryClient = () => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -214,6 +215,45 @@ describe("UserEnvVarsModal", () => {
     await user.click(screen.getByRole("button", { name: "Show password" }));
 
     expect(networking.storeMCPUserEnvVars).not.toHaveBeenCalled();
+  });
+
+  it("clears every stored value through the delete endpoint and reports the cleared status", async () => {
+    const user = setup();
+    const cleared = statusWith([{ name: "API_KEY", description: null, is_set: false }]);
+    vi.mocked(networking.clearMCPUserEnvVars).mockResolvedValue(cleared);
+    const { onSaved, onClose } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: true }]));
+
+    await fieldAfterOpen(/^API_KEY/);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+
+    await waitFor(() => {
+      expect(onSaved).toHaveBeenCalledWith(cleared);
+    });
+    expect(networking.clearMCPUserEnvVars).toHaveBeenCalledWith("sk-test", "srv-1");
+    expect(networking.storeMCPUserEnvVars).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("offers Clear only when a value is stored", async () => {
+    renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
+
+    await fieldAfterOpen(/^API_KEY/);
+    expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+  });
+
+  it("surfaces a clear failure without closing", async () => {
+    const user = setup();
+    vi.mocked(networking.clearMCPUserEnvVars).mockRejectedValue(new Error("boom"));
+    const { onSaved, onClose } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: true }]));
+
+    await fieldAfterOpen(/^API_KEY/);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+
+    await waitFor(() => {
+      expect(networking.clearMCPUserEnvVars).toHaveBeenCalledTimes(1);
+    });
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("surfaces a save failure without closing", async () => {
