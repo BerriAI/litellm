@@ -313,6 +313,113 @@ def test_completion_plumbs_stream_chunk_size_through_converse():
     iter_bytes_spy.assert_called_once_with(chunk_size=2048)
 
 
+def _stream_converse_completion_with_spied_client(**kwargs) -> tuple[MagicMock, MagicMock]:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+
+    litellm.completion(
+        model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **kwargs,
+    )
+    return mock_response.iter_bytes, client.post
+
+
+def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body():
+    iter_bytes_spy, post_spy = _stream_converse_completion_with_spied_client(stream_chunk_size=64)
+
+    iter_bytes_spy.assert_called_once_with(chunk_size=64)
+    assert "stream_chunk_size" not in post_spy.call_args.kwargs["data"], post_spy.call_args.kwargs["data"]
+
+
+def test_completion_without_stream_chunk_size_uses_default_chunking():
+    iter_bytes_spy, _ = _stream_converse_completion_with_spied_client()
+
+    iter_bytes_spy.assert_called_once_with(chunk_size=None)
+
+
+async def _astream_converse_completion_with_spied_client(**kwargs) -> tuple[MagicMock, AsyncMock]:
+    async def _no_bytes():
+        return
+        yield b""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.aiter_bytes = MagicMock(return_value=_no_bytes())
+    aiter_bytes_spy = mock_response.aiter_bytes
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=mock_response)
+
+    await litellm.acompletion(
+        model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **kwargs,
+    )
+    return aiter_bytes_spy, client.post
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_converse_body():
+    aiter_bytes_spy, post_spy = await _astream_converse_completion_with_spied_client(stream_chunk_size=64)
+
+    aiter_bytes_spy.assert_called_once_with(chunk_size=64)
+    assert "stream_chunk_size" not in post_spy.call_args.kwargs["data"], post_spy.call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_without_stream_chunk_size_uses_default_chunking():
+    aiter_bytes_spy, _ = await _astream_converse_completion_with_spied_client()
+
+    aiter_bytes_spy.assert_called_once_with(chunk_size=None)
+
+
+@pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), (None, None)])
+def test_router_deployment_stream_chunk_size_reaches_iter_bytes(stream_chunk_size, expected_chunk_size):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+    deployment_params = {
+        "model": "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "converse-chunked",
+                "litellm_params": deployment_params
+                | ({} if stream_chunk_size is None else {"stream_chunk_size": stream_chunk_size}),
+            }
+        ]
+    )
+
+    router.completion(
+        model="converse-chunked",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+    )
+
+    mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
+    assert "stream_chunk_size" not in client.post.call_args.kwargs["data"], client.post.call_args.kwargs["data"]
+
+
 def _bedrock_error_response(status_code: int, request_id: str) -> httpx.Response:
     return httpx.Response(
         status_code=status_code,

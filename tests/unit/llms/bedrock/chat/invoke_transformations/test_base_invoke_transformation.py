@@ -31,12 +31,12 @@ def test_transform_request_drops_stream_chunk_size(config, model):
     request_body = config().transform_request(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
-        optional_params={"stream": True, "stream_chunk_size": 2048, "max_tokens": 10},
-        litellm_params={},
+        optional_params={"stream": True, "max_tokens": 10},
+        litellm_params={"stream_chunk_size": 2048},
         headers={},
     )
 
-    assert "stream_chunk_size" not in json.dumps(request_body)
+    assert "stream_chunk_size" not in json.dumps(request_body), request_body
 
 
 def test_validate_environment_maps_guardrail_config_to_invoke_headers():
