@@ -57,8 +57,11 @@ def _langfuse_rig(
         return Reply()
 
     with wire_server(upstream) as provider, wire_server(sink) as collector:
-        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-        config["litellm_settings"].update({"callbacks": ["langfuse_otel"], **settings})
+        raw_config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config: Final = {
+            **raw_config,
+            "litellm_settings": {**raw_config["litellm_settings"], "callbacks": ["langfuse_otel"], **settings},
+        }
         path: Final = tmp_path / "langfuse_otel.yaml"
         path.write_text(yaml.safe_dump(config))
         with owned_proxy(
@@ -76,7 +79,7 @@ def _langfuse_rig(
 
 
 def _observation_span(collector: Wire, response_id: str) -> dict[str, object]:
-    batches: Final = []
+    batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, so accumulating needs a mutable list
 
     def spans() -> tuple[dict[str, object], ...]:
         batches.extend(collector.drain())
