@@ -1595,6 +1595,18 @@ export const claimOnboardingToken = async (
   }
 };
 
+/**
+ * Revokes the UI session key server-side (POST /session/logout). Best-effort
+ * with a short timeout: logout must still complete locally when the server is
+ * unreachable, so callers swallow rejections.
+ */
+export const sessionLogoutCall = async (accessToken: string): Promise<{ message: string }> => {
+  return await apiClient.post(`/session/logout`, {
+    accessToken,
+    signal: AbortSignal.timeout(3000),
+  });
+};
+
 export const changePasswordCall = async (
   accessToken: string,
   currentPassword: string,

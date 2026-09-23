@@ -1,0 +1,3 @@
+[
+  "tests/e2e/ui/tests/integrationCritical/projectDetachment.spec.ts::project creation and explicit detachment preserve saved scope and restore serving"
+]
