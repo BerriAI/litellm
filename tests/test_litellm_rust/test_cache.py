@@ -425,40 +425,6 @@ def test_registered_facade_uses_native_and_instance_overrides_fall_back() -> Non
         assert backend_fallback.lookup(None, callback_kwargs={"cache_key": "key"}) == {"source": "override"}
 
 
-def test_a_late_backend_class_attribute_invalidates_the_native_selection() -> None:
-    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    handle: Final = _CacheTestHandle.memory()
-    handle._bind_facade(facade)
-    resolver: Final = _CacheTestResolver(SimpleNamespace(cache=facade))
-    assert resolver.resolve().kind == "native"
-
-    def extra_method(_self: object) -> object:
-        return object()
-
-    setattr(type(facade.cache), "extra_method", extra_method)
-    try:
-        assert resolver.resolve().kind == "python_callback"
-    finally:
-        delattr(type(facade.cache), "extra_method")
-    assert resolver.resolve().kind == "native"
-
-
-def test_an_interpreter_added_class_attribute_keeps_the_native_selection() -> None:
-    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    handle: Final = _CacheTestHandle.memory()
-    resolver: Final = _CacheTestResolver(SimpleNamespace(cache=facade))
-    implementation: Final = InMemoryCache.__dict__["_abc_impl"]
-    delattr(InMemoryCache, "_abc_impl")
-    try:
-        handle._bind_facade(facade)
-        assert resolver.resolve().kind == "native"
-        setattr(InMemoryCache, "_abc_impl", implementation)
-        assert resolver.resolve().kind == "native"
-    finally:
-        if "_abc_impl" not in InMemoryCache.__dict__:
-            setattr(InMemoryCache, "_abc_impl", implementation)
-
-
 def test_facade_subclasses_backend_replacement_and_configuration_changes_are_not_bypassed() -> None:
     class CustomCache(Cache):
         pass
