@@ -4,14 +4,12 @@ from typing import Final
 
 import pytest
 import yaml
-
 from integration._support.client import Gateway, eventually
 from integration._support.mcp import (
     McpCaller,
     call_tool,
     delete_mcp,
     forget_mcp,
-    listed_tools,
     mcp_peer,
     register_mcp,
     tool_calls,

@@ -85,22 +85,25 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     output: Final = Path(destination)
     output.mkdir(parents=True, exist_ok=True)
     (output / "execution.json").write_text(
-        json.dumps({
-            "collected": collected,
-            "passed": passed,
-            "skipped": skipped,
-            "complete": complete,
-            "exitstatus": exitstatus,
-            "hypothesis_version": version("hypothesis"),
-            "hypothesis_seed": session.config.getoption("hypothesis_seed"),
-            "order_seed": session.config.getoption("integration_order_seed"),
-            "generation": {
-                "max_examples": LIFECYCLE_SETTINGS.max_examples,
-                "stateful_step_count": LIFECYCLE_SETTINGS.stateful_step_count,
-                "database": str(LIFECYCLE_SETTINGS.database),
-                "phases": [phase.name for phase in LIFECYCLE_SETTINGS.phases],
+        json.dumps(
+            {
+                "collected": collected,
+                "passed": passed,
+                "skipped": skipped,
+                "complete": complete,
+                "exitstatus": exitstatus,
+                "hypothesis_version": version("hypothesis"),
+                "hypothesis_seed": session.config.getoption("hypothesis_seed"),
+                "order_seed": session.config.getoption("integration_order_seed"),
+                "generation": {
+                    "max_examples": LIFECYCLE_SETTINGS.max_examples,
+                    "stateful_step_count": LIFECYCLE_SETTINGS.stateful_step_count,
+                    "database": str(LIFECYCLE_SETTINGS.database),
+                    "phases": [phase.name for phase in LIFECYCLE_SETTINGS.phases],
+                },
             },
-        }, indent=2)
+            indent=2,
+        )
         + "\n"
     )
     if not complete and exitstatus == 0:

@@ -4,8 +4,8 @@ import queue
 import socket
 import threading
 import time
-from concurrent.futures import Future
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future
 from contextlib import contextmanager
 from typing import Final
 

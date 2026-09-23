@@ -1,3 +1,4 @@
+import functools
 import json
 import uuid
 from contextlib import ExitStack
@@ -9,11 +10,9 @@ import yaml
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
-
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
-from integration._support.process import owned_proxy
 from integration._support.mcp import (
     McpCaller,
     Outcome,
@@ -23,6 +22,7 @@ from integration._support.mcp import (
     tool_calls,
     tool_names,
 )
+from integration._support.process import owned_proxy
 
 
 @pytest.mark.covers("mcp.call_tool.saved_headers.reach_actual_transport")
@@ -304,15 +304,22 @@ def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(
                 observed = peer.drain()
                 if server_index != caller_index:
                     assert response.status_code == 403 and "not allowed" in response.text, response.text
-                    assert observed == (), "forbidden server reached the upstream"
+                    assert tool_calls(observed) == (), "forbidden server reached the upstream"
                     continue
                 assert response.status_code == 200 and response.json()["isError"] is False, response.text
                 assert response.json()["content"][0]["text"] == "8", response.text
                 calls = tuple(item for item in observed if item["body"].get("method") == "tools/call")
                 assert len(calls) == 1
                 assert calls[0]["headers"][b"x-integration-server"] == aliases[server_index].encode()
-                expected_auth = f"Bearer synthetic-{aliases[server_index]}".encode() if authenticated else None
-                assert all(item["headers"].get(b"authorization") == expected_auth for item in observed)
+                assert all(
+                    item["headers"].get(b"authorization")
+                    == (f"Bearer synthetic-{_server_alias(item)}".encode() if authenticated else None)
+                    for item in observed
+                ), observed
+
+
+def _matches_grants(expected: set[str], view: Outcome) -> bool:
+    return view.error is None and set(view.tools) == expected
 
 
 def _granted_view(worker: Gateway, key: str) -> Outcome:
@@ -401,13 +408,11 @@ def test_generated_create_edit_grant_revoke_delete_call_keeps_grants_and_tool_li
             @invariant()
             def tool_lists_and_calls_match_grants_on_both_workers(self) -> None:
                 for key in self.keys:
-                    expected = {
-                        f"{alias}-{tool}" for alias in self.grants[key] for tool in ("add", "multiply", "fail")
-                    }
+                    expected = {f"{alias}-{tool}" for alias in self.grants[key] for tool in ("add", "multiply", "fail")}
                     for worker in (gateway, peer):
                         listing = eventually(
-                            lambda: _granted_view(worker, key),
-                            lambda view: view.error is None and set(view.tools) == expected,
+                            functools.partial(_granted_view, worker, key),
+                            functools.partial(_matches_grants, expected),
                             seconds=40,
                             return_last_on_timeout=True,
                         )

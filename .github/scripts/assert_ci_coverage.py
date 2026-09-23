@@ -235,9 +235,7 @@ class Slice:
             return True  # a `-k` this parser cannot model is assumed to claim everything
         if any(term.lower() in relative_path.lower() for term in self.excluded):
             return False
-        return not self.required or any(
-            term.lower() in name.lower() for term in self.required for name in inner_names
-        )
+        return not self.required or any(term.lower() in name.lower() for term in self.required for name in inner_names)
 
 
 def _strings(node: object) -> Iterable[str]:
@@ -307,9 +305,7 @@ def _matchable_names(relative_path: str) -> frozenset[str]:
     except (OSError, SyntaxError):
         return frozenset({relative_path})
     return frozenset({relative_path}) | frozenset(
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     )
 
 
@@ -331,9 +327,7 @@ def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
     slices: Final = _slices()
     named_by_workflow: Final = _workflow_named_tokens()
     globbed: Final = tuple(
-        path
-        for path in _test_files()
-        if any(_token_covers(glob, path) for slice_ in slices for glob in slice_.globs)
+        path for path in _test_files() if any(_token_covers(glob, path) for slice_ in slices for glob in slice_.globs)
     )
     return tuple(
         Finding(
@@ -363,11 +357,7 @@ def _shard_children(root: str, repo_root: pathlib.Path = REPO_ROOT) -> tuple[str
             child.relative_to(repo_root).as_posix()
             for child in (repo_root / root).iterdir()
             if not child.name.startswith(".")
-            and (
-                _holds_tests(child)
-                if child.is_dir()
-                else child.name.startswith("test_") and child.suffix == ".py"
-            )
+            and (_holds_tests(child) if child.is_dir() else child.name.startswith("test_") and child.suffix == ".py")
         )
     )
 
@@ -551,7 +541,9 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
     ungrouped: Final = frozenset(
         path
         for path in paths
-        if sum(any(path.startswith(f"tests/integration/{folder}/") for folder in folders) for folders in groups.values())
+        if sum(
+            any(path.startswith(f"tests/integration/{folder}/") for folder in folders) for folders in groups.values()
+        )
         != 1
     )
     gha_tokens: Final = _invoked_test_tokens(

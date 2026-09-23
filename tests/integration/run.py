@@ -65,11 +65,7 @@ def main() -> int:
             f"--hypothesis-seed={options.seed}",
             f"--integration-order-seed={options.order_seed}",
             f"--junitxml={output / 'junit.xml'}",
-            *(
-                ("-n", str(options.workers))
-                if options.workers > 1
-                else ()
-            ),
+            *(("-n", str(options.workers)) if options.workers > 1 else ()),
         ],
         cwd=root,
         env=environment,

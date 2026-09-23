@@ -144,9 +144,7 @@ def test_the_parent_token_alone_does_not_satisfy_any_child(tmp_path):
     (root / "billing").mkdir(parents=True)
     (root / "billing" / "test_a.py").write_text("def test_a(): assert True\n")
 
-    findings = coverage._unassigned_shard_children(
-        frozenset({"tests/tree"}), roots=("tests/tree",), repo_root=tmp_path
-    )
+    findings = coverage._unassigned_shard_children(frozenset({"tests/tree"}), roots=("tests/tree",), repo_root=tmp_path)
 
     assert tuple(f.subject for f in findings) == ("tests/tree/billing",)
 
@@ -181,8 +179,12 @@ def test_the_repo_as_it_stands_has_every_shard_child_assigned():
 
 def _slice(**overrides):
     defaults = dict(
-        job="a_job", globs=("tests/x/**/test_*.py",), named=frozenset(),
-        required=(), excluded=(), understood=True,
+        job="a_job",
+        globs=("tests/x/**/test_*.py",),
+        named=frozenset(),
+        required=(),
+        excluded=(),
+        understood=True,
     )
     return coverage.Slice(**{**defaults, **overrides})
 
@@ -224,9 +226,7 @@ def test_an_explicitly_named_file_is_claimed_whatever_the_keywords_say():
 def test_an_unparsed_keyword_expression_claims_everything_it_globs():
     # Staying silent beats guessing: an expression this parser cannot model must never
     # be the reason a file is reported as unrun.
-    assert _slice(understood=False, excluded=("cache",)).claims(
-        "tests/x/test_caching.py", frozenset()
-    ) is True
+    assert _slice(understood=False, excluded=("cache",)).claims("tests/x/test_caching.py", frozenset()) is True
 
 
 def test_keyword_terms_splits_an_and_chain_into_required_and_excluded():
@@ -339,10 +339,7 @@ def test_a_dockerfile_directory_entry_is_stale_because_only_an_exact_path_exempt
 def test_a_workflow_that_names_a_file_clears_it_from_the_slice_check():
     named = coverage._workflow_named_tokens()
     assert named, "the workflows must name some test paths or the check proves nothing"
-    assert any(
-        coverage._token_covers(token, "tests/local_testing/test_caching_handler.py")
-        for token in named
-    )
+    assert any(coverage._token_covers(token, "tests/local_testing/test_caching_handler.py") for token in named)
 
 
 def test_the_slice_check_credits_only_workflows_never_the_circleci_config():
@@ -355,6 +352,6 @@ def test_the_slice_check_credits_only_workflows_never_the_circleci_config():
 
 def test_a_file_no_workflow_names_is_still_reported_when_every_slice_drops_it():
     named = coverage._workflow_named_tokens()
-    assert not any(
-        coverage._token_covers(token, "tests/local_testing/test_caching.py") for token in named
-    ), "test_caching.py is allowlisted, not run; crediting it would hide a real gap"
+    assert not any(coverage._token_covers(token, "tests/local_testing/test_caching.py") for token in named), (
+        "test_caching.py is allowlisted, not run; crediting it would hide a real gap"
+    )

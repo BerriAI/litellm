@@ -7,7 +7,6 @@ from typing import Final, Literal
 
 import httpx
 import pytest
-
 from integration._support.client import Gateway, Scenario
 from integration._support.mcp import McpPeer, mcp_peer, register_mcp, tool_calls
 from integration._support.wire import Reply, Request, Wire, wire_server
