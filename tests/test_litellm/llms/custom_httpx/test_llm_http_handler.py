@@ -4290,3 +4290,70 @@ async def test_list_batches_anthropic_4xx_raises_anthropic_error():
             model="",
         )
     assert exc_info.value.status_code == 401
+
+
+def test_list_batches_passes_api_base_to_validate_environment():
+    provider_config = Mock(spec=AnthropicBatchesConfig)
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_list_batches_url.return_value = "https://custom.example/anthropic/v1/messages/batches?limit=1"
+    client = Mock(spec=HTTPHandler)
+    client.get = Mock(return_value=_anthropic_list_response())
+
+    BaseLLMHTTPHandler().list_batches(
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base="https://custom.example/anthropic",
+        api_key="sk-ant-test",
+        logging_obj=None,
+        after=None,
+        limit=1,
+        _is_async=False,
+        client=client,
+        timeout=60.0,
+        model="",
+    )
+
+    provider_config.validate_environment.assert_called_once_with(
+        api_key="sk-ant-test",
+        api_base="https://custom.example/anthropic",
+        headers={},
+        model="",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+    )
+
+
+def test_cancel_batch_passes_api_base_to_validate_environment():
+    provider_config = Mock(spec=AnthropicBatchesConfig)
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_cancel_batch_url.return_value = (
+        "https://custom.example/anthropic/v1/messages/batches/msgbatch_abc/cancel"
+    )
+    client = Mock(spec=HTTPHandler)
+    client.post = Mock(return_value=_anthropic_cancel_response())
+
+    BaseLLMHTTPHandler().cancel_batch(
+        batch_id="msgbatch_abc",
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base="https://custom.example/anthropic",
+        api_key="sk-ant-test",
+        logging_obj=None,
+        _is_async=False,
+        client=client,
+        timeout=60.0,
+        model="",
+    )
+
+    provider_config.validate_environment.assert_called_once_with(
+        api_key="sk-ant-test",
+        api_base="https://custom.example/anthropic",
+        headers={},
+        model="",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+    )

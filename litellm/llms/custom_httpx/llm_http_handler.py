@@ -4333,6 +4333,7 @@ class BaseLLMHTTPHandler:
         """
         headers = provider_config.validate_environment(
             api_key=api_key,
+            api_base=api_base,
             headers=headers,
             model=model,
             messages=[],  # mutable-ok: validate_environment signature declares list[AllMessageValues]
@@ -4455,6 +4456,7 @@ class BaseLLMHTTPHandler:
         """
         headers = provider_config.validate_environment(
             api_key=api_key,
+            api_base=api_base,
             headers=headers,
             model=model,
             messages=[],  # mutable-ok: validate_environment signature declares list[AllMessageValues]
