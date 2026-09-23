@@ -1,4 +1,8 @@
 import base64
+import io
+import math
+import wave
+from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
@@ -10,6 +14,8 @@ from litellm.llms.vertex_ai.text_to_speech.transformation import (
     VertexAILyriaTextToSpeechConfig,
     VertexAITextToSpeechConfig,
 )
+from litellm.cost_calculator import response_cost_calculator
+from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -405,6 +411,66 @@ def test_transform_text_to_speech_response_leaves_unknown_bytes_unlabeled():
 
     assert "content-type" not in result.response.headers
     assert result.response.content == raw_pcm
+
+
+@pytest.mark.parametrize("encoding", ["LINEAR16", "PCM", "MP3"])
+def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
+    model: Final = "gemini-3.1-flash-tts-preview"
+    input_text: Final = "Hello from Gemini text to speech"
+    pcm_audio: Final = b"\x00\x00" * 24000
+    wav_buffer: Final = io.BytesIO()
+    with wave.open(wav_buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(24000)
+        wav_file.writeframes(pcm_audio)
+    audio_by_encoding: Final = {
+        "PCM": pcm_audio,
+        "LINEAR16": wav_buffer.getvalue(),
+        "MP3": (Path(__file__).resolve().parents[4] / "audio_tests/speech_vertex.mp3").read_bytes(),
+    }
+    audio_bytes: Final = audio_by_encoding[encoding]
+    logger: Final = MagicMock()
+    logger.model_call_details = {
+        "additional_args": {
+            "complete_input_dict": {
+                "dict_body": {
+                    "input": {"text": input_text},
+                    "audioConfig": {"audioEncoding": encoding, "sampleRateHertz": 24000},
+                }
+            }
+        }
+    }
+    raw_response: Final = httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+
+    result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(model, raw_response, logger)
+    usage: Final = result.usage
+    assert usage is not None
+    duration: Final = len(audio_bytes) / 48000 if encoding == "PCM" else calculate_request_duration(audio_bytes)
+    assert duration is not None
+    assert usage.completion_tokens == math.ceil(duration * 25), (
+        "Google Cloud TTS pricing, 2026-09-23: https://cloud.google.com/text-to-speech/pricing"
+    )
+    assert usage.prompt_tokens == litellm.token_counter(model=model, text=input_text)
+    assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.audio_tokens == usage.completion_tokens
+
+    model_info: Final = litellm.get_model_info(model, custom_llm_provider="vertex_ai")
+    cost: Final = response_cost_calculator(
+        response_object=result,
+        model=model,
+        custom_llm_provider="vertex_ai",
+        call_type="speech",
+        optional_params={},
+        prompt=input_text,
+    )
+    expected_cost: Final = (
+        usage.prompt_tokens * model_info["input_cost_per_token"]
+        + usage.completion_tokens * model_info["output_cost_per_audio_token"]
+    )
+    assert cost == pytest.approx(expected_cost)
+    assert cost > usage.prompt_tokens * model_info["input_cost_per_token"]
 
 
 class TestVertexAILyriaTextToSpeechConfig:
@@ -867,10 +933,11 @@ def test_litellm_speech_vertex_ai_gemini_tts_mp3_uses_cloud_tts(mock_get_token, 
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
     mock_response.headers = {"content-type": "application/json"}
-    mock_response.json.return_value = {"audioContent": "SGVsbG8gV29ybGQ="}
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/speech_vertex.mp3").read_bytes()
+    mock_response.json.return_value = {"audioContent": base64.b64encode(audio_bytes).decode()}
     mock_post.return_value = mock_response
 
-    litellm.speech(
+    result: Final = litellm.speech(
         model="vertex_ai/gemini-3.1-flash-tts-preview",
         input="Ryan: Hi.\nKatie: Hello.",
         voice={
@@ -899,6 +966,11 @@ def test_litellm_speech_vertex_ai_gemini_tts_mp3_uses_cloud_tts(mock_get_token, 
         vertex_project="test-project",
         vertex_location="global",
     )
+
+    assert result.response.content == audio_bytes
+    assert result.usage is not None
+    assert result.usage.prompt_tokens > 0
+    assert result.usage.completion_tokens > 0
 
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args.kwargs

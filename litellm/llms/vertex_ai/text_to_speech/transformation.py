@@ -6,6 +6,7 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 """
 
 import base64
+import math
 from collections.abc import Coroutine, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeAlias, Union
@@ -16,6 +17,7 @@ import litellm
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import (
     DEFAULT_SPEECH_MEDIA_TYPE,
+    calculate_request_duration,
     speech_media_type_from_audio_bytes,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -665,8 +667,34 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             content=binary_data,
         )
 
-        # Initialize the HttpxBinaryResponseContent instance
-        return HttpxBinaryResponseContent(response)
+        binary_response: Final = HttpxBinaryResponseContent(response)
+        if self._is_gemini_tts_model(model):
+            from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
+
+            request_body: Final = logging_obj.model_call_details["additional_args"]["complete_input_dict"]["dict_body"]
+            input_data: Final = request_body["input"]
+            audio_config: Final = request_body["audioConfig"]
+            container_duration: Final = calculate_request_duration(binary_data)
+            sample_rate: Final = audio_config.get("sampleRateHertz") or 24000
+            duration: Final = (
+                len(binary_data) / (2 * sample_rate)
+                if container_duration is None and audio_config["audioEncoding"] == "PCM"
+                else container_duration
+            )
+            if duration is None:
+                raise ValueError("Cannot determine Gemini TTS output duration for cost calculation")
+            input_text: Final = " ".join(
+                value for value in (input_data.get("text"), input_data.get("ssml"), input_data.get("prompt")) if value
+            )
+            prompt_tokens: Final = litellm.token_counter(model=model, text=input_text)
+            audio_tokens: Final = math.ceil(duration * 25)
+            binary_response.usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=audio_tokens,
+                total_tokens=prompt_tokens + audio_tokens,
+                completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=audio_tokens),
+            )
+        return binary_response
 
 
 class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
