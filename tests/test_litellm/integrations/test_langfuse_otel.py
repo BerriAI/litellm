@@ -1105,6 +1105,42 @@ class TestDerivedTraceFields:
             "user_api_key_alias:k1",
         ]
 
+    def test_cache_key_default_tag_falls_back_to_preset_cache_key(self, monkeypatch):
+        import litellm
+
+        class _PresetCache:
+            @staticmethod
+            def _get_preset_cache_key_from_kwargs(**kwargs) -> str:
+                return "preset-abc"
+
+        monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_key"])
+        monkeypatch.setattr(litellm, "cache", _PresetCache())
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {}},
+            }
+        )
+        assert json.loads(attributes["langfuse.trace.tags"]) == ["cache_key:preset-abc"]
+
+    def test_cache_key_default_tag_prefers_hidden_params_over_preset(self, monkeypatch):
+        import litellm
+
+        class _PresetCache:
+            @staticmethod
+            def _get_preset_cache_key_from_kwargs(**kwargs) -> str:
+                return "preset-abc"
+
+        monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_key"])
+        monkeypatch.setattr(litellm, "cache", _PresetCache())
+        attributes = _emitted(
+            {
+                "call_type": "acompletion",
+                "litellm_params": {"metadata": {"hidden_params": {"cache_key": "explicit-key"}}},
+            }
+        )
+        assert json.loads(attributes["langfuse.trace.tags"]) == ["cache_key:explicit-key"]
+
     def test_caller_tags_string_is_a_single_tag(self):
         attributes = _emitted(
             {

@@ -1,8 +1,9 @@
 import base64
 import json
 import os
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -28,6 +29,27 @@ LANGFUSE_CLOUD_EU_ENDPOINT: Final = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/otel"
 LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
 LANGFUSE_INGESTION_VERSION: Final = "4"
+
+
+@runtime_checkable
+class _Gettable(Protocol):
+    def get(self, key: str, default: object = None) -> object: ...
+
+
+def _as_gettable(value: object) -> _Gettable | None:
+    return value if isinstance(value, _Gettable) else None
+
+
+def _attr(item: object, name: str, default: object = None) -> object:
+    return getattr(item, name, default)
+
+
+def _preset_cache_key(kwargs: Mapping[str, object]) -> object:
+    import litellm
+
+    if litellm.cache is None:
+        return None
+    return litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -125,27 +147,34 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(span, enum_attr.value, value)
 
     @staticmethod
-    def _observation_output(response_obj) -> str | None:
+    def _observation_output(response_obj: _Gettable | None) -> str | None:
         """Serialized observation output, or None when the response yields nothing."""
         if not response_obj or not hasattr(response_obj, "get"):
             return None
         return _extract_output_items(response_obj) or _extract_choices_output(response_obj)
 
     @staticmethod
-    def _trace_tags(kwargs: dict, metadata: dict, derive_defaults: bool = True) -> tuple[str, ...]:
+    def _trace_tags(
+        kwargs: Mapping[str, object], metadata: Mapping[str, object], derive_defaults: bool = True
+    ) -> tuple[str, ...]:
         """Order-preserving dedupe of caller tags, request tags and langfuse_default_tags expansions."""
         import litellm
 
         caller_tags: Final = metadata.get("tags")
-        request_tags: Final = (kwargs.get("standard_logging_object") or {}).get("request_tags")
+        request_tags: Final = (_as_gettable(kwargs.get("standard_logging_object")) or {}).get("request_tags")
         default_tags: Final = litellm.langfuse_default_tags
 
         def _default_tag(key: str) -> str | None:
             if key == "cache_hit":
                 return f"cache_hit:{kwargs.get('cache_hit', False)}"
             if key == "cache_key":
-                hidden_params: Final = metadata.get("hidden_params", {}) or {}
-                return f"cache_key:{hidden_params.get('cache_key')}"
+                hidden_params: Final = _as_gettable(metadata.get("hidden_params", {})) or {}
+                cache_key: Final = (
+                    hidden_params.get("cache_key")
+                    if hidden_params.get("cache_key") is not None
+                    else _preset_cache_key(kwargs)
+                )
+                return f"cache_key:{cache_key}"
             if key == "proxy_base_url":
                 proxy_base_url: Final = os.environ.get("PROXY_BASE_URL")
                 return f"proxy_base_url:{proxy_base_url}" if proxy_base_url is not None else None
@@ -411,24 +440,22 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
 
 
-def _extract_choices_output(response_obj) -> str | None:
+def _extract_choices_output(response_obj: _Gettable) -> str | None:
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
     choices: Final = response_obj.get("choices", [])
-    if not choices:
+    if not isinstance(choices, list) or not choices:
         return None
-    message: Final = choices[0].get("message", {})
+    first_choice: Final = _as_gettable(choices[0])
+    if first_choice is None:
+        return None
+    message: Final = _as_gettable(first_choice.get("message", {}))
+    if message is None:
+        return None
     tool_calls: Final = message.get("tool_calls")
-    if tool_calls:
+    if isinstance(tool_calls, list) and tool_calls:
         transformed_tool_calls: Final = [
-            {
-                "id": response_obj.get("id", ""),
-                "name": tool_call.get("function", {}).get("name", ""),
-                "call_id": tool_call.get("id", ""),
-                "type": "function_call",
-                "arguments": _tool_call_arguments(tool_call.get("function", {}).get("arguments", "{}")),
-            }
-            for tool_call in tool_calls
+            entry for tool_call in tool_calls if (entry := _transformed_tool_call(response_obj, tool_call)) is not None
         ]
         return safe_dumps(transformed_tool_calls)
     output_data: Final = {
@@ -442,6 +469,22 @@ def _extract_choices_output(response_obj) -> str | None:
     return safe_dumps(output_data) if output_data else None
 
 
+def _transformed_tool_call(response_obj: _Gettable, tool_call: object) -> dict[str, object] | None:
+    call: Final = _as_gettable(tool_call)
+    if call is None:
+        return None
+    function: Final = _as_gettable(call.get("function", {}))
+    if function is None:
+        return None
+    return {
+        "id": response_obj.get("id", ""),
+        "name": function.get("name", ""),
+        "call_id": call.get("id", ""),
+        "type": "function_call",
+        "arguments": _tool_call_arguments(function.get("arguments", "{}")),
+    }
+
+
 def _tool_call_arguments(arguments: object) -> object:
     if not isinstance(arguments, str):
         return arguments
@@ -451,39 +494,47 @@ def _tool_call_arguments(arguments: object) -> object:
         return {}
 
 
-def _extract_output_items(response_obj) -> str | None:
+def _extract_output_items(response_obj: _Gettable) -> str | None:
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
     output: Final = response_obj.get("output", [])
-    if not output:
+    if not isinstance(output, list) or not output:
         return None
     rendered: Final = tuple(entry for item in output for entry in _output_items(item))
     return safe_dumps(list(rendered)) if rendered else None
 
 
-def _output_items(item) -> tuple[dict, ...]:
-    if not hasattr(item, "type"):
-        return ()
-    if item.type == "reasoning" and hasattr(item, "summary"):
+def _output_items(item: object) -> tuple[dict[str, object], ...]:
+    item_type: Final = _attr(item, "type")
+    if item_type == "reasoning":
+        summaries: Final = _attr(item, "summary")
+        if not isinstance(summaries, Iterable):
+            return ()
         return tuple(
-            {"role": "reasoning_summary", "content": summary.text}
-            for summary in item.summary
+            {"role": "reasoning_summary", "content": _attr(summary, "text")}
+            for summary in summaries
             if hasattr(summary, "text")
         )
-    if item.type == "message":
+    if item_type == "message":
+        content_items: Final = _attr(item, "content", [{}])
+        first_content: Final = (
+            content_items[0]
+            if isinstance(content_items, Sequence) and not isinstance(content_items, (str, bytes)) and content_items
+            else {}
+        )
         return (
             {
-                "role": getattr(item, "role", "assistant"),
-                "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
+                "role": _attr(item, "role", "assistant"),
+                "content": _attr(first_content, "text", ""),
             },
         )
-    if item.type == "function_call":
-        arguments: Final = getattr(item, "arguments", "{}")
+    if item_type == "function_call":
+        arguments: Final = _attr(item, "arguments", "{}")
         return (
             {
-                "id": getattr(item, "id", ""),
-                "name": getattr(item, "name", ""),
-                "call_id": getattr(item, "call_id", ""),
+                "id": _attr(item, "id", ""),
+                "name": _attr(item, "name", ""),
+                "call_id": _attr(item, "call_id", ""),
                 "type": "function_call",
                 "arguments": safe_json_loads(arguments, default={}) if isinstance(arguments, str) else arguments,
             },

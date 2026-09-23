@@ -113,13 +113,10 @@ def _chat_stream(marker: str) -> tuple[bytes, ...]:
 
 
 def _generation_span(collector: Wire, marker: str) -> SpanRecord:
-    batches: list[Request] = []  # mutable-ok: accumulated across eventually() polls
-
     def spans() -> tuple[SpanRecord, ...]:
-        batches.extend(collector.drain())
         return tuple(
             record
-            for request in batches
+            for request in collector.drain()
             if request.target.endswith("/v1/traces")
             for record in _span_records(request.body)
             if record.attributes.get("langfuse.observation.type") == "generation"
