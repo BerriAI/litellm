@@ -7102,3 +7102,8 @@ async def test_apply_guardrail_signs_off_the_event_loop(monkeypatch):
 
     assert response["action"] == "NONE"
     assert probe.served_during_refresh is True
+
+
+def test_bedrock_guardrail_opts_into_attachment_scanning() -> None:
+    """Translation handlers scope attachment extraction by this flag; Bedrock must keep it set."""
+    assert BedrockGuardrail.scans_attachments is True

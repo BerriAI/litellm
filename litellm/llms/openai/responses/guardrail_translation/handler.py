@@ -465,13 +465,15 @@ def _input_image_ref(content_item: Mapping[str, object]) -> str:
     return "input_image"
 
 
-def _image_url_part_ref(content_item: Mapping[str, object]) -> str | None:
+def _image_url_part_ref(content_item: Mapping[str, object], scan_attachments: bool) -> str | None:
     image_url: Final = content_item.get("image_url")
     if not isinstance(image_url, dict):
         return None
     url: Final = image_url.get("url")
     if isinstance(url, str) and url:
         return url
+    if not scan_attachments:
+        return None
     file_id: Final = image_url.get("file_id")
     return file_id if isinstance(file_id, str) and file_id else None
 
@@ -496,6 +498,7 @@ def _extract_input_content_item(
     images_to_check: list[str],
     files_to_check: list[str],
     task_mappings: list[tuple[int, int | None]],
+    scan_attachments: bool = False,
 ) -> None:
     text_str: Final = content_item.get("text")
     if text_str is not None:
@@ -503,12 +506,12 @@ def _extract_input_content_item(
         task_mappings.append((msg_idx, content_idx))
     kind: Final = content_item.get("type")
     if kind == "image_url":
-        url: Final = _image_url_part_ref(content_item)
+        url: Final = _image_url_part_ref(content_item, scan_attachments)
         if url:
             images_to_check.append(url)
-    elif kind == "input_image":
+    elif kind == "input_image" and scan_attachments:
         images_to_check.append(_input_image_ref(content_item))
-    elif kind == "input_file":
+    elif kind == "input_file" and scan_attachments:
         files_to_check.append(_input_file_ref(content_item))
 
 
@@ -564,8 +567,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         flattened_tool_groups: Final = tuple(
             form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
         )
-        extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups)
-        if not (extracted.inputs.get("texts") or extracted.inputs.get("images") or extracted.inputs.get("files")):
+        scan_attachments: Final = guardrail_to_apply.scans_attachments
+        extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups, scan_attachments)
+        if not (
+            extracted.inputs.get("texts")
+            or (scan_attachments and (extracted.inputs.get("images") or extracted.inputs.get("files")))
+        ):
             return data
         if structured_messages:
             extracted.inputs["structured_messages"] = structured_messages
@@ -607,6 +614,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         data: Mapping[str, object],
         input_data: "str | ResponseInputParam",
         flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
+        scan_attachments: bool = False,
     ) -> _ExtractedInputs:
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
@@ -632,6 +640,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                     images_to_check=images_to_check,
                     files_to_check=files_to_check,
                     task_mappings=task_mappings,
+                    scan_attachments=scan_attachments,
                 )
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if images_to_check:
@@ -695,6 +704,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         images_to_check: list[str],
         files_to_check: list[str],
         task_mappings: list[tuple[int, int | None]],
+        scan_attachments: bool = False,
     ) -> None:
         """
         Extract text content and images from an input message.
@@ -722,6 +732,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                         images_to_check=images_to_check,
                         files_to_check=files_to_check,
                         task_mappings=task_mappings,
+                        scan_attachments=scan_attachments,
                     )
 
     async def _apply_guardrail_responses_to_input(

@@ -35,6 +35,12 @@ class InputRecordingGuardrail(CustomGuardrail):
         return inputs
 
 
+class ScanningGuardrail(InputRecordingGuardrail):
+    """A guardrail that opted into attachment scanning, like Bedrock."""
+
+    scans_attachments = True
+
+
 class TestBedrockConverseHandlerAttachments:
     @staticmethod
     def _data(body: dict) -> dict:
@@ -47,7 +53,7 @@ class TestBedrockConverseHandlerAttachments:
     @pytest.mark.asyncio
     async def test_image_block_reaches_guardrail_as_data_uri(self):
         """Converse image blocks used to be dropped before the guardrail ran."""
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningGuardrail()
         body = {
             "messages": [
                 {
@@ -71,7 +77,7 @@ class TestBedrockConverseHandlerAttachments:
     @pytest.mark.asyncio
     async def test_document_block_reaches_guardrail_as_files(self):
         """Converse document blocks used to be dropped before the guardrail ran."""
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningGuardrail()
         body = {
             "messages": [
                 {
@@ -95,7 +101,7 @@ class TestBedrockConverseHandlerAttachments:
     @pytest.mark.asyncio
     async def test_document_only_turn_invokes_guardrail(self):
         """A turn whose only content is a document still must reach the guardrail."""
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningGuardrail()
         body = {
             "messages": [
                 {
@@ -117,7 +123,7 @@ class TestBedrockConverseHandlerAttachments:
 
     @pytest.mark.asyncio
     async def test_document_inside_tool_result_reaches_guardrail_as_files(self):
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningGuardrail()
         body = {
             "messages": [
                 {
@@ -147,7 +153,7 @@ class TestBedrockConverseHandlerAttachments:
 
     @pytest.mark.asyncio
     async def test_s3_backed_document_yields_its_uri(self):
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningGuardrail()
         body = {
             "messages": [
                 {
@@ -172,3 +178,61 @@ class TestBedrockConverseHandlerAttachments:
         assert guardrail.calls == 1
         assert guardrail.inputs is not None
         assert guardrail.inputs["files"] == ["s3://bucket/a.pdf"]
+
+
+class TestBedrockConverseAttachmentsDefaultScope:
+    """Guardrails that did not opt into attachment scanning see base behavior."""
+
+    @staticmethod
+    def _data(body: dict) -> dict:
+        return {
+            "endpoint": "/bedrock/model/us.amazon.nova-lite-v1:0/converse",
+            "model": "us.amazon.nova-lite-v1:0",
+            "data": body,
+        }
+
+    @pytest.mark.asyncio
+    async def test_document_only_turn_never_calls_apply_guardrail(self):
+        guardrail = InputRecordingGuardrail()
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"document": {"format": "pdf", "name": "a", "source": {"bytes": "QUFBQQ=="}}},
+                    ],
+                }
+            ]
+        }
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data=self._data(body), guardrail_to_apply=guardrail
+        )
+
+        assert guardrail.calls == 0, "non-scanning guardrail fired on a document-only turn"
+        assert result["data"] == body
+
+    @pytest.mark.asyncio
+    async def test_text_plus_document_sends_texts_only(self):
+        guardrail = InputRecordingGuardrail()
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "summarize this"},
+                        {"document": {"format": "pdf", "name": "a", "source": {"bytes": "QUFBQQ=="}}},
+                    ],
+                }
+            ]
+        }
+
+        await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data=self._data(body), guardrail_to_apply=guardrail
+        )
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["summarize this"]
+        assert "files" not in guardrail.inputs
+        assert "images" not in guardrail.inputs

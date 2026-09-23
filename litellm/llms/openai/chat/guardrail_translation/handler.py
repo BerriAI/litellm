@@ -71,7 +71,7 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
 
 
-def _image_part_ref(content_item: Mapping[str, object]) -> str | None:
+def _image_part_ref(content_item: Mapping[str, object], scan_attachments: bool) -> str | None:
     """The url or provider file id an ``image_url`` part carries."""
     image_url: Final = content_item.get("image_url")
     if isinstance(image_url, str):
@@ -80,9 +80,10 @@ def _image_part_ref(content_item: Mapping[str, object]) -> str | None:
         url: Final = image_url.get("url")
         if isinstance(url, str) and url:
             return url
-        file_id: Final = image_url.get("file_id")
-        if isinstance(file_id, str) and file_id:
-            return file_id
+        if scan_attachments:
+            file_id: Final = image_url.get("file_id")
+            if isinstance(file_id, str) and file_id:
+                return file_id
     return None
 
 
@@ -142,6 +143,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
+        scan_attachments: Final = guardrail_to_apply.scans_attachments
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
@@ -164,10 +166,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
                 scan_only_tool_results=scan_only_tool_results,
+                scan_attachments=scan_attachments,
             )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check or images_to_check or files_to_check:
+        if texts_to_check or tool_calls_to_check or (scan_attachments and (images_to_check or files_to_check)):
             inputs, structured_messages, scoped_message_indices = self._build_input_guardrail_inputs(
                 data=data,
                 texts_to_check=texts_to_check,
@@ -238,7 +241,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             not images_to_check
             and not files_to_check
             and not guardrail_to_apply.records_own_guardrail_information
-            and (not_run_reason := self._not_run_reason(messages)) is not None
+            and (not_run_reason := self._not_run_reason(messages, scan_attachments)) is not None
         ):
             guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response=not_run_reason,
@@ -292,6 +295,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def _not_run_reason(
         self,
         messages: Sequence[dict[str, Any]],  # mutable-ok: raw request messages consumed by _extract_inputs
+        scan_attachments: bool,
     ) -> str | None:
         """Why nothing was scanned, or None when the only unscoped content is attachments, which reach the guardrail but carry no texts."""
         texts: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs
@@ -308,10 +312,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_calls_to_check=tool_calls,
                 text_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
                 tool_call_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
+                scan_attachments=scan_attachments,
             )
         if texts or tool_calls:
             return "no scannable content after message scoping"
-        return None if images or files else "no scannable content"
+        return None if images or (scan_attachments and files) else "no scannable content"
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
@@ -339,6 +344,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
+        scan_attachments: bool = False,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
@@ -371,12 +377,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                     # Extract images (image_url)
                     if content_item.get("type") == "image_url":
-                        image_ref: Final = _image_part_ref(content_item)
+                        image_ref: Final = _image_part_ref(content_item, scan_attachments)
                         if image_ref is not None:
                             images_to_check.append(image_ref)
 
                     # Extract non-image file attachments
-                    if content_item.get("type") == "file":
+                    if scan_attachments and content_item.get("type") == "file":
                         files_to_check.append(_file_part_ref(content_item))
 
         # Extract tool calls (typically in assistant messages)

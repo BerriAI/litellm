@@ -517,10 +517,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
 
+        scan_attachments: Final = guardrail_to_apply.scans_attachments
         texts, holders = _extract_converse_texts(body, skip_system, skip_tool)
-        images, files = _extract_converse_attachments(body, skip_tool)
+        images, files = _extract_converse_attachments(body, skip_tool) if scan_attachments else ([], [])
 
-        if not texts and not images and not files:
+        if not texts and not (scan_attachments and (images or files)):
             return data
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts)

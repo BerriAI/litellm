@@ -3396,6 +3396,12 @@ class InputRecordingGuardrail(CustomGuardrail):
         return inputs
 
 
+class ScanningGuardrail(InputRecordingGuardrail):
+    """A guardrail that opted into attachment scanning, like Bedrock."""
+
+    scans_attachments = True
+
+
 class TestOpenAIResponsesHandlerAttachments:
     _GIF_DATA_URI = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
 
@@ -3403,7 +3409,7 @@ class TestOpenAIResponsesHandlerAttachments:
     async def test_input_image_only_invokes_guardrail_with_images(self):
         """An input_image-only turn used to skip apply_guardrail entirely."""
         handler = OpenAIResponsesHandler()
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningGuardrail()
         data = {
             "input": [
                 {
@@ -3423,7 +3429,7 @@ class TestOpenAIResponsesHandlerAttachments:
     @pytest.mark.asyncio
     async def test_input_file_reaches_guardrail_as_files(self):
         handler = OpenAIResponsesHandler()
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningGuardrail()
         data = {
             "input": [
                 {
@@ -3452,7 +3458,7 @@ class TestOpenAIResponsesHandlerAttachments:
         """A file-backed image_url has no inline url; it still must surface so the
         guardrail can refuse it instead of dropping it past the scan."""
         handler = OpenAIResponsesHandler()
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningGuardrail()
         data = {
             "input": [
                 {
@@ -3472,7 +3478,7 @@ class TestOpenAIResponsesHandlerAttachments:
     @pytest.mark.asyncio
     async def test_input_file_with_only_a_file_id_reaches_guardrail(self):
         handler = OpenAIResponsesHandler()
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningGuardrail()
         data = {
             "input": [
                 {
@@ -3488,3 +3494,75 @@ class TestOpenAIResponsesHandlerAttachments:
         assert guardrail.calls == 1, "file-only turn never reached apply_guardrail"
         assert guardrail.inputs is not None
         assert guardrail.inputs["files"] == ["file_abc"]
+
+
+class TestOpenAIResponsesHandlerAttachmentsDefaultScope:
+    """Guardrails that did not opt into attachment scanning see base behavior."""
+
+    _GIF_DATA_URI = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
+
+    @pytest.mark.asyncio
+    async def test_input_image_only_turn_never_calls_apply_guardrail(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = InputRecordingGuardrail()
+        input_data = [
+            {
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": self._GIF_DATA_URI}],
+            }
+        ]
+        data = {"input": input_data, "model": "gpt-4o"}
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.calls == 0, "non-scanning guardrail fired on an input_image-only turn"
+        assert result["input"] == input_data
+
+    @pytest.mark.asyncio
+    async def test_image_url_file_id_yields_no_images_entry(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "describe it"},
+                        {"type": "image_url", "image_url": {"file_id": "file_abc"}},
+                    ],
+                }
+            ],
+            "model": "gpt-4o",
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["describe it"]
+        assert "images" not in guardrail.inputs
+        assert "files" not in guardrail.inputs
+
+    @pytest.mark.asyncio
+    async def test_text_plus_input_file_sends_texts_only(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "summarize this document"},
+                        {"type": "input_file", "file_id": "file_abc"},
+                    ],
+                }
+            ],
+            "model": "gpt-4o",
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["summarize this document"]
+        assert "files" not in guardrail.inputs

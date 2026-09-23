@@ -288,6 +288,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     # OpenAI translation always passes input_type="request" and spend/UI show PRE-CALL.
     use_native_during_call_hook: ClassVar[bool] = True
 
+    # Bedrock scans attachment content, so translation handlers collect images/files for it.
+    scans_attachments: ClassVar[bool] = True
+
     def __init__(
         self,
         guardrailIdentifier: str | None = None,

@@ -1763,6 +1763,8 @@ class TestAnthropicMessagesImageSources:
         handler = AnthropicMessagesHandler()
 
         class ImageRecordingGuardrail(MockCanaryMaskingGuardrail):
+            scans_attachments = True
+
             def __init__(self):
                 super().__init__()
                 self.seen_images: list[str] = []  # mutable-ok: accumulator for the assertion
@@ -2667,6 +2669,12 @@ class InputRecordingGuardrail(CustomGuardrail):
         return inputs
 
 
+class ScanningInputRecordingGuardrail(InputRecordingGuardrail):
+    """A guardrail that opted into attachment scanning, like Bedrock."""
+
+    scans_attachments = True
+
+
 class TestAnthropicMessagesHandlerAttachments:
     _PNG_B64 = "iVBORw0KGgoAAAANSUhEUg=="
     _PNG_DATA_URI = f"data:image/png;base64,{_PNG_B64}"
@@ -2674,7 +2682,7 @@ class TestAnthropicMessagesHandlerAttachments:
     @pytest.mark.asyncio
     async def test_image_only_message_invokes_guardrail_with_images(self):
         """An image-only turn used to skip apply_guardrail entirely."""
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningInputRecordingGuardrail()
         data = {
             "model": "claude-sonnet-4-5",
             "messages": [
@@ -2699,7 +2707,7 @@ class TestAnthropicMessagesHandlerAttachments:
     @pytest.mark.asyncio
     async def test_url_and_file_image_sources_reach_the_guardrail(self):
         """Non-inline image sources surface as refs so the guardrail can refuse them."""
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningInputRecordingGuardrail()
         data = {
             "model": "claude-sonnet-4-5",
             "messages": [
@@ -2722,7 +2730,7 @@ class TestAnthropicMessagesHandlerAttachments:
 
     @pytest.mark.asyncio
     async def test_document_block_reaches_guardrail_as_files(self):
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningInputRecordingGuardrail()
         data = {
             "model": "claude-sonnet-4-5",
             "messages": [
@@ -2747,7 +2755,7 @@ class TestAnthropicMessagesHandlerAttachments:
 
     @pytest.mark.asyncio
     async def test_document_inside_tool_result_reaches_guardrail_as_files(self):
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningInputRecordingGuardrail()
         data = {
             "model": "claude-sonnet-4-5",
             "messages": [
@@ -2779,7 +2787,7 @@ class TestAnthropicMessagesHandlerAttachments:
     @pytest.mark.asyncio
     async def test_document_only_message_invokes_guardrail(self):
         """A turn carrying only a document block still must reach the guardrail."""
-        guardrail = InputRecordingGuardrail()
+        guardrail = ScanningInputRecordingGuardrail()
         data = {
             "model": "claude-sonnet-4-5",
             "messages": [
@@ -2800,3 +2808,80 @@ class TestAnthropicMessagesHandlerAttachments:
         assert guardrail.calls == 1, "document-only turn never reached apply_guardrail"
         assert guardrail.inputs is not None
         assert guardrail.inputs["files"] == ["data:application/pdf;base64,AAAA"]
+
+
+class TestAnthropicMessagesHandlerAttachmentsDefaultScope:
+    """Guardrails that did not opt into attachment scanning see base behavior."""
+
+    _PNG_B64 = "iVBORw0KGgoAAAANSUhEUg=="
+
+    @pytest.mark.asyncio
+    async def test_image_only_turn_never_calls_apply_guardrail(self):
+        guardrail = InputRecordingGuardrail()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/png", "data": self._PNG_B64},
+                    }
+                ],
+            }
+        ]
+        data = {"model": "claude-sonnet-4-5", "messages": messages}
+
+        result = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 0, "non-scanning guardrail fired on an image-only turn"
+        assert result["messages"] == messages
+
+    @pytest.mark.asyncio
+    async def test_file_source_image_yields_no_images_entry(self):
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe it"},
+                        {"type": "image", "source": {"type": "file", "file_id": "file_abc"}},
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["describe it"]
+        assert "images" not in guardrail.inputs
+        assert "files" not in guardrail.inputs
+
+    @pytest.mark.asyncio
+    async def test_text_plus_document_sends_texts_only(self):
+        guardrail = InputRecordingGuardrail()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "summarize this"},
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                        },
+                    ],
+                }
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["summarize this"]
+        assert "files" not in guardrail.inputs
