@@ -134,6 +134,31 @@ fn responses_ws_usage_filters_and_partitions_billable_events_by_service_tier() {
 }
 
 #[rstest]
+fn responses_ws_token_cost_prices_each_tier_at_its_returned_rate() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/model".to_owned(),
+        json!({
+            "input_cost_per_token": 0.002,
+            "output_cost_per_token": 0.003,
+            "input_cost_per_token_priority": 0.005,
+            "output_cost_per_token_priority": 0.007
+        }),
+    )]));
+    let events = [
+        json!({"type": "response.completed", "response": {"service_tier": "default", "usage": {"input_tokens": 100, "output_tokens": 40}}}),
+        json!({"type": "response.incomplete", "response": {"service_tier": "priority", "usage": {"input_tokens": 60, "output_tokens": 10}}}),
+        json!({"type": "response.failed", "response": {"service_tier": "priority", "usage": {"input_tokens": 1000, "output_tokens": 1000}}}),
+    ];
+    let at: Timestamp = "2026-09-22T12:00:00Z".parse().unwrap();
+    let actual = catalog
+        .responses_ws_token_cost_by_tier(&events, "model", Some("openai"), None, None, at)
+        .unwrap();
+    let expected = 100.0 * 0.002 + 40.0 * 0.003 + 60.0 * 0.005 + 10.0 * 0.007;
+    assert!((actual - expected).abs() < 1e-12);
+    assert!((actual - (160.0 * 0.002 + 50.0 * 0.003)).abs() > 1e-9);
+}
+
+#[rstest]
 #[case(json!({}), 100.0 * 0.002 + 20.0 * 0.003)]
 #[case(json!({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}), 0.0)]
 fn handle_realtime_stream_cost_calculation_falls_through_only_for_priceless_session_models(

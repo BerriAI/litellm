@@ -177,7 +177,7 @@ pub fn combine_usage_objects(
         })
 }
 
-fn event_usage(event: &Value) -> Result<ChatUsage, UsageError> {
+pub(crate) fn event_usage(event: &Value) -> Result<ChatUsage, UsageError> {
     let usage = event.pointer("/response/usage").unwrap_or(&Value::Null);
     Ok(get_usage_object(&json!({"usage": usage}))?.unwrap_or_default())
 }

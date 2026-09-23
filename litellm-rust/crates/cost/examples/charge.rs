@@ -522,7 +522,7 @@ fn main() {
         ),
         (
             "openai/realtime".to_owned(),
-            json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003}),
+            json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003, "input_cost_per_token_priority": 0.005, "output_cost_per_token_priority": 0.007}),
         ),
         (
             "openai/cache_savings_model".to_owned(),
@@ -804,4 +804,18 @@ fn main() {
         at,
     );
     println!("realtime_stream_cost={realtime_cost:.3}");
+    let websocket_cost = model_info_catalog
+        .responses_ws_token_cost_by_tier(
+            &[
+                json!({"type": "response.completed", "response": {"service_tier": "default", "usage": {"input_tokens": 100, "output_tokens": 20}}}),
+                json!({"type": "response.completed", "response": {"service_tier": "priority", "usage": {"input_tokens": 50, "output_tokens": 10}}}),
+            ],
+            "realtime",
+            Some("openai"),
+            None,
+            None,
+            at,
+        )
+        .unwrap();
+    println!("responses_ws_cost={websocket_cost:.3}");
 }

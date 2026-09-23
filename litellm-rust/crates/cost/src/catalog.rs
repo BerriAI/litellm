@@ -24,8 +24,11 @@ use crate::prompt_caching_savings::{
     PromptCachingSavingsRequest, calculate_prompt_caching_savings,
 };
 use crate::provider_cache::apply_provider_cache_read_default;
-use crate::realtime_cost::{get_transcription_model_name_from_results, transcription_usage_cost};
-use crate::responses_usage::ChatUsage;
+use crate::realtime_cost::{
+    combine_usage_objects, event_usage, get_transcription_model_name_from_results,
+    partition_results_by_service_tier, transcription_usage_cost,
+};
+use crate::responses_usage::{ChatUsage, UsageError};
 use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use crate::search_cost::{
     ParallelAiPricing, effective_mode, parallel_ai_search_cost, provider_usage,
@@ -90,6 +93,24 @@ pub enum CatalogError {
 pub enum CatalogResponseError {
     Catalog(CatalogError),
     ProviderCost(ResponseCostError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RealtimeCostError {
+    Catalog(CatalogError),
+    Usage(UsageError),
+}
+
+impl From<CatalogError> for RealtimeCostError {
+    fn from(value: CatalogError) -> Self {
+        Self::Catalog(value)
+    }
+}
+
+impl From<UsageError> for RealtimeCostError {
+    fn from(value: UsageError) -> Self {
+        Self::Usage(value)
+    }
 }
 
 impl From<PricingError> for CatalogError {
@@ -275,6 +296,40 @@ impl ModelInfoCatalog {
                 provider,
                 requested_model,
             )
+    }
+
+    pub fn responses_ws_token_cost_by_tier(
+        &self,
+        results: &[Value],
+        model: &str,
+        provider: Option<&str>,
+        region: Option<&str>,
+        data_residency: Option<&str>,
+        at: Timestamp,
+    ) -> Result<f64, RealtimeCostError> {
+        partition_results_by_service_tier(results)
+            .into_iter()
+            .map(|(service_tier, events)| {
+                let usage = combine_usage_objects(
+                    events
+                        .into_iter()
+                        .map(event_usage)
+                        .collect::<Result<Vec<_>, _>>()?,
+                )?;
+                let (prompt, completion) = self.cost_per_token(ModelCostRequest {
+                    model,
+                    provider,
+                    region,
+                    usage: &usage,
+                    service_tier,
+                    data_residency,
+                    vertex_location: None,
+                    at,
+                    response_time_ms: None,
+                })?;
+                Ok(prompt + completion)
+            })
+            .sum()
     }
 
     pub fn cost_per_token(
