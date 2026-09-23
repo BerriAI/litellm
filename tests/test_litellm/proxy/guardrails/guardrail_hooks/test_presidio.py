@@ -2539,13 +2539,16 @@ async def test_apply_to_output_streaming_gemini_sse_bytes_are_forwarded_incremen
             yield frame
         raise ConnectionError("upstream closed mid-stream")
 
-    with pytest.raises(ConnectionError):
+    async def collect() -> None:
         async for chunk in guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             response=mock_stream(),
             request_data={},
         ):
             collected.append(chunk)
+
+    with pytest.raises(ConnectionError):
+        await collect()
 
     assert collected == frames
 
