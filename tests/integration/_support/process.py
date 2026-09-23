@@ -1,6 +1,6 @@
 import os
-import socket
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -13,7 +13,6 @@ from typing import Final
 
 import httpx
 import psutil
-
 from integration._support.client import Gateway
 
 
@@ -61,9 +60,10 @@ def owned_proxy(
     *,
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
+    workers: int = 1,
 ) -> Iterator[Gateway]:
     with owned_proxy_process(
-        gateway, directory, overrides, config=config, remove_environment=remove_environment
+        gateway, directory, overrides, config=config, remove_environment=remove_environment, workers=workers
     ) as owned:
         yield owned.gateway
 
@@ -76,11 +76,12 @@ def owned_proxy_process(
     *,
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
+    workers: int = 1,
 ) -> Iterator[OwnedProxy]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port: Final = reserve.getsockname()[1]
-    root: Final = Path(__file__).resolve().parents[3]
+    root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
     environment: Final = {
         **{name: value for name, value in os.environ.items() if name not in remove_environment},
         "LITELLM_MASTER_KEY": gateway.key,
@@ -104,7 +105,7 @@ def owned_proxy_process(
                 "--port",
                 str(port),
                 "--num_workers",
-                "1",
+                str(workers),
                 "--use_prisma_db_push",
                 "--enforce_prisma_migration_check",
             ],
