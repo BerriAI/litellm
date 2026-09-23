@@ -35,10 +35,12 @@ from litellm.proxy.common_request_processing import (
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
     _ClientDisconnectedBeforeFirstChunk,
+    attach_guardrail_information,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
+    include_guardrail_response_requested,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
@@ -59,6 +61,132 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+
+
+def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
+    recorded = [
+        {"guardrail_name": "first", "guardrail_status": "success"},
+        {"guardrail_name": "second", "guardrail_status": "success"},
+    ]
+    response = litellm.ModelResponse()
+
+    result = attach_guardrail_information(
+        response=response,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == recorded
+    assert "guardrail_information" not in response.model_dump()
+
+
+def test_attach_guardrail_information_reports_empty_list_when_nothing_ran():
+    response = litellm.ModelResponse()
+
+    result = attach_guardrail_information(response=response, request_data={})
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == []
+    assert "guardrail_information" not in response.model_dump()
+
+
+def test_attach_guardrail_information_sets_key_on_dict_response():
+    recorded = [{"guardrail_name": "first", "guardrail_status": "success"}]
+    response = {"id": "x"}
+
+    result = attach_guardrail_information(
+        response=response,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, dict)
+    assert result == {"id": "x", "guardrail_information": recorded}
+    assert response == {"id": "x"}
+
+
+def test_attach_guardrail_information_redacts_matched_content():
+    recorded = [
+        {
+            "guardrail_name": "cf",
+            "guardrail_status": "success",
+            "guardrail_response": [
+                {"type": "blocked_word", "keyword": "secret-word", "action": "MASK"}
+            ],
+            "match_details": [{"snippet": "secret-word", "detection_method": "keyword"}],
+        }
+    ]
+
+    result = attach_guardrail_information(
+        response={"id": "x"},
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, dict)
+    guardrail_information = result["guardrail_information"]
+    assert isinstance(guardrail_information, list)
+    assert guardrail_information[0]["guardrail_response"][0]["keyword"] == "[REDACTED]"
+    assert guardrail_information[0]["match_details"][0]["snippet"] == "[REDACTED]"
+    assert guardrail_information[0]["match_details"][0]["detection_method"] == "keyword"
+    assert "secret-word" not in json.dumps(result)
+
+
+def test_attach_guardrail_information_leaves_cached_dict_response_untouched():
+    recorded = [{"guardrail_name": "cf", "guardrail_status": "success"}]
+    cached = {"id": "x", "content": []}
+
+    result = attach_guardrail_information(
+        response=cached,
+        request_data={
+            "metadata": {
+                "include_guardrail_response": True,
+                "standard_logging_guardrail_information": recorded,
+            }
+        },
+    )
+
+    assert "guardrail_information" not in cached
+    assert result is not cached
+    assert isinstance(result, dict)
+    assert result["guardrail_information"] == recorded
+
+    original = litellm.ModelResponse()
+    copied = attach_guardrail_information(
+        response=original,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert "guardrail_information" not in original.model_dump()
+    assert isinstance(copied, litellm.ModelResponse)
+    assert copied.model_dump()["guardrail_information"] == recorded
+
+
+def test_include_guardrail_response_requested_reads_flag_from_metadata_when_router_seeded_litellm_metadata():
+    recorded = [
+        {"guardrail_name": "first", "guardrail_status": "success"},
+        {"guardrail_name": "second", "guardrail_status": "success"},
+    ]
+    request_data = {
+        "metadata": {
+            "include_guardrail_response": True,
+            "standard_logging_guardrail_information": recorded,
+        },
+        "litellm_metadata": {},
+    }
+
+    assert include_guardrail_response_requested(request_data) is True
+
+    response = litellm.ModelResponse()
+    result = attach_guardrail_information(response=response, request_data=request_data)
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == recorded
+
+
+def test_include_guardrail_response_requested_is_false_without_exact_true():
+    assert include_guardrail_response_requested(
+        {"metadata": {"include_guardrail_response": "true"}, "litellm_metadata": {}}
+    ) is False
+    assert include_guardrail_response_requested({}) is False
 
 
 class TestProxyBaseLLMRequestProcessing:

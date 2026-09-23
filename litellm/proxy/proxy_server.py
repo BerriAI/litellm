@@ -132,6 +132,8 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
+from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
@@ -309,6 +311,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.realtime_errors import (
+    close_after_upstream_handshake_refusal,
     realtime_error_event,
     websocket_close_reason,
 )
@@ -594,6 +597,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
     generate_key_helper_fn,
+    parse_key_alias_pattern,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
@@ -4852,6 +4856,22 @@ def validate_deployment_complexity_router_placement(model: Mapping[str, object])
         raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
 
 
+def validate_deployment_access_windows(model: Mapping[str, object]) -> None:
+    """
+    Reject a malformed `model_info.access_windows` instead of silently dropping the deployment.
+
+    Checked here rather than on `ModelInfo` because the proxy builds its router with
+    `ignore_invalid_deployments=True`, so a rejection further down turns a bad
+    deployment into a silently missing model instead of a refusal to start.
+    """
+    model_info: Final = model.get("model_info")
+    if not isinstance(model_info, Mapping):
+        return
+    error: Final = access_windows_config_error(model_info, model_name=str(model.get("model_name", "")))
+    if error is not None:
+        raise ValueError(error)
+
+
 def validate_auto_router_capability_limits(model_list: Sequence[Mapping[str, object]], *, limit: int | None) -> None:
     """
     Refuse to start when config.yaml defines more auto-routers claiming a licensed capability than allowed.
@@ -5049,6 +5069,7 @@ class ProxyConfig:
 
     def __init__(self) -> None:
         self.config: Mapping[str, object] = MappingProxyType({})
+        self.auto_router_db_catalog: tuple[AutoRouterCatalogEntry, ...] | None = None
         self._last_semantic_filter_config: dict[str, object] | None = None
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
@@ -6248,6 +6269,8 @@ class ProxyConfig:
                         litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(**value)
                     else:
                         raise Exception(f"Invalid value set for upperbound_key_generate_params - value={value}")
+                elif key == "key_alias_pattern":
+                    litellm.key_alias_pattern = parse_key_alias_pattern(value)
                 elif key == "json_logs" and value is True:
                     litellm.json_logs = True
                     litellm._turn_on_json()
@@ -6552,6 +6575,7 @@ class ProxyConfig:
                         model["litellm_params"][k] = get_secret(v)
                 validate_deployment_max_agentic_loops(model)
                 validate_deployment_complexity_router_placement(model)
+                validate_deployment_access_windows(model)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
@@ -7669,6 +7693,12 @@ class ProxyConfig:
     def _should_load_db_object(self, object_type: str | SupportedDBObjectType) -> bool:
         return should_load_db_object(object_type=object_type)
 
+    def remove_auto_router_catalog_entries(self, model_ids: frozenset[str]) -> None:
+        if self.auto_router_db_catalog is not None:
+            self.auto_router_db_catalog = tuple(
+                row for row in self.auto_router_db_catalog if row.model_id not in model_ids
+            )
+
     async def _get_models_from_db(self, prisma_client: PrismaClient) -> Sequence[_ProxyModelRow] | None:
         """
         Fetch all model deployments from the DB.
@@ -7689,6 +7719,7 @@ class ProxyConfig:
             new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(
                 WriterPinnedClient(prisma_client.db)
             ).table.find_many()
+            self.auto_router_db_catalog = build_auto_router_catalog(new_models)
             return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -12513,9 +12544,9 @@ async def realtime_websocket_endpoint(
             user_model=user_model,
         )
         await llm_call
-    except websockets.exceptions.InvalidStatusCode as e:
+    except websockets.exceptions.InvalidStatus as e:
         verbose_proxy_logger.exception("Invalid status code")
-        await websocket.close(code=e.status_code, reason="Invalid status code")
+        await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
     except Exception as e:
         verbose_proxy_logger.exception("Internal server error")
         redacted_error: Final = _redact_string(str(e))

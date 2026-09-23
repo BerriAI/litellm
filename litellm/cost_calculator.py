@@ -1532,6 +1532,7 @@ def completion_cost(
                         size=size,
                         optional_params=optional_params,
                         call_type=call_type,
+                        model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -2011,13 +2012,9 @@ def _deployment_model_info(
 ) -> ModelInfo | None:
     if not custom_pricing:
         return None
-    registered_deployment_info: Final = (
-        _cost_map_model_info(router_model_id, None)
-        if router_model_id is not None and router_model_id in litellm.model_cost
-        else None
-    )
+    registered_deployment_info: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
     if registered_deployment_info is not None:
-        return registered_deployment_info
+        return cast(ModelInfo, registered_deployment_info)  # cast-ok: router registers deployment prices under its id
     if litellm_logging_obj is None:
         return None
     litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
@@ -2085,8 +2082,7 @@ def pricing_entry_for_cost_calc(
     deployment_entry: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
     deployment_key: Final = router_model_id or model
     if deployment_entry is not None and deployment_key is not None:
-        registered_entry: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
-        return deployment_key, registered_entry or deployment_entry
+        return deployment_key, deployment_entry
     selected_model: Final = _select_model_name_for_cost_calc(
         model=model,
         completion_response=completion_response,
@@ -2346,6 +2342,7 @@ def default_image_cost_calculator(
     n: int | None = 1,  # Default to 1 image
     size: str | None = "1024-x-1024",  # OpenAI default
     optional_params: dict | None = None,
+    model_info: ModelInfo | None = None,
 ) -> float:
     """
     Default image cost calculator for image generation
@@ -2356,6 +2353,7 @@ def default_image_cost_calculator(
         quality (Optional[str]): Image quality setting
         n (Optional[int]): Number of images generated
         size (Optional[str]): Image size (e.g. "1024x1024" or "1024-x-1024")
+        model_info (Optional[ModelInfo]): The deployment's own prices, consulted before the cost map
 
     Returns:
         float: Cost in USD for the image generation
@@ -2377,6 +2375,11 @@ def default_image_cost_calculator(
         model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
         base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
     model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
+    provider_first_model_name_with_quality: Final = (
+        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
+        if quality and custom_llm_provider
+        else None
+    )
 
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
@@ -2386,32 +2389,42 @@ def default_image_cost_calculator(
     model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
     model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
 
-    # Try model with quality first, fall back to base model name
-    cost_info: dict | None = None
-    models_to_check: Final[list[str | None]] = [
+    models_to_check: Final = (
         model_name_with_quality,
+        provider_first_model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
         model_with_quality_without_provider,
         model_without_provider,
         model,
         model_name_without_custom_llm_provider,
-    ]
-    for _model in models_to_check:
-        if _model is not None and _model in litellm.model_cost:
-            cost_info = litellm.model_cost[_model]
-            break
-    if cost_info is None:
+    )
+    matched_model: Final = next(
+        (_model for _model in models_to_check if _model is not None and _model in litellm.model_cost), None
+    )
+    if matched_model is None and model_info is None:
         raise Exception(f"Model not found in cost map. Tried checking {models_to_check}")
 
-    # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
-    if "input_cost_per_image" in cost_info and cost_info["input_cost_per_image"] is not None:
-        return cost_info["input_cost_per_image"] * n
-    # Priority 2: Fall back to per-pixel pricing for backward compatibility
-    elif "input_cost_per_pixel" in cost_info and cost_info["input_cost_per_pixel"] is not None:
-        return cost_info["input_cost_per_pixel"] * height * width * n
-    else:
+    shared_cost_info: Final = litellm.model_cost[matched_model] if matched_model is not None else None
+    price_tables: Final = tuple(table for table in (model_info, shared_cost_info) if table is not None)
+    image_count: Final = n if n is not None else 1
+    unit_counts: Final = (
+        ("input_cost_per_image", image_count),
+        ("output_cost_per_image", image_count),
+        ("input_cost_per_pixel", height * width * image_count),
+    )
+    cost: Final = next(
+        (
+            price * units
+            for price_table in price_tables
+            for cost_key, units in unit_counts
+            if (price := price_table.get(cost_key)) is not None
+        ),
+        None,
+    )
+    if cost is None:
         raise Exception(f"No pricing information found for model {model}. Tried checking {models_to_check}")
+    return cost
 
 
 def default_video_cost_calculator(

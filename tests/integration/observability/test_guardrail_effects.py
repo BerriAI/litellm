@@ -143,6 +143,104 @@ def test_guardrail_denial_prevents_provider_and_preserves_allowed_control(gatewa
             assert len(policy.drain()) == 2
 
 
+@pytest.mark.covers("other.observability.guardrails.bedrock_passthrough_converse_scans_only_caller_content")
+def test_bedrock_passthrough_converse_guardrail_ignores_denied_term_in_tool_definition(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    denied: Final = "synthetic denied marker"
+    allowed: Final = "synthetic allowed weather question"
+    access_key: Final = "AKIASYNTHETICPASSTHROUGH"
+    tool_config: Final = {
+        "tools": [
+            {
+                "toolSpec": {
+                    "name": "lookup_weather",
+                    "description": f"Look up the forecast, never answer a {denied}",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string", "enum": [denied]}},
+                            "required": ["city"],
+                        }
+                    },
+                }
+            }
+        ]
+    }
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api"
+        texts: Final = json.loads(request.body)["texts"]
+        result: Final = (
+            {"action": "BLOCKED", "blocked_reason": "synthetic policy denial"}
+            if any(denied in text for text in texts)
+            else {"action": "NONE"}
+        )
+        return Reply(body=json.dumps(result).encode())
+
+    def runtime(request: Request) -> Reply:
+        assert request.target == "/model/anthropic.claude-3-haiku-20240307-v1:0/converse"
+        assert request.headers["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={access_key}/"), (
+            request.headers
+        )
+        return Reply(
+            body=json.dumps(
+                {
+                    "output": {"message": {"role": "assistant", "content": [{"text": "sunny passthrough control"}]}},
+                    "stopReason": "end_turn",
+                    "usage": {"inputTokens": 11, "outputTokens": 4, "totalTokens": 15},
+                    "metrics": {"latencyMs": 1},
+                }
+            ).encode()
+        )
+
+    with wire_server(guardrail) as policy, wire_server(runtime) as bedrock, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            api_key=None,
+            api_base=bedrock.url,
+            aws_access_key_id=access_key,
+            aws_secret_access_key="synthetic-secret",
+            aws_region_name="us-east-1",
+        )
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "api_base": policy.url,
+                    "api_key": "synthetic-guardrail-key",
+                },
+            }
+        ]
+        path: Final = tmp_path / "bedrock-passthrough.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate:
+            route: Final = f"/bedrock/model/{model}/converse"
+            passed: Final = candidate.request(
+                "POST",
+                route,
+                {"messages": [{"role": "user", "content": [{"text": allowed}]}], "toolConfig": tool_config},
+            )
+            assert passed.status_code == 200, passed.text
+            assert passed.json()["output"]["message"]["content"] == [{"text": "sunny passthrough control"}]
+            forwarded: Final = bedrock.drain()
+            assert len(forwarded) == 1, "the runtime peer must see exactly the allowed request"
+            assert json.loads(forwarded[0].body)["toolConfig"] == tool_config
+            blocked: Final = candidate.request(
+                "POST",
+                route,
+                {"messages": [{"role": "user", "content": [{"text": denied}]}], "toolConfig": tool_config},
+            )
+            assert blocked.status_code == 400 and "synthetic policy denial" in blocked.text, blocked.text
+            assert bedrock.drain() == ()
+            assert [json.loads(request.body)["texts"] for request in policy.drain()] == [[allowed], [denied]]
+
+
 @pytest.mark.covers("other.mcp.guardrails.request_selection_blocks_resolved_tool_without_execution")
 def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway: Gateway, tmp_path: Path) -> None:
     guardrail = "mcp-policy-" + uuid.uuid4().hex
