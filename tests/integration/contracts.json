@@ -2023,6 +2023,63 @@
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
     ],
+    "tests/integration/observability/test_passthrough_upstream_error_chaos.py::test_passthrough_upstream_outage_mid_burst_still_logs_errors_once": [
+      "observability.passthrough.upstream_outage_still_produces_one_spend_row_per_call"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_chaos.py::test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging": [
+      "observability.passthrough.worker_kill_leaves_sibling_serving_errors"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_budget_rejected_call_keeps_budget_normalized_error": [
+      "observability.passthrough.budget_rejection_keeps_budget_normalized_error"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_config_pass_through_route_logs_body_and_strips_query": [
+      "observability.passthrough.config_route_body_logged_and_url_query_stripped"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_4097_byte_body_truncated_with_marker": [
+      "observability.passthrough.body_over_4096_chars_marked_truncated"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_async_client_404_body_reaches_proxy_log_and_spend_row": [
+      "observability.passthrough.async_client_404_body_logged_and_in_spend_log"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_control_characters_cannot_forge_log_lines": [
+      "observability.passthrough.control_characters_cannot_forge_log_lines"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_empty_error_body_still_logged_and_proxy_serves": [
+      "observability.passthrough.empty_error_body_still_logged_and_serving"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_error_body_redacted_when_message_logging_off": [
+      "observability.passthrough.turn_off_message_logging_redacts_upstream_body"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_exact_4096_byte_body_logged_without_marker": [
+      "observability.passthrough.exact_4096_byte_body_logged_without_marker"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_gzip_error_body_decoded_for_log_and_client": [
+      "observability.passthrough.gzip_body_decoded_for_log_and_client"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_one_byte_stream_chunks_reassembled_and_logged": [
+      "observability.passthrough.one_byte_stream_chunks_reassembled_and_logged"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_repeated_errors_each_get_row_and_log_line": [
+      "observability.passthrough.each_error_gets_own_log_line_and_spend_row"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_streaming_200_relays_every_chunk": [
+      "observability.passthrough.streaming_200_relays_all_chunks"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_streaming_500_relays_full_body_and_logs_bounded_preview": [
+      "observability.passthrough.streaming_500_full_body_relayed_with_bounded_log"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_streaming_gzip_error_body_decoded_for_log_and_client": [
+      "observability.passthrough.streaming_gzip_body_decoded_for_log_and_client"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_gemini_passthrough_success_logs_nothing_and_spend_row_is_success": [
+      "observability.passthrough.success_200_leaves_log_and_spend_row_clean"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_openai_passthrough_async_sdk_error_body_reaches_proxy_log_and_spend_row": [
+      "observability.passthrough.openai_async_sdk_404_body_logged_and_in_spend_log"
+    ],
+    "tests/integration/observability/test_passthrough_upstream_error_visibility.py::test_openai_passthrough_sdk_error_body_reaches_proxy_log_and_spend_row": [
+      "observability.passthrough.openai_sdk_404_body_logged_and_in_spend_log"
+    ],
     "tests/integration/management/test_user_updates_wedged_coordination_redis.py::test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged": [
       "mgmt.user.update.budget_change_returns_promptly_with_wedged_coordination_redis",
       "mgmt.user.bulk_update.budget_change_returns_promptly_with_wedged_coordination_redis",
