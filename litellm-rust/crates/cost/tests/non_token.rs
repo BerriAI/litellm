@@ -3,6 +3,7 @@ use litellm_cost::non_token::{
     Charge, Component, Error, ImageRates, ImageUsage, OcrRates, OcrUsage, Unit, calculate,
     calculate_image, calculate_ocr,
 };
+use rstest::rstest;
 
 #[test]
 fn combines_non_token_charges_without_losing_components() {
@@ -172,8 +173,8 @@ fn ocr_credits_take_precedence_and_annotation_uses_page_fallback() {
     assert!((page_cost.total - 0.15).abs() < 1e-12);
 }
 
-#[test]
-fn image_and_ocr_reject_missing_prices_for_billable_usage() {
+#[rstest]
+fn image_rejects_missing_prices_and_ocr_returns_zero() {
     let image = ImageUsage {
         count: 1,
         width: 10,
@@ -193,6 +194,9 @@ fn image_and_ocr_reject_missing_prices_for_billable_usage() {
                 annotation_pages: 0,
             },
         ),
-        Err(Error::MissingRate)
+        Ok(litellm_cost::non_token::Cost {
+            components: vec![],
+            total: 0.0,
+        })
     );
 }

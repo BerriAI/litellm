@@ -146,10 +146,8 @@ pub fn calculate_ocr(rates: OcrRates, usage: OcrUsage) -> Result<Cost, Error> {
     }
     let page_rate = priced(rates.per_page);
     let annotation_rate = priced(rates.per_annotation_page).or(page_rate);
-    if (usage.pages > 0 && page_rate.is_none())
-        || (usage.annotation_pages > 0 && annotation_rate.is_none())
-    {
-        return Err(Error::MissingRate);
+    if page_rate.is_none() && (annotation_rate.is_none() || usage.annotation_pages == 0) {
+        return calculate(&[]);
     }
     let charges: Vec<Charge> = [
         page_rate.map(|rate| Charge {
@@ -169,5 +167,23 @@ pub fn calculate_ocr(rates: OcrRates, usage: OcrUsage) -> Result<Cost, Error> {
     .flatten()
     .collect();
     calculate(&charges)
+}
+
+pub fn calculate_ocr_with_tables(tables: &[OcrRates], usage: OcrUsage) -> Result<Cost, Error> {
+    let rates = OcrRates {
+        per_credit: tables
+            .iter()
+            .find_map(|table| priced(table.per_credit))
+            .map_or(Rate::Missing, Rate::Value),
+        per_page: tables
+            .iter()
+            .find_map(|table| priced(table.per_page))
+            .map_or(Rate::Missing, Rate::Value),
+        per_annotation_page: tables
+            .iter()
+            .find_map(|table| priced(table.per_annotation_page))
+            .map_or(Rate::Missing, Rate::Value),
+    };
+    calculate_ocr(rates, usage)
 }
 use crate::Rate;

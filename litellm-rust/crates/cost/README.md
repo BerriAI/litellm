@@ -4,7 +4,19 @@ This crate calculates token and non-token charges from rates and usage supplied 
 
 Call `compile(&pricing)` once for an immutable plan, then `plan.calculate(&request)` for each supported request. `calculate(&pricing, &request)` compiles on each call. A successful result exposes pre-multiplier component costs, selected rates, the multiplier, and derived `input()`, `output()`, and `total()` values
 
-`non_token::calculate` totals priced units such as images, pixels, seconds, pages, requests, credits, and guardrail units. `non_token::calculate_image` selects the first available price from ordered pricing tables, with per-image rates ahead of per-pixel rates inside each table. `non_token::calculate_ocr` prefers credit pricing when credits are present, then prices pages and annotation pages. Missing rates for billable usage and invalid quantities return errors instead of silently billing zero
+`non_token::calculate` totals priced units such as images, pixels, seconds, pages, requests, credits, and guardrail units. `non_token::calculate_image` selects the first available price from ordered pricing tables, with per-image rates ahead of per-pixel rates inside each table. `non_token::calculate_ocr_with_tables` selects each OCR rate from the first table that has it, then `non_token::calculate_ocr` prefers credit pricing when credits are present and otherwise prices pages and annotation pages. Unpriced OCR usage returns zero, as in Python. Invalid quantities and rates return errors
+
+## Python function map
+
+The Rust module tree does not mirror Python's overall cost module tree. The Python entry points also look up models, normalize responses, and choose providers, while this crate starts with caller-supplied prices and usage. These mappings cover the calculation portions of the functions:
+
+| Python function | Rust function | Python tests | Rust tests |
+| --- | --- | --- | --- |
+| `litellm.litellm_core_utils.llm_cost_calc.utils.generic_cost_per_token` | `litellm_cost::calculate` | `test_llm_cost_calc_utils.py` | `calculation.rs`, `python_reference.tsv` |
+| `litellm.cost_calculator.default_image_cost_calculator` | `litellm_cost::non_token::calculate_image` | `test_cost_calculator.py::test_default_image_cost_calculator` | `python_cost_calculator.rs::default_image_cost_calculator_selects_first_priced_unit` |
+| `litellm.cost_calculator.ocr_cost` | `litellm_cost::non_token::calculate_ocr_with_tables` | `test_cost_calculator.py::test_ocr_cost_*` | `python_cost_calculator.rs::ocr_cost_*` |
+
+`cost_per_token`, `completion_cost`, `response_cost_calculator`, provider calculators, and Python's model lookup and response normalization have no Rust counterpart yet. The ported Rust cases use `rstest` and synthetic prices; they cover the corresponding Python tests' price selection and arithmetic, not their integration with Python model registration
 
 The caller states whether `prompt_tokens` includes cache tokens. Threshold selection uses total input tokens for either convention and selects one rate for the whole request. Thresholds are sorted when compiled, and duplicate thresholds or tier overrides fail deterministically. `Fast` selects priority rates; unknown tiers use standard rates
 
