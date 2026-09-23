@@ -478,3 +478,87 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
         "unknown_root-new_family_models",
         "vertex_ai-new_family_models",
     ]
+
+
+AZURE_GEN_6_RESOLD_MODELS: Final = ("gpt-6-sol", "gpt-6-luna")
+AZURE_GEN_6_SNAPSHOT: Final = "2026-09-22"
+AZURE_US_DATA_ZONE_UPLIFT: Final = 1.1
+# Azure publishes Std meters only for generation 6, so an entry that kept OpenAI's flex, priority
+# or batch rates would quote a tier no Azure request can be served at.
+AZURE_UNSOLD_RATE_SUFFIXES: Final = ("_batches", "_flex", "_priority")
+
+
+def rate_fields(entry: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(field for field in entry if "_cost_per_token" in field or "_token_cost" in field)
+
+
+@pytest.mark.parametrize("model", AZURE_GEN_6_RESOLD_MODELS)
+def test_azure_gen_6_global_row_prices_every_rate_at_its_openai_row(prices: dict, model: str):
+    """Azure's Standard Global sheet resells these at the same per-token rate OpenAI charges, which
+    is how azure/gpt-6-astra's Gl rates relate to gpt-6-astra's. Comparing the two rows rather than
+    pinning a number means this fails on a drift in either direction and survives a repricing that
+    moves both together."""
+    azure_row: Final = prices[f"azure/{model}"]
+    openai_row: Final = prices[model]
+    drifted: Final = [
+        f"azure/{model}.{field}: {azure_row[field]} != {openai_row[field]}"
+        for field in sorted(rate_fields(azure_row))
+        if azure_row[field] != openai_row[field]
+    ]
+    assert drifted == []
+
+
+@pytest.mark.parametrize("model", AZURE_GEN_6_RESOLD_MODELS)
+def test_azure_gen_6_rows_omit_the_service_tiers_azure_does_not_sell(prices: dict, model: str):
+    """The OpenAI rows carry flex, priority and batch rates. Carrying them onto an Azure row would
+    price a tier a request can never reach, and the /v1/batch endpoint has to go with them."""
+    keys: Final = (f"azure/{model}", f"azure/{model}-{AZURE_GEN_6_SNAPSHOT}", f"azure/us/{model}")
+    unsold: Final = sorted(
+        f"{key}.{field}"
+        for key in keys
+        for field in rate_fields(prices[key])
+        if field.endswith(AZURE_UNSOLD_RATE_SUFFIXES)
+    )
+    assert unsold == []
+    assert [key for key in keys if "/v1/batch" in prices[key]["supported_endpoints"]] == []
+
+
+@pytest.mark.parametrize("model", AZURE_GEN_6_RESOLD_MODELS)
+def test_azure_gen_6_us_data_zone_row_uplifts_every_rate_the_global_row_sets(prices: dict, model: str):
+    """A data-zone row is the global row times one uplift applied to every rate. Leaving a field at
+    the global number under-bills exactly that rate on a data-zone deployment, and the field sets
+    have to match or a rate goes missing rather than wrong."""
+    global_row: Final = prices[f"azure/{model}"]
+    zone_row: Final = prices[f"azure/us/{model}"]
+    assert rate_fields(zone_row) == rate_fields(global_row)
+    drifted: Final = [
+        f"azure/us/{model}.{field}: {zone_row[field]} != {global_row[field]} * {AZURE_US_DATA_ZONE_UPLIFT}"
+        for field in sorted(rate_fields(global_row))
+        if abs(zone_row[field] - global_row[field] * AZURE_US_DATA_ZONE_UPLIFT)
+        > global_row[field] * AZURE_US_DATA_ZONE_UPLIFT * 1e-9
+    ]
+    assert drifted == []
+
+
+@pytest.mark.parametrize("model", AZURE_GEN_6_RESOLD_MODELS)
+def test_azure_gen_6_dated_snapshot_prices_the_same_as_its_undated_row(prices: dict, model: str):
+    """An Azure deployment of these reports the dated model string. _strip_model_name already falls
+    back to the undated row, so the dated key is a spelling rather than the only way to price a call,
+    and the whole value of carrying one is that it agrees with the row it stands in for. Drift is the
+    only way it can hurt: the same deployment would then bill two ways depending on the spelling."""
+    assert prices[f"azure/{model}-{AZURE_GEN_6_SNAPSHOT}"] == prices[f"azure/{model}"]
+
+
+@pytest.mark.parametrize("model", AZURE_GEN_6_RESOLD_MODELS)
+def test_azure_gen_6_rows_do_not_advertise_the_reasoning_effort_azure_refuses(prices: dict, model: str):
+    """Azure answers reasoning_effort=max on a generation-6 deployment with a 400 naming none, low,
+    medium, high and xhigh as the values it takes, while the OpenAI rows for the same models accept
+    max. The flag is opt-in, so a row that inherits OpenAI's true advertises a level every Azure
+    request 400s on. Probed live against a real deployment of each model on 2026-09-23, the same way
+    e79f3ec520 established it for gpt-6-astra."""
+    keys: Final = (f"azure/{model}", f"azure/{model}-{AZURE_GEN_6_SNAPSHOT}", f"azure/us/{model}")
+    offered: Final = {
+        key: resolve_supported_reasoning_efforts(prices[key], deployment_is_mapped=True) or () for key in keys
+    }
+    assert [key for key, efforts in offered.items() if "max" in efforts] == []
+    assert [key for key, efforts in offered.items() if "xhigh" not in efforts] == []
