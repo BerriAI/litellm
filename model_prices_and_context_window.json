@@ -64373,6 +64373,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_video_input": true,
         "supports_prompt_caching": true
     },
     "openrouter/deepseek/deepseek-v4-flash-0731": {
