@@ -872,6 +872,40 @@ def test_default_image_cost_calculator(monkeypatch):
     assert cost == 10485760
 
 
+@pytest.mark.parametrize(
+    ("model", "quality", "size", "priced_key", "pixels"),
+    [
+        ("azure/dall-e-3", "standard", "1024x1024", "azure/standard/1024-x-1024/dall-e-3", 1024 * 1024),
+        ("azure/dall-e-3", "hd", "1024x1792", "azure/hd/1024-x-1792/dall-e-3", 1024 * 1792),
+        ("dall-e-3", "hd", "1024x1792", "azure/hd/1024-x-1792/dall-e-3", 1024 * 1792),
+    ],
+)
+def test_default_image_cost_calculator_matches_provider_first_quality_key(
+    monkeypatch, model: str, quality: str, size: str, priced_key: str, pixels: int
+):
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "azure/standard/1024-x-1024/dall-e-3": {"litellm_provider": "azure", "input_cost_per_pixel": 1e-08},
+            "azure/hd/1024-x-1792/dall-e-3": {"litellm_provider": "azure", "input_cost_per_pixel": 3e-08},
+        },
+    )
+
+    cost = default_image_cost_calculator(
+        model=model,
+        custom_llm_provider="azure",
+        quality=quality,
+        n=1,
+        size=size,
+        optional_params={},
+    )
+
+    assert cost == litellm.model_cost[priced_key]["input_cost_per_pixel"] * pixels
+
+
 def test_cost_calculator_with_cache_creation():
     from litellm import completion_cost
     from litellm.types.utils import Choices, Message, Usage
