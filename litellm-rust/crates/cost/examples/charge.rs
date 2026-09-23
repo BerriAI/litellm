@@ -525,6 +525,17 @@ fn main() {
             json!({"input_cost_per_token": 5e-6, "input_cost_per_image_token": 8e-6, "output_cost_per_image_token": 3e-5}),
         ),
         (
+            "perplexity/research".to_owned(),
+            json!({
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 1e-6,
+                "output_cost_per_reasoning_token": 3e-6,
+                "citation_cost_per_token": 2e-6,
+                "search_context_cost_per_query": {"search_context_size_low": 0.005},
+                "off_peak_pricing": {"hours_utc": "16:30-00:30", "input_cost_per_token": 1e-7, "output_cost_per_token": 2e-7}
+            }),
+        ),
+        (
             "vertex_ai/rerank".to_owned(),
             json!({"input_cost_per_query": 0.25}),
         ),
@@ -646,4 +657,28 @@ fn main() {
         )
         .unwrap();
     println!("image_usage_cost={image_usage_cost:.6}");
+    let perplexity_usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+        "citation_tokens": 100,
+        "prompt_tokens_details": {"web_search_requests": 2},
+        "completion_tokens_details": {"reasoning_tokens": 50}
+    }}))
+    .unwrap()
+    .unwrap();
+    let (perplexity_prompt, perplexity_output) = model_info_catalog
+        .cost_per_token(ModelCostRequest {
+            model: "research",
+            provider: Some("perplexity"),
+            region: None,
+            usage: &perplexity_usage,
+            service_tier: None,
+            data_residency: None,
+            vertex_location: None,
+            at,
+            response_time_ms: None,
+        })
+        .unwrap();
+    println!("perplexity_prompt={perplexity_prompt:.6} perplexity_output={perplexity_output:.6}");
 }

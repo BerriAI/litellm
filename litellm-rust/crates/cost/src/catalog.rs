@@ -15,6 +15,7 @@ use crate::custom_pricing::CustomTokenRates;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::image_response_cost::calculate_image_response_cost_from_usage;
 use crate::per_second::per_second_pricing_cost;
+use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
 use crate::prompt_caching_savings::{
     PromptCachingSavingsRequest, calculate_prompt_caching_savings,
 };
@@ -198,12 +199,24 @@ impl ModelInfoCatalog {
         &self,
         request: ModelCostRequest<'_>,
     ) -> Result<(f64, f64), CatalogError> {
+        if request.provider == Some("perplexity")
+            && let Some(cost) = request.usage.cost
+        {
+            return Ok((0.0, cost));
+        }
         let key = self
             .select_model_key(request.model, request.provider, request.region)
             .ok_or(CatalogError::ModelNotFound)?;
         let model_info = apply_provider_cache_read_default(&self.entries[key], request.provider);
         if let Some(cost) = per_second_pricing_cost(&model_info, request.response_time_ms) {
             return Ok(cost);
+        }
+        if request.provider == Some("perplexity") {
+            return Ok(perplexity_cost_per_token(
+                request.usage,
+                &model_info,
+                request.at,
+            ));
         }
         Ok(calculate_generic_cost_from_model_info_with_region(
             request.usage,

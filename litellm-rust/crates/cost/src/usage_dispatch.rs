@@ -103,7 +103,7 @@ fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
         total_tokens,
         prompt_tokens_details,
         completion_tokens_details,
-        cost: object.get("cost").and_then(Value::as_f64),
+        cost: crate::responses_usage::reported_cost(object.get("cost")),
         extra,
     })
 }

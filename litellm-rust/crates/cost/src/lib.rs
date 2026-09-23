@@ -16,6 +16,7 @@ pub mod interactions_usage;
 pub mod non_token;
 pub mod off_peak;
 pub mod per_second;
+pub mod perplexity_cost;
 pub mod prompt_caching_savings;
 pub mod provider_cache;
 pub mod regional_uplift;

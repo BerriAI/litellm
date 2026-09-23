@@ -107,7 +107,7 @@ struct RawResponseUsage {
     #[serde(default)]
     output_token_details: Option<CompletionTokenDetails>,
     #[serde(default)]
-    cost: Option<f64>,
+    cost: Option<Value>,
     #[serde(flatten)]
     extra: BTreeMap<String, Value>,
 }
@@ -196,7 +196,12 @@ pub fn transform_response_api_usage_to_chat_usage(usage: &Value) -> Result<ChatU
         total_tokens,
         prompt_tokens_details,
         completion_tokens_details,
-        cost: raw.cost,
+        cost: reported_cost(raw.cost.as_ref()),
         extra,
     })
+}
+
+pub(crate) fn reported_cost(value: Option<&Value>) -> Option<f64> {
+    let value = value?;
+    value.as_f64().or_else(|| value.get("total_cost")?.as_f64())
 }
