@@ -54,7 +54,12 @@ class _StaticJevClient:
         self.response = response
         self.calls = 0
 
-    async def evaluate(self, request: JevSystemOneRequest, timeout_s: float) -> JevSystemOneResponse:
+    async def evaluate(
+        self,
+        request: JevSystemOneRequest,
+        timeout_s: float,
+        request_kwargs: Mapping[str, object] | None = None,
+    ) -> JevSystemOneResponse:
         self.calls += 1
         return self.response
 
@@ -65,7 +70,12 @@ class _WireJevClient:
     def __init__(self, payload: Mapping[str, object]) -> None:
         self.payload = payload
 
-    async def evaluate(self, request: JevSystemOneRequest, timeout_s: float) -> JevSystemOneResponse:
+    async def evaluate(
+        self,
+        request: JevSystemOneRequest,
+        timeout_s: float,
+        request_kwargs: Mapping[str, object] | None = None,
+    ) -> JevSystemOneResponse:
         return TypeAdapter(JevSystemOneResponse).validate_python(self.payload)
 
 
