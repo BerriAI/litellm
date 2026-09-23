@@ -13,13 +13,10 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from dataclasses import dataclass
-from fnmatch import fnmatchcase
+from collections.abc import Awaitable, Mapping, Sequence
 from json import JSONDecodeError
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
@@ -57,12 +54,11 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
-    append_team_models,
     team_model_add,
     team_model_delete,
 )
@@ -70,13 +66,6 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
-from litellm.proxy.management_helpers.auto_router_permissions import (
-    MemberAutoRouterWrite,
-    StoredAutoRouterIdentity,
-    authorize_member_auto_router_dependencies,
-    authorize_member_auto_router_team,
-    authorize_member_auto_router_write,
-)
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
@@ -114,13 +103,11 @@ from litellm.types.router import (
     GenericLiteLLMParams,
     ModelInfo,
     updateDeployment,
-    updateLiteLLMParams,
 )
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
-    from prisma import types as prisma_types
 
 router: Final = APIRouter()
 
@@ -168,39 +155,8 @@ class _ProxyModelTable(Protocol):
     def delete_many(self, *, where: Mapping[str, object]) -> Awaitable[int]: ...
 
 
-class _TxTable(Protocol):
-    def find_unique(
-        self, *, where: Mapping[str, object], include: Mapping[str, bool] | None = None
-    ) -> Awaitable[BaseModel | None]: ...
-
-
 class _TxModelTables(Protocol):
     litellm_proxymodeltable: _ProxyModelTable
-    litellm_teamtable: _TxTable
-    litellm_teammembership: _TxTable
-    litellm_organizationtable: _TxTable
-    litellm_projecttable: _TxTable
-
-    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
-
-
-@runtime_checkable
-class _TransactionFactory(Protocol):
-    def __call__(self, *, timeout: datetime.timedelta = ...) -> AbstractAsyncContextManager[_TxModelTables]: ...
-
-
-class _ModelTransactionClient(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
-
-    tx: _TransactionFactory
-
-
-@dataclass(frozen=True, slots=True)
-class _TransactionClient:
-    db: _TxModelTables
-
-
-_RowT = TypeVar("_RowT")
 
 
 class _ExistingModelRow(Protocol):
@@ -283,147 +239,6 @@ def _effective_complexity_router_config(
             **supplied,
         },
     }
-
-
-def _effective_model(
-    incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
-) -> str | None:
-    """The model a write leaves on the row, decrypting an existing value only when the patch omits it."""
-    incoming: Final = None if incoming_params is None else incoming_params.model
-    if incoming is not None:
-        return incoming
-    existing: Final = None if existing_params is None else existing_params.model
-    if existing is None:
-        return None
-    decrypted: Final = decrypt_value_helper(
-        value=existing,
-        key="model",
-        exception_type="debug",
-        return_original_value=True,
-    )
-    return decrypted if isinstance(decrypted, str) else None
-
-
-def _member_auto_router_marker_for_update(
-    *,
-    incoming_params: updateLiteLLMParams | None,
-    existing: Deployment,
-    member_write: MemberAutoRouterWrite | None,
-) -> bool | None:
-    if member_write is not None:
-        return True
-    if not existing.model_info.member_auto_router:
-        return None
-    if incoming_params is None:
-        return True
-    if any(getattr(incoming_params, field, None) is not None for field in STRATEGY_ROUTER_PARAM_FIELDS):
-        return False
-    return incoming_params.model is None or incoming_params.model == _effective_model(None, existing.litellm_params)
-
-
-AUTO_ROUTER_WRITE_SLOT_LOCK_KEY: Final = 5_872_301
-_WRITE_SLOT_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock($1)"
-
-
-@asynccontextmanager
-async def _member_auto_router_write_slot(
-    prisma_client: PrismaClient,
-    *,
-    member_write: MemberAutoRouterWrite | None,
-) -> AsyncGenerator[_ProxyModelTable, None]:
-    """Hand out the model table a member write goes through.
-
-    Member writes to a team auto router recheck their authorization inside one
-    transaction that locks the row first, so two concurrent member writes
-    cannot both pass the ownership and name checks. Non-member writes keep the
-    direct table. The transaction write bypasses the repository's
-    publish-on-write, so the config change is published once after commit.
-    """
-    if member_write is None:
-        yield _proxy_model_table(prisma_client)
-        return
-    import litellm
-    from litellm.proxy.auth.team_grants import team_model_aliases
-    from litellm.proxy.proxy_server import llm_router, premium_user
-
-    transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
-    async with transaction_client.tx(timeout=datetime.timedelta(seconds=30)) as tx_ctx:
-        tables: Final[_TxModelTables] = tx_ctx
-        await tx_ctx.query_raw(_WRITE_SLOT_LOCK_SQL, AUTO_ROUTER_WRITE_SLOT_LOCK_KEY)
-        config_rows: Final = () if llm_router is None else tuple(llm_router.config_deployments())
-        if member_write.model_id is not None:
-            await tx_ctx.query_raw(
-                'SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = $1 FOR UPDATE',
-                member_write.model_id,
-            )
-        pinned_client: Final = _TransactionClient(tx_ctx)
-        team_where: Final[prisma_types.LiteLLM_TeamTableWhereUniqueInput] = {"team_id": member_write.team_id}
-        team_row: Final = await tx_ctx.litellm_teamtable.find_unique(
-            where=team_where,
-            include={"litellm_model_table": True},  # mutable-ok: prisma include clause
-        )
-        if team_row is None or llm_router is None:
-            raise HTTPException(status_code=403, detail="The auto router's team or model catalog is unavailable.")
-        team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-        authorize_member_auto_router_team(user_api_key_dict=member_write.actor, team=team, premium_user=premium_user)
-        if member_write.model_id is not None:
-            model_where: Final[prisma_types.LiteLLM_ProxyModelTableWhereInput] = {"model_id": member_write.model_id}
-            current_row: Final = await tables.litellm_proxymodeltable.find_unique(where=model_where)
-            current_identity: Final = (
-                StoredAutoRouterIdentity.model_validate(current_row.model_dump()) if current_row is not None else None
-            )
-            current_model: Final = (
-                Deployment.model_validate(current_row.model_dump()) if current_row is not None else None
-            )
-            if (
-                current_identity is None
-                or current_identity.created_by != member_write.actor.user_id
-                or current_model is None
-                or current_model.model_info.team_id != member_write.team_id
-            ):
-                raise HTTPException(status_code=403, detail="Team members can update only their own auto routers.")
-            if current_identity.updated_at != member_write.updated_at:
-                raise HTTPException(status_code=409, detail="This auto router changed. Reload it before updating.")
-        else:
-            all_models: Final[prisma_types.LiteLLM_ProxyModelTableWhereInput] = {}
-            rows_for_names: Final = await tables.litellm_proxymodeltable.find_many(where=all_models)
-            stored_names: Final = tuple(
-                (
-                    row.model_name,
-                    model_info_as_mapping(row.model_info),
-                )
-                for row in rows_for_names
-            )
-            config_names: Final = tuple(
-                (str(row.get("model_name", "")), model_info_as_mapping(row.get("model_info"))) for row in config_rows
-            )
-            team_aliases: Final = team_model_aliases(team)
-            aliases: Final = (
-                *(llm_router.model_group_alias or ()),
-                *(litellm.model_alias_map or ()),
-                *(team_aliases or ()),
-            )
-            if member_write.public_name in aliases or any(
-                fnmatchcase(
-                    member_write.public_name,
-                    str(info.get("team_public_model_name") or name)
-                    if info is not None and info.get("team_id") == member_write.team_id
-                    else name,
-                )
-                for name, info in (*stored_names, *config_names)
-                if info is None or info.get("team_id") in (None, member_write.team_id)
-            ):
-                raise HTTPException(status_code=409, detail="This auto-router name is already used by a model.")
-        await authorize_member_auto_router_dependencies(
-            config=member_write.config,
-            default_model=member_write.default_model,
-            user_api_key_dict=member_write.actor,
-            team=team,
-            prisma_client=pinned_client,
-            llm_router=llm_router,
-        )
-        yield tables.litellm_proxymodeltable
-    await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
 
 
 def _strategy_router_write_violation(
@@ -909,39 +724,11 @@ async def patch_model(
                 param=None,
             )
 
-        write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
+        await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=db_model,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-            member_operation="update",
-            incoming_model_params=patch_data,
-        )
-        member_write: Final = write_authorization if isinstance(write_authorization, MemberAutoRouterWrite) else None
-        member_marker: Final = _member_auto_router_marker_for_update(
-            incoming_params=patch_data.litellm_params, existing=db_model, member_write=member_write
-        )
-        marker_info: Final = (
-            ModelInfo(id=db_model.model_info.id)
-            if member_write is not None
-            else patch_data.model_info or ModelInfo(id=db_model.model_info.id)
-        )
-        effective_info: Final = (
-            marker_info.model_copy(update=MappingProxyType({"member_auto_router": member_marker}))
-            if member_marker is not None
-            else patch_data.model_info
-        )
-        effective_patch: Final = (
-            patch_data.model_copy(
-                update=MappingProxyType(
-                    {
-                        "model_name": None if member_write is not None else patch_data.model_name,
-                        "model_info": effective_info,
-                    }
-                )
-            )
-            if member_marker is not None
-            else patch_data
         )
 
         # Pause/resume (`blocked`) is a proxy-admin-only privilege. Team admins
@@ -960,26 +747,22 @@ async def patch_model(
             existing_params=db_model.litellm_params,
         )
 
-        async def write_row(update_data: PrismaCompatibleUpdateDBModel) -> _ProxyModelRow | None:
-            update_data["updated_by"] = (
-                user_api_key_dict.user_id or litellm_proxy_admin_name
-            )  # mutable-ok: prisma update payload is dict-shaped
-            update_data["updated_at"] = cast(
-                str, get_utc_datetime()
-            )  # mutable-ok: prisma update payload is dict-shaped
-            async with _member_auto_router_write_slot(prisma_client, member_write=member_write) as table:
-                return await table.update(
-                    where={"model_id": model_id},  # mutable-ok: prisma where clause
-                    data=update_data,
-                )
-
         # Handle team model updates with proper alias management
-        updated_model: Final = await _update_team_model_in_db(
+        update_data: Final = await _update_team_model_in_db(
             db_model=db_model,
-            patch_data=effective_patch,
+            patch_data=patch_data,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
-            write_row=write_row,
+        )
+
+        # Add metadata about update
+        update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
+        update_data["updated_at"] = cast(str, get_utc_datetime())
+
+        # Perform partial update
+        updated_model: Final = await _proxy_model_table(prisma_client).update(
+            where={"model_id": model_id},
+            data=update_data,
         )
 
         if updated_model is None:
@@ -1210,7 +993,6 @@ async def _add_model_to_db(
     prisma_client: PrismaClient,
     new_encryption_key: str | None = None,
     should_create_model_in_db: bool = True,
-    slot: AbstractAsyncContextManager[_ProxyModelTable] | None = None,
 ) -> "prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None":
     # encrypt litellm params #
     _litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
@@ -1229,19 +1011,17 @@ async def _add_model_to_db(
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
     _create_data: Final = cast("Mapping[str, object]", _data)  # cast-ok: str-keyed json payload built just above
-    if not should_create_model_in_db:
-        return LiteLLM_ProxyModelTable(**_data)
-    if slot is None:
-        return await ModelRepository(prisma_client).table.create(data=_create_data)
-    async with slot as table:
-        return await table.create(data=_create_data)
+    if should_create_model_in_db:
+        model_response = await ModelRepository(prisma_client).table.create(data=_create_data)
+    else:
+        model_response = LiteLLM_ProxyModelTable(**_data)
+    return model_response
 
 
 async def _add_team_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-    slot: AbstractAsyncContextManager[_ProxyModelTable] | None = None,
 ) -> "prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None":
     """
     If 'team_id' is provided,
@@ -1250,8 +1030,6 @@ async def _add_team_model_to_db(
     - store the model in the db with the unique 'model_name'
     - add the public model name to the team's allowed models list
     """
-    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
-
     _team_id: Final = model_params.model_info.team_id
     if _team_id is None:
         return None
@@ -1275,18 +1053,16 @@ async def _add_team_model_to_db(
         model_params=model_params,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
-        slot=slot,
     )
 
     if original_model_name:
-        await append_team_models(
+        await team_model_add(
             data=TeamModelAddRequest(
                 team_id=_team_id,
                 models=[original_model_name],
             ),
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
         )
 
     return model_response
@@ -1297,8 +1073,7 @@ async def _update_team_model_in_db(
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-    write_row: Callable[[PrismaCompatibleUpdateDBModel], Awaitable[_RowT]],
-) -> _RowT:
+) -> PrismaCompatibleUpdateDBModel:
     """
     Handle team model updates with proper alias management.
 
@@ -1306,9 +1081,6 @@ async def _update_team_model_in_db(
     - Creates unique internal model_name and team alias
     - Adds model to team object
     - Preserves team_public_model_name for external reference
-
-    The row is written through ``write_row`` before the team's model list is touched, so a
-    refused or failed write leaves the team as it was (the create path orders itself the same way).
     """
     # Validate team_id if present in patch_data
     from litellm.proxy.proxy_server import premium_user
@@ -1342,7 +1114,7 @@ async def _update_team_model_in_db(
 
     # No team_id in patch, proceed with standard update
     if patch_team_id is None:
-        return await write_row(update_db_model(db_model=db_model, updated_patch=patch_data))
+        return update_db_model(db_model=db_model, updated_patch=patch_data)
 
     # Determine public model name
     public_model_name: Final = _get_public_model_name(
@@ -1361,10 +1133,6 @@ async def _update_team_model_in_db(
     db_team_id: Final = db_model.model_info.team_id if db_model.model_info else None
     is_new_team_assignment: Final = db_team_id != patch_team_id
 
-    # Team rows keep their internal UUID-based model_name; the public name lives in model_info
-    patch_data.model_name = f"model_name_{patch_team_id}_{uuid.uuid4()}" if is_new_team_assignment else None
-    row: Final = await write_row(update_db_model(db_model=db_model, updated_patch=patch_data))
-
     if is_new_team_assignment:
         await _setup_new_team_model_assignment(
             team_id=patch_team_id,
@@ -1382,7 +1150,7 @@ async def _update_team_model_in_db(
             prisma_client=prisma_client,
         )
 
-    return row
+    return update_db_model(db_model=db_model, updated_patch=patch_data)
 
 
 def _get_public_model_name(
@@ -1545,7 +1313,7 @@ async def _get_team_public_model_names(
         model_info = model_info_as_mapping(row.model_info)
         if model_info is not None:
             public_name = model_info.get("team_public_model_name")
-            if isinstance(public_name, str) and public_name:
+            if public_name:
                 public_names.add(public_name)
     return public_names
 
@@ -1778,14 +1546,7 @@ class ModelManagementAuthChecks:
         prisma_client: PrismaClient,
         premium_user: bool,
         allow_missing_team: bool = False,
-        member_operation: Literal["create", "update"] | None = None,
-        incoming_model_params: updateDeployment | None = None,
-    ) -> Literal[True] | MemberAutoRouterWrite:
-        if user_api_key_dict.user_role in (
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ):
-            raise HTTPException(status_code=403, detail="View-only users cannot manage models.")
+    ) -> Literal[True]:
         ## Check team model auth
         if model_params.model_info is not None and model_params.model_info.team_id is not None:
             team_obj_row: Final = await _repo_team_table(prisma_client).find_unique(
@@ -1807,27 +1568,6 @@ class ModelManagementAuthChecks:
                     detail={"error": f"Team id={model_params.model_info.team_id} does not exist in db"},
                 )
             team_obj: Final = LiteLLM_TeamTable.model_validate(team_obj_row.model_dump())
-
-            if (
-                member_operation is not None
-                and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-                and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-            ):
-                from litellm.proxy.proxy_server import llm_router
-
-                if llm_router is None or (member_operation == "update" and incoming_model_params is None):
-                    raise HTTPException(
-                        status_code=400, detail="An auto-router configuration and model catalog are required."
-                    )
-                return await authorize_member_auto_router_write(
-                    incoming=incoming_model_params if incoming_model_params is not None else model_params,
-                    existing=model_params if member_operation == "update" else None,
-                    user_api_key_dict=user_api_key_dict,
-                    team=team_obj,
-                    premium_user=premium_user,
-                    prisma_client=prisma_client,
-                    llm_router=llm_router,
-                )
 
             return ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id=model_params.model_info.team_id,
@@ -2080,18 +1820,12 @@ async def add_new_model(
             )
 
         ## Auth check
-        write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
+        await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-            member_operation="create",
         )
-        member_write: Final = write_authorization if isinstance(write_authorization, MemberAutoRouterWrite) else None
-        if member_write is not None and model_params.model_info is not None:
-            model_params.model_info = model_params.model_info.model_copy(  # rebind-ok: downstream team-model handling mutates this same object
-                update=MappingProxyType({"member_auto_router": True})
-            )
 
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
@@ -2120,20 +1854,17 @@ async def add_new_model(
             reload_outcome: ReconcileOutcome = ReconcileOutcome(still_desired=None, live_after=None)
             try:
                 _original_litellm_model_name: Final = model_params.model_name
-                add_slot: Final = _member_auto_router_write_slot(prisma_client, member_write=member_write)
                 if model_params.model_info.team_id is None:
                     model_response = await _add_model_to_db(
                         model_params=priced_model_params,
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
-                        slot=add_slot,
                     )
                 else:
                     model_response = await _add_team_model_to_db(
                         model_params=priced_model_params,
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
-                        slot=add_slot,
                     )
                 reload_outcome = await proxy_config.add_deployment(
                     prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
@@ -2261,17 +1992,11 @@ async def update_model(
                 raise Exception("model not found")
         deployment: Final = Deployment(**_existing_litellm_params.model_dump())
 
-        write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
+        await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=deployment,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-            member_operation="update",
-            incoming_model_params=model_params,
-        )
-        member_write: Final = write_authorization if isinstance(write_authorization, MemberAutoRouterWrite) else None
-        member_marker: Final = _member_auto_router_marker_for_update(
-            incoming_params=model_params.litellm_params, existing=deployment, member_write=member_write
         )
 
         _raise_on_strategy_router_write_violation(
@@ -2313,24 +2038,14 @@ async def update_model(
                 if value is not None or _existing_litellm_params_dict.get(key) is not None
             }
 
-            _data: Final[dict[str, str]] = {  # mutable-ok: prisma update payload is dict-shaped
+            _data: Final[dict[str, str]] = {
                 "litellm_params": json.dumps(merged_dictionary),
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-                **(
-                    {
-                        "model_info": deployment.model_info.model_copy(
-                            update=MappingProxyType({"member_auto_router": member_marker})
-                        ).model_dump_json(exclude_none=True)
-                    }
-                    if member_marker is not None
-                    else {}
-                ),
             }
-            async with _member_auto_router_write_slot(prisma_client, member_write=member_write) as update_table:
-                model_response: Final = await update_table.update(
-                    where={"model_id": _model_id},
-                    data=_data,
-                )
+            model_response: Final = await _proxy_model_table(prisma_client).update(
+                where={"model_id": _model_id},
+                data=_data,
+            )
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
             live_before_reload: Final = live_model_ids_snapshot()
