@@ -1,6 +1,6 @@
 import { fireEvent, renderWithProviders, screen, within } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
@@ -108,7 +108,7 @@ describe("ComplexityRouterConfig", () => {
       classifier_type: "llm",
       classifier_llm_config: { model: "", timeout_ms: 3000, classification_rubric: "agentic" },
       classifier_context_window_size: 3,
-      classifier_context_per_turn_chars: 200,
+      classifier_context_budget_chars: 8000,
     };
     expect(onChange).toHaveBeenCalledWith(expectedValue);
   });

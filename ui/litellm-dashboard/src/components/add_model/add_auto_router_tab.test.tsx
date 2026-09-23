@@ -14,37 +14,36 @@ vi.mock(
 );
 
   it("preserves a JEV preset's per-turn bound in the create request", async () => {
-    vi.clearAllMocks();
-    testQueryClient.clear();
-    vi.mocked(handleAddAutoRouterSubmit).mockReset();
-    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
-    vi.mocked(useAutoRouterPresets).mockReturnValue({
-      ...LOADED_PRESETS_QUERY,
-      data: [
-        {
-          ...ANTHROPIC_PRESET,
-          key: "bounded_jev",
-          label: "Bounded JEV",
-          complexity_router_config: {
-            ...ANTHROPIC_PRESET.complexity_router_config,
-            classifier_type: "jev",
-            jev_classifier_config: { model: "jev-test", timeout_ms: 3000 },
-            classifier_context_per_turn_chars: 450,
-          },
-        },
-      ],
-    });
-    renderWithProviders(<Harness />);
-    await waitForPresetEnabled("Bounded JEV");
-    await selectTemplate("Bounded JEV");
-    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "bounded-router" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    const presets = getAllPresets();
+    const anthropic = getPresetByKey("anthropic_family")!;
+    const boundedJev = {
+      ...anthropic,
+      key: "bounded_jev",
+      label: "Bounded JEV",
+      complexity_router_config: {
+        ...anthropic.complexity_router_config,
+        classifier_type: "jev" as const,
+        jev_classifier_config: { model: "jev-test", timeout_ms: 3000 },
+        classifier_context_per_turn_chars: 450,
+      },
+    };
+    presets.push(boundedJev);
+    try {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Bounded JEV");
+      await selectTemplate("Bounded JEV");
+      fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "bounded-router" } });
+      fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
 
-    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
-    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject({
-      classifier_type: "jev",
-      classifier_context_per_turn_chars: 450,
-    });
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject({
+        classifier_type: "jev",
+        classifier_context_per_turn_chars: 450,
+      });
+    } finally {
+      presets.pop();
+    }
   });
 
 const ANTHROPIC_PRESET = getPresetByKey("anthropic_family")!;

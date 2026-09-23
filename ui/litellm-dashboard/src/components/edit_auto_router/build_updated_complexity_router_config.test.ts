@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { transitionClassifierType } from "../add_model/classifier_type_transition";
 import { effectiveClassifierType } from "../add_model/ComplexityRouterConfig";
 
-import { buildUpdatedComplexityRouterConfig, type KeywordMatchingState } from "./edit_auto_router_modal";
+import { buildUpdatedComplexityRouterConfig, hydrateComplexityRouterConfig, type KeywordMatchingState } from "./edit_auto_router_modal";
 
 const STORED = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
@@ -82,9 +82,9 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
       circuit_breaker_enabled: false,
     });
   });
-  it.each([false, true])("round trips JEV settings and preserves unmanaged fields, custom: %s", (custom) => {
+  it("round trips JEV settings and preserves unmanaged fields", () => {
     const stored = {
-      ...(custom ? storedCustomConfig() : STORED),
+      ...STORED,
       classifier_llm_config: { model: "stale-judge", timeout_ms: 3000 },
       classifier_type: "jev" as const,
       jev_classifier_config: {

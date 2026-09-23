@@ -27,7 +27,6 @@ const configParams: BuildComplexityRouterConfigParams = {
   classifierContextIncludeAssistantTurns: undefined,
   classifierFallback: undefined,
   classificationPrompt: undefined,
-  classificationExamples: undefined,
   heuristicFirstMaxTier: undefined,
   classificationMode: undefined,
   sessionAffinity: false,
@@ -53,7 +52,7 @@ const request = buildSavedJevConnectionTestRequest(
   "saved-id",
 );
 const targets = buildAutoRouterTestTargets({
-  tiers: Object.entries(config.tiers),
+  tiers: config.tiers,
   semanticMatchingEnabled: false,
   embeddingModel: undefined,
 });

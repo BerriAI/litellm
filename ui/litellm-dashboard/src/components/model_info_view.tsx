@@ -17,6 +17,7 @@ import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import { normalizeTierModels, resolveComplexityDefaultModel } from "./add_model/complexity_router_tiers";
+import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
 import {
   hasAutoRouterEditor,
   isAutoRouterDeployment,

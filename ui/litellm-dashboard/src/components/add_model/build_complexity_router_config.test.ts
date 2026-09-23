@@ -22,7 +22,6 @@ const baseParams: BuildComplexityRouterConfigParams = {
   tiers,
   defaultModel: undefined,
   planModeMinTier: undefined,
-  classificationExamples: undefined,
   heuristicFirstMaxTier: undefined,
   classificationMode: undefined,
   tierLabels: undefined,

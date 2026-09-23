@@ -1,7 +1,12 @@
 import { KeywordTierRule } from "./KeywordTierRules";
 import { type JevClassifierConfig, normalizeJevClassifierConfig } from "./jev_classifier_config";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
-import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
+import {
+  TierModelParams,
+  TierModelParamsByTier,
+  normalizeTierModels,
+  serializeTierModelConfigs,
+} from "./complexity_router_tiers";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -94,8 +99,10 @@ export interface BuildComplexityRouterConfigParams {
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classificationPrompt: string | undefined;
   jevClassifierConfig?: JevClassifierConfig;
   classifierContextWindowSize: number | undefined;
+  classifierContextBudgetChars: number | undefined;
   classifierContextPerTurnChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
@@ -127,7 +134,9 @@ export interface ComplexityRouterConfigPayload {
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   jev_classifier_config?: JevClassifierConfig;
+  classification_prompt?: string;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
@@ -228,75 +237,6 @@ export const getSemanticConfigError = ({
   return null;
 };
 
-export const customTierWireFields = (
-  customTierSet: CustomTierSet,
-  classifierType: ClassifierType | undefined,
-  classifierLlmConfig: ClassifierLLMConfig | undefined,
-  jevClassifierConfig: JevClassifierConfig | undefined,
-  planModeMinTierId: string | undefined,
-  classificationPrompt: string | undefined,
-): Partial<ComplexityRouterConfigPayload> => {
-  const rows = customTierSet.tiers;
-  const fallback = tierRowById(rows, customTierSet.fallback_tier_id);
-  const floor = tierRowById(rows, planModeMinTierId);
-  return {
-    tiers: Object.fromEntries(rows.map((row) => [activeTierName(row), row.models])),
-    tier_definitions: tierDefinitionsFromRows(rows),
-    ...(fallback && { fallback_tier: activeTierName(fallback) }),
-    classifier_type: classifierType === "jev" ? "jev" : "llm",
-    ...(classifierType === "jev" && { jev_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
-    // Rebuilt from the two fields an edited tier set allows. The backend rejects system_prompt and
-    // classification_rubric beside tier_definitions, and both live inside this object rather than at
-    // the top level the omit list covers. The opening instructions ride classification_prompt below.
-    ...(classifierLlmConfig && {
-      classifier_llm_config: {
-        model: classifierLlmConfig.model,
-        timeout_ms: classifierLlmConfig.timeout_ms,
-        ...(classifierLlmConfig.circuit_breaker_enabled !== undefined && {
-          circuit_breaker_enabled: classifierLlmConfig.circuit_breaker_enabled,
-        }),
-        ...(classifierLlmConfig.circuit_breaker_cooldown_seconds !== undefined && {
-          circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
-        }),
-      },
-    }),
-    session_affinity: false,
-    ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
-    ...(floor && { plan_mode_min_tier: activeTierName(floor) }),
-  };
-};
-
-// plan_mode_min_tier rides the strip list because the base payload carries it as a row id;
-// customTierWireFields re-emits it as the row's name, and an unresolvable floor stays off.
-const CUSTOM_TIER_STRIPPED_KEYS: readonly string[] = [...CUSTOM_TIER_OMITTED_KEYS, "plan_mode_min_tier"];
-
-export const hydrateCustomTierSet = (parsedConfig: {
-  tier_definitions?: unknown;
-  fallback_tier?: unknown;
-  tiers?: unknown;
-}): CustomTierSet | undefined => {
-  if (!Array.isArray(parsedConfig.tier_definitions) || parsedConfig.tier_definitions.length === 0) return undefined;
-  const storedTiers =
-    typeof parsedConfig.tiers === "object" && parsedConfig.tiers !== null && !Array.isArray(parsedConfig.tiers)
-      ? Object.entries(parsedConfig.tiers as Record<string, unknown>)
-      : [];
-  const rows = parsedConfig.tier_definitions.flatMap((entry, index): TierRow[] => {
-    if (typeof entry !== "object" || entry === null) return [];
-    const { name, description } = entry as { name?: unknown; description?: unknown };
-    if (typeof name !== "string" || !name.trim()) return [];
-    return [
-      {
-        id: TIER_KEYS.find((tier) => sameTierIdentity(tier, name)) ?? `stored-${index}`,
-        name: name.trim(),
-        definition: typeof description === "string" ? description.trim() : "",
-        models: normalizeTierModels(storedTiers.find(([tier]) => sameTierIdentity(tier, name))?.[1]),
-      },
-    ];
-  });
-  if (rows.length === 0) return undefined;
-  const storedFallback = typeof parsedConfig.fallback_tier === "string" ? parsedConfig.fallback_tier : "";
-  return { tiers: rows, fallback_tier_id: tierRowByName(rows, storedFallback)?.id ?? "" };
-};
 
 // Ids are session-ephemeral, so a stored floor hydrates by name; unresolvable means off, the same
 // rule the editor and the wire apply.
@@ -309,44 +249,6 @@ export const hydratePlanModeMinTier = (
   return tierRowByName(customTierSet.tiers, stored)?.id;
 };
 
-const classifierWireFields = (
-  effectiveType: ClassifierType,
-  {
-    classifierLlmConfig,
-    classifierFallback,
-    heuristicFirstMaxTier,
-    classifierContextWindowSize,
-    classifierContextBudgetChars,
-    classifierContextIncludeAssistantTurns,
-  }: Pick<
-    BuildComplexityRouterConfigParams,
-    | "classifierLlmConfig"
-    | "classifierFallback"
-    | "heuristicFirstMaxTier"
-    | "classifierContextWindowSize"
-    | "classifierContextBudgetChars"
-    | "classifierContextIncludeAssistantTurns"
-  >,
-): Partial<ComplexityRouterConfigPayload> => ({
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
-  ...(effectiveType === "heuristic_first" &&
-    heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierContextWindowSize !== undefined && {
-      classifier_context_window_size: classifierContextWindowSize,
-    }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierContextBudgetChars !== undefined && {
-      classifier_context_budget_chars: classifierContextBudgetChars,
-    }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierContextIncludeAssistantTurns !== undefined && {
-      classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
-    }),
-});
 
 export const buildComplexityRouterConfig = ({
   tiers,
@@ -355,7 +257,10 @@ export const buildComplexityRouterConfig = ({
   tierLabels,
   classifierType,
   classifierLlmConfig,
+  jevClassifierConfig,
+  classificationPrompt,
   classifierContextWindowSize,
+  classifierContextBudgetChars,
   classifierContextPerTurnChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
@@ -402,10 +307,16 @@ export const buildComplexityRouterConfig = ({
     ...(classifierType === "jev" && { jev_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
     ...(classifierType === "llm" &&
       classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
+    ...(classifierType === "llm" &&
+      classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
     ...(classifierType === "llm" && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
     ...((classifierType === "llm" || classifierType === "jev") &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,
+      }),
+    ...((classifierType === "llm" || classifierType === "jev") &&
+      classifierContextBudgetChars !== undefined && {
+        classifier_context_budget_chars: classifierContextBudgetChars,
       }),
     ...((classifierType === "llm" || classifierType === "jev") &&
       classifierContextPerTurnChars !== undefined && {
