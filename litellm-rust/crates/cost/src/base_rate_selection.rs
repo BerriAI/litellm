@@ -2,7 +2,9 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::generic_input::get_cost_per_unit;
-use crate::off_peak::{open_off_peak_block, parse_off_peak_rate};
+use crate::off_peak::{
+    TokenRates, apply_off_peak_pricing, open_off_peak_block, parse_off_peak_rate,
+};
 use crate::tiered_pricing::{select_tier_for_input, tier_rate};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -240,26 +242,31 @@ pub fn get_token_base_cost(
     let Some(off_peak) = open_off_peak_block(model_info, at) else {
         return standard;
     };
-    let rate = |key| {
-        off_peak
-            .get(key)
-            .and_then(|value| parse_off_peak_rate(Some(value)))
+    let rates = apply_off_peak_pricing(
+        model_info,
+        at,
+        TokenRates {
+            input_rate: standard.input,
+            output_rate: standard.output,
+            cache_read_rate: standard.cache_read,
+            cache_creation_rate: standard.cache_creation,
+            reasoning_rate: None,
+        },
+    );
+    let has_rate = |key| parse_off_peak_rate(off_peak.get(key)).is_some();
+    let cache_read = if missing.read && !has_rate("cache_read_input_token_cost") {
+        rates.input_rate
+    } else {
+        rates.cache_read_rate
     };
-    let input = rate("input_cost_per_token").unwrap_or(standard.input);
-    let output = rate("output_cost_per_token").unwrap_or(standard.output);
-    let cache_read = rate("cache_read_input_token_cost").unwrap_or(if missing.read {
-        input
+    let cache_creation = if missing.creation && !has_rate("cache_creation_input_token_cost") {
+        rates.input_rate
     } else {
-        standard.cache_read
-    });
-    let cache_creation = rate("cache_creation_input_token_cost").unwrap_or(if missing.creation {
-        input
-    } else {
-        standard.cache_creation
-    });
+        rates.cache_creation_rate
+    };
     TokenBaseRates {
-        input,
-        output,
+        input: rates.input_rate,
+        output: rates.output_rate,
         cache_creation,
         cache_creation_above_1hr: if missing.one_hour {
             cache_creation

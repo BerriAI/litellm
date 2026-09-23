@@ -14,17 +14,17 @@ pub fn fast_speed_multiplier(model_info: &Value, usage: &ChatUsage) -> f64 {
 }
 
 pub fn get_anthropic_web_search_requests_from_response(response: &Value) -> Option<i64> {
-    response
-        .pointer("/usage/server_tool_use/web_search_requests")
+    get_web_search_requests(response.pointer("/usage/server_tool_use"))
+}
+
+pub fn get_web_search_requests(server_tool_use: Option<&Value>) -> Option<i64> {
+    server_tool_use?
+        .get("web_search_requests")
         .and_then(Value::as_i64)
 }
 
 pub fn get_web_search_requests_from_usage(usage: &ChatUsage) -> Option<i64> {
-    usage
-        .extra
-        .get("server_tool_use")
-        .and_then(|value| value.get("web_search_requests"))
-        .and_then(Value::as_i64)
+    get_web_search_requests(usage.extra.get("server_tool_use"))
 }
 
 pub fn get_cost_for_anthropic_web_search(

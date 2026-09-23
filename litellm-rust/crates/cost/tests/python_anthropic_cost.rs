@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use jiff::Timestamp;
 use litellm_cost::anthropic_cost::{
     fast_speed_multiplier, get_anthropic_web_search_requests_from_response,
-    get_cost_for_anthropic_web_search, get_web_search_requests_from_usage,
+    get_cost_for_anthropic_web_search, get_web_search_requests, get_web_search_requests_from_usage,
 };
 use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::tool_call_cost_tracking::{DefaultToolRates, ResponseKind};
@@ -78,6 +78,19 @@ fn get_anthropic_web_search_requests_from_response_reads_nested_usage(
         get_anthropic_web_search_requests_from_response(&response),
         expected
     );
+}
+
+#[rstest]
+#[case(json!({"web_search_requests": 0}), Some(0))]
+#[case(json!({"web_search_requests": 3}), Some(3))]
+#[case(json!({}), None)]
+#[case(json!({"web_search_requests": "3"}), None)]
+fn get_web_search_requests_reads_serialized_server_tool_use(
+    #[case] server_tool_use: Value,
+    #[case] expected: Option<i64>,
+) {
+    assert_eq!(get_web_search_requests(Some(&server_tool_use)), expected);
+    assert_eq!(get_web_search_requests(None), None);
 }
 
 #[rstest]

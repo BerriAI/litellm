@@ -1,7 +1,8 @@
 use jiff::Timestamp;
 use litellm_cost::base_rate_selection::get_token_base_cost;
 use litellm_cost::off_peak::{
-    is_off_peak, is_within_off_peak_window, open_off_peak_block, parse_off_peak_rate,
+    TokenRates, apply_off_peak_pricing, is_off_peak, is_within_off_peak_window,
+    open_off_peak_block, parse_off_peak_rate,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -89,6 +90,56 @@ fn parse_off_peak_rate_accepts_numeric_strings_and_rejects_bools(
     #[case] expected: Option<f64>,
 ) {
     assert_eq!(parse_off_peak_rate(Some(&raw)), expected);
+}
+
+#[rstest]
+#[case("2026-01-01T18:00Z", true)]
+#[case("2026-01-01T12:00Z", false)]
+fn apply_off_peak_pricing_preserves_unset_rates_and_replaces_reasoning(
+    #[case] at: &str,
+    #[case] inside: bool,
+) {
+    let model_info = json!({"off_peak_pricing": {
+        "hours_utc": "16:30-00:30",
+        "input_cost_per_token": "5e-7",
+        "cache_creation_input_token_cost": true,
+        "output_cost_per_reasoning_token": "4e-7"
+    }});
+    let standard = TokenRates {
+        input_rate: 1e-6,
+        output_rate: 2e-6,
+        cache_read_rate: 1e-7,
+        cache_creation_rate: 1.25e-6,
+        reasoning_rate: Some(4e-6),
+    };
+    let rates = apply_off_peak_pricing(&model_info, instant(at), standard);
+    assert_eq!(rates.input_rate, if inside { 5e-7 } else { 1e-6 });
+    assert_eq!(rates.output_rate, standard.output_rate);
+    assert_eq!(rates.cache_read_rate, standard.cache_read_rate);
+    assert_eq!(rates.cache_creation_rate, standard.cache_creation_rate);
+    assert_eq!(rates.reasoning_rate, Some(if inside { 4e-7 } else { 4e-6 }));
+    assert_eq!(
+        rates.billed_reasoning_rate(),
+        if inside { 4e-7 } else { 4e-6 }
+    );
+}
+
+#[rstest]
+fn apply_off_peak_pricing_uses_output_rate_for_reasoning_without_dedicated_rate() {
+    let model_info = json!({"off_peak_pricing": {
+        "hours_utc": "00:00-00:00",
+        "output_cost_per_token": 7e-7
+    }});
+    let standard = TokenRates {
+        input_rate: 1e-6,
+        output_rate: 2e-6,
+        cache_read_rate: 1e-7,
+        cache_creation_rate: 1.25e-6,
+        reasoning_rate: None,
+    };
+    let rates = apply_off_peak_pricing(&model_info, instant("2026-01-01T12:00Z"), standard);
+    assert_eq!(rates.reasoning_rate, None);
+    assert_eq!(rates.billed_reasoning_rate(), 7e-7);
 }
 
 #[rstest]

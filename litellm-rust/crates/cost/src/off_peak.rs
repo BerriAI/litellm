@@ -1,6 +1,21 @@
 use jiff::{Timestamp, tz::TimeZone};
 use serde_json::Value;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TokenRates {
+    pub input_rate: f64,
+    pub output_rate: f64,
+    pub cache_read_rate: f64,
+    pub cache_creation_rate: f64,
+    pub reasoning_rate: Option<f64>,
+}
+
+impl TokenRates {
+    pub fn billed_reasoning_rate(self) -> f64 {
+        self.reasoning_rate.unwrap_or(self.output_rate)
+    }
+}
+
 fn window_minutes(value: &str) -> Option<(i16, i16)> {
     fn minute(value: &str) -> Option<i16> {
         let (hour, minute) = value.trim().split_once(':')?;
@@ -104,5 +119,20 @@ pub fn parse_off_peak_rate(value: Option<&Value>) -> Option<f64> {
         Value::Number(number) => number.as_f64(),
         Value::String(number) => number.parse().ok(),
         _ => None,
+    }
+}
+
+pub fn apply_off_peak_pricing(model_info: &Value, at: Timestamp, rates: TokenRates) -> TokenRates {
+    let Some(off_peak) = open_off_peak_block(model_info, at) else {
+        return rates;
+    };
+    let rate = |key, standard| parse_off_peak_rate(off_peak.get(key)).unwrap_or(standard);
+    TokenRates {
+        input_rate: rate("input_cost_per_token", rates.input_rate),
+        output_rate: rate("output_cost_per_token", rates.output_rate),
+        cache_read_rate: rate("cache_read_input_token_cost", rates.cache_read_rate),
+        cache_creation_rate: rate("cache_creation_input_token_cost", rates.cache_creation_rate),
+        reasoning_rate: parse_off_peak_rate(off_peak.get("output_cost_per_reasoning_token"))
+            .or(rates.reasoning_rate),
     }
 }
