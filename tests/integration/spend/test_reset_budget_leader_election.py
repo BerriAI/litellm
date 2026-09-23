@@ -72,5 +72,4 @@ def test_reset_sweep_skips_ticks_while_another_pod_holds_the_lease_and_resumes_a
                 assert swept == 0.0
                 eventually(lambda: cache.get(RESET_LEASE_KEY), lambda value: value is None, seconds=15)
         finally:
-            if cache.get(RESET_LEASE_KEY) == PEER_POD_LEASE.encode():
-                cache.delete(RESET_LEASE_KEY)
+            cache.delete(RESET_LEASE_KEY)

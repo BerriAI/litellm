@@ -21,13 +21,15 @@ def _object_permission_reads() -> int:
 
 
 def _settled_object_permission_reads(previous: int, unchanged_since: float) -> int:
-    if time.monotonic() - unchanged_since >= STATS_FLUSH_WINDOW_SECONDS:
+    changed: Final = eventually(
+        lambda: _object_permission_reads() != previous,
+        lambda drifted: drifted,
+        seconds=STATS_FLUSH_WINDOW_SECONDS - (time.monotonic() - unchanged_since),
+        return_last_on_timeout=True,
+    )
+    if not changed:
         return previous
-    time.sleep(0.5)
-    current: Final = _object_permission_reads()
-    if current == previous:
-        return _settled_object_permission_reads(previous, unchanged_since)
-    return _settled_object_permission_reads(current, time.monotonic())
+    return _settled_object_permission_reads(_object_permission_reads(), time.monotonic())
 
 
 def _assert_plain_chat_served(gateway: Gateway, model: str, key: str) -> None:
