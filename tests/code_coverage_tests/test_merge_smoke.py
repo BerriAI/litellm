@@ -205,7 +205,10 @@ def test_proxy_startup_exits_early_fails(tmp_path: Path) -> None:
 
 
 def test_proxy_startup_readiness_timeout_fails(tmp_path: Path) -> None:
-    fake: Final = _fake_litellm(tmp_path, "import time\ntime.sleep(3600)\n")
+    fake: Final = _fake_litellm(
+        tmp_path,
+        "import os, pathlib, sys, time\npathlib.Path(sys.argv[0]).with_name('fake.pid').write_text(str(os.getpid()))\ntime.sleep(3600)\n",
+    )
     diagnostics: Final = tmp_path / "diag"
 
     proc: Final = _run(
@@ -224,6 +227,8 @@ def test_proxy_startup_readiness_timeout_fails(tmp_path: Path) -> None:
     assert proc.returncode != 0
     assert "readiness" in proc.stderr
     assert (diagnostics / "proxy.log").exists()
+    with pytest.raises(ProcessLookupError):
+        os.kill(int((tmp_path / "fake.pid").read_text()), 0)
 
 
 def test_proxy_startup_healthy_succeeds(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import http.client
 import json
 import os
@@ -285,7 +286,7 @@ def cmd_proxy_startup(args: _Args) -> int:
         time.sleep(args.poll_interval)
     outcome["time_to_ready_s"] = round(time.monotonic() - started, 3)
     if body is None:
-        log_file.close()
+        _terminate(proc, log_file)
         result_path.write_text(json.dumps(outcome))
         detail = f"last status {last_status}" if last_status is not None else "no response"
         fail(f"readiness not reached within {args.ready_deadline}s ({detail})\n{tail(log_path)}")
@@ -332,21 +333,15 @@ def cmd_proxy_startup(args: _Args) -> int:
 
 
 def _terminate(proc: subprocess.Popen[bytes], log_file: TextIO) -> None:
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
     try:
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        try:
+        with contextlib.suppress(ProcessLookupError):
             os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            pass
     log_file.close()
 
 
