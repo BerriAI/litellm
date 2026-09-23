@@ -484,10 +484,7 @@ class TestLangfuseOtelIntegration:
             assert isinstance(config, OpenTelemetryConfig)
             # Endpoint assertion removed as side effect is gone
 
-    def test_request_metadata_is_emitted_under_langfuse_observation_and_trace_metadata_keys(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(litellm, "redact_user_api_key_info", False)
+    def test_request_metadata_is_emitted_under_langfuse_observation_and_trace_metadata_keys(self) -> None:
         request_metadata: Final = {
             "user_api_key_hash": "hash123",
             "user_api_key_alias": "prod-key",
@@ -518,8 +515,9 @@ class TestLangfuseOtelIntegration:
                 "langfuse.trace.metadata.user_api_key_team_alias": "team-a",
             }
 
-    def test_request_metadata_redaction_matches_vanilla_langfuse(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(litellm, "redact_user_api_key_info", True)
+    def test_request_metadata_redaction_matches_vanilla_langfuse(self) -> None:
+        previous_flag: Final = litellm.redact_user_api_key_info
+        litellm.redact_user_api_key_info = True
         request_metadata: Final = {
             "user_api_key_hash": "hash123",
             "user_api_key_alias": "prod-key",
@@ -536,22 +534,22 @@ class TestLangfuseOtelIntegration:
             "standard_logging_object": {"metadata": request_metadata},
         }
 
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+        try:
+            with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+                LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
 
-            actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+                actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
 
-            assert json.loads(actual["langfuse.observation.metadata"]) == {
-                "spend_logs_metadata": {"env": "prod"},
-                "requester_ip_address": "10.0.0.1",
-                "requester_metadata": {"ticket": "LIT-8283"},
-            }
-            assert not [key for key in actual if key.startswith("langfuse.trace.metadata.")]
+                assert json.loads(actual["langfuse.observation.metadata"]) == {
+                    "spend_logs_metadata": {"env": "prod"},
+                    "requester_ip_address": "10.0.0.1",
+                    "requester_metadata": {"ticket": "LIT-8283"},
+                }
+                assert not [key for key in actual if key.startswith("langfuse.trace.metadata.")]
+        finally:
+            litellm.redact_user_api_key_info = previous_flag
 
-    def test_request_metadata_drops_null_fields_and_skips_empty_trace_identities(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(litellm, "redact_user_api_key_info", False)
+    def test_request_metadata_drops_null_fields_and_skips_empty_trace_identities(self) -> None:
         request_metadata: Final = {
             "user_api_key_alias": "prod-key",
             "user_api_key_user_id": "user-1",
@@ -584,10 +582,7 @@ class TestLangfuseOtelIntegration:
                 "langfuse.trace.metadata.user_api_key_user_id": "user-1",
             }
 
-    def test_request_metadata_keys_are_absent_without_standard_logging_object(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(litellm, "redact_user_api_key_info", False)
+    def test_request_metadata_keys_are_absent_without_standard_logging_object(self) -> None:
         kwargs: Final = {"litellm_params": {"metadata": {"trace_metadata": {"k": "v"}}}}
 
         with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
