@@ -11,6 +11,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
@@ -1677,6 +1678,46 @@ async def test_async_post_call_failure_hook_enriches_auth_error_metadata():
         assert metadata["user_api_key_user_id"] == "my-user-id"
         assert metadata["user_api_key_team_id"] == "my-team-id"
         assert metadata["user_api_key_team_alias"] == "my-team-alias"
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_skips_the_key_lookup_when_the_failure_is_a_db_stall():
+    logger = _ProxyDBLogger()
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed_key")
+    request_data = {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "litellm_params": {},
+    }
+
+    with (
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+        ) as mock_get_key_object,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team_object,
+    ):
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=DBLookupDeadlineExceeded("key", 10.0),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    mock_get_key_object.assert_not_called()
+    mock_get_team_object.assert_not_called()
+    mock_update_database.assert_called_once()
+    metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
+    assert metadata["status"] == "failure"
+    assert metadata["user_api_key"] == "hashed_key"
+    assert metadata["user_api_key_alias"] is None
 
 
 @pytest.mark.asyncio

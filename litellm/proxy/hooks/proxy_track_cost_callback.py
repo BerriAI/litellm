@@ -28,6 +28,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     debitable_model_access_groups,
     get_llm_router,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
@@ -186,8 +187,8 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["error_information"] = _error_information
 
-        _metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
-            metadata=_metadata,
+        _metadata = await _ProxyDBLogger._enrich_failure_metadata_unless_db_stalled(
+            metadata=_metadata, original_exception=original_exception
         )
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
@@ -471,6 +472,12 @@ class _ProxyDBLogger(CustomLogger):
             )
 
             spend_log_error("Error in tracking cost callback - %s", str(e), exc=e)
+
+    @staticmethod
+    async def _enrich_failure_metadata_unless_db_stalled(metadata: dict, original_exception: Exception) -> dict:
+        if PrismaDBExceptionHandler.is_database_connection_error(original_exception):
+            return metadata
+        return await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
 
     @staticmethod
     async def _enrich_failure_metadata_with_key_info(metadata: dict, resolve_missing_key_identity: bool = True) -> dict:

@@ -2703,6 +2703,134 @@ async def test_health_readiness_details_returns_200_when_db_down_and_allow_reque
     assert result["db"] == "disconnected"
 
 
+@pytest.fixture
+def _clear_db_lookup_stall() -> Iterator[None]:
+    from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
+
+    db_lookup_stall_tracker.clear()
+    yield
+    db_lookup_stall_tracker.clear()
+
+
+def _connected_prisma() -> MagicMock:
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(return_value=True)
+    return mock_prisma
+
+
+def _forget_db_health_cache() -> None:
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_returns_503_stalled_after_a_db_lookup_deadline_hit(_clear_db_lookup_stall):
+    """The incident's readiness stayed green while every request sat parked on the
+    database: the probe's own ping is a fresh connection that answers fine. A lookup
+    that hit its deadline inside the stall window must take the pod out of rotation."""
+    from fastapi import Response
+
+    from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    _forget_db_health_cache()
+    db_lookup_stall_tracker.record_hit()
+
+    response = Response()
+    with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+        "litellm.proxy.proxy_server.prisma_client", _connected_prisma()
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 503
+    assert result == {"status": "healthy", "db": "stalled"}
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_details_returns_503_stalled_after_a_db_lookup_deadline_hit(_clear_db_lookup_stall):
+    from fastapi import Response
+
+    from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
+    from litellm.proxy.health_endpoints._health_endpoints import _get_health_readiness_details
+
+    _forget_db_health_cache()
+    db_lookup_stall_tracker.record_hit()
+
+    response = Response()
+    with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+        "litellm.proxy.proxy_server.prisma_client", _connected_prisma()
+    ):
+        result = await _get_health_readiness_details(response=response)
+
+    assert response.status_code == 503
+    assert result["db"] == "stalled"
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_stays_200_with_stalled_body_when_requests_are_allowed_on_db_unavailable(
+    _clear_db_lookup_stall,
+):
+    """The fail-open deployment keeps serving through a stalled database, so the pod
+    must stay in rotation and report the stall through the body, exactly as it does
+    for a disconnected one."""
+    from fastapi import Response
+
+    from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    _forget_db_health_cache()
+    db_lookup_stall_tracker.record_hit()
+
+    response = Response()
+    with (
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", _connected_prisma()
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "stalled"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hit_recorded", [False, True])
+async def test_health_readiness_reports_connected_without_a_stall_inside_the_window(
+    _clear_db_lookup_stall, hit_recorded: bool
+):
+    """No deadline hit, or a window of 0 (the opt-out), keeps the ordinary connected
+    answer, so a healthy pod never leaves rotation over the stall check."""
+    from fastapi import Response
+
+    from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    _forget_db_health_cache()
+    if hit_recorded:
+        db_lookup_stall_tracker.record_hit()
+
+    response = Response()
+    with (
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", _connected_prisma()
+        ),
+        patch(  # test-quality-ok: lowers the module-level stall window to its opt-out value for the recorded-hit case
+            "litellm.proxy.health_endpoints._health_endpoints.PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS",
+            0.0 if hit_recorded else 30.0,
+        ),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "connected"}
+
+
 @pytest.mark.asyncio
 async def test_db_health_readiness_check_bounds_hung_health_check():
     """
