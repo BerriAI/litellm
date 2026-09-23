@@ -104,3 +104,43 @@ def test_codex_agent_message_compaction_and_local_shell_items_are_rewritten_for_
             }
         ], response.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/openai/v1/responses")]
+
+
+_MANTLE_MIN_MAX_OUTPUT_TOKENS: Final = 16
+
+
+def _mantle_peer_expecting_max_output_tokens(marker: str, expected: int) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/openai/v1/responses", request.target
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert body["max_output_tokens"] == expected, request.body.decode()
+        assert body["input"] == f"clamp probe {marker}", request.body.decode()
+        return Reply(body=_RESPONSE)
+
+    return respond
+
+
+@pytest.mark.covers("providers.bedrock_mantle.max_output_tokens_below_minimum_is_clamped_to_16_on_the_wire")
+def test_max_output_tokens_below_mantle_minimum_is_raised_to_16_before_reaching_mantle(gateway: Gateway) -> None:
+    marker: Final = uuid4().hex
+    peer: Final = _mantle_peer_expecting_max_output_tokens(marker, _MANTLE_MIN_MAX_OUTPUT_TOKENS)
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_TOKEN, aws_region_name="us-east-1")
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses",
+            {"model": model, "input": f"clamp probe {marker}", "max_output_tokens": 5, "stream": False},
+        )
+        assert response.status_code == 200, response.text
+        payload: Final = _JSON_OBJECT.validate_json(response.content)
+        assert payload["status"] == "completed", response.text
+        assert payload["output"] == [
+            {
+                **_OUTPUT_MESSAGE,
+                "phase": None,
+                "content": [
+                    {"type": "output_text", "text": "mantle wire control", "annotations": [], "logprobs": None}
+                ],
+            }
+        ], response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/openai/v1/responses")]

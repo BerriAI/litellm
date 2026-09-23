@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Final
 
 import pytest
@@ -34,13 +35,13 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_LIST: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
-def redacted_thinking_peer(request: Request) -> Reply:
+def redacted_thinking_peer(request: Request, prompts: tuple[str, str]) -> Reply:
     assert request.method == "POST" and request.target == "/model/global.anthropic.claude-opus-4-8/converse"
     assert request.headers["authorization"] == f"Bearer {TOKEN}"
     body: Final = json.loads(request.body)
     assert body["messages"] in (
-        [{"role": "user", "content": [{"text": PROMPT}]}],
-        [{"role": "user", "content": [{"text": RESPONSES_PROMPT}]}],
+        [{"role": "user", "content": [{"text": prompts[0]}]}],
+        [{"role": "user", "content": [{"text": prompts[1]}]}],
     ), body
     assert body["additionalModelRequestFields"]["thinking"]["type"] == "adaptive", body
     return Reply(body=RESPONSE)
@@ -48,7 +49,9 @@ def redacted_thinking_peer(request: Request) -> Reply:
 
 @pytest.mark.covers("other.provider_wire.bedrock.hidden_thinking_tokens_are_not_reported_as_text")
 def test_bedrock_redacted_thinking_is_not_reported_as_zero_reasoning_tokens(gateway: Gateway) -> None:
-    with wire_server(redacted_thinking_peer) as wire, gateway.scenario() as scenario:
+    identity: Final = " " + uuid.uuid4().hex
+    prompts: Final = (PROMPT + identity, RESPONSES_PROMPT + identity)
+    with wire_server(lambda request: redacted_thinking_peer(request, prompts)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model=MODEL, api_key=TOKEN, aws_region_name="us-east-1", aws_bedrock_runtime_endpoint=wire.url
         )
@@ -57,7 +60,7 @@ def test_bedrock_redacted_thinking_is_not_reported_as_zero_reasoning_tokens(gate
             "/v1/chat/completions",
             {
                 "model": model,
-                "messages": [{"role": "user", "content": PROMPT}],
+                "messages": [{"role": "user", "content": prompts[0]}],
                 "max_tokens": 4000,
                 "reasoning_effort": "max",
             },
@@ -76,7 +79,7 @@ def test_bedrock_redacted_thinking_is_not_reported_as_zero_reasoning_tokens(gate
         responses: Final = gateway.request(
             "POST",
             "/v1/responses",
-            {"model": model, "input": RESPONSES_PROMPT, "max_output_tokens": 4000, "reasoning": {"effort": "max"}},
+            {"model": model, "input": prompts[1], "max_output_tokens": 4000, "reasoning": {"effort": "max"}},
         )
         assert responses.status_code == 200, responses.text
         responses_body: Final = _JSON_OBJECT.validate_json(responses.content)
