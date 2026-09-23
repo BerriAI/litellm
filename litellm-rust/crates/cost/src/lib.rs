@@ -52,6 +52,7 @@ pub mod transcription_usage;
 pub mod usage_dispatch;
 pub mod vertex_cost;
 pub mod xai_cost;
+pub mod zero_cost_diagnostic;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Rate {
