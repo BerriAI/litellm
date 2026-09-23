@@ -1004,7 +1004,9 @@ def test_burst_with_platform_outage_recovers_without_duplicate_spend(rig: Rig) -
         marker = markers[index]
         expected: Final = ("msg_" if index % 3 == 0 else "chatcmpl-") + marker + "%"
         rows: Final = eventually(
-            lambda: read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id LIKE %s', (expected,)),
+            lambda like=expected: read_rows(
+                'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id LIKE %s', (like,)
+            ),
             lambda values: len(values) == 1,
             seconds=70,
         )
