@@ -2076,6 +2076,9 @@
         ],
         "tests/integration/spend/test_session_total_spend.py::test_logs_ui_session_total_spend_sums_every_round_of_a_multi_round_session": [
             "spend.logs_ui.multi_round_session_total_spend_sums_every_round"
+        ],
+        "tests/integration/authorization/test_jwt_default_team_provisioning.py::test_jwt_subject_without_team_claim_is_provisioned_into_configured_default_team": [
+            "authorization.jwt.new_subject_without_team_claim_joins_default_team"
         ]
     },
     "browser": {
