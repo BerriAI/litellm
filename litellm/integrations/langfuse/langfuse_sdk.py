@@ -588,12 +588,11 @@ class _Halving:
 
 def _smaller(batch: _Batch) -> tuple[_Batch, ...]:
     """What to send after a 413: the two halves of a batch, or a single span with its largest field truncated."""
-    match batch:
-        case (only,):
-            truncated: Final = _truncated(only)
-            return () if truncated is None else ((truncated,),)
-        case _:
-            return batch[: len(batch) // 2], batch[len(batch) // 2 :]
+    if len(batch) != 1:
+        return batch[: len(batch) // 2], batch[len(batch) // 2 :]
+    (only,) = batch
+    truncated: Final = _truncated(only)
+    return () if truncated is None else ((truncated,),)
 
 
 def _in_group(key: str, group: tuple[str, ...]) -> bool:
@@ -717,14 +716,13 @@ class LangfuseSpanExporter(SpanExporter):
                     self.endpoint,
                     _TRUNCATION_MARKER,
                 )
-                return "too_large"
             case _:
                 verbose_logger.warning(
                     "Langfuse rejected a %d byte export of %d spans as too large, resending in halves",
                     len(body),
                     len(batch),
                 )
-                return "too_large"
+        return "too_large"
 
     def _send(self, body: bytes) -> _ExportOutcome:
         for delay in self.delays:
