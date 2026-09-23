@@ -544,6 +544,10 @@ fn main() {
             json!({"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "cache_read_input_token_cost": 0.2e-6}]}),
         ),
         (
+            "fireworks_ai/fireworks-ai-moe-up-to-56b".to_owned(),
+            json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 4e-6, "off_peak_pricing": {"hours_utc": "16:30-00:30", "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}),
+        ),
+        (
             "vertex_ai/rerank".to_owned(),
             json!({"input_cost_per_query": 0.25}),
         ),
@@ -725,4 +729,18 @@ fn main() {
         })
         .unwrap();
     println!("dashscope_prompt={dashscope_prompt:.6} dashscope_output={dashscope_output:.6}");
+    let (fireworks_prompt, fireworks_output) = model_info_catalog
+        .cost_per_token(ModelCostRequest {
+            model: "accounts/models/model-7x8b",
+            provider: Some("fireworks_ai"),
+            region: None,
+            usage: &off_peak_usage,
+            service_tier: None,
+            data_residency: None,
+            vertex_location: None,
+            at,
+            response_time_ms: None,
+        })
+        .unwrap();
+    println!("fireworks_prompt={fireworks_prompt:.6} fireworks_output={fireworks_output:.6}");
 }

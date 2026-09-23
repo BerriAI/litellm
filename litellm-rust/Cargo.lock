@@ -2980,6 +2980,7 @@ dependencies = [
  "criterion",
  "jiff",
  "proptest",
+ "regex",
  "rstest",
  "serde",
  "serde_json",

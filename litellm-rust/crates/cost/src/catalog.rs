@@ -13,6 +13,9 @@ use crate::completion_cost::{
 };
 use crate::custom_pricing::CustomTokenRates;
 use crate::dashscope_cost::cost_per_token as dashscope_cost_per_token;
+use crate::fireworks_cost::{
+    FireworksThresholds, cost_per_token as fireworks_cost_per_token, get_base_model_for_pricing,
+};
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::image_response_cost::calculate_image_response_cost_from_usage;
 use crate::per_second::per_second_pricing_cost;
@@ -213,6 +216,15 @@ impl ModelInfoCatalog {
         }
         let key = self
             .select_model_key(request.model, request.provider, request.region)
+            .or_else(|| {
+                (request.provider == Some("fireworks_ai"))
+                    .then(|| {
+                        get_base_model_for_pricing(request.model, FireworksThresholds::default())
+                    })
+                    .and_then(|category| {
+                        self.select_model_key(category, request.provider, request.region)
+                    })
+            })
             .ok_or(CatalogError::ModelNotFound)?;
         let model_info = apply_provider_cache_read_default(&self.entries[key], request.provider);
         if let Some(cost) = per_second_pricing_cost(&model_info, request.response_time_ms) {
@@ -235,6 +247,13 @@ impl ModelInfoCatalog {
             return Ok(dashscope_cost_per_token(
                 request.usage,
                 &model_info,
+                request.at,
+            ));
+        }
+        if request.provider == Some("fireworks_ai") {
+            return Ok(fireworks_cost_per_token(
+                request.usage,
+                &self.entries[key],
                 request.at,
             ));
         }

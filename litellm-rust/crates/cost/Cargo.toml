@@ -9,6 +9,7 @@ repository.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 jiff = "=0.2.37"
+regex = "=1.13.1"
 
 [dev-dependencies]
 criterion.workspace = true
