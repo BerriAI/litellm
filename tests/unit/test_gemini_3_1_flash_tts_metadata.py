@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -57,6 +58,20 @@ def test_gemini_tts_detection_uses_model_metadata(monkeypatch):
     _invalidate_model_cost_lowercase_map()
 
     assert is_gemini_tts_model(model)
+
+
+def test_gemini_tts_detection_uses_bundled_metadata_when_runtime_provider_is_generic(monkeypatch):
+    model: Final = "gemini-3.1-flash-tts-preview"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"vertex_ai/{model}",
+        {"litellm_provider": "vertex_ai", "mode": "audio_speech"},
+    )
+    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
+
+    assert is_gemini_tts_model(model, custom_llm_provider="vertex_ai")
+    assert not is_gemini_tts_model("lyria-3-clip-preview", custom_llm_provider="vertex_ai")
 
 
 @pytest.mark.parametrize(
