@@ -14,6 +14,7 @@ from litellm.constants import (
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -110,7 +111,7 @@ class CheckBatchCost:
         inline for a batch the first poll cycle then accounts again.
         """
         try:
-            await _managed_object_table(self.prisma_client).find_first(
+            await _managed_object_table(WriterPinnedClient(self.prisma_client.db)).find_first(
                 where={"file_purpose": "batch", "batch_processed": False}
             )
         except Exception as probe_err:
