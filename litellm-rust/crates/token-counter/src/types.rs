@@ -137,6 +137,28 @@ impl<'de> Visitor<'de> for TextValueVisitor {
     }
 }
 
+/// The parts of an assistant tool call Python counts: only the `arguments`
+/// string contributes (`_count_function_call_tokens` in
+/// `litellm_core_utils/token_counter.py`). Absent arguments count as the empty
+/// string; a non-string `arguments` declines so Python handles the fallback
+/// instead of miscounting.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct ToolCall {
+    pub(crate) function: ToolCallFunction,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct ToolCallFunction {
+    #[serde(default)]
+    pub(crate) arguments: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct LegacyFunctionCall {
+    #[serde(default)]
+    pub(crate) arguments: Option<String>,
+}
+
 /// Python counts every string-valued key of a message, so any key beyond these
 /// makes the shape unsupported rather than silently uncounted.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -145,6 +167,9 @@ pub(crate) struct Message {
     pub(crate) role: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) content: Option<MessageContent>,
+    pub(crate) tool_call_id: Option<String>,
+    pub(crate) tool_calls: Option<Vec<ToolCall>>,
+    pub(crate) function_call: Option<LegacyFunctionCall>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
