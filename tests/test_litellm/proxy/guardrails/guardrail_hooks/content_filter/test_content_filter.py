@@ -2502,6 +2502,7 @@ class TestContentFilterGuardrail:
             "SELECT * FROM users -- skip the password check",
             "SELECT @@version",
             "Run SELECT name FROM users WHERE id = 5 OR 1 to list everyone.",
+            "UPDATE users SET admin=1 WHERE 0 OR 1e0=1e0",
         ],
     )
     async def test_conditional_sql_injection_still_blocks_real_sql(self, text: str) -> None:
