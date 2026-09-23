@@ -204,5 +204,8 @@ pub async fn get_secret_from_python_manager(
     ) {
         return Ok(None);
     }
+    if manager.system() == KeyManagementSystem::AzureKeyVault && matches!(result, Ok(None)) {
+        return Ok(None);
+    }
     result.and_then(|value| value.ok_or(Error::ManagedSecretMissing).map(Some))
 }
