@@ -38,6 +38,7 @@ use crate::image_response_cost::{
     gemini_image_generation_cost, resolve_image_model_info, vertex_image_edit_cost,
     vertex_image_generation_cost,
 };
+use crate::model_selection::{ModelSelectionRequest, select_model_name_for_cost_calc};
 use crate::non_token::{Error as NonTokenError, ImageRates, ImageUsage, calculate_image};
 use crate::ocr_cost::{OcrCostError, ocr_cost};
 use crate::openai_image_cost::cost_calculator as openai_image_cost_calculator;
@@ -388,6 +389,13 @@ impl ModelInfoCatalog {
         region: Option<&str>,
     ) -> Option<&'a str> {
         select_model_key(&self.entries, model, provider, region)
+    }
+
+    pub fn select_model_name_for_cost_calc(
+        &self,
+        request: ModelSelectionRequest<'_>,
+    ) -> Option<String> {
+        select_model_name_for_cost_calc(request, &self.entries)
     }
 
     pub fn cost_per_token_for_call(
