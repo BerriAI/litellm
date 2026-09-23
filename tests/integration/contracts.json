@@ -290,6 +290,12 @@
     "tests/integration/spend/test_spend_calculate.py::test_spend_calculate_rejects_unpriced_model_with_400": [
       "quota_management.spend_tracking.spend_calculate.rejects_unpriced_model"
     ],
+    "tests/integration/spend/test_spend_calculate.py::test_live_preview_entry_charges_cached_tokens_at_the_fresh_rate[gemini-live-2.5-flash-preview-native-audio-09-2025]": [
+      "quota_management.spend_tracking.spend_calculate.live_preview_cached_tokens_cost_fresh_rate"
+    ],
+    "tests/integration/spend/test_spend_calculate.py::test_live_preview_entry_charges_cached_tokens_at_the_fresh_rate[gemini/gemini-live-2.5-flash-preview-native-audio-09-2025]": [
+      "quota_management.spend_tracking.spend_calculate.live_preview_cached_tokens_cost_fresh_rate"
+    ],
     "tests/integration/management/test_partial_update_sequences.py::test_restricted_actor_cannot_detach_key_from_project": [
       "mgmt.key.update.project_detach_denied_to_restricted_actor"
     ],
@@ -1803,6 +1809,225 @@
     ],
     "tests/integration/management/test_mcp_user_env_vars.py::test_concurrent_stores_of_different_variables_do_not_lose_an_update": [
       "mcp.user_env_vars.store.concurrent_writes_to_different_variables_both_land"
+    ],
+    "tests/integration/management/test_budget_updates.py::test_shortening_budget_duration_moves_reset_at_onto_the_new_schedule": [
+      "mgmt.budget.update.duration_change_recomputes_reset_at"
+    ],
+    "tests/integration/management/test_organization_budget_clear.py::test_patch_organization_update_with_null_tpm_limit_clears_it_and_keeps_sibling_limits": [
+      "mgmt.organization.update.null_clears_budget_limit"
+    ],
+    "tests/integration/management/test_team_budget_duration_defaults.py::test_team_new_explicit_null_budget_duration_is_not_replaced_by_default": [
+      "mgmt.team.new.explicit_null_budget_duration_overrides_default"
+    ],
+    "tests/integration/management/test_team_member_budget_cache.py::test_team_member_default_budget_lands_in_redis_after_first_member_call": [
+      "mgmt.team_member_budget.default_budget_is_cached_in_redis_as_json"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_streamed_responses_success_callback_carries_provider_apim_request_id": [
+      "other.observability.callbacks.streamed_responses_events_carry_provider_response_headers"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_bedrock_passthrough_converse_guardrail_ignores_denied_term_in_tool_definition": [
+      "other.observability.guardrails.bedrock_passthrough_converse_scans_only_caller_content"
+    ],
+    "tests/integration/pricing/test_configured_prices.py::test_cost_estimate_reports_configured_prices_for_model_absent_from_cost_map": [
+      "quota_management.cost_estimate.configured_price.reported_for_model_absent_from_cost_map"
+    ],
+    "tests/integration/pricing/test_configured_prices.py::test_saving_echoed_model_info_does_not_freeze_cost_map_price_into_deployment": [
+      "pricing.model_update.echoed_cost_map_price_is_not_persisted_as_override"
+    ],
+    "tests/integration/pricing/test_databricks_cache_pricing.py::test_databricks_cached_prompt_tokens_bill_at_cache_rates_not_input_rate": [
+      "pricing.databricks.cached_prompt_tokens_bill_at_cache_rates"
+    ],
+    "tests/integration/pricing/test_ocr_page_pricing.py::test_ocr_annotation_pages_are_billed_at_annotation_cost_per_page": [
+      "pricing.ocr.annotation_pages_billed_at_annotation_rate"
+    ],
+    "tests/integration/pricing/test_service_tier_pricing.py::test_ultrafast_service_tier_bills_ultrafast_rates_and_keeps_pricing_off_the_wire": [
+      "quota_management.spend_tracking.service_tier_pricing.ultrafast_bills_ultrafast_rates"
+    ],
+    "tests/integration/spend/test_batch_completion_accounting.py::test_completed_batch_spend_row_records_reasoning_tokens_and_error_file_failures": [
+      "quota_management.spend_tracking.batch_costs.reasoning_tokens_and_error_file_failures_recorded"
+    ],
+    "tests/integration/spend/test_batch_observability.py::test_batch_retrieval_row_sums_reasoning_tokens_and_counts_output_and_error_file_failures": [
+      "spend.batches.retrieval_row_aggregates_reasoning_tokens_and_per_request_counts"
+    ],
+    "tests/integration/spend/test_batch_poll_starvation.py::test_batches_gone_at_provider_do_not_starve_a_newer_batch_out_of_cost_polling": [
+      "quota_management.spend_tracking.batch_costs.uncostable_rows_retire_so_newer_batches_are_costed"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_in_flight_count_tokens_does_not_reserve_key_budget_away_from_a_completion": [
+      "quota_management.budget.key.in_flight_count_tokens_reserves_nothing_so_completion_reaches_provider"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_later_completion": [
+      "quota_management.budget.key.count_tokens_reserves_nothing_so_completion_within_budget_succeeds"
+    ],
+    "tests/integration/spend/test_daily_rollup_retry.py::test_failed_daily_user_rollup_commit_is_retried_so_spend_report_and_daily_activity_agree": [
+      "spend.daily_rollup.failed_user_commit_is_retried_until_report_and_daily_activity_agree"
+    ],
+    "tests/integration/spend/test_disconnected_bedrock_messages_stream_billing.py::test_client_disconnect_mid_bedrock_messages_stream_still_bills_terminal_usage": [
+      "spend.anthropic_messages_stream.client_disconnect_bills_terminal_bedrock_usage"
+    ],
+    "tests/integration/spend/test_failed_dispatch_tokens.py::test_provider_500_after_dispatch_records_estimated_prompt_tokens_on_failure_row": [
+      "spend.failed_dispatch.failure_row_records_estimated_input_tokens"
+    ],
+    "tests/integration/spend/test_model_router_selected_model.py::test_model_router_alias_without_router_in_name_keeps_selected_model_in_response_and_spend_log": [
+      "spend.model_router.selected_model_is_returned_and_persisted_for_plain_alias"
+    ],
+    "tests/integration/spend/test_org_budget_cli_session_token.py::test_cli_session_token_without_org_id_charges_and_caps_the_team_organization": [
+      "quota_management.organization_budget.cli_session_token_without_org_id_charges_team_organization"
+    ],
+    "tests/integration/spend/test_passthrough_budget_reservation.py::test_repeated_gemini_passthrough_calls_stay_served_while_key_spend_is_below_max_budget": [
+      "spend.budget_reservation.gemini_passthrough_success_releases_reservation_from_spend_counter"
+    ],
+    "tests/integration/spend/test_team_daily_activity_aggregated.py::test_aggregated_team_activity_reports_the_whole_range_team_spend_in_one_page": [
+      "quota_management.spend_tracking.team_daily_activity_aggregated_reports_whole_range_team_spend"
+    ],
+    "tests/integration/spend/test_team_member_spend.py::test_member_added_without_any_budget_is_charged_on_its_membership_row": [
+      "spend.team_member.member_without_budget_gets_membership_row_and_spend"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_config_store_is_listed_beside_db_store_and_survives_listing": [
+      "mgmt.vector_store.list.keeps_config_store_beside_db_stores"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_config_store_refuses_new_update_and_delete": [
+      "mgmt.vector_store.write.config_store_is_read_only"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_db_store_lifecycle_is_unchanged_beside_config_store": [
+      "mgmt.vector_store.write.db_store_lifecycle_unchanged_beside_config_store"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_chat_with_config_store_searches_upstream_and_injects_context_after_listing": [
+      "other.vector_store.chat.config_store_search_reaches_upstream_after_listing"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_passthrough_search_on_config_store_uses_yaml_credentials_after_listing": [
+      "other.vector_store.search.config_store_passthrough_uses_yaml_credentials_after_listing"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_non_admin_key_access_to_config_store_follows_grants_after_admin_listing": [
+      "authz.vector_store.list.non_admin_key_access_to_config_store_follows_grants"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_peer_process_keeps_config_store_and_sees_db_store_created_elsewhere": [
+      "mgmt.vector_store.list.peer_process_keeps_config_store_and_sees_db_store"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_concurrent_burst_keeps_config_store_and_refuses_every_config_write": [
+      "mgmt.vector_store.chaos.concurrent_burst_keeps_config_store_across_workers"
+    ],
+    "tests/integration/management/test_vector_store_config_ownership.py::test_redis_outage_keeps_config_store_served_and_recovers": [
+      "mgmt.vector_store.chaos.redis_outage_keeps_config_store_and_recovers"
+    ],
+    "tests/integration/providers/test_anthropic_advisor_wire.py::test_advisor_sub_call_reaches_the_router_deployment_with_its_key_instead_of_anthropic_unauthenticated": [
+      "providers.anthropic_messages_advisor.sub_call_uses_the_configured_advisor_deployment"
+    ],
+    "tests/integration/providers/test_azure_ai_chat_wire.py::test_azure_ai_strips_thinking_blocks_and_cache_control_from_forwarded_messages": [
+      "providers.azure_ai.anthropic_message_fields_are_stripped_before_foundry"
+    ],
+    "tests/integration/providers/test_azure_ai_flux2_image_wire.py::test_azure_flux2_flex_generation_hits_flex_provider_path_not_pro": [
+      "other.provider_wire.azure_ai.flux2_flex_generation_targets_flex_path_with_bfl_body"
+    ],
+    "tests/integration/providers/test_azure_ai_rerank_auth_wire.py::test_azure_ai_rerank_with_entra_token_and_no_api_key_sends_bearer_to_provider": [
+      "other.provider_wire.azure_ai.rerank_entra_token_without_api_key_reaches_provider"
+    ],
+    "tests/integration/providers/test_bedrock_auth_wire.py::test_client_anthropic_oauth_authorization_header_does_not_replace_bedrock_sigv4_signature": [
+      "providers.bedrock_auth.client_anthropic_oauth_token_never_replaces_sigv4_authorization"
+    ],
+    "tests/integration/providers/test_bedrock_batch_files_wire.py::test_completions_and_responses_batch_records_upload_as_anthropic_user_messages": [
+      "other.provider_wire.bedrock.batch_file_completions_and_responses_records_reach_s3_as_user_messages"
+    ],
+    "tests/integration/providers/test_bedrock_claude_thinking_wire.py::test_prefixed_opus_4_8_reasoning_effort_reaches_bedrock_as_adaptive_thinking_not_budget_tokens": [
+      "other.provider_wire.bedrock.prefixed_opus_4_8_reasoning_effort_sends_adaptive_thinking"
+    ],
+    "tests/integration/providers/test_bedrock_converse_config_blocks_wire.py::test_guardrail_and_performance_config_are_not_duplicated_inside_inference_config": [
+      "other.provider_wire.bedrock.converse_config_blocks_sent_once_at_top_level"
+    ],
+    "tests/integration/providers/test_bedrock_embedding_wire.py::test_cohere_embed_english_v3_accepts_encoding_format_and_dimensions": [
+      "other.provider_wire.bedrock.cohere_embed_english_v3_accepts_encoding_format"
+    ],
+    "tests/integration/providers/test_bedrock_gpt5_reasoning_wire.py::test_gpt5_reasoning_effort_is_accepted_and_sent_as_converse_reasoning_effort": [
+      "providers.bedrock_converse.gpt5_reasoning_effort_reaches_provider_as_reasoning_effort"
+    ],
+    "tests/integration/providers/test_bedrock_invoke_tool_search_wire.py::test_gen5_claude_bedrock_invoke_messages_tool_search_sends_bedrock_beta_field": [
+      "providers.bedrock_invoke.tool_search_gen5_claude_sends_bedrock_beta_and_reports_support"
+    ],
+    "tests/integration/providers/test_bedrock_mantle_codex_input_wire.py::test_codex_agent_message_context_compaction_and_local_shell_call_reach_mantle_as_supported_items": [
+      "other.provider_wire.bedrock_mantle.codex_history_items_reach_mantle_as_supported_types"
+    ],
+    "tests/integration/providers/test_bedrock_mantle_responses_wire.py::test_codex_agent_message_compaction_and_local_shell_items_are_rewritten_for_mantle": [
+      "providers.bedrock_mantle.codex_history_items_reach_the_wire_as_supported_input_items"
+    ],
+    "tests/integration/providers/test_bedrock_mantle_wire.py::test_bedrock_mantle_context_overflow_returns_400_saying_prompt_is_too_long": [
+      "other.provider_wire.bedrock_mantle.context_overflow_is_reported_as_prompt_too_long"
+    ],
+    "tests/integration/providers/test_bedrock_messages_web_search_replay_wire.py::test_replayed_intercepted_web_search_turn_reaches_bedrock_as_text_and_answers": [
+      "providers.bedrock_messages.replayed_intercepted_web_search_turn_is_flattened_to_text"
+    ],
+    "tests/integration/providers/test_bedrock_passthrough_stream_wire.py::test_bedrock_passthrough_converse_stream_response_carries_event_stream_content_type": [
+      "other.provider_wire.bedrock.passthrough_stream_keeps_event_stream_content_type"
+    ],
+    "tests/integration/providers/test_bedrock_rerank_wire.py::test_forwarded_client_header_on_rerank_is_excluded_from_the_sigv4_signature": [
+      "providers.bedrock_rerank.forwarded_client_headers_are_sent_unsigned"
+    ],
+    "tests/integration/providers/test_bedrock_thinking_tokens_wire.py::test_bedrock_redacted_thinking_is_not_reported_as_zero_reasoning_tokens": [
+      "other.provider_wire.bedrock.hidden_thinking_tokens_are_not_reported_as_text"
+    ],
+    "tests/integration/providers/test_dashscope_chat_wire.py::test_dashscope_chat_forwards_reasoning_effort_none_to_the_provider": [
+      "other.provider_wire.dashscope.reasoning_effort_reaches_provider"
+    ],
+    "tests/integration/providers/test_databricks_chat_wire.py::test_databricks_stream_final_usage_chunk_reaches_client_and_spend_log": [
+      "other.provider_wire.databricks.stream_usage_and_cache_reads_reach_client_and_spend_log"
+    ],
+    "tests/integration/providers/test_databricks_oauth_wire.py::test_databricks_ai_gateway_api_base_requests_oauth_token_from_workspace_origin": [
+      "other.provider_wire.databricks.oauth_token_url_uses_workspace_origin_for_ai_gateway_api_base"
+    ],
+    "tests/integration/providers/test_deepseek_vision_wire.py::test_deepseek_vision_forwards_image_url_content_list_instead_of_collapsing_to_text": [
+      "other.provider_wire.deepseek.vision_image_content_list_reaches_provider"
+    ],
+    "tests/integration/providers/test_fireworks_ai_router_slug_wire.py::test_fireworks_router_slug_chat_sends_router_resource_not_models_path": [
+      "other.provider_wire.fireworks_ai.router_slug_chat_sends_router_resource_name"
+    ],
+    "tests/integration/providers/test_fireworks_ai_router_slug_wire.py::test_fireworks_router_slug_text_completion_sends_router_resource_not_models_path": [
+      "other.provider_wire.fireworks_ai.router_slug_text_completion_sends_router_resource_name"
+    ],
+    "tests/integration/providers/test_openai_chat_wire.py::test_openai_chat_tool_choice_without_tools_is_not_forwarded": [
+      "providers.openai_chat_wire.tool_choice_without_tools_is_dropped_before_the_wire"
+    ],
+    "tests/integration/providers/test_openai_image_edit_wire.py::test_openai_compatible_image_edit_forwards_seed_form_field_to_backend": [
+      "other.provider_wire.openai.image_edit_forwards_provider_specific_form_fields"
+    ],
+    "tests/integration/providers/test_responses_bridge_incomplete.py::test_chat_over_responses_deployment_returns_length_when_output_tokens_run_out": [
+      "other.provider_wire.responses_bridge.max_output_tokens_incomplete_maps_to_length"
+    ],
+    "tests/integration/providers/test_tencent_chat_wire.py::test_tencent_thinking_is_sent_in_provider_body_instead_of_failing_the_request[reasoning_effort_none]": [
+      "other.provider_wire.tencent.thinking_reaches_provider_in_request_body"
+    ],
+    "tests/integration/providers/test_tencent_chat_wire.py::test_tencent_thinking_is_sent_in_provider_body_instead_of_failing_the_request[thinking_enabled]": [
+      "other.provider_wire.tencent.thinking_reaches_provider_in_request_body"
+    ],
+    "tests/integration/providers/test_websearch_interception_wire.py::test_capped_websearch_interception_loop_ends_turn_instead_of_exposing_internal_tool_use": [
+      "other.provider_wire.anthropic.websearch_interception_capped_loop_ends_turn_without_internal_tool_use"
+    ],
+    "tests/integration/providers/test_websearch_interception_wire.py::test_streamed_web_search_turn_capped_by_max_agentic_loops_ends_turn_with_snippets_and_ordered_blocks": [
+      "other.provider_wire.bedrock.websearch_interception_streamed_capped_turn_ends_with_native_results"
+    ],
+    "tests/integration/providers/test_xai_web_search_wire.py::test_xai_chat_web_search_is_sent_to_responses_with_instructions_and_nested_filters": [
+      "other.provider_wire.xai.chat_web_search_reaches_responses_with_instructions_and_filters"
+    ],
+    "tests/integration/routing/test_priority_rate_limit_headers.py::test_non_streaming_v1_messages_success_carries_v3_priority_rate_limit_headers": [
+      "other.routing.priority_rate_limits.v1_messages_success_exposes_v3_priority_headers"
+    ],
+    "tests/integration/routing/test_stale_cost_map_boot.py::test_config_deployment_dropped_by_stale_boot_cost_map_is_restored_after_reload": [
+      "other.routing.cost_map.config_deployment_dropped_by_stale_boot_map_is_restored_after_reload"
+    ],
+    "tests/integration/streaming/test_stream_contracts.py::test_messages_stream_completes_through_trailing_empty_choices_usage_chunk": [
+      "other.streaming.messages_bridge.empty_choices_usage_chunk_completes_stream"
+    ],
+    "tests/integration/streaming/test_stream_contracts.py::test_perplexity_stream_with_cost_breakdown_object_completes_and_bills_total_cost": [
+      "other.streaming.usage.provider_cost_object_completes_stream_and_bills_total_cost"
+    ],
+    "tests/integration/streaming/test_stream_contracts.py::test_primary_stream_with_empty_first_chunk_then_disconnect_falls_back_and_bills_the_fallback": [
+      "other.streaming.fallback.empty_leading_chunk_then_disconnect_streams_fallback_with_usage_and_spend"
+    ],
+    "tests/integration/streaming/test_stream_contracts.py::test_responses_stream_completes_through_empty_choices_metadata_and_usage_chunks": [
+      "other.streaming.responses_bridge.empty_choices_chunks_complete_stream"
+    ],
+    "tests/integration/streaming/test_stream_parallel_slot_release.py::test_failing_stream_logging_callback_does_not_leak_max_parallel_requests_slot": [
+      "streaming.max_parallel_requests.slot_released_when_stream_logging_callback_fails"
+    ],
+    "tests/integration/streaming/test_ttft_keepalive.py::test_stream_emits_sse_ping_comments_before_the_first_data_frame_while_upstream_is_silent": [
+      "streaming.keepalive.sse_pings_fill_silent_time_to_first_token"
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[chat]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
