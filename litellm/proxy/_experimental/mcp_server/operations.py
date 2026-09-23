@@ -50,6 +50,7 @@ from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
     cache_byok_credential,
     get_cached_byok_credential,
 )
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.contracts import (
     AuthorizedToolCall,
     OperationContext,
@@ -614,6 +615,7 @@ def apply_tool_overrides(
     return tools
 
 
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _get_allowed_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_servers: Sequence[str] | None,
@@ -930,6 +932,7 @@ def _aggregate_server_key(server: MCPServer) -> str:
     return get_server_prefix(server) or "unknown"
 
 
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _get_tools_from_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_auth_header: str | None,
@@ -1435,6 +1438,7 @@ async def filter_tools_by_key_team_permissions(
     ]
 
 
+@catalog_operation(lambda: global_mcp_server_manager)
 async def _list_mcp_tools(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1485,6 +1489,7 @@ async def _list_mcp_tools(
         return AggregateToolListing(tools=[], outcomes={})
 
 
+@catalog_operation(global_manager)
 async def _list_mcp_prompts(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1526,6 +1531,7 @@ async def _list_mcp_prompts(
     return managed_prompts
 
 
+@catalog_operation(global_manager)
 async def _list_mcp_resources(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -1555,6 +1561,7 @@ async def _list_mcp_resources(
     return managed_resources
 
 
+@catalog_operation(global_manager)
 async def _list_mcp_resource_templates(
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
@@ -2271,6 +2278,7 @@ async def fire_mcp_tool_call_failure_logging(
 
 
 @client
+@catalog_operation(lambda: global_mcp_server_manager)
 async def call_mcp_tool(
     name: str,
     arguments: dict[str, object] | None = None,
@@ -2546,6 +2554,9 @@ async def _handle_local_mcp_tool(name: str, arguments: dict[str, object]) -> Cal
     """
     import inspect
 
+    server: Final = global_mcp_server_manager.server_owning_tool_name_prefix(name)
+    if server is not None:
+        global_mcp_server_manager.catalog.assert_current(server)
     tool: Final = global_mcp_tool_registry.get_tool(name)
     if not tool:
         raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
@@ -3055,6 +3066,7 @@ class GatewayOperations:
     @overload
     async def execute(self, operation: ReadResourceRequest, context: OperationContext) -> ReadResourceResult: ...
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
             case AuthorizedToolCall():

@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._experimental.mcp_server.catalog import public_catalog_operation
 from litellm.proxy._experimental.mcp_server.db import store_user_credential
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     BYOK_RESOURCE_METADATA_PATH,
@@ -702,6 +703,7 @@ async def byok_protected_resource_metadata(request: Request) -> JSONResponse:
 
 
 @router.get("/v1/mcp/oauth/authorize", include_in_schema=False)
+@public_catalog_operation
 async def byok_authorize_get(
     request: Request,
     client_id: str | None = None,
@@ -742,7 +744,7 @@ async def byok_authorize_get(
                 global_mcp_server_manager,
             )
 
-            registry: Final = global_mcp_server_manager.get_registry()
+            registry: Final = await global_mcp_server_manager.catalog.list()
             if server_id in registry:
                 srv: Final = registry[server_id]
                 server_name = srv.server_name or srv.name

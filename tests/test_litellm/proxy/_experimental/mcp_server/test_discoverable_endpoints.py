@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from litellm.types.mcp import MCPAuth
 
@@ -91,7 +91,7 @@ def mock_mcp_client_ip():
 
 
 @pytest.fixture(autouse=True)
-def isolate_global_mcp_registry():
+def isolate_global_mcp_registry(monkeypatch):
     """Restore the module-global MCP server registry after each test.
 
     Tests here register servers on ``global_mcp_server_manager`` directly; without a
@@ -100,6 +100,8 @@ def isolate_global_mcp_registry():
     """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
+    from litellm.proxy._experimental.mcp_server.catalog import TargetCatalog
+    monkeypatch.setattr(global_mcp_server_manager, "catalog", TargetCatalog(global_mcp_server_manager))
     snapshot = dict(global_mcp_server_manager.registry)
     yield
     global_mcp_server_manager.registry.clear()
@@ -114,7 +116,8 @@ def _mock_callback_request(base_url: str = "http://localhost:3000/"):
     and trusted ``X-Forwarded-*`` headers). A simple MagicMock with the
     right attributes is sufficient.
     """
-    req = MagicMock()
+    req = MagicMock(spec=Request)
+    req.client = None
     req.base_url = base_url
     req.headers = {}
     req.cookies = {}
@@ -738,7 +741,8 @@ async def test_token_endpoint_forwards_code_verifier():
 
 
 @pytest.mark.asyncio
-async def test_register_client_without_mcp_server_name_returns_dummy():
+@pytest.mark.parametrize("server_name", [None, "missing"])
+async def test_register_client_without_mcp_server_name_returns_dummy(server_name):
     try:
         from fastapi import Request
 
@@ -761,17 +765,18 @@ async def test_register_client_without_mcp_server_name_returns_dummy():
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
         new=AsyncMock(return_value={}),
     ):
-        result = await register_client(request=mock_request)
+        result = await register_client(request=mock_request, mcp_server_name=server_name)
 
     assert result == {
-        "client_id": "dummy_client",
+        "client_id": server_name or "dummy_client",
         "client_secret": "dummy",
         "redirect_uris": ["https://proxy.litellm.example/callback"],
     }
 
 
 @pytest.mark.asyncio
-async def test_register_client_returns_existing_server_credentials():
+@pytest.mark.parametrize("use_root", [False, True])
+async def test_register_client_returns_existing_server_credentials(use_root):
     try:
         from fastapi import Request
 
@@ -811,7 +816,9 @@ async def test_register_client_returns_existing_server_credentials():
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
             new=AsyncMock(return_value={}),
         ):
-            result = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
+            result = await register_client(
+                request=mock_request, mcp_server_name=None if use_root else oauth2_server.server_name
+            )
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -4696,7 +4703,7 @@ async def test_token_endpoint_authorization_code_missing_code():
     )
     global_mcp_server_manager.registry[server.server_id] = server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://proxy.example/"
     mock_request.headers = {}
 
@@ -8056,7 +8063,7 @@ async def test_authorize_endpoint_rejects_non_oauth2_server():
     server = _access_group_none_server()
     global_mcp_server_manager.registry[server.server_id] = server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -8095,7 +8102,7 @@ async def test_token_endpoint_rejects_non_oauth2_server():
     server = _access_group_none_server()
     global_mcp_server_manager.registry[server.server_id] = server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -8137,7 +8144,7 @@ async def test_register_client_rejects_non_oauth2_server():
     server = _access_group_none_server()
     global_mcp_server_manager.registry[server.server_id] = server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -8210,7 +8217,7 @@ async def test_oauth_authorization_server_404_for_non_oauth2_server():
     server = _access_group_none_server()
     global_mcp_server_manager.registry[server.server_id] = server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -8258,7 +8265,7 @@ async def test_oauth_protected_resource_passthrough_none_auth_not_404():
     )
     global_mcp_server_manager.registry[passthrough_server.server_id] = passthrough_server
 
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -8292,7 +8299,7 @@ async def test_oauth_protected_resource_404_for_unknown_server_name():
         pytest.skip("MCP discoverable endpoints not available")
 
     global_mcp_server_manager.registry.clear()
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -8320,7 +8327,7 @@ async def test_oauth_authorization_server_404_for_unknown_server_name():
         pytest.skip("MCP discoverable endpoints not available")
 
     global_mcp_server_manager.registry.clear()
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9324,7 +9331,7 @@ async def test_load_servers_from_config_hydrates_dcr_clients():
     )
 
     hydrate_spy = AsyncMock()
-    with patch.object(global_mcp_server_manager, "_hydrate_config_servers_dcr_clients", new=hydrate_spy):
+    with patch.object(global_mcp_server_manager, "hydrate_config_servers_dcr_clients", new=hydrate_spy):
         await global_mcp_server_manager.load_servers_from_config({})
 
     hydrate_spy.assert_awaited_once()
@@ -9342,6 +9349,7 @@ async def test_reload_servers_from_database_hydrates_dcr_clients():
 
     prisma = MagicMock()
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     hydrate_spy = AsyncMock()
     with (
@@ -9349,7 +9357,7 @@ async def test_reload_servers_from_database_hydrates_dcr_clients():
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=prisma,
         ),
-        patch.object(global_mcp_server_manager, "_hydrate_config_servers_dcr_clients", new=hydrate_spy),
+        patch.object(global_mcp_server_manager, "hydrate_config_servers_dcr_clients", new=hydrate_spy),
     ):
         await global_mcp_server_manager.reload_servers_from_database()
 
@@ -9620,7 +9628,7 @@ async def test_authorize_wall_names_the_fix_for_urlless_servers():
         auth_type=MCPAuth.oauth2,
         spec_path="https://example.com/openapi.yaml",
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9658,7 +9666,7 @@ async def test_token_wall_names_the_fix_for_urlless_servers():
         spec_path="https://example.com/openapi.yaml",
         authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9698,7 +9706,7 @@ async def test_register_wall_names_the_fix_for_urlless_servers():
         auth_type=MCPAuth.oauth2,
         spec_path="https://example.com/openapi.yaml",
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9737,7 +9745,7 @@ async def test_authorize_wall_points_at_discovery_failure_for_url_servers():
         transport=MCPTransport.http,
         auth_type=MCPAuth.oauth2,
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9773,7 +9781,7 @@ async def test_token_wall_points_at_discovery_failure_for_url_servers():
         auth_type=MCPAuth.oauth2,
         authorization_url="https://idp.example.com/authorize",
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9813,7 +9821,7 @@ async def test_authorize_wall_names_the_issuer_for_anchored_servers():
         issuer="https://idp.example.com",
         issuer_is_anchored=True,
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9860,7 +9868,7 @@ async def test_authorize_uses_admin_entered_github_oauth_urls_after_issuer_yield
         configured_authorization_url="https://github.com/login/oauth/authorize",
         configured_token_url="https://github.com/login/oauth/access_token",
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -9882,7 +9890,7 @@ def test_oauth_endpoints_count_admin_entered_urls_as_resolved():
     """A leftover issuer empties the resolved authorize/token fields but must not keep the
     server on the deferred-discovery retry path when the admin already stored those URLs."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        _oauth_endpoints_unresolved,
+        oauth_endpoints_unresolved,
     )
     from litellm.types.mcp import MCPAuth, MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -9899,7 +9907,7 @@ def test_oauth_endpoints_count_admin_entered_urls_as_resolved():
         configured_authorization_url="https://github.com/login/oauth/authorize",
         configured_token_url="https://github.com/login/oauth/access_token",
     )
-    assert _oauth_endpoints_unresolved(server) is False
+    assert oauth_endpoints_unresolved(server) is False
 
 
 @pytest.mark.asyncio
@@ -9952,7 +9960,7 @@ async def test_token_exchange_with_configured_token_url_never_joins_discovery(mo
         "get_async_httpx_client",
         lambda llm_provider: fake_http_client,
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -10077,7 +10085,7 @@ async def test_bridge_authorize_relays_with_registration_url_resolved_by_deferre
         "ensure_oauth_metadata_discovered",
         resolve_discovery,
     )
-    mock_request = MagicMock()
+    mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -11399,7 +11407,7 @@ def test_discovery_advertises_the_exchange_grant_only_where_the_gateway_can_serv
         litellm_jwtauth=LiteLLM_JWTAuth(virtual_key_claim_field=virtual_key_claim_field),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", handler)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": jwt_auth_enabled})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": jwt_auth_enabled, "supported_db_objects": []})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     exchange_grant = ["urn:ietf:params:oauth:grant-type:token-exchange"] if exchange_servable else []
@@ -12611,3 +12619,61 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     proxy_server.prisma_client.db.litellm_mcpusercredentials.upsert.assert_not_called()
     proxy_server.prisma_client.db.litellm_usertable.create.assert_not_called()
     proxy_server.prisma_client.db.litellm_teamtable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["create", "update", "delete"])
+async def test_authorize_observes_committed_peer_server_changes(monkeypatch, change):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "catalog-consistency-test-key")
+    stamp = datetime.now(timezone.utc)
+    old_server = _create_id_lookup_oauth2_server()
+    old_server.updated_at = stamp
+    row = LiteLLM_MCPServerTable(
+        server_id=old_server.server_id,
+        server_name=old_server.server_name,
+        alias=old_server.alias,
+        url="https://upstream.example/mcp",
+        transport="http",
+        auth_type="oauth2",
+        authorization_url="https://new-provider.example/authorize",
+        token_url="https://new-provider.example/token",
+        scopes=["read"],
+        credentials={"client_id": "current-client", "client_secret": "current-secret"},
+        created_at=stamp,
+        updated_at=stamp + timedelta(seconds=1),
+    )
+    read_rows = AsyncMock(return_value=[] if change == "delete" else [row])
+    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=SimpleNamespace(find_many=read_rows), litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(
+        global_mcp_server_manager, "registry", {} if change == "create" else {old_server.server_id: old_server}
+    )
+    monkeypatch.setattr(global_mcp_server_manager, "config_mcp_servers", {})
+    request = Request(
+        {"type": "http", "scheme": "https", "server": ("gateway.example", 443), "path": "/authorize", "headers": []}
+    )
+
+    if change == "delete":
+        with pytest.raises(HTTPException) as exc:
+            await discoverable_endpoints.authorize(
+                request, "http://localhost/callback", mcp_server_name=old_server.server_id
+            )
+        assert exc.value.status_code == 404
+    else:
+        response = await discoverable_endpoints.authorize(
+            request, "http://localhost/callback", mcp_server_name=old_server.server_id
+        )
+        assert response.status_code == 307
+        assert response.headers["location"].startswith("https://new-provider.example/authorize?")
+        assert "client_id=current-client" in response.headers["location"]
+    read_rows.assert_awaited_once()

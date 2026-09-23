@@ -62,9 +62,11 @@ def _clear_proxy_database_env() -> typing.Iterator[None]:
 
 
 async def _initialize_proxy(config_path: str) -> None:
+    from litellm.proxy._experimental.mcp_server.catalog import TargetCatalog
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     cleanup_router_config_variables()
+    global_mcp_server_manager.catalog = TargetCatalog(global_mcp_server_manager)
     await initialize(config=config_path, debug=True)
     for server_id, upstream in tuple(global_mcp_server_manager.registry.items()):
         if upstream.server_name != "math_restricted":

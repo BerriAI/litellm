@@ -205,3 +205,31 @@ class TestInitializeGuardrail:
         assert isinstance(result, MCPSecurityGuardrail)
         assert result.on_violation == expected
         assert result in litellm.callbacks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+async def test_guardrail_observes_saved_server_creation_and_deletion_on_another_worker(guardrail, call_type):
+    from unittest.mock import AsyncMock
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager = MCPServerManager()
+    row = LiteLLM_MCPServerTable(server_id="peer-server", alias="peer_server", transport="http",
+        url="https://upstream.example/mcp")
+    prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=([row], []))
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    data = {"tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/peer-server"}],
+        "guardrails": ["test-mcp-security"]}
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", manager),
+    ):
+        result = await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
+        assert result == data
+        with pytest.raises(HTTPException) as exc:
+            await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
+    assert exc.value.status_code == 400
+    assert exc.value.detail["unregistered_servers"] == ["peer-server"]

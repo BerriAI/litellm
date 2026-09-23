@@ -36,6 +36,7 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     can_store_oauth_credential,
     oauth_authorization_uses_gateway_credential,
 )
+from litellm.proxy._experimental.mcp_server.catalog import public_catalog_operation
 from litellm.proxy._experimental.mcp_server.faults import (
     CallerRejected,
     CredentialSource,
@@ -1769,7 +1770,7 @@ async def resolve_ephemeral_dcr_client(
 def _register_flow_needed_endpoint(mcp_server: MCPServer) -> str | None:
     """The register flow's deferred-discovery join gate. A DCR bridge with no admin-configured
     client can only register callers through the upstream's registration endpoint
-    (``_oauth_endpoints_unresolved`` keeps its discovery slot armed for exactly this shape), so
+    (``oauth_endpoints_unresolved`` keeps its discovery slot armed for exactly this shape), so
     the flow must keep joining discovery while registration is still missing instead of silently
     degrading to the dummy short-circuit. Every other shape only needs the authorization url."""
     if mcp_server.is_dcr_bridge and not mcp_server.client_id and mcp_server.effective_registration_url is None:
@@ -1875,6 +1876,7 @@ async def register_client_with_server(
 
 
 @router.get("/authorize/mcp-session")
+@public_catalog_operation
 async def authorize_mcp_session(
     request: Request,
     redirect_uri: str,
@@ -1900,6 +1902,7 @@ async def authorize_mcp_session(
 
 @router.get("/{mcp_server_name}/authorize")
 @router.get("/authorize")
+@public_catalog_operation
 async def authorize(
     request: Request,
     redirect_uri: str,
@@ -1938,9 +1941,11 @@ async def authorize(
             resource=resource,
         )
 
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
     lookup_name: Final[str | None] = mcp_server_name or client_id
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-    mcp_server = _resolve_mcp_server_by_name_or_id(lookup_name, client_ip) if lookup_name else None
+    mcp_server = await global_mcp_server_manager.catalog.resolve(lookup_name, client_ip) if lookup_name else None
     if mcp_server is None and mcp_server_name is None:
         mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
@@ -1974,6 +1979,7 @@ async def authorize(
 
 @router.post("/{mcp_server_name}/token")
 @router.post("/token")
+@public_catalog_operation
 async def token_endpoint(
     request: Request,
     grant_type: str = Form(...),
@@ -2067,6 +2073,7 @@ async def _vendor_credential_state(user_id: str, server_id: str) -> VendorCreden
 
 
 @router.get("/authorize/flow")
+@public_catalog_operation
 async def authorize_flow(request: Request, flow: str) -> Response:
     return await describe_connect_flow(
         request=request,
@@ -2078,6 +2085,7 @@ async def authorize_flow(request: Request, flow: str) -> Response:
 
 
 @router.post("/authorize/complete")
+@public_catalog_operation
 async def authorize_complete(
     request: Request,
     flow: str = Form(...),
@@ -2435,6 +2443,7 @@ def is_network_error(exc: Exception) -> bool:
     return isinstance(exc, httpx.TransportError)
 
 
+@public_catalog_operation
 async def _build_oauth_protected_resource_response(
     request: Request,
     mcp_server_name: str | None,
@@ -2696,6 +2705,7 @@ async def oauth_authorization_server_aggregate(request: Request):
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
 # This is the pattern expected by standard MCP clients (mcp-inspector, VSCode Copilot)
 @router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{{mcp_server_name}}")
+@public_catalog_operation
 async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth protected resource discovery endpoint using standard MCP URL pattern.
@@ -2716,6 +2726,7 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
 # LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
 # Kept for backward compatibility with existing deployments
 @router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
+@public_catalog_operation
 async def oauth_protected_resource_mcp(request: Request, mcp_server_name: str | None = None):
     """
     OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
@@ -2739,12 +2750,7 @@ def _build_oauth_authorization_server_response(
     *,
     issuer_path: str | None = None,
 ) -> dict:
-    """Build OAuth authorization server metadata response (gateway-as-AS shape).
-
-    Synchronous because the body only does dict construction and synchronous
-    registry lookups; unlike :func:`_build_oauth_protected_resource_response`
-    it does not need to await any upstream IO.
-    """
+    """Build OAuth authorization server metadata response (gateway-as-AS shape)."""
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
     explicitly_named: Final = mcp_server_name is not None
@@ -2792,6 +2798,7 @@ def _build_oauth_authorization_server_response(
 
 # Standard MCP pattern: /.well-known/oauth-authorization-server/mcp/{server_name}
 @router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp/{{mcp_server_name}}")
+@public_catalog_operation
 async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery endpoint using standard MCP URL pattern.
@@ -2809,6 +2816,7 @@ async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_n
 # LiteLLM legacy pattern and root endpoint
 @router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}")
 @router.get("/.well-known/oauth-authorization-server")
+@public_catalog_operation
 async def oauth_authorization_server_mcp(request: Request, mcp_server_name: str | None = None):
     """
     OAuth authorization server discovery endpoint.
@@ -2882,6 +2890,7 @@ async def jwks_json(request: Request):
 
 # Additional legacy pattern support
 @router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
+@public_catalog_operation
 async def oauth_authorization_server_legacy(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
@@ -2895,6 +2904,7 @@ async def oauth_authorization_server_legacy(request: Request, mcp_server_name: s
 
 @router.post("/{mcp_server_name}/register")
 @router.post("/register")
+@public_catalog_operation
 async def register_client(request: Request, mcp_server_name: str | None = None):
     # Get the correct base URL considering X-Forwarded-* headers
     request_base_url: Final = get_request_base_url(request)
@@ -2903,46 +2913,44 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
     data: Final[dict] = {**request_data}
     client_redirect_uris: Final = client_supplied_redirect_uris(data.get("redirect_uris"))
 
-    dummy_return: Final = {
-        "client_id": mcp_server_name or "dummy_client",
-        "client_secret": "dummy",
-        "redirect_uris": client_redirect_uris or [f"{request_base_url}/callback"],
-    }
-    client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-    if not mcp_server_name:
-        # A real DCR request carries redirect_uris (RFC 7591): route it to the aggregate DCR
-        # endpoint the aggregate authorization-server metadata advertises. A single-server
-        # deployment registers at /{server}/register instead (its bare-origin discovery
-        # advertises that), so this does not affect it. A request without redirect_uris is not
-        # a DCR request, so the legacy single-server-or-dummy fallback is kept for it.
-        if data.get("redirect_uris"):
-            return await register_aggregate_client(
-                request=request, request_body=data, token_exchange_available=token_exchange_available()
-            )
-        resolved: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
-        if resolved:
-            return await register_client_with_server(
-                request=request,
-                mcp_server=resolved,
-                client_name=data.get("client_name", ""),
-                grant_types=data.get("grant_types", []),
-                response_types=data.get("response_types", []),
-                token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
-                fallback_client_id=resolved.server_name or resolved.name,
-                client_redirect_uris=client_redirect_uris,
-            )
-        return dummy_return
+    if not mcp_server_name and data.get("redirect_uris"):
+        return await register_aggregate_client(
+            request=request, request_body=data, token_exchange_available=token_exchange_available()
+        )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-    mcp_server: Final = _resolve_mcp_server_by_name_or_id(mcp_server_name, client_ip)
-    if mcp_server is None:
-        return dummy_return
-    return await register_client_with_server(
-        request=request,
-        mcp_server=mcp_server,
-        client_name=data.get("client_name", ""),
-        grant_types=data.get("grant_types", []),
-        response_types=data.get("response_types", []),
-        token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
-        fallback_client_id=mcp_server_name,
-        client_redirect_uris=client_redirect_uris,
-    )
+    async with global_mcp_server_manager.catalog.operation():
+        dummy_return: Final = {
+            "client_id": mcp_server_name or "dummy_client",
+            "client_secret": "dummy",
+            "redirect_uris": client_redirect_uris or [f"{request_base_url}/callback"],
+        }
+        client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
+        if not mcp_server_name:
+            resolved: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
+            if resolved:
+                return await register_client_with_server(
+                    request=request,
+                    mcp_server=resolved,
+                    client_name=data.get("client_name", ""),
+                    grant_types=data.get("grant_types", []),
+                    response_types=data.get("response_types", []),
+                    token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
+                    fallback_client_id=resolved.server_name or resolved.name,
+                    client_redirect_uris=client_redirect_uris,
+                )
+            return dummy_return
+
+        mcp_server: Final = _resolve_mcp_server_by_name_or_id(mcp_server_name, client_ip)
+        if mcp_server is None:
+            return dummy_return
+        return await register_client_with_server(
+            request=request,
+            mcp_server=mcp_server,
+            client_name=data.get("client_name", ""),
+            grant_types=data.get("grant_types", []),
+            response_types=data.get("response_types", []),
+            token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
+            fallback_client_id=mcp_server_name,
+            client_redirect_uris=client_redirect_uris,
+        )

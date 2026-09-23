@@ -1548,6 +1548,9 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
 
+    from litellm.proxy._experimental.mcp_server.catalog import catalog_operation
+
+    @catalog_operation(lambda: operations.global_mcp_server_manager)
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: list[str] | None,

@@ -5390,6 +5390,7 @@ class TestMCPServerManagerReload:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[db_row])
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -5432,6 +5433,7 @@ class TestMCPServerManagerReload:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[db_row])
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -5445,7 +5447,7 @@ class TestMCPServerManagerReload:
         ):
             await manager.reload_servers_from_database()
 
-        mock_build.assert_awaited_once_with(db_row, env_vars_are_encrypted=True)
+        mock_build.assert_awaited_once_with(db_row, env_vars_are_encrypted=True, register_oauth_discovery=False)
         assert manager.registry["server-1"] is rebuilt_server
 
     @pytest.mark.asyncio
@@ -5487,6 +5489,7 @@ class TestMCPServerManagerReload:
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
             return_value=[healthy_row, bad_row, another_healthy_row]
         )
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -5497,7 +5500,7 @@ class TestMCPServerManagerReload:
                 "build_mcp_server_from_table",
                 AsyncMock(side_effect=build_server),
             ),
-            patch.object(manager, "_maybe_register_openapi_tools", AsyncMock()),
+            patch.object(manager, "maybe_register_openapi_tools", AsyncMock()),
             caplog.at_level("ERROR", logger="LiteLLM"),
         ):
             await manager.reload_servers_from_database()
@@ -5557,6 +5560,7 @@ class TestMCPServerManagerReload:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[healthy_row, bad_openapi_row])
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
@@ -5569,7 +5573,7 @@ class TestMCPServerManagerReload:
             ),
             patch.object(
                 manager,
-                "_maybe_register_openapi_tools",
+                "maybe_register_openapi_tools",
                 AsyncMock(side_effect=register_openapi_tools),
             ),
             caplog.at_level("ERROR", logger="LiteLLM"),
@@ -8718,6 +8722,7 @@ async def test_get_active_submitted_mcp_server_ids_for_user_queries_active_rows(
     row.server_id = "submitted-1"
     prisma_client = MagicMock()
     prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     result = await get_active_submitted_mcp_server_ids_for_user(prisma_client, "submitter-user")
 
@@ -8738,6 +8743,7 @@ async def test_get_active_submitted_mcp_server_ids_for_user_empty_user_id_skips_
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_mcpservertable.find_many = AsyncMock()
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     assert await get_active_submitted_mcp_server_ids_for_user(prisma_client, "") == []
     prisma_client.db.litellm_mcpservertable.find_many.assert_not_awaited()
@@ -9507,7 +9513,7 @@ class TestPreemptive401ModeAware:
         assert resolved.authorization_url == "https://idp.example.com/authorize"
         assert resolved.token_url == "https://idp.example.com/token"
         assert resolved.registration_url == "https://idp.example.com/register"
-        assert manager._oauth_discovery_slot(server.server_id) is None
+        assert manager.oauth_discovery_slot(server.server_id) is None
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
