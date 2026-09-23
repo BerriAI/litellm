@@ -2,7 +2,7 @@ import contextlib
 import json
 import os
 import traceback
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest import mock
@@ -11,6 +11,7 @@ from urllib.parse import parse_qs
 
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request, Response
 from fastapi.testclient import TestClient
 
@@ -38,6 +39,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vllm_proxy_route,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -4067,6 +4069,42 @@ class TestTypeSafePassthroughRoute:
         request.query_params = query_params or {}
         request.json = AsyncMock(return_value=body)
         return request
+
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
+        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        yield TestClient(app)
+
+    @pytest.mark.parametrize(
+        "method, body",
+        [
+            ("GET", None),
+            ("POST", {"state": "x"}),
+            ("PUT", {"state": "x"}),
+            ("DELETE", None),
+            ("PATCH", {"state": "x"}),
+        ],
+    )
+    def test_forwards_every_method_and_body_upstream(
+        self, client: TestClient, method: str, body: dict[str, str] | None
+    ) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.request(method, "https://typesafe.example/base/v1/systemone").mock(
+                return_value=httpx.Response(200, json={"id": "upstream_123"})
+            )
+            response = client.request(method, "/typesafe/v1/systemone", json=body)
+
+            assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
+            sent: Final = route.calls.last.request
+            assert sent.headers["authorization"] == "Bearer typesafe-test-key"
+            assert json.loads(sent.content or b"{}") == (body or {})
 
     @pytest.mark.asyncio
     async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch):

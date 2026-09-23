@@ -1371,8 +1371,7 @@ def test_models_by_provider():
             or v["litellm_provider"] == "bedrock_converse"
         ):
             continue
-        elif v.get("mode") == "search":
-            # Skip search providers as they don't have traditional models
+        elif v.get("mode") in ("search", "evaluation"):
             continue
         else:
             providers.add(v["litellm_provider"])
