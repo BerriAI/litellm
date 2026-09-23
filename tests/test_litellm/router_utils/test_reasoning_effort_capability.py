@@ -466,6 +466,8 @@ class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:
         [
             ("azure/gpt-6-sol", "azure"),
             ("azure/gpt-6-luna", "azure"),
+            ("azure/eu/gpt-6-sol", "azure"),
+            ("azure/eu/gpt-6-luna", "azure"),
             ("azure_ai/gpt-6-sol", "azure_ai"),
             ("azure_ai/gpt-6-luna", "azure_ai"),
         ],
@@ -478,7 +480,7 @@ class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:
         from litellm.utils import _get_model_info_helper
 
         azure_info = dict(_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
-        openai_info = dict(_get_model_info_helper(model=model.split("/", 1)[1], custom_llm_provider="openai"))
+        openai_info = dict(_get_model_info_helper(model=model.rsplit("/", 1)[1], custom_llm_provider="openai"))
 
         assert resolve_supported_reasoning_efforts(
             azure_info, deployment_is_mapped=True
