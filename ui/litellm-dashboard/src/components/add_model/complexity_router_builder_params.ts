@@ -58,6 +58,7 @@ export const builderParamsFromValue = (
   tierModelParams: value.tier_model_params,
   enableContextWindowEscalation: value.enable_context_window_escalation,
   contextWindowEscalationBuffer: value.context_window_escalation_buffer,
+  healthTierEscalation: value.health_tier_escalation ?? false,
   stallEscalationEnabled: value.stall_escalation_enabled,
   stallEscalationWindow: value.stall_escalation_window,
   stallEscalationRepeatThreshold: value.stall_escalation_repeat_threshold,

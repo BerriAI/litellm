@@ -976,6 +976,7 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
             "modality_escalation",
             "modality_pin_override",
             "health_failover",
+            "health_escalation",
             "health_default_fallback",
         )
         and not decision.get("context_escalated")
@@ -3731,7 +3732,7 @@ class ComplexityRouter(CustomLogger):
         names: Final = self.config.tier_names()
         tiers: Final = (
             tuple(names[names.index(decided_tier) :])
-            if (context_recovery or modality_recovery) and decided_tier in names
+            if (context_recovery or modality_recovery or self.config.health_tier_escalation) and decided_tier in names
             else (decided_tier,)
         )
 
@@ -3772,17 +3773,24 @@ class ComplexityRouter(CustomLogger):
                     )
                 else:
                     self._restamp_adaptive_choice(request_kwargs, response.model, new_model)
+                    escalated_tier: Final = self.config.health_tier_escalation and candidate_tier != decided_tier
+                    cause: Final[RoutingDecisionCause] = "health_escalation" if escalated_tier else "health_failover"
                     verbose_router_logger.info(
-                        "ComplexityRouter: routing decision cause=health_failover, routed_model=%s, displaced=%s",
+                        "ComplexityRouter: routing decision cause=%s, routed_model=%s, displaced=%s",
+                        cause,
                         new_model,
                         response.model,
                     )
                     new_decision: Final = self._build_routing_decision(
                         routed_model=new_model,
-                        cause="health_failover",
+                        cause=cause,
                         tier=candidate_tier,
                         score=decision.get("score"),
-                        signals=(*(decision.get("signals") or ()), f"health_displaced:{response.model}"),
+                        signals=(
+                            *(decision.get("signals") or ()),
+                            f"health_displaced:{response.model}",
+                            *((f"health_escalated_from:{decided_tier}",) if escalated_tier else ()),
+                        ),
                         matched_keyword=decision.get("matched_keyword"),
                         escalation_keyword=decision.get("escalation_keyword"),
                         escalated=bool(decision.get("escalated", False)),

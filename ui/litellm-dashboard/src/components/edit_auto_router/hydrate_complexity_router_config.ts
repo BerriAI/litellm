@@ -153,6 +153,8 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.context_window_escalation_buffer === "number"
         ? parsedConfig.context_window_escalation_buffer
         : undefined,
+    health_tier_escalation:
+      typeof parsedConfig.health_tier_escalation === "boolean" ? parsedConfig.health_tier_escalation : false,
     stall_escalation_enabled: parsedConfig.stall_escalation_enabled === true || undefined,
     stall_escalation_window:
       typeof parsedConfig.stall_escalation_window === "number" ? parsedConfig.stall_escalation_window : undefined,

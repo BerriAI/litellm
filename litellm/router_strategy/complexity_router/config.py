@@ -1390,6 +1390,18 @@ class ComplexityRouterConfig(BaseModel):
             "modality_routing is also enabled."
         ),
     )
+    health_tier_escalation: bool = Field(
+        default=False,
+        description=(
+            "When every model group of the decided tier is unavailable (all deployments in cooldown "
+            "or filtered out), walk the higher configured tiers in ascending order and serve from "
+            "the first one with a healthy model group, before falling back to default_model. Never "
+            "walks down: a request classified to the top tier only has default_model left. The "
+            "escalated tier is reported as cause health_escalation with health_escalated_from:<TIER> "
+            "in signals, and is never pinned to the session. Disabled by default: omit or set false "
+            "to keep the same-tier peer then default_model recovery order."
+        ),
+    )
 
     # Semantic (embedding) matching for keyword_tier_rules instead of literal text matching
     semantic_keyword_matching: bool = Field(

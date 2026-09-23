@@ -415,6 +415,16 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText("modality_pin_override")).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["health_failover", "Failed over to a healthy peer"],
+    ["health_escalation", "Escalated to a healthy tier"],
+    ["health_default_fallback", "Default model, selected tier unhealthy"],
+  ])("labels the %s health recovery cause instead of showing the raw token", (cause, label) => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause }} />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.queryByText(cause)).not.toBeInTheDocument();
+  });
+
   it("labels a modality escalation instead of showing the raw cause token", () => {
     render(<RoutingDecisionCard decision={{ ...heuristic, cause: "modality_escalation" }} />);
     expect(screen.getByText("Escalated for image input")).toBeInTheDocument();

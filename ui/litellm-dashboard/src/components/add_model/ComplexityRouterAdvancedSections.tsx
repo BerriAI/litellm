@@ -18,6 +18,7 @@ import CompressionControls from "./CompressionControls";
 import PlanModeOverrideControls from "./PlanModeOverrideControls";
 import { AffinityControls } from "./AffinityControls";
 import { ModalityRoutingControls } from "./ModalityRoutingControls";
+import { HealthTierEscalationControls } from "./HealthTierEscalationControls";
 import HeuristicKeywordOverrides from "./HeuristicKeywordOverrides";
 import HousekeepingRoutingControls from "./HousekeepingRoutingControls";
 import ReminderMarkers from "./ReminderMarkers";
@@ -169,6 +170,11 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
       children: <ContextWindowEscalationConfig value={value} onChange={onChange} />,
     },
     {
+      key: "health-escalation",
+      label: <strong className="text-foreground font-semibold">Health Escalation</strong>,
+      children: <HealthTierEscalationControls value={value} onChange={onChange} />,
+    },
+    {
       key: "stall-escalation",
       label: <strong className="text-foreground font-semibold">Stalled Task Escalation</strong>,
       children: (
@@ -248,6 +254,7 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
         "plan-mode",
         "housekeeping",
         "context-window",
+        "health-escalation",
         "stall-escalation",
         "escalation",
         "keyword-semantic",

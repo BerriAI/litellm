@@ -111,6 +111,13 @@ describe("buildUpdatedComplexityRouterConfig", () => {
     expect(disabled.modality_routing).toBe(false);
   });
 
+  it("hydrates a stored health_tier_escalation into form state and defaults absent to off", () => {
+    expect(
+      hydrateComplexityRouterConfig({ ...storedConfig, health_tier_escalation: true }, null).health_tier_escalation,
+    ).toBe(true);
+    expect(hydrateComplexityRouterConfig(storedConfig, null).health_tier_escalation).toBe(false);
+  });
+
   it("hydrates a stored modality_pin_override into form state and defaults absent to off", () => {
     expect(
       hydrateComplexityRouterConfig({ ...storedConfig, modality_pin_override: true }, null).modality_pin_override,

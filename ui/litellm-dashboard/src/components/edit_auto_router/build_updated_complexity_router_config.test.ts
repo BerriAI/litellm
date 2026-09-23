@@ -850,6 +850,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     session_affinity_ttl_seconds: 300,
     modality_routing: true,
     modality_pin_override: true,
+    health_tier_escalation: true,
     deployment_affinity: false,
     adaptive: true,
     adaptive_weights: { quality: 0.4, cost: 0.6 },

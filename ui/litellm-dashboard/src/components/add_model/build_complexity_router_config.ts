@@ -181,6 +181,7 @@ export interface StoredComplexityRouterConfig {
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
   enable_context_window_escalation?: unknown;
+  health_tier_escalation?: unknown;
   context_window_escalation_buffer?: unknown;
   stall_escalation_enabled?: unknown;
   stall_escalation_window?: unknown;
@@ -246,6 +247,7 @@ export interface BuildComplexityRouterConfigParams {
   tierModelParams?: TierModelParamsByTier;
   enableContextWindowEscalation?: boolean;
   contextWindowEscalationBuffer?: number;
+  healthTierEscalation?: boolean;
   sessionAffinityTtlSeconds?: number;
   codeKeywords?: string[];
   reasoningKeywords?: string[];
@@ -325,6 +327,7 @@ export interface ComplexityRouterConfigPayload {
   reasoning_override_min_score?: number;
   enable_context_window_escalation?: boolean;
   context_window_escalation_buffer?: number;
+  health_tier_escalation?: boolean;
   tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
   code_keywords?: string[];
   reasoning_keywords?: string[];
@@ -693,6 +696,7 @@ export const buildComplexityRouterConfig = ({
   tierModelParams,
   enableContextWindowEscalation,
   contextWindowEscalationBuffer,
+  healthTierEscalation,
   sessionAffinityTtlSeconds,
   codeKeywords,
   reasoningKeywords,
@@ -823,6 +827,7 @@ export const buildComplexityRouterConfig = ({
       contextWindowEscalationBuffer !== undefined && {
         context_window_escalation_buffer: contextWindowEscalationBuffer,
       }),
+    ...(healthTierEscalation && { health_tier_escalation: true }),
     ...(sessionAffinityTtlSeconds !== undefined && {
       session_affinity_ttl_seconds: sessionAffinityTtlSeconds,
     }),

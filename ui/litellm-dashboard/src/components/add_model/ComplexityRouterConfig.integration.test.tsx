@@ -1065,6 +1065,35 @@ describe("ComplexityRouterConfig modality panel", () => {
   });
 });
 
+describe("ComplexityRouterConfig health escalation panel", () => {
+  const switchName = "Escalate to the next healthy tier when the selected tier is down";
+
+  it("defaults the switch off and writes health_tier_escalation through onChange", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    openAutoRouterAdvanced("Health Escalation");
+
+    const toggle = screen.getByRole("switch", { name: switchName });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, health_tier_escalation: true });
+  });
+
+  it("renders a stored health_tier_escalation=true as on and writes false when switched off", async () => {
+    const onChange = vi.fn();
+    const value = { ...defaultValue, health_tier_escalation: true };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
+    openAutoRouterAdvanced("Health Escalation");
+
+    const toggle = screen.getByRole("switch", { name: switchName });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+
+    expect(onChange).toHaveBeenCalledWith({ ...value, health_tier_escalation: false });
+  });
+});
+
 describe("ComplexityRouterConfig affinity panel", () => {
   it("holds the deployment switch at its backend default, session pinning having moved to the frequency choice", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);

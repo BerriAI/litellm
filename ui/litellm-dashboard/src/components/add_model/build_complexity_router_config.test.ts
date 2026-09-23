@@ -476,6 +476,16 @@ describe("buildComplexityRouterConfig", () => {
     expect(buildComplexityRouterConfig({ ...baseParams, modalityRouting: false }).modality_routing).toBe(false);
   });
 
+  it("writes health_tier_escalation only when on, so an off router keeps the backend default and its old payload", () => {
+    expect(buildComplexityRouterConfig({ ...baseParams, healthTierEscalation: true }).health_tier_escalation).toBe(
+      true,
+    );
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("health_tier_escalation");
+    expect(buildComplexityRouterConfig({ ...baseParams, healthTierEscalation: false })).not.toHaveProperty(
+      "health_tier_escalation",
+    );
+  });
+
   it("writes modality_pin_override explicitly both ways, so the stored config never relies on the backend default", () => {
     expect(buildComplexityRouterConfig({ ...baseParams, modalityPinOverride: true }).modality_pin_override).toBe(true);
     expect(buildComplexityRouterConfig(baseParams).modality_pin_override).toBe(false);

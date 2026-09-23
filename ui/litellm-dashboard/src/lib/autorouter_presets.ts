@@ -312,6 +312,7 @@ export const buildPresetPrefill = (
       reasoning_override_min_score: hydrateReasoningOverrideMinScore(config.reasoning_override_min_score),
       enable_context_window_escalation: config.enable_context_window_escalation,
       context_window_escalation_buffer: config.context_window_escalation_buffer,
+      health_tier_escalation: config.health_tier_escalation ?? false,
     },
     customTechnicalKeywords: config.custom_technical_keywords ?? [],
     keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),

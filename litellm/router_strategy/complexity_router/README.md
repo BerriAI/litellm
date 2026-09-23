@@ -395,6 +395,13 @@ Context-window and modality recovery take priority over the default model. If a 
 cannot serve, the router checks the remaining compatible recovery tiers before using `default_model`.
 A capacity failure without those constraints tries the selected tier's peers, then the default
 
+Add `health_tier_escalation: true` to walk the higher configured tiers between those two steps: when
+every model group of the selected tier is unavailable, the request goes to the nearest higher tier
+with a healthy group, in ascending order, and only then to `default_model`. The walk never goes down,
+so a top-tier request still has only the default left. A tier change records `cause: health_escalation`
+with `health_displaced:<MODEL>` and `health_escalated_from:<TIER>` in `signals`, is never pinned by
+session affinity, and keeps every other filter (context fit, modality, routing plugins)
+
 The default must fit the context and accept the request's modality. It cannot bypass routing plugins
 or a plan-mode floor. Context fit uses the auto-router's existing buffer even when Router-wide pre-call
 checks are off. Missing context metadata retains the existing unknown-window behavior

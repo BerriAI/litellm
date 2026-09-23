@@ -863,6 +863,56 @@ describe("EditAutoRouterModal deployment affinity", () => {
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().modality_pin_override).toBe(false);
   });
+
+  it("shows a stored health_tier_escalation=true as on and preserves it through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, health_tier_escalation: true });
+
+    openAutoRouterAdvanced("Health Escalation");
+    expect(
+      await screen.findByRole("switch", { name: "Escalate to the next healthy tier when the selected tier is down" }),
+    ).toBeChecked();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().health_tier_escalation).toBe(true);
+  });
+
+  it("persists turning health tier escalation on, and drops the key when turned back off", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, health_tier_escalation: true });
+
+    openAutoRouterAdvanced("Health Escalation");
+    await user.click(
+      await screen.findByRole("switch", { name: "Escalate to the next healthy tier when the selected tier is down" }),
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).not.toHaveProperty("health_tier_escalation");
+  });
+
+  it("persists turning health tier escalation on for a stored config that never carried the key", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    openAutoRouterAdvanced("Health Escalation");
+    const toggle = await screen.findByRole("switch", {
+      name: "Escalate to the next healthy tier when the selected tier is down",
+    });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().health_tier_escalation).toBe(true);
+  });
 });
 
 describe("EditAutoRouterModal custom classifier prompt and fallback", () => {

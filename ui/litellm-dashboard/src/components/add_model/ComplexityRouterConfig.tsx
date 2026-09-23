@@ -382,6 +382,7 @@ export interface ComplexityRouterConfigValue {
   session_affinity_ttl_seconds?: number;
   modality_routing?: boolean;
   modality_pin_override?: boolean;
+  health_tier_escalation?: boolean;
   deployment_affinity?: boolean;
   /** Plan-mode floor as a tier ROW ID, unset meaning off. The wire carries the row's name. */
   plan_mode_min_tier?: string;

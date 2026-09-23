@@ -16060,6 +16060,114 @@ class TestTierHealthFailover:
         assert {r.model for r in results} == {"live-c"}
 
 
+class TestHealthTierEscalation:
+    """health_tier_escalation: a tier with no healthy model group hands the request to the next
+    healthy tier up, ahead of default_model, and only when the operator opted in."""
+
+    SIMPLE_MESSAGE = [{"role": "user", "content": "Hello!"}]
+    TIERS = {"SIMPLE": "dead-simple", "MEDIUM": "dead-mid", "COMPLEX": "big", "REASONING": "top"}
+    IDS = {"dead-simple": ["id-s1"], "dead-mid": ["id-m1"], "big": ["id-c1"], "top": ["id-r1"], "fallback": ["id-f1"]}
+
+    def _router(self, mock_router_instance, config, ids_by_model=None, cooling=("id-s1", "id-m1")):
+        return TestTierHealthFailover._router(
+            mock_router_instance, {"tiers": dict(self.TIERS), **config}, ids_by_model or self.IDS, cooling=cooling
+        )
+
+    async def _pinned(self, router, model, tier, session_id="sess-esc"):
+        key = router._get_session_affinity_cache_key(session_id, {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": model, "tier": tier}, ttl=600
+        )
+        return await router.async_pre_routing_hook(
+            model="m", request_kwargs={"metadata": {"session_id": session_id}}, messages=self.SIMPLE_MESSAGE
+        )
+
+    @pytest.mark.asyncio
+    async def test_dead_tier_escalates_to_the_nearest_healthy_higher_tier_before_default_model(
+        self, mock_router_instance
+    ):
+        """SIMPLE and MEDIUM are both fully cooling, COMPLEX is live and default_model is live too:
+        the walk lands on COMPLEX, skipping the dead middle tier and leaving the default unused."""
+        router = self._router(
+            mock_router_instance,
+            {"health_tier_escalation": True, "default_model": "fallback", "session_affinity": True},
+        )
+        result = await self._pinned(router, "dead-simple", "SIMPLE")
+        assert result.model == "big"
+        assert result.routing_decision["cause"] == "health_escalation"
+        assert result.routing_decision["tier"] == "COMPLEX"
+        assert "health_displaced:dead-simple" in result.routing_decision["signals"]
+        assert "health_escalated_from:SIMPLE" in result.routing_decision["signals"]
+        assert result.litellm_params == router._litellm_params_for_model("COMPLEX", "big")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "config, expected_model, expected_cause",
+        [
+            ({"default_model": "fallback"}, "fallback", "health_default_fallback"),
+            ({"health_tier_escalation": False, "default_model": "fallback"}, "fallback", "health_default_fallback"),
+            ({}, "dead-simple", "session_affinity_pin"),
+        ],
+        ids=("omitted_uses_default_model", "false_uses_default_model", "omitted_without_default_fails_open"),
+    )
+    async def test_without_the_flag_a_dead_tier_never_walks_up(
+        self, mock_router_instance, config, expected_model, expected_cause
+    ):
+        """The healthy COMPLEX group is right there, and the pre-existing recovery order must not
+        reach it: same-tier peers, then default_model, then leave the decision alone."""
+        router = self._router(mock_router_instance, {"session_affinity": True, **config})
+        result = await self._pinned(router, "dead-simple", "SIMPLE")
+        assert result.model == expected_model
+        assert result.routing_decision["cause"] == expected_cause
+        assert "health_escalated_from:SIMPLE" not in (result.routing_decision.get("signals") or ())
+
+    @pytest.mark.asyncio
+    async def test_top_tier_never_walks_down(self, mock_router_instance):
+        """A REASONING request whose only group is cooling has no higher tier: the live COMPLEX
+        group below it is not a candidate, so default_model takes over as before."""
+        router = self._router(
+            mock_router_instance,
+            {"health_tier_escalation": True, "default_model": "fallback", "session_affinity": True},
+            cooling=("id-r1",),
+        )
+        result = await self._pinned(router, "top", "REASONING")
+        assert result.model == "fallback"
+        assert result.routing_decision["cause"] == "health_default_fallback"
+
+    @pytest.mark.asyncio
+    async def test_a_live_same_tier_peer_still_wins_over_escalation(self, mock_router_instance):
+        """The walk starts at the decided tier, so a healthy peer keeps the request where the
+        classifier put it and the row reads as a plain failover."""
+        router = self._router(
+            mock_router_instance,
+            {"health_tier_escalation": True, "tiers": {**self.TIERS, "SIMPLE": ["dead-simple", "live-simple"]}},
+            ids_by_model={**self.IDS, "live-simple": ["id-s2"]},
+            cooling=("id-s1",),
+        )
+        results = [
+            await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self.SIMPLE_MESSAGE)
+            for _ in range(20)
+        ]
+        assert {r.model for r in results} == {"live-simple"}
+        assert {r.routing_decision["tier"] for r in results} == {"SIMPLE"}
+        assert {r.routing_decision["cause"] for r in results} <= {"heuristic_scorer", "health_failover"}
+
+    @pytest.mark.asyncio
+    async def test_an_escalated_turn_is_never_pinned(self, mock_router_instance):
+        """The escalation describes the fleet's state, not the session's traffic: pinning it would
+        hold the session on the pricier tier after SIMPLE recovers."""
+        router = self._router(mock_router_instance, {"health_tier_escalation": True, "session_affinity": True})
+        result = await router.async_pre_routing_hook(
+            model="m", request_kwargs={"metadata": {"session_id": "sess-fresh"}}, messages=self.SIMPLE_MESSAGE
+        )
+        assert result.model == "big"
+        assert result.routing_decision["cause"] == "health_escalation"
+        stored = await router.litellm_router_instance.cache.async_get_cache(
+            key=router._get_session_affinity_cache_key("sess-fresh", {})
+        )
+        assert stored is None, "an escalated turn must leave the pin unwritten"
+
+
 ANTHROPIC_IMG_PART = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGk="}}
 RESPONSES_IMG_PART = {"type": "input_image", "image_url": "data:image/png;base64,aGk="}
 

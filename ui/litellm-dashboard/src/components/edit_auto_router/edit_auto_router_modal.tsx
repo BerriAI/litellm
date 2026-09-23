@@ -126,6 +126,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "custom_dimensions",
   "reasoning_override_min_score",
   "enable_context_window_escalation",
+  "health_tier_escalation",
   "context_window_escalation_buffer",
   "stall_escalation_enabled",
   "stall_escalation_window",
