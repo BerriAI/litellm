@@ -1855,6 +1855,9 @@
     "tests/integration/spend/test_passthrough_budget_reservation.py::test_repeated_gemini_passthrough_calls_stay_served_while_key_spend_is_below_max_budget": [
       "spend.budget_reservation.gemini_passthrough_success_releases_reservation_from_spend_counter"
     ],
+    "tests/integration/spend/test_responses_cache_write_itemization.py::test_responses_cache_write_tokens_are_itemized_as_cache_creation_cost": [
+      "spend.responses_api.cache_write_tokens_itemized_as_cache_creation_cost"
+    ],
     "tests/integration/spend/test_team_daily_activity_aggregated.py::test_aggregated_team_activity_reports_the_whole_range_team_spend_in_one_page": [
       "quota_management.spend_tracking.team_daily_activity_aggregated_reports_whole_range_team_spend"
     ],
