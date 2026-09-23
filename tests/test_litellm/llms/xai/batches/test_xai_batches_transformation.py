@@ -91,6 +91,18 @@ def test_batch_cancelled_by_caller_is_cancelled() -> None:
     assert (batch.status, batch.cancelled_at, batch.errors) == ("cancelled", SEPT_23_2026_UTC, None)
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    ["/v1/images/generations", "/v1/images/edits", "/v1/videos/generations", "/v1/videos/edits", "/v1/videos/extensions"],
+)
+def test_create_body_accepts_image_and_video_endpoints(endpoint: str) -> None:
+    body: Final = to_create_batch_body(
+        CreateBatchRequest(completion_window="24h", endpoint=endpoint, input_file_id="file_07")
+    )
+
+    assert dict(body) == {"name": "litellm-batch", "input_file_id": "file_07"}
+
+
 def test_create_body_uses_input_file_id_and_metadata_name() -> None:
     body: Final = to_create_batch_body(
         CreateBatchRequest(

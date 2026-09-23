@@ -57,6 +57,39 @@ async def test_create_batch_posts_input_file_id_with_bearer_auth(sync_mode: bool
     )
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/ocr",
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/videos/generations",
+        "/v1/videos",
+        "/v1/videos/edits",
+        "/v1/videos/extensions",
+    ],
+)
+@respx.mock
+async def test_create_batch_keeps_image_and_video_endpoints_on_the_batch(endpoint: str) -> None:
+    respx.post(f"{API_BASE}/v1/batches").respond(200, json=_XAI_BATCH)
+
+    batch: Final = await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint=endpoint,
+        input_file_id="file_1",
+        custom_llm_provider="xai",
+        api_key=KEY,
+        api_base=API_BASE,
+    )
+
+    assert isinstance(batch, LiteLLMBatch)
+    assert batch.endpoint == endpoint
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @respx.mock
 async def test_retrieve_batch_reads_native_batch_route(sync_mode: bool) -> None:
