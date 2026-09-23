@@ -54,6 +54,7 @@ pub mod tool_cost_dispatch;
 pub mod transcription_usage;
 pub mod usage_dispatch;
 pub mod vertex_cost;
+pub mod wire;
 pub mod xai_cost;
 pub mod zero_cost_diagnostic;
 

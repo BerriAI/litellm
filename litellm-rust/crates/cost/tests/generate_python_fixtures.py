@@ -22,9 +22,253 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 )
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.utils import register_model
-from litellm.types.utils import Usage
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from openai.types.images_response import ImagesResponse
 
 UTC = timezone.utc
+
+
+def private_cache_attrs(usage: Usage) -> dict[str, int]:
+    return {
+        "_cache_read_input_tokens": usage._cache_read_input_tokens,
+        "_cache_creation_input_tokens": usage._cache_creation_input_tokens,
+    }
+
+
+def chat_usage_payload(usage: Usage) -> dict[str, Any]:
+    return {"format": "chat", **usage.model_dump(), **private_cache_attrs(usage)}
+
+
+def tagged_response_payload(response: ModelResponse) -> dict[str, Any]:
+    dump = response.model_dump()
+    if dump.get("usage") is not None:
+        dump["usage"] = {"format": "chat", **dump["usage"], **private_cache_attrs(response.usage)}
+    return dump
+
+
+WIRE_USAGE_CASES: tuple[tuple[str, str, dict[str, Any]], ...] = (
+    (
+        "chat_full_projection",
+        "chat",
+        chat_usage_payload(
+            Usage(
+                prompt_tokens=1_000,
+                completion_tokens=500,
+                reasoning_tokens=120,
+                prompt_tokens_details={
+                    "cached_tokens": 800,
+                    "cache_write_tokens": 300,
+                    "web_search_requests": 2,
+                    "cache_creation_token_details": {
+                        "ephemeral_5m_input_tokens": 200,
+                        "ephemeral_1h_input_tokens": 100,
+                    },
+                },
+                completion_tokens_details={"reasoning_tokens": 120, "text_tokens": 380},
+                server_tool_use={"web_search_requests": 3},
+                cost=0.75,
+                cache_read_input_tokens=800,
+                **{
+                    "inference_geo": "us",
+                    "speed": "fast",
+                    "citation_tokens": 1_500,
+                    "server_side_tool_usage_details": {"web_search_calls": 4},
+                },
+            )
+        ),
+    ),
+    (
+        "chat_minimal",
+        "chat",
+        chat_usage_payload(Usage(prompt_tokens=10, completion_tokens=5)),
+    ),
+    (
+        "chat_gateway_merged_input_token_keys",
+        "chat",
+        chat_usage_payload(Usage(prompt_tokens=100, completion_tokens=50, input_tokens=100, output_tokens=50)),
+    ),
+    (
+        "responses_singular_details",
+        "responses",
+        {
+            "input_tokens": 1_200,
+            "output_tokens": 300,
+            "input_token_details": {"cached_tokens": 800, "web_search_requests": 2},
+            "output_token_details": {"reasoning_tokens": 100},
+        },
+    ),
+    (
+        "responses_plural_details",
+        "responses",
+        {
+            "input_tokens": 900,
+            "output_tokens": 250,
+            "input_tokens_details": {"text_tokens": 700, "cached_tokens": 200},
+            "output_tokens_details": {"text_tokens": 150, "audio_tokens": 100},
+            "cost": {"total_cost": 0.25},
+        },
+    ),
+    (
+        "anthropic_full",
+        "anthropic",
+        {
+            "input_tokens": 5_000,
+            "output_tokens": 200,
+            "cache_read_input_tokens": 3_000,
+            "cache_creation_input_tokens": 2_000,
+            "cache_creation": {"ephemeral_5m_input_tokens": 1_500, "ephemeral_1h_input_tokens": 500},
+            "server_tool_use": {"web_search_requests": 2},
+            "speed": "fast",
+        },
+    ),
+    (
+        "anthropic_iterations",
+        "anthropic",
+        {
+            "input_tokens": 600,
+            "output_tokens": 300,
+            "iterations": [
+                {
+                    "input_tokens": 100,
+                    "output_tokens": 150,
+                    "cache_read_input_tokens": 20,
+                    "cache_creation_input_tokens": 10,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 10},
+                    "output_tokens_details": {"thinking_tokens": 90},
+                },
+                {
+                    "input_tokens": 200,
+                    "output_tokens": 150,
+                    "output_tokens_details": {"thinking_tokens": 60},
+                },
+            ],
+        },
+    ),
+    (
+        "interactions_modality_split",
+        "interactions",
+        {
+            "total_input_tokens": 1_000,
+            "total_output_tokens": 300,
+            "total_tool_use_tokens": 50,
+            "total_cached_tokens": 400,
+            "total_reasoning_tokens": 120,
+            "total_tokens": 1_470,
+            "input_tokens_by_modality": [
+                {"tokens": 600, "modality": "TEXT"},
+                {"tokens": 50, "modality": "AUDIO"},
+            ],
+            "cached_tokens_by_modality": [{"tokens": 400, "modality": "TEXT"}],
+            "output_tokens_by_modality": [{"tokens": 180, "modality": "TEXT"}],
+            "grounding_tool_count": [{"type": "google_search", "count": 3}],
+        },
+    ),
+    (
+        "transcription_tokens",
+        "transcription",
+        {
+            "type": "tokens",
+            "input_tokens": 100,
+            "output_tokens": 200,
+            "total_tokens": 300,
+            "input_token_details": {"text_tokens": 60, "audio_tokens": 40},
+        },
+    ),
+    (
+        "transcription_duration",
+        "transcription",
+        {"type": "duration", "seconds": 12.5},
+    ),
+)
+
+
+def wire_usage_surface() -> list[dict[str, Any]]:
+    return [{"id": name, "payload": {"format": declared, **payload}} for name, declared, payload in WIRE_USAGE_CASES]
+
+
+def wire_response_surface() -> list[dict[str, Any]]:
+    usage = Usage(
+        prompt_tokens=2_000,
+        completion_tokens=400,
+        prompt_tokens_details={"cached_tokens": 1_500, "cache_write_tokens": 100},
+        server_tool_use={"web_search_requests": 1},
+        cost=0.5,
+    )
+    usage.inference_geo = "us"
+    chat_response = ModelResponse(
+        id="chatcmpl-wire",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="ok", role="assistant"),
+            )
+        ],
+        created=1_774_000_000,
+        model="synthetic-chat",
+        usage=usage,
+        _response_ms=1_234.5,
+    )
+    chat_response.ended = 1_774_000_012.5
+    image_response = ImagesResponse(
+        created=1_774_000_000,
+        data=[
+            {"url": "https://synthetic/1", "revised_prompt": None},
+            {"url": "https://synthetic/2", "revised_prompt": None},
+        ],
+    )
+    return [
+        {
+            "id": "chat_response_full",
+            "response": tagged_response_payload(chat_response),
+            "hidden_params": {
+                "custom_llm_provider": "openai",
+                "region_name": "us-west-2",
+                "model": "synthetic-chat",
+                "litellm_model_name": "synthetic-chat-alias",
+                "additional_headers": {"llm_provider-x-litellm-response-cost": "0.0123"},
+                "provider_specific_fields": {"traffic_type": "batch"},
+            },
+            "optional_params": {"service_tier": "priority", "query": ["synthetic-a", "synthetic-b"]},
+        },
+        {
+            "id": "realtime_results",
+            "response": {
+                "results": [
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "usage": {
+                                "format": "responses",
+                                "input_tokens": 500,
+                                "output_tokens": 120,
+                                "input_token_details": {"cached_tokens": 100},
+                            },
+                            "service_tier": "priority",
+                        },
+                    }
+                ]
+            },
+        },
+        {
+            "id": "image_response_usage",
+            "response": {
+                **image_response.model_dump(),
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                    "input_tokens_details": {"text_tokens": 40, "image_tokens": 60},
+                    "output_tokens_details": {
+                        "text_tokens": 10,
+                        "image_tokens": 40,
+                        "reasoning_tokens": 0,
+                        "audio_tokens": 0,
+                    },
+                },
+            },
+        },
+    ]
 
 
 def details(
@@ -824,6 +1068,8 @@ def main() -> None:
         "responses_usage": responses_usage_surface(),
         "caching_savings": caching_savings_surface(),
         "anthropic_usage": anthropic_usage_surface(),
+        "wire_usage": wire_usage_surface(),
+        "wire_response": wire_response_surface(),
     }
     target = Path(__file__).parent / "python_fixtures.json"
     target.write_text(json.dumps(fixture, indent=1) + "\n")

@@ -1,5 +1,5 @@
 {
- "python_commit": "b401bc9be2509e46fc0126087db2542b129ad56c",
+ "python_commit": "492ac2e9c43ed8fc9ae18650f6d41987ff7ae0fc",
  "generic": [
   {
    "id": "audio_mixed_modalities",
@@ -1772,6 +1772,354 @@
     },
     "cache_creation_input_tokens": 0,
     "cache_read_input_tokens": 0
+   }
+  }
+ ],
+ "wire_usage": [
+  {
+   "id": "chat_full_projection",
+   "payload": {
+    "format": "chat",
+    "completion_tokens": 500,
+    "prompt_tokens": 1000,
+    "total_tokens": 0,
+    "completion_tokens_details": {
+     "accepted_prediction_tokens": null,
+     "audio_tokens": null,
+     "reasoning_tokens": 120,
+     "rejected_prediction_tokens": null,
+     "text_tokens": 380,
+     "image_tokens": null,
+     "video_tokens": null
+    },
+    "prompt_tokens_details": {
+     "audio_tokens": null,
+     "cached_tokens": 800,
+     "text_tokens": null,
+     "image_tokens": null,
+     "video_tokens": null,
+     "web_search_requests": 2,
+     "cache_write_tokens": 300,
+     "cache_creation_tokens": 300,
+     "cache_creation_token_details": {
+      "ephemeral_5m_input_tokens": 200,
+      "ephemeral_1h_input_tokens": 100
+     }
+    },
+    "server_tool_use": {
+     "web_search_requests": 3,
+     "tool_search_requests": null,
+     "browser_open_requests": null
+    },
+    "cost": 0.75,
+    "cache_read_input_tokens": 800,
+    "inference_geo": "us",
+    "speed": "fast",
+    "citation_tokens": 1500,
+    "server_side_tool_usage_details": {
+     "web_search_calls": 4
+    },
+    "_cache_read_input_tokens": 800,
+    "_cache_creation_input_tokens": 0
+   }
+  },
+  {
+   "id": "chat_minimal",
+   "payload": {
+    "format": "chat",
+    "completion_tokens": 5,
+    "prompt_tokens": 10,
+    "total_tokens": 0,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": null,
+    "_cache_read_input_tokens": 0,
+    "_cache_creation_input_tokens": 0
+   }
+  },
+  {
+   "id": "chat_gateway_merged_input_token_keys",
+   "payload": {
+    "format": "chat",
+    "completion_tokens": 50,
+    "prompt_tokens": 100,
+    "total_tokens": 0,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": null,
+    "input_tokens": 100,
+    "output_tokens": 50,
+    "_cache_read_input_tokens": 0,
+    "_cache_creation_input_tokens": 0
+   }
+  },
+  {
+   "id": "responses_singular_details",
+   "payload": {
+    "format": "responses",
+    "input_tokens": 1200,
+    "output_tokens": 300,
+    "input_token_details": {
+     "cached_tokens": 800,
+     "web_search_requests": 2
+    },
+    "output_token_details": {
+     "reasoning_tokens": 100
+    }
+   }
+  },
+  {
+   "id": "responses_plural_details",
+   "payload": {
+    "format": "responses",
+    "input_tokens": 900,
+    "output_tokens": 250,
+    "input_tokens_details": {
+     "text_tokens": 700,
+     "cached_tokens": 200
+    },
+    "output_tokens_details": {
+     "text_tokens": 150,
+     "audio_tokens": 100
+    },
+    "cost": {
+     "total_cost": 0.25
+    }
+   }
+  },
+  {
+   "id": "anthropic_full",
+   "payload": {
+    "format": "anthropic",
+    "input_tokens": 5000,
+    "output_tokens": 200,
+    "cache_read_input_tokens": 3000,
+    "cache_creation_input_tokens": 2000,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 1500,
+     "ephemeral_1h_input_tokens": 500
+    },
+    "server_tool_use": {
+     "web_search_requests": 2
+    },
+    "speed": "fast"
+   }
+  },
+  {
+   "id": "anthropic_iterations",
+   "payload": {
+    "format": "anthropic",
+    "input_tokens": 600,
+    "output_tokens": 300,
+    "iterations": [
+     {
+      "input_tokens": 100,
+      "output_tokens": 150,
+      "cache_read_input_tokens": 20,
+      "cache_creation_input_tokens": 10,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 10
+      },
+      "output_tokens_details": {
+       "thinking_tokens": 90
+      }
+     },
+     {
+      "input_tokens": 200,
+      "output_tokens": 150,
+      "output_tokens_details": {
+       "thinking_tokens": 60
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "interactions_modality_split",
+   "payload": {
+    "format": "interactions",
+    "total_input_tokens": 1000,
+    "total_output_tokens": 300,
+    "total_tool_use_tokens": 50,
+    "total_cached_tokens": 400,
+    "total_reasoning_tokens": 120,
+    "total_tokens": 1470,
+    "input_tokens_by_modality": [
+     {
+      "tokens": 600,
+      "modality": "TEXT"
+     },
+     {
+      "tokens": 50,
+      "modality": "AUDIO"
+     }
+    ],
+    "cached_tokens_by_modality": [
+     {
+      "tokens": 400,
+      "modality": "TEXT"
+     }
+    ],
+    "output_tokens_by_modality": [
+     {
+      "tokens": 180,
+      "modality": "TEXT"
+     }
+    ],
+    "grounding_tool_count": [
+     {
+      "type": "google_search",
+      "count": 3
+     }
+    ]
+   }
+  },
+  {
+   "id": "transcription_tokens",
+   "payload": {
+    "format": "transcription",
+    "type": "tokens",
+    "input_tokens": 100,
+    "output_tokens": 200,
+    "total_tokens": 300,
+    "input_token_details": {
+     "text_tokens": 60,
+     "audio_tokens": 40
+    }
+   }
+  },
+  {
+   "id": "transcription_duration",
+   "payload": {
+    "format": "transcription",
+    "type": "duration",
+    "seconds": 12.5
+   }
+  }
+ ],
+ "wire_response": [
+  {
+   "id": "chat_response_full",
+   "response": {
+    "id": "chatcmpl-wire",
+    "created": 1774000000,
+    "model": "synthetic-chat",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "choices": [
+     {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+       "content": "ok",
+       "role": "assistant",
+       "tool_calls": null,
+       "function_call": null
+      }
+     }
+    ],
+    "usage": {
+     "format": "chat",
+     "completion_tokens": 400,
+     "prompt_tokens": 2000,
+     "total_tokens": 0,
+     "completion_tokens_details": null,
+     "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cached_tokens": 1500,
+      "text_tokens": null,
+      "image_tokens": null,
+      "video_tokens": null,
+      "cache_write_tokens": 100,
+      "cache_creation_tokens": 100
+     },
+     "server_tool_use": {
+      "web_search_requests": 1,
+      "tool_search_requests": null,
+      "browser_open_requests": null
+     },
+     "cost": 0.5,
+     "inference_geo": "us",
+     "_cache_read_input_tokens": 0,
+     "_cache_creation_input_tokens": 0
+    },
+    "_response_ms": 1234.5,
+    "ended": 1774000012.5
+   },
+   "hidden_params": {
+    "custom_llm_provider": "openai",
+    "region_name": "us-west-2",
+    "model": "synthetic-chat",
+    "litellm_model_name": "synthetic-chat-alias",
+    "additional_headers": {
+     "llm_provider-x-litellm-response-cost": "0.0123"
+    },
+    "provider_specific_fields": {
+     "traffic_type": "batch"
+    }
+   },
+   "optional_params": {
+    "service_tier": "priority",
+    "query": [
+     "synthetic-a",
+     "synthetic-b"
+    ]
+   }
+  },
+  {
+   "id": "realtime_results",
+   "response": {
+    "results": [
+     {
+      "type": "response.completed",
+      "response": {
+       "usage": {
+        "format": "responses",
+        "input_tokens": 500,
+        "output_tokens": 120,
+        "input_token_details": {
+         "cached_tokens": 100
+        }
+       },
+       "service_tier": "priority"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "image_response_usage",
+   "response": {
+    "created": 1774000000,
+    "background": null,
+    "data": [
+     {
+      "b64_json": null,
+      "revised_prompt": null,
+      "url": "https://synthetic/1"
+     },
+     {
+      "b64_json": null,
+      "revised_prompt": null,
+      "url": "https://synthetic/2"
+     }
+    ],
+    "output_format": null,
+    "quality": null,
+    "size": null,
+    "usage": {
+     "input_tokens": 100,
+     "output_tokens": 50,
+     "total_tokens": 150,
+     "input_tokens_details": {
+      "text_tokens": 40,
+      "image_tokens": 60
+     },
+     "output_tokens_details": {
+      "text_tokens": 10,
+      "image_tokens": 40,
+      "reasoning_tokens": 0,
+      "audio_tokens": 0
+     }
+    }
    }
   }
  ]
