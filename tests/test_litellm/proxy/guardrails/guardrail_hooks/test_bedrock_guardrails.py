@@ -5646,6 +5646,7 @@ class TestBedrockGuardrailImageInput:
 
     _PNG_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
     _GIF_DATA_URI = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
+
     def _guardrail(self, **kwargs) -> BedrockGuardrail:
         return BedrockGuardrail(
             guardrail_name="bedrock-image",
@@ -5837,10 +5838,12 @@ class TestBedrockGuardrailImageInput:
             }
         ]
 
-        with patch(  # test-quality-ok: the decoder is the thing under assertion -- the cap must reject before it is ever awaited
-            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
-            new_callable=AsyncMock,
-        ) as decode:
+        with (
+            patch(  # test-quality-ok: the decoder is the thing under assertion -- the cap must reject before it is ever awaited
+                "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+                new_callable=AsyncMock,
+            ) as decode
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
 
@@ -6040,9 +6043,7 @@ class TestBedrockGuardrailImageInput:
                         {
                             "type": "tool_result",
                             "tool_use_id": "tu_1",
-                            "content": [
-                                {"type": "image", "source": {"type": "file", "file_id": "file_abc"}}
-                            ],
+                            "content": [{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}],
                         },
                     ],
                 }
@@ -6165,9 +6166,7 @@ class TestBedrockGuardrailImageInput:
                                 {
                                     "type": "tool_result",
                                     "tool_use_id": "tu_1",
-                                    "content": [
-                                        {"type": "image", "source": {"type": "base64", "data": "AAAA"}}
-                                    ],
+                                    "content": [{"type": "image", "source": {"type": "base64", "data": "AAAA"}}],
                                 },
                             ],
                         }
@@ -6345,9 +6344,7 @@ class TestBedrockGuardrailImageInput:
     async def test_an_image_url_part_with_only_a_file_id_is_refused(self):
         """A file-backed image is not an inline png/jpeg, so it is refused like any
         other attachment the guardrail cannot read."""
-        messages = [
-            {"role": "user", "content": [{"type": "image_url", "image_url": {"file_id": "file_abc"}}]}
-        ]
+        messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"file_id": "file_abc"}}]}]
 
         with pytest.raises(HTTPException) as exc_info:
             await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
@@ -7065,7 +7062,9 @@ async def test_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
     mock_response.json.return_value = {"action": "NONE", "assessments": []}
 
     with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
-        response = await guardrail.make_bedrock_api_request(source="INPUT", messages=[{"role": "user", "content": "hello"}])
+        response = await guardrail.make_bedrock_api_request(
+            source="INPUT", messages=[{"role": "user", "content": "hello"}]
+        )
 
     assert response["action"] == "NONE"
     assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
@@ -7110,9 +7109,7 @@ def test_bedrock_guardrail_opts_into_attachment_scanning() -> None:
 
 
 def test_apply_masking_to_messages_keeps_tool_result_and_image_blocks() -> None:
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1"
-    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1")
     messages = [
         {
             "role": "user",
@@ -7136,9 +7133,7 @@ def test_apply_masking_to_messages_keeps_tool_result_and_image_blocks() -> None:
 
 
 def test_apply_masking_to_messages_masks_tool_result_inner_list_items() -> None:
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1"
-    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1")
     messages = [
         {
             "role": "user",
@@ -7357,3 +7352,71 @@ async def test_apply_guardrail_refuses_non_string_image_reference():
 
     assert exc_info.value.status_code == 400
     assert "cannot be scanned" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_tool_output_file_id_and_scoped_media():
+    """file_id-only members and video/audio payloads in serialized tool output are refused."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-output-payloads",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    for member in (
+        {"type": "input_file", "file_id": "file-abc"},
+        {"type": "video_url", "video_url": {"url": "https://x/clip.mp4"}},
+        {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+    ):
+        data = {
+            "messages": [
+                {"role": "tool", "content": json.dumps([member])},
+                {"role": "user", "content": "summarize"},
+            ]
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type=CallTypes.acompletion.value,
+            )
+        assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_tool_output_payloadless_shell_falls_through():
+    """A type-only member inside serialized tool output carries nothing to leak; it is dropped."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-output-shell",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    data = {
+        "messages": [
+            {"role": "tool", "content": json.dumps([{"type": "input_file"}, {"type": "output_text", "text": "done"}])},
+            {"role": "user", "content": "summarize"},
+        ]
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()

@@ -125,13 +125,12 @@ _BEDROCK_WHITESPACE: Final = re.compile(r"\s")
 _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "file": "file",
+        "input_file": "file_data",
         "document": "source",
+        "input_image": "image_url",
         "video_url": "video_url",
         "input_audio": "input_audio",
     }
-)
-_TOOL_OUTPUT_ATTACHMENT_TYPES: Final[frozenset[str]] = frozenset(
-    ("input_file", "file", "document", "input_image", "image_url", "image")
 )
 _NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
@@ -521,7 +520,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 self._handle_unscannable_attachment(reason="image part carries no inline url")
             return await self._build_image_content_item(image_url=image_url)
         payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part.get("type")))
-        if payload_key is not None and part.get(payload_key):
+        if (payload_key is not None and part.get(payload_key)) or part.get("file_id"):
             self._handle_unscannable_attachment(reason="a document, file, video or audio attachment cannot be scanned")
         if part.get("type") == "image":
             return await self._build_anthropic_image_content_item(part=part)
@@ -695,7 +694,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         part_map: Final = cast(Mapping[str, object], part)  # cast-ok: narrowed to dict on the line above
         part_type: Final = part_map.get("type")
         payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part_type))
-        if payload_key is not None and part_map.get(payload_key):
+        if (payload_key is not None and part_map.get(payload_key)) or part_map.get("file_id"):
             self._handle_unscannable_attachment(reason="a document, file, video or audio attachment cannot be scanned")
         if part_type == "image_url":
             image_url: Final = self._get_image_url(item=part_map)
@@ -730,7 +729,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not isinstance(content, str):
             return
         for part in _serialized_tool_output_parts(content):
-            if part.get("type") in _TOOL_OUTPUT_ATTACHMENT_TYPES:
+            payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part.get("type")))
+            if (payload_key is not None and part.get(payload_key)) or part.get("file_id"):
                 self._handle_unscannable_attachment(reason="a tool output attachment cannot be scanned")
 
     async def _build_image_content_item(self, image_url: str) -> BedrockContentItem:
