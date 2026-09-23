@@ -67,6 +67,10 @@ _GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
     {"text", "image", "image_url", "file", "input_audio", "input_text", "input_image", "input_file"}
 )
+# Anthropic lists the block types a cache_control marker may sit on: text, image,
+# tool_use, tool_result and document. A list of refused types rather than accepted
+# ones so a block type this code has not been told about still takes a marker.
+ANTHROPIC_BLOCK_TYPES_WITHOUT_CACHE_CONTROL: Final = frozenset({"thinking", "redacted_thinking"})
 OPENAI_API_HOST: Final = "api.openai.com"
 OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
@@ -137,6 +141,28 @@ def _chat_transform_drops_tool_cache_control(tool: object) -> bool:
 
 def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
+
+
+def _index_of_block_accepting_cache_control(content: list[object], on_a_tool_message: bool) -> int | None:
+    """Position of the last block a cache_control marker can be written on, or None.
+
+    Searched from the end: a marker caches everything up to and including its own
+    block, so the last one caches the most.
+
+    An empty text block is refused because the rewrites this hook runs ahead of drop
+    it, and the marker goes with it. ``on_a_tool_message`` lifts that refusal: a tool
+    message keeps its empty block, nested in the tool_result the rewrite builds.
+    """
+    for index in range(len(content) - 1, -1, -1):
+        block = content[index]
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") in ANTHROPIC_BLOCK_TYPES_WITHOUT_CACHE_CONTROL:
+            continue
+        if block.get("type") == "text" and not block.get("text") and not on_a_tool_message:
+            continue
+        return index
+    return None
 
 
 # Set by a caller whose message list is not the one that goes upstream -- today the
@@ -507,10 +533,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # 1. if string, insert cache control in the message
         if isinstance(message_content, str):
             message["cache_control"] = control
-        # 2. list of objects - only apply to last item per Anthropic spec
+        # 2. list of objects - the last block that accepts a marker, per Anthropic spec
         elif isinstance(message_content, list):
-            if len(message_content) > 0 and isinstance(message_content[-1], dict):
-                message_content[-1]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
+            target_index: Final = _index_of_block_accepting_cache_control(
+                message_content, on_a_tool_message=message.get("role") == "tool"
+            )
+            if target_index is not None:
+                message_content[target_index]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
         return message
 
     @staticmethod

@@ -3606,3 +3606,163 @@ class TestRecordGatewayInjection:
             custom_llm_provider="anthropic",
         )
         assert self.KEY not in kwargs["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_skips_a_thinking_block(monkeypatch: pytest.MonkeyPatch):
+    """
+    A cache_control marker on a thinking block is spent on a block Anthropic does not
+    accept one on, so the turn it was meant to cache is not cached. The marker goes on
+    the last block of the message that accepts one instead.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
+    anthropic_cache_control_hook = AnthropicCacheControlHook()
+    monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "Because two plus two is four."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_response.status_code = 200
+
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[
+                {"role": "user", "content": "What is 2 + 2?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "The answer is 4."},
+                        {"type": "thinking", "thinking": "Adding two and two.", "signature": "sig"},
+                        {"type": "redacted_thinking", "data": "redacted"},
+                    ],
+                },
+                {"role": "user", "content": "Why?"},
+            ],
+            cache_control_injection_points=[{"location": "message", "index": 1}],
+            client=client,
+        )
+
+        request_body = mock_post.call_args.kwargs["json"]
+
+    assert request_body["messages"][1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "The answer is 4.", "cache_control": {"type": "ephemeral"}},
+            {"type": "thinking", "thinking": "Adding two and two.", "signature": "sig"},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_skips_an_empty_text_block(monkeypatch: pytest.MonkeyPatch):
+    """
+    An empty text block is replaced by a placeholder before the request goes out, and a
+    cache_control marker written on it is replaced with it. The marker goes on the last
+    block that survives instead.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "Because two plus two is four."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_response.status_code = 200
+
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[
+                {"role": "user", "content": "What is 2 + 2?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "The answer is 4."},
+                        {"type": "text", "text": ""},
+                    ],
+                },
+                {"role": "user", "content": "Why?"},
+            ],
+            cache_control_injection_points=[{"location": "message", "index": 1}],
+            client=client,
+        )
+
+        request_body = mock_post.call_args.kwargs["json"]
+
+    assert request_body["messages"][1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "The answer is 4.", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "[System: Empty message content sanitised to satisfy protocol]"},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_marks_an_empty_tool_result(monkeypatch: pytest.MonkeyPatch):
+    """
+    A tool message keeps its empty text block - it goes out nested in the tool_result the
+    conversion builds - so the marker stays on it rather than walking off the message.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "Nothing came back."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_response.status_code = 200
+
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[
+                {"role": "user", "content": "Search for it."},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "search", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": ""}]},
+            ],
+            cache_control_injection_points=[{"location": "message", "index": 2}],
+            client=client,
+        )
+
+        request_body = mock_post.call_args.kwargs["json"]
+
+    assert request_body["messages"][-1] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "content": [{"type": "text", "text": "", "cache_control": {"type": "ephemeral"}}],
+            }
+        ],
+    }
