@@ -36,7 +36,10 @@ function ResizableSheetContent({
   const [width, setWidth] = React.useState(() => readStoredWidth(storageKey, defaultWidthPercent, minWidthPercent));
   const widthRef = React.useRef(width);
   const lastNonFullWidthRef = React.useRef(defaultWidthPercent);
+  const cleanupRef = React.useRef<(() => void) | null>(null);
   const isFull = width >= 100;
+
+  React.useEffect(() => () => cleanupRef.current?.(), []);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -46,9 +49,13 @@ function ResizableSheetContent({
       setWidth(next);
     };
     const onUp = () => {
+      cleanupRef.current?.();
+      cleanupRef.current = null;
+      setLocalStorageItem(storageKey, String(widthRef.current));
+    };
+    cleanupRef.current = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      setLocalStorageItem(storageKey, String(widthRef.current));
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -71,7 +78,10 @@ function ResizableSheetContent({
   return (
     <SheetContent
       side="right"
-      className={cn("w-full sm:w-(--sheet-width) sm:min-w-[min(720px,100%)] sm:max-w-none", className)}
+      className={cn(
+        "data-[side=right]:w-full data-[side=right]:sm:w-(--sheet-width) data-[side=right]:sm:min-w-[min(720px,100%)] data-[side=right]:sm:max-w-none",
+        className,
+      )}
       style={{ "--sheet-width": `${width}%` } as React.CSSProperties}
       {...props}
     >
