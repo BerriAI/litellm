@@ -7,7 +7,7 @@ reports supports_video_input as absent for every model even though the cost map
 declares it.
 
 The deployment is registered through /model/new (deleted on teardown) on the
-gemini/gemini-2.5-flash backend; /model/info resolves capability flags from the
+gemini/gemini-2.5-pro backend; /model/info resolves capability flags from the
 cost map without calling the provider. The expected value is read back from the
 proxy's own cost map endpoint rather than hardcoded, so the test stays correct
 if the map's flag ever changes.
