@@ -508,13 +508,16 @@ class ProxyClient:
             )
         ).info
 
-    def memory_summary_everywhere(self) -> Mapping[str, Result[MemorySummaryResponse]]:
+    def memory_summary_everywhere(
+        self, *, timeout: float | None = None
+    ) -> Mapping[str, Result[MemorySummaryResponse]]:
         return {
             url: transport.get(
                 "/debug/memory/summary",
                 headers=self.management_headers(transport=transport),
                 params=NoBody(),
                 response_type=MemorySummaryResponse,
+                timeout=timeout,
             )
             for url, transport in self.replicas.items()
         }

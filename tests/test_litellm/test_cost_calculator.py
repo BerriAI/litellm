@@ -595,6 +595,8 @@ def test_completion_cost_image_generation_registered_deployment_price_keeps_map_
         deployment_id,
         {"mode": "image_generation", "litellm_provider": "gemini", "output_cost_per_image": 0.1},
     )
+    map_model: Final = "gemini/gemini-3.1-flash-image"
+    row: Final = litellm.model_cost[map_model]
     usage: Final = ImageUsage(
         input_tokens=10,
         input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=10),
@@ -604,7 +606,7 @@ def test_completion_cost_image_generation_registered_deployment_price_keeps_map_
 
     cost = completion_cost(
         completion_response=ImageResponse(data=[ImageObject(url="https://example.com/img.png")], usage=usage),
-        model="gemini/gemini-3.1-flash-image-preview",
+        model=map_model,
         custom_llm_provider="gemini",
         call_type="image_generation",
         custom_pricing=True,
@@ -612,7 +614,10 @@ def test_completion_cost_image_generation_registered_deployment_price_keeps_map_
         litellm_logging_obj=SimpleNamespace(litellm_params={"metadata": {"model_info": {"id": deployment_id}}}),
     )
 
-    assert cost == pytest.approx(10 * 5e-07 + 1290 * 6e-05)
+    expected: Final = (
+        usage.input_tokens * row["input_cost_per_token"] + usage.output_tokens * row["output_cost_per_image_token"]
+    )
+    assert cost == pytest.approx(expected)
 
 
 def test_completion_cost_image_generation_ignores_deployment_model_info_without_custom_pricing(
@@ -865,6 +870,40 @@ def test_default_image_cost_calculator(monkeypatch):
     }
     cost = default_image_cost_calculator(**args)
     assert cost == 10485760
+
+
+@pytest.mark.parametrize(
+    ("model", "quality", "size", "priced_key", "pixels"),
+    [
+        ("azure/dall-e-3", "standard", "1024x1024", "azure/standard/1024-x-1024/dall-e-3", 1024 * 1024),
+        ("azure/dall-e-3", "hd", "1024x1792", "azure/hd/1024-x-1792/dall-e-3", 1024 * 1792),
+        ("dall-e-3", "hd", "1024x1792", "azure/hd/1024-x-1792/dall-e-3", 1024 * 1792),
+    ],
+)
+def test_default_image_cost_calculator_matches_provider_first_quality_key(
+    monkeypatch, model: str, quality: str, size: str, priced_key: str, pixels: int
+):
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "azure/standard/1024-x-1024/dall-e-3": {"litellm_provider": "azure", "input_cost_per_pixel": 1e-08},
+            "azure/hd/1024-x-1792/dall-e-3": {"litellm_provider": "azure", "input_cost_per_pixel": 3e-08},
+        },
+    )
+
+    cost = default_image_cost_calculator(
+        model=model,
+        custom_llm_provider="azure",
+        quality=quality,
+        n=1,
+        size=size,
+        optional_params={},
+    )
+
+    assert cost == litellm.model_cost[priced_key]["input_cost_per_pixel"] * pixels
 
 
 def test_cost_calculator_with_cache_creation():
