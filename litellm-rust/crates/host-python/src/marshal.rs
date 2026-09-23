@@ -32,6 +32,13 @@ where
         .map_err(PyErr::from)
 }
 
+pub fn json_object_field(py: Python<'_>, document: &str, name: &str) -> PyResult<Py<PyAny>> {
+    py.import("json")?
+        .call_method1("loads", (document,))?
+        .call_method1("get", (name,))
+        .map(Bound::unbind)
+}
+
 pub struct Pythonized<T>(pub T);
 
 impl<'py, T> IntoPyObject<'py> for Pythonized<T>

@@ -18,7 +18,7 @@ impl AwsSecretsManagerV2 {
         let payload = self
             .read_payload(name, primary_name, environment, ReadPolicy::Native)
             .await?;
-        resolve_payload(payload)
+        resolve_payload(payload, name)
     }
 
     pub async fn read_secret_for_python(
@@ -30,7 +30,7 @@ impl AwsSecretsManagerV2 {
         let payload = self
             .read_payload_for_python(name, primary_name, environment)
             .await?;
-        resolve_payload(payload)
+        resolve_payload(payload, name)
     }
 
     pub async fn read_payload_for_python(
@@ -66,12 +66,7 @@ impl AwsSecretsManagerV2 {
                 self.read_with_policy(primary, ReadPolicy::Python).await?
             };
             return Ok(match value.filter(|value| !value.expose().is_empty()) {
-                Some(value) => {
-                    let object: Value =
-                        serde_json::from_str(value.expose()).map_err(|_| Error::PrimarySecret)?;
-                    let object = object.as_object().ok_or(Error::PrimarySecret)?;
-                    PythonSecretRead::Value(object.get(name).cloned().map(Secret::from_json))
-                }
+                Some(value) => PythonSecretRead::PrimaryJson(value),
                 None => PythonSecretRead::Value(None),
             });
         }
@@ -115,12 +110,7 @@ impl AwsSecretsManagerV2 {
                 if matches!(policy, ReadPolicy::Python) && value.expose().is_empty() {
                     return Ok(PythonSecretRead::Value(None));
                 }
-                let object: Value =
-                    serde_json::from_str(value.expose()).map_err(|_| Error::PrimarySecret)?;
-                let object = object.as_object().ok_or(Error::PrimarySecret)?;
-                Ok(PythonSecretRead::Value(
-                    object.get(name).cloned().map(Secret::from_json),
-                ))
+                Ok(PythonSecretRead::PrimaryJson(value))
             }
         }
     }
@@ -222,8 +212,14 @@ pub fn is_bootstrap_key(name: &str) -> bool {
     )
 }
 
-fn resolve_payload(payload: PythonSecretRead) -> Result<Option<Secret>, Error> {
+fn resolve_payload(payload: PythonSecretRead, name: &str) -> Result<Option<Secret>, Error> {
     match payload {
         PythonSecretRead::Value(value) => Ok(value),
+        PythonSecretRead::PrimaryJson(document) => {
+            let object: Value =
+                serde_json::from_str(document.expose()).map_err(|_| Error::PrimarySecret)?;
+            let object = object.as_object().ok_or(Error::PrimarySecret)?;
+            Ok(object.get(name).cloned().map(Secret::from_json))
+        }
     }
 }
