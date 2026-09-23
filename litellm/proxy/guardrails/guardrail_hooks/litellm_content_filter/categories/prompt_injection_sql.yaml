@@ -5,6 +5,9 @@
 category_name: "prompt_injection_sql"
 description: "Detects SQL injection attempts embedded in prompts"
 default_action: "BLOCK"
+# SQL keywords are exact tokens, so don't match them inside other words
+# ("exec" in "executive", "or 1" in "or 15")
+match_whole_words: true
 
 # IDENTIFIER WORDS - SQL keywords that could be used in injection
 # When combined with block words, triggers blocking
