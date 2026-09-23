@@ -540,6 +540,10 @@ fn main() {
             json!({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}),
         ),
         (
+            "dashscope/tier".to_owned(),
+            json!({"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "cache_read_input_token_cost": 0.2e-6}]}),
+        ),
+        (
             "vertex_ai/rerank".to_owned(),
             json!({"input_cost_per_query": 0.25}),
         ),
@@ -707,4 +711,18 @@ fn main() {
         })
         .unwrap();
     println!("xai_prompt={xai_prompt:.6} xai_output={xai_output:.6}");
+    let (dashscope_prompt, dashscope_output) = model_info_catalog
+        .cost_per_token(ModelCostRequest {
+            model: "tier",
+            provider: Some("dashscope"),
+            region: None,
+            usage: &off_peak_usage,
+            service_tier: None,
+            data_residency: None,
+            vertex_location: None,
+            at,
+            response_time_ms: None,
+        })
+        .unwrap();
+    println!("dashscope_prompt={dashscope_prompt:.6} dashscope_output={dashscope_output:.6}");
 }

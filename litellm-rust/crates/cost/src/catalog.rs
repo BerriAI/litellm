@@ -12,6 +12,7 @@ use crate::completion_cost::{
     CompletionCost, ResponseCostError, completion_cost, get_response_cost_from_hidden_params,
 };
 use crate::custom_pricing::CustomTokenRates;
+use crate::dashscope_cost::cost_per_token as dashscope_cost_per_token;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::image_response_cost::calculate_image_response_cost_from_usage;
 use crate::per_second::per_second_pricing_cost;
@@ -226,6 +227,16 @@ impl ModelInfoCatalog {
         }
         if request.provider == Some("xai") {
             return Ok(xai_cost_per_token(request.usage, &model_info, request.at));
+        }
+        if matches!(
+            request.provider,
+            Some("dashscope" | "qwencloud" | "qwen_ai_platform")
+        ) {
+            return Ok(dashscope_cost_per_token(
+                request.usage,
+                &model_info,
+                request.at,
+            ));
         }
         Ok(calculate_generic_cost_from_model_info_with_region(
             request.usage,

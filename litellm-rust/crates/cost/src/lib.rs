@@ -5,6 +5,7 @@ pub mod billed_token_rates;
 pub mod catalog;
 pub mod completion_cost;
 pub mod custom_pricing;
+pub mod dashscope_cost;
 pub mod gemini_cost;
 pub mod generic_cost;
 pub mod generic_input;
