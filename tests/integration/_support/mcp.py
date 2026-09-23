@@ -25,6 +25,7 @@ from mcp_tests.mcp_e2e_upstream_server import add, multiply
 from pydantic import BaseModel
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response
 from starlette.types import Message, Receive, Scope, Send
 
 Transport = Literal["http", "sse", "stdio"]
@@ -118,6 +119,9 @@ def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Qu
         if scope["type"] != "http":
             await app(scope, receive, send)
             return
+        if scope["method"] == "GET" and scope["path"].endswith("/mcp"):
+            await Response(status_code=405, headers={"Allow": "POST, DELETE"})(scope, receive, send)
+            return
         body: Final = await StarletteRequest(scope, receive).body()
         assert len(body) <= 65536
         if body:
@@ -188,9 +192,7 @@ def mcp_peer(transport: Literal["http", "sse"] = "http", *, rich: bool = False) 
         else service.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
     )
     observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
-    with asgi_server(
-        _capturing(app, observed), before_stop=_drain_sse_streams if transport == "sse" else None
-    ) as url:
+    with asgi_server(_capturing(app, observed), before_stop=_drain_sse_streams if transport == "sse" else None) as url:
         yield McpPeer(url + ("/sse" if transport == "sse" else "/mcp"), observed, transport)
 
 
@@ -378,9 +380,14 @@ def register_mcp(scenario: Scenario, peer: McpPeer, alias: str, **fields: object
         "POST", "/v1/mcp/server", {"server_name": alias, "alias": alias, **peer.registration(), **fields}
     )
     identity: Final = response.json()["server_id"]
-    scenario.cleanups.callback(delete_mcp, scenario.gateway, identity)
+    scenario.cleanups.callback(forget_mcp, scenario.gateway, identity)
     assert response.status_code == 201, response.text
     return identity
+
+
+def forget_mcp(gateway: Gateway, identity: str) -> None:
+    response: Final = gateway.request("DELETE", f"/v1/mcp/server/{identity}")
+    assert response.status_code in (202, 404), response.text
 
 
 def delete_mcp(gateway: Gateway, identity: str) -> None:
@@ -538,13 +545,19 @@ class McpCaller:
                 self.gateway.client.post(
                     "/mcp-rest/tools/call",
                     headers=self._headers(),
-                    json={"name": name, "arguments": dict(arguments), **({"server_id": server_id} if server_id else {})},
+                    json={
+                        "name": name,
+                        "arguments": dict(arguments),
+                        **({"server_id": server_id} if server_id else {}),
+                    },
                 )
             )
         return _outcome_from_rpc(self.rpc("tools/call", {"name": name, "arguments": dict(arguments)}))
 
 
-def _legacy_sse_rpc(gateway: Gateway, headers: Mapping[str, str], method: str, params: JsonRpc | None) -> httpx.Response:
+def _legacy_sse_rpc(
+    gateway: Gateway, headers: Mapping[str, str], method: str, params: JsonRpc | None
+) -> httpx.Response:
     """Drive the legacy GET /mcp/sse + POST /mcp/sse/messages pair for one request and synthesise a JSON response."""
     with gateway.client.stream("GET", "/mcp/sse", headers=headers, timeout=15) as stream:
         if stream.status_code != 200:
@@ -558,9 +571,7 @@ def _legacy_sse_rpc(gateway: Gateway, headers: Mapping[str, str], method: str, p
             headers=headers,
         )
         assert init.status_code in (200, 202), init.text
-        gateway.client.post(
-            endpoint, json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=headers
-        )
+        gateway.client.post(endpoint, json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=headers)
         posted: Final = gateway.client.post(
             endpoint, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params or {})}, headers=headers
         )
