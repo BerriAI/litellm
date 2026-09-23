@@ -10,6 +10,7 @@ DELETE /fallback/{model} - Delete fallbacks for a specific model
 
 # pyright: reportMissingImports=false
 
+import copy
 import json
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -302,17 +303,32 @@ async def delete_fallback(
         elif fallback_type == "content_policy":
             fallback_key = "content_policy_fallbacks"
 
-        # Get existing fallbacks
-        existing_fallbacks: Final[list[dict[str, list[str]]]] = router_settings.get(fallback_key, [])
+        # Get existing fallbacks from router_settings OR fallback to in-memory router
+        existing_fallbacks: list[dict[str, list[str]]] = router_settings.get(fallback_key, [])
+        if not existing_fallbacks and hasattr(llm_router, fallback_key):
+            in_mem = getattr(llm_router, fallback_key, [])
+            if in_mem and isinstance(in_mem, list):
+                existing_fallbacks = copy.deepcopy(in_mem)
 
         # Find and remove the fallback configuration
         fallback_found = False
         updated_fallbacks: Final = []
         for fallback_dict in existing_fallbacks:
-            if model not in fallback_dict:
-                updated_fallbacks.append(fallback_dict)
-            else:
+            if isinstance(fallback_dict, dict):
+                if model not in fallback_dict:
+                    updated_fallbacks.append(fallback_dict)
+                else:
+                    fallback_found = True
+
+        if not fallback_found:
+            # Also check if model was in in-memory router directly
+            in_mem_fallbacks = getattr(llm_router, fallback_key, [])
+            if any(isinstance(d, dict) and model in d for d in in_mem_fallbacks):
                 fallback_found = True
+                updated_fallbacks.clear()
+                for d in in_mem_fallbacks:
+                    if isinstance(d, dict) and model not in d:
+                        updated_fallbacks.append(d)
 
         if not fallback_found:
             raise HTTPException(
