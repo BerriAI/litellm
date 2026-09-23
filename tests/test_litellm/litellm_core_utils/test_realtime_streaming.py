@@ -3027,6 +3027,28 @@ def test_translation_preserves_input_only_provider_usage(
     assert closed_events[0]["usage"] == expected_usage
 
 
+def test_translation_retained_input_only_close_event_bills_captured_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "logged_real_time_event_types", "*")
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._translation_output_audio_bytes = 48000
+    close_event: Final = {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 0.25}}
+
+    streaming._capture_translation_output_audio(close_event)
+    streaming.store_message(close_event)
+    streaming._finalize_translation_usage()
+
+    usage_events: Final = tuple(event["usage"] for event in streaming.messages if event.get("type") == "session.closed")
+    assert len(usage_events) == 2
+    assert sum(usage.get("input_seconds", 0.0) for usage in usage_events) == 0.25
+    assert sum(usage.get("output_seconds", 0.0) for usage in usage_events) == 1.0
+
+
 @pytest.mark.asyncio
 async def test_audio_delta_frame_parsed_at_most_once():
     client_ws = _beta_client_ws()

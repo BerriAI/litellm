@@ -43,18 +43,8 @@ class AzureAudioTranscription(AzureChatCompletion):
     ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
         sdk_data: Final = sdk_compatible_transcription_request_data(data)
-        model_info: Final = (
-            litellm.get_model_info(model=model, custom_llm_provider="azure")
-            if f"azure/{model}" in litellm.model_cost
-            else None
-        )
-        provider_specific_entry: Final = model_info.get("provider_specific_entry") if model_info is not None else None
         resolved_api_version: Final = (
-            litellm.AZURE_DEFAULT_API_VERSION
-            if provider_specific_entry is not None
-            and provider_specific_entry.get("transcription_deployment_api") == 1
-            and api_version in ("v1", "latest", "preview")
-            else api_version
+            litellm.AZURE_DEFAULT_API_VERSION if api_version in ("v1", "latest", "preview") else api_version
         )
 
         if atranscription is True:

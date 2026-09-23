@@ -450,7 +450,17 @@ class RealTimeStreaming:
                 output_seconds if isinstance(output_seconds, (int, float)) else synthetic_output_seconds
             )
             if isinstance(input_seconds, (int, float)) or resolved_output_seconds is not None:
-                if not self._should_store_message(event_obj):
+                if self._should_store_message(event_obj):
+                    if not isinstance(output_seconds, (int, float)) and synthetic_output_seconds is not None:
+                        self.messages.append(
+                            OpenAIRealtimeTranslationClosedEvent(
+                                type="session.closed",
+                                usage=OpenAIRealtimeTranslationDurationUsage(
+                                    type="duration", output_seconds=synthetic_output_seconds
+                                ),
+                            )
+                        )
+                else:
                     normalized_usage: Final = (
                         OpenAIRealtimeTranslationDurationUsage(
                             type="duration",
