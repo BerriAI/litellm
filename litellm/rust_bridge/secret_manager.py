@@ -60,7 +60,7 @@ _ADAPTERS: Final = (
         KeyManagementSystem.HASHICORP_VAULT,
         "litellm.secret_managers.hashicorp_secret_manager",
         "HashicorpSecretManager",
-        ("sync_read_secret", "async_read_secret"),
+        ("sync_read_secret", "async_read_secret", "async_write_secret", "async_delete_secret", "async_rotate_secret"),
         environment_attributes=(
             ("HCP_VAULT_ADDR", "vault_addr"),
             ("HCP_VAULT_TOKEN", "vault_token"),

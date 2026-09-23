@@ -63,6 +63,8 @@ pub async fn read_python_provider(
 #[derive(Debug)]
 pub enum PythonMutationError {
     Unsupported,
+    #[cfg(feature = "hashicorp")]
+    Vault(Box<litellm_secrets_hashicorp::PythonFailure>),
     #[cfg(feature = "cyberark")]
     CyberarkWrite {
         name: String,
@@ -164,4 +166,88 @@ pub async fn rotate_python_provider(
 #[cfg(feature = "cyberark")]
 fn write_success(name: &str) -> serde_json::Value {
     serde_json::json!({"status": "success", "message": format!("Secret {name} written successfully")})
+}
+
+pub enum PythonMutationResponse {
+    Value(serde_json::Value),
+    Json(Vec<u8>),
+}
+
+pub async fn write_python_provider_with_context(
+    manager: &SecretManager,
+    name: &str,
+    value: &crate::SecretValue,
+    context: &litellm_secrets_types::SecretWriteContext,
+) -> Result<PythonMutationResponse, PythonMutationError> {
+    #[cfg(not(feature = "hashicorp"))]
+    let _ = context;
+    #[cfg(feature = "hashicorp")]
+    if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(operation)) =
+        (manager, &context.operation)
+    {
+        return client
+            .write_for_python(
+                name,
+                value,
+                &litellm_secrets_types::SecretWriteContext {
+                    description: context.description.clone(),
+                    tags: context.tags.clone(),
+                    operation: operation.clone(),
+                },
+            )
+            .await
+            .map(PythonMutationResponse::Json)
+            .map_err(|failure| PythonMutationError::Vault(Box::new(failure)));
+    }
+    write_python_provider(manager, name, value)
+        .await
+        .map(PythonMutationResponse::Value)
+}
+
+pub async fn delete_python_provider_with_context(
+    manager: &SecretManager,
+    name: &str,
+    context: &SecretOperationContext,
+) -> Result<PythonMutationResponse, PythonMutationError> {
+    #[cfg(not(feature = "hashicorp"))]
+    let _ = context;
+    #[cfg(feature = "hashicorp")]
+    if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(context)) =
+        (manager, context)
+    {
+        client
+            .delete_for_python(name, context)
+            .await
+            .map_err(|failure| PythonMutationError::Vault(Box::new(failure)))?;
+        return Ok(PythonMutationResponse::Value(serde_json::json!({
+            "status": "success", "message": format!("Secret {name} deleted successfully"),
+        })));
+    }
+    delete_python_provider(manager, name)
+        .await
+        .map(PythonMutationResponse::Value)
+}
+
+pub async fn rotate_python_provider_with_context(
+    manager: &SecretManager,
+    current_name: &str,
+    new_name: &str,
+    value: &crate::SecretValue,
+    context: &SecretOperationContext,
+) -> Result<PythonMutationResponse, PythonMutationError> {
+    #[cfg(not(feature = "hashicorp"))]
+    let _ = context;
+    #[cfg(feature = "hashicorp")]
+    if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(context)) =
+        (manager, context)
+    {
+        return client
+            .rotate_for_python(current_name, new_name, value, context)
+            .await
+            .map(PythonMutationResponse::Json)
+            .map_err(|failure| PythonMutationError::Vault(Box::new(failure)));
+    }
+    rotate_python_provider(manager, current_name, new_name, value)
+        .await
+        .map(PythonMutationResponse::Value)
 }

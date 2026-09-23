@@ -5,6 +5,7 @@ mod mutation;
 mod provider;
 pub(crate) mod resolved;
 pub(crate) mod runtime;
+mod vault;
 
 use std::sync::Arc;
 

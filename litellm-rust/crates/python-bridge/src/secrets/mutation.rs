@@ -1,12 +1,20 @@
 use litellm_host_python::to_py;
-use litellm_secrets::{PythonMutationError, cyberark};
+use litellm_secrets::{PythonMutationError, PythonMutationResponse, cyberark};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
 pub(super) fn mutation_value(
-    result: Result<serde_json::Value, PythonMutationError>,
+    result: Result<PythonMutationResponse, PythonMutationError>,
+    context: &super::vault::ErrorContext,
 ) -> PyResult<Py<PyAny>> {
     Python::attach(|py| match result {
-        Ok(value) => to_py(py, &value),
+        Ok(PythonMutationResponse::Value(value)) => to_py(py, &value),
+        Ok(PythonMutationResponse::Json(body)) => match json_value(py, &body) {
+            Ok(value) => Ok(value),
+            Err(error) => error_value(py, error.value(py).str()?.extract()?),
+        },
+        Err(PythonMutationError::Vault(failure)) => {
+            super::vault::failure_value(py, *failure, context)
+        }
         Err(PythonMutationError::CyberarkWrite { name, failure }) => {
             let message = cyberark_failure(py, &name, *failure)?;
             to_py(
@@ -36,19 +44,11 @@ fn cyberark_failure(
 ) -> PyResult<String> {
     let message = match failure.source {
         cyberark::Error::Status(status) | cyberark::Error::AuthStatus(status) => {
-            let httpx = py.import("httpx")?;
             let url = failure
                 .request_url
                 .as_ref()
                 .map_or("", reqwest::Url::as_str);
-            let request = httpx.getattr("Request")?.call1(("POST", url))?;
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("request", request)?;
-            let response = httpx.getattr("Response")?.call((status,), Some(&kwargs))?;
-            match response.call_method0("raise_for_status") {
-                Err(error) => error.value(py).str()?.extract()?,
-                Ok(_) => format!("CyberArk Conjur returned HTTP {status}"),
-            }
+            http_message(py, "POST", url, status)?
         }
         cyberark::Error::Operation(litellm_secrets_types::Error::UnsafeSecretName) => {
             format!("Invalid secret_name {}", name.into_pyobject(py)?.repr()?)
@@ -81,4 +81,34 @@ fn os_error_code(error: &(dyn std::error::Error + 'static)) -> Option<i32> {
         .downcast_ref::<std::io::Error>()
         .and_then(std::io::Error::raw_os_error)
         .or_else(|| error.source().and_then(os_error_code))
+}
+
+pub(super) fn json_value(py: Python<'_>, body: &[u8]) -> PyResult<Py<PyAny>> {
+    py.import("json")?
+        .call_method1("loads", (pyo3::types::PyBytes::new(py, body),))
+        .map(Bound::unbind)
+}
+
+pub(super) fn error_value(py: Python<'_>, message: String) -> PyResult<Py<PyAny>> {
+    to_py(
+        py,
+        &serde_json::json!({"status": "error", "message": message}),
+    )
+}
+
+pub(super) fn http_message(
+    py: Python<'_>,
+    method: &str,
+    url: &str,
+    status: u16,
+) -> PyResult<String> {
+    let httpx = py.import("httpx")?;
+    let request = httpx.getattr("Request")?.call1((method, url))?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("request", request)?;
+    let response = httpx.getattr("Response")?.call((status,), Some(&kwargs))?;
+    match response.call_method0("raise_for_status") {
+        Err(error) => error.value(py).str()?.extract(),
+        Ok(_) => Ok(format!("HTTP {status}")),
+    }
 }

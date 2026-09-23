@@ -272,15 +272,42 @@ impl NativeSecretManager {
         tags: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let backend = self.backend()?;
-        let _ = (description, optional_params, timeout, tags);
+        let _ = tags;
+        let context = litellm_secrets_types::SecretWriteContext {
+            operation: super::provider::mutation_context(
+                self.configuration.system,
+                optional_params,
+                timeout,
+            )?,
+            description: if self.configuration.system == KeyManagementSystem::HashicorpVault {
+                description
+                    .filter(|value| !value.is_none())
+                    .map(|value| {
+                        if value.is_truthy()? {
+                            value.extract().map(Some)
+                        } else {
+                            Ok(None)
+                        }
+                    })
+                    .transpose()?
+                    .flatten()
+            } else {
+                None
+            },
+            ..litellm_secrets_types::SecretWriteContext::default()
+        };
+        let error_context =
+            super::vault::ErrorContext::capture(py, self.configuration.system, timeout)?;
         run_async_value(py, async move {
             super::mutation::mutation_value(
-                litellm_secrets::write_python_provider(
+                litellm_secrets::write_python_provider_with_context(
                     &backend,
                     &secret_name,
                     &litellm_secrets::SecretValue::new(secret_value),
+                    &context,
                 )
                 .await,
+                &error_context,
             )
         })
     }
@@ -295,10 +322,20 @@ impl NativeSecretManager {
         timeout: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let backend = self.backend()?;
-        let _ = (recovery_window_in_days, optional_params, timeout);
+        let _ = recovery_window_in_days;
+        let context =
+            super::provider::mutation_context(self.configuration.system, optional_params, timeout)?;
+        let error_context =
+            super::vault::ErrorContext::capture(py, self.configuration.system, timeout)?;
         run_async_value(py, async move {
             super::mutation::mutation_value(
-                litellm_secrets::delete_python_provider(&backend, &secret_name).await,
+                litellm_secrets::delete_python_provider_with_context(
+                    &backend,
+                    &secret_name,
+                    &context,
+                )
+                .await,
+                &error_context,
             )
         })
     }
@@ -314,16 +351,21 @@ impl NativeSecretManager {
         timeout: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let backend = self.backend()?;
-        let _ = (optional_params, timeout);
+        let context =
+            super::provider::mutation_context(self.configuration.system, optional_params, timeout)?;
+        let error_context =
+            super::vault::ErrorContext::capture(py, self.configuration.system, timeout)?;
         run_async_value(py, async move {
             super::mutation::mutation_value(
-                litellm_secrets::rotate_python_provider(
+                litellm_secrets::rotate_python_provider_with_context(
                     &backend,
                     &current_secret_name,
                     &new_secret_name,
                     &litellm_secrets::SecretValue::new(new_secret_value),
+                    &context,
                 )
                 .await,
+                &error_context,
             )
         })
     }

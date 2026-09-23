@@ -131,3 +131,19 @@ fn vault_field(params: Option<&Bound<'_, PyDict>>, name: &str) -> PyResult<Optio
         None => Ok(None),
     }
 }
+
+pub(super) fn mutation_context(
+    system: KeyManagementSystem,
+    optional_params: Option<&Bound<'_, PyAny>>,
+    timeout: Option<&Bound<'_, PyAny>>,
+) -> PyResult<SecretOperationContext> {
+    if system == KeyManagementSystem::HashicorpVault {
+        return Ok(SecretOperationContext::Hashicorp(
+            HashicorpOperationContext {
+                timeout: read_timeout(timeout)?,
+                ..vault_context(optional_params)?
+            },
+        ));
+    }
+    Ok(SecretOperationContext::Default)
+}

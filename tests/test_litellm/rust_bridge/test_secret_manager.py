@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
@@ -175,9 +176,12 @@ def test_custom_subclass_keeps_its_python_reader_under_native_selection() -> Non
     binding: Final[NativeBinding[NativeSecretManagerFactory]] = NativeBinding("unused", validate=lambda value: None)
     binding.override(DecliningFactory)
     rules: Final[Rules] = (SecretManagerRule(Rollout.RUST_REQUIRED, systems=frozenset({"aws_secret_manager"})),)
-    assert get_secret_from_manager(
-        CustomManager(aws_region_name="us-east-1"), "aws_secret_manager", "KEY", rules=rules, binding=binding
-    ) == "custom:KEY"
+    assert (
+        get_secret_from_manager(
+            CustomManager(aws_region_name="us-east-1"), "aws_secret_manager", "KEY", rules=rules, binding=binding
+        )
+        == "custom:KEY"
+    )
 
 
 def test_read_dispatch_uses_native_backend_with_explicit_rules(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -392,9 +396,7 @@ def test_python_only_manager_types_never_construct_a_native_backend(system: str)
 
 
 @pytest.mark.parametrize("factory", (None, SimpleNamespace(from_client="not callable")))
-def test_invalid_native_factories_are_reported_as_unavailable(
-    monkeypatch: pytest.MonkeyPatch, factory: object
-) -> None:
+def test_invalid_native_factories_are_reported_as_unavailable(monkeypatch: pytest.MonkeyPatch, factory: object) -> None:
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: SimpleNamespace(_SecretManagerRuntime=factory))
     rules: Final[Rules] = (SecretManagerRule(Rollout.RUST_REQUIRED, systems=frozenset({"aws_secret_manager"})),)
 
@@ -417,9 +419,7 @@ def test_native_binding_accepts_a_callable_factory(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.parametrize("value", ("text", "", True, False, 42, 2**100, [1, "two"], {"nested": True}, None))
-async def test_aws_primary_values_match_python_handler(
-    monkeypatch: pytest.MonkeyPatch, value: JsonValue
-) -> None:
+async def test_aws_primary_values_match_python_handler(monkeypatch: pytest.MonkeyPatch, value: JsonValue) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
         server.default_response = ResponseSpec(body={"SecretString": json.dumps({"KEY": value})})
@@ -474,12 +474,14 @@ def test_aws_absence_and_failed_reads_match_python_without_environment_fallback(
         monkeypatch.setattr(litellm, "_key_management_settings", settings)
         main: Final = import_module("litellm.secret_managers.main")
         monkeypatch.setattr(
-            main, "get_secret_from_manager",
+            main,
+            "get_secret_from_manager",
             partial(get_secret_from_manager, rules=(SecretManagerRule(Rollout.PYTHON_ONLY),)),
         )
         reference: Final = litellm.get_secret("KEY", "must-not-default")
         monkeypatch.setattr(
-            main, "get_secret_from_manager",
+            main,
+            "get_secret_from_manager",
             partial(get_secret_from_manager, rules=(SecretManagerRule(Rollout.RUST_REQUIRED),)),
         )
         actual: Final = litellm.get_secret("KEY", "must-not-default")
@@ -487,7 +489,7 @@ def test_aws_absence_and_failed_reads_match_python_without_environment_fallback(
         assert actual == ("" if primary is None and body.get("SecretString") == "" else None)
 
 
-@pytest.mark.parametrize("document", ("{", "not-json", "[1]", "null", "true", "42", '\"text\"'))
+@pytest.mark.parametrize("document", ("{", "not-json", "[1]", "null", "true", "42", '"text"'))
 async def test_aws_primary_json_errors_preserve_python_exception_details(
     monkeypatch: pytest.MonkeyPatch, document: str
 ) -> None:
@@ -578,8 +580,11 @@ async def test_public_aws_reads_preserve_coroutines_and_per_call_credentials(
             )
             signed_request.context["timestamp"] = request.headers["x-amz-date"]
             signer: Final = SigV4Auth(
-                Credentials(options["aws_access_key_id"], options["aws_secret_access_key"], options["aws_session_token"]),
-                "secretsmanager", options["aws_region_name"],
+                Credentials(
+                    options["aws_access_key_id"], options["aws_secret_access_key"], options["aws_session_token"]
+                ),
+                "secretsmanager",
+                options["aws_region_name"],
             )
             string_to_sign: Final = signer.string_to_sign(signed_request, signer.canonical_request(signed_request))
             assert request.headers["authorization"].split("Signature=")[1] == signer.signature(
@@ -603,9 +608,10 @@ async def test_public_aws_primary_reads_ignore_operation_overrides_like_python(
         _select_provider_reads(monkeypatch, "litellm.secret_managers.aws_secret_manager_v2", rollout)
         options: Final = {"aws_bedrock_runtime_endpoint": unused.base_url}
         assert manager.sync_read_secret("KEY", options, 0, "primary") is True
-        assert await manager.async_read_secret(
-            "KEY", optional_params=options, timeout=0, primary_secret_name="primary"
-        ) is True
+        assert (
+            await manager.async_read_secret("KEY", optional_params=options, timeout=0, primary_secret_name="primary")
+            is True
+        )
         assert tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": "primary"},) * 2
 
 
@@ -708,7 +714,8 @@ async def test_public_cyberark_reads_reuse_authentication_and_cached_values(
             '"secret-value"' if rollout is Rollout.RUST_REQUIRED else "secret-value"
         )
         assert tuple(request.path for request in server.requests) == (
-            "/authn/account/reader/authenticate", "/secrets/account/variable/KEY"
+            "/authn/account/reader/authenticate",
+            "/secrets/account/variable/KEY",
         )
 
 
@@ -720,7 +727,8 @@ async def test_public_native_selection_and_missing_extension_keep_the_python_met
     binding.override(None)
     module: Final = import_module("litellm.secret_managers.aws_secret_manager_v2")
     monkeypatch.setattr(
-        module, "resolve_native_provider_reader",
+        module,
+        "resolve_native_provider_reader",
         partial(resolve_native_provider_reader, rules=(SecretManagerRule(rollout),), binding=binding),
     )
     with recording_service() as server:
@@ -776,13 +784,17 @@ def test_public_google_reader_uses_the_selected_binding_without_replaying_python
 
     class Reader(_RecordingRuntime):
         def sync_read_secret(
-            self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+            self,
+            secret_name: str,
+            optional_params: Mapping[str, object] | None = None,
             timeout: float | httpx.Timeout | None = None,
         ) -> str | None:
             return self.read_secret(secret_name)
 
         async def async_read_secret(
-            self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+            self,
+            secret_name: str,
+            optional_params: Mapping[str, object] | None = None,
             timeout: float | httpx.Timeout | None = None,
         ) -> str | None:
             return self.sync_read_secret(secret_name)
@@ -802,7 +814,8 @@ def test_public_google_reader_uses_the_selected_binding_without_replaying_python
     binding.override(Factory)
     module: Final = import_module("litellm.secret_managers.google_secret_manager")
     monkeypatch.setattr(
-        module, "resolve_native_provider_reader",
+        module,
+        "resolve_native_provider_reader",
         partial(resolve_native_provider_reader, rules=(SecretManagerRule(Rollout.RUST_REQUIRED),), binding=binding),
     )
     assert manager.get_secret_from_google_secret_manager(secret_name="KEY") == value
@@ -824,14 +837,16 @@ def _select_cyberark_mutations(monkeypatch: pytest.MonkeyPatch, rollout: Rollout
     module: Final = import_module("litellm.secret_managers.cyberark_secret_manager")
     _select_provider_reads(monkeypatch, module.__name__, rollout)
     monkeypatch.setattr(
-        module, "resolve_native_provider_writer",
+        module,
+        "resolve_native_provider_writer",
         partial(resolve_native_provider_writer, rules=(SecretManagerRule(rollout),)),
     )
 
 
 @pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
 async def test_public_cyberark_writes_and_deletes_share_the_read_cache(
-    monkeypatch: pytest.MonkeyPatch, rollout: Rollout,
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
 ) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
@@ -842,12 +857,18 @@ async def test_public_cyberark_writes_and_deletes_share_the_read_cache(
         _select_cyberark_mutations(monkeypatch, rollout)
         assert manager.sync_read_secret("KEY") == "old"
         pending: Final = manager.async_write_secret(
-            "KEY", "new-value", "ignored", {"ignored": object()}, 0, {"ignored": object()},
+            "KEY",
+            "new-value",
+            "ignored",
+            {"ignored": object()},
+            0,
+            {"ignored": object()},
         )
         assert inspect.iscoroutine(pending)
         assert len(server.requests) == 2
         assert await asyncio.create_task(pending) == {
-            "status": "success", "message": "Secret KEY written successfully",
+            "status": "success",
+            "message": "Secret KEY written successfully",
         }
         assert manager.sync_read_secret("KEY") == "new-value"
         assert await manager.async_read_secret("KEY") == "new-value"
@@ -859,8 +880,11 @@ async def test_public_cyberark_writes_and_deletes_share_the_read_cache(
         assert len(server.requests) == 4
         assert manager.sync_read_secret("KEY") == "provider-after-delete"
         assert tuple(request.path for request in server.requests) == (
-            "/authn/account/reader/authenticate", "/secrets/account/variable/KEY",
-            "/policies/account/policy/root", "/secrets/account/variable/KEY", "/secrets/account/variable/KEY",
+            "/authn/account/reader/authenticate",
+            "/secrets/account/variable/KEY",
+            "/policies/account/policy/root",
+            "/secrets/account/variable/KEY",
+            "/secrets/account/variable/KEY",
         )
         assert server.requests[3].raw_body == b"new-value"
 
@@ -868,13 +892,19 @@ async def test_public_cyberark_writes_and_deletes_share_the_read_cache(
 @pytest.mark.parametrize("status", (401, 403, 500))
 @pytest.mark.parametrize("authentication", (False, True))
 async def test_public_cyberark_write_errors_match_python_without_http_retries(
-    monkeypatch: pytest.MonkeyPatch, status: int, authentication: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    authentication: bool,
 ) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
         responses: Final = (
-            (ResponseSpec(status=status, body={}),) * 2 if authentication else (
-                ResponseSpec(body=b"token"), ResponseSpec(body={}), ResponseSpec(status=status, body={}),
+            (ResponseSpec(status=status, body={}),) * 2
+            if authentication
+            else (
+                ResponseSpec(body=b"token"),
+                ResponseSpec(body={}),
+                ResponseSpec(status=status, body={}),
             )
         )
         for response in responses * 2:
@@ -894,7 +924,8 @@ async def test_public_cyberark_write_errors_match_python_without_http_retries(
 
 @pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
 async def test_public_cyberark_write_recovers_from_initial_policy_authentication_failure(
-    monkeypatch: pytest.MonkeyPatch, rollout: Rollout,
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
 ) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
@@ -905,17 +936,22 @@ async def test_public_cyberark_write_recovers_from_initial_policy_authentication
         manager: Final = _cyberark(monkeypatch, server.base_url)
         _select_cyberark_mutations(monkeypatch, rollout)
         assert await manager.async_write_secret("KEY", "value") == {
-            "status": "success", "message": "Secret KEY written successfully",
+            "status": "success",
+            "message": "Secret KEY written successfully",
         }
         assert tuple(request.path for request in server.requests) == (
-            "/authn/account/reader/authenticate", "/authn/account/reader/authenticate", "/secrets/account/variable/KEY",
+            "/authn/account/reader/authenticate",
+            "/authn/account/reader/authenticate",
+            "/secrets/account/variable/KEY",
         )
 
 
 @pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
 @pytest.mark.parametrize("name", ("../KEY", "line\nKEY", "a\u2028b"))
 async def test_public_cyberark_write_rejects_unsafe_names_before_authentication(
-    monkeypatch: pytest.MonkeyPatch, rollout: Rollout, name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
+    name: str,
 ) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
@@ -923,14 +959,17 @@ async def test_public_cyberark_write_rejects_unsafe_names_before_authentication(
         manager: Final = _cyberark(monkeypatch, server.base_url)
         _select_cyberark_mutations(monkeypatch, rollout)
         assert await manager.async_write_secret(name, "value") == {
-            "status": "error", "message": f"Invalid secret_name {name!r}",
+            "status": "error",
+            "message": f"Invalid secret_name {name!r}",
         }
 
 
 @pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
 @pytest.mark.parametrize("same_name", (False, True))
 async def test_public_cyberark_rotation_returns_the_write_response_and_retains_old_alias(
-    monkeypatch: pytest.MonkeyPatch, rollout: Rollout, same_name: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
+    same_name: bool,
 ) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
@@ -946,10 +985,12 @@ async def test_public_cyberark_rotation_returns_the_write_response_and_retains_o
         assert inspect.iscoroutine(pending)
         assert server.requests == []
         assert await asyncio.create_task(pending) == {
-            "status": "success", "message": f"Secret {new_name} written successfully",
+            "status": "success",
+            "message": f"Secret {new_name} written successfully",
         }
         assert tuple(request.method for request in server.requests) == (
-            ("POST", "GET", "POST", "POST", "GET") if rollout is Rollout.RUST_REQUIRED
+            ("POST", "GET", "POST", "POST", "GET")
+            if rollout is Rollout.RUST_REQUIRED
             else ("POST", "GET", "POST", "POST")
         )
         assert server.requests[3].raw_body == b"new-value"
@@ -957,7 +998,8 @@ async def test_public_cyberark_rotation_returns_the_write_response_and_retains_o
 
 @pytest.mark.parametrize("replacement", (None, b"wrong-value"))
 async def test_public_cyberark_rotation_requires_a_fresh_matching_replacement(
-    monkeypatch: pytest.MonkeyPatch, replacement: bytes | None,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: bytes | None,
 ) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
@@ -972,14 +1014,18 @@ async def test_public_cyberark_rotation_requires_a_fresh_matching_replacement(
             await manager.async_rotate_secret("OLD", "NEW", "new-value")
         assert manager.sync_read_secret("OLD") == "old-value"
         assert tuple(request.path for request in server.requests) == (
-            "/authn/account/reader/authenticate", "/secrets/account/variable/OLD", "/policies/account/policy/root",
-            "/secrets/account/variable/NEW", "/secrets/account/variable/NEW",
+            "/authn/account/reader/authenticate",
+            "/secrets/account/variable/OLD",
+            "/policies/account/policy/root",
+            "/secrets/account/variable/NEW",
+            "/secrets/account/variable/NEW",
         )
 
 
 @pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
 async def test_public_cyberark_cached_authentication_does_not_retry_denied_reads(
-    monkeypatch: pytest.MonkeyPatch, rollout: Rollout,
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
 ) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
@@ -999,7 +1045,9 @@ async def test_cyberark_handler_errors_match_python_after_cached_authentication_
     pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
         for response in (
-            ResponseSpec(body=b"token"), ResponseSpec(body=b"value"), ResponseSpec(status=401, body={}),
+            ResponseSpec(body=b"token"),
+            ResponseSpec(body=b"value"),
+            ResponseSpec(status=401, body={}),
         ) * 2:
             server.enqueue(response)
         server.expected_requests = 6
@@ -1037,19 +1085,24 @@ async def test_public_cyberark_connection_errors_match_python(
 @pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
 @pytest.mark.parametrize("operation", ("write", "delete", "rotate"))
 async def test_public_cyberark_mutations_preserve_missing_extension_selection(
-    monkeypatch: pytest.MonkeyPatch, rollout: Rollout, operation: str,
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
+    operation: str,
 ) -> None:
     binding: Final[NativeBinding[NativeSecretManagerFactory]] = NativeBinding("unused", validate=lambda value: None)
     binding.override(None)
     module: Final = import_module("litellm.secret_managers.cyberark_secret_manager")
     _select_provider_reads(monkeypatch, module.__name__, Rollout.PYTHON_ONLY)
     monkeypatch.setattr(
-        module, "resolve_native_provider_writer",
+        module,
+        "resolve_native_provider_writer",
         partial(resolve_native_provider_writer, rules=(SecretManagerRule(rollout),), binding=binding),
     )
     with recording_service() as server:
-        bodies: Final = () if rollout is Rollout.RUST_REQUIRED or operation == "delete" else (
-            (b"token", b"old", {}, {}) if operation == "rotate" else (b"token", {}, {})
+        bodies: Final = (
+            ()
+            if rollout is Rollout.RUST_REQUIRED or operation == "delete"
+            else ((b"token", b"old", {}, {}) if operation == "rotate" else (b"token", {}, {}))
         )
         for body in bodies:
             server.enqueue(ResponseSpec(body=body))
@@ -1085,3 +1138,426 @@ async def test_public_cyberark_rotation_stops_after_a_failed_write(monkeypatch: 
         assert "401" in response["message"]
         assert manager.sync_read_secret("OLD") == "old-value"
         assert tuple(request.method for request in server.requests) == ("POST", "GET", "POST", "POST")
+
+
+def _select_vault_mutations(monkeypatch: pytest.MonkeyPatch, rollout: Rollout) -> None:
+    module: Final = import_module("litellm.secret_managers.hashicorp_secret_manager")
+    _select_provider_reads(monkeypatch, module.__name__, rollout)
+    monkeypatch.setattr(
+        module,
+        "resolve_native_provider_writer",
+        partial(resolve_native_provider_writer, rules=(SecretManagerRule(rollout),)),
+    )
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+@pytest.mark.parametrize("description", (None, "", "purpose"))
+async def test_public_vault_writes_preserve_complete_responses_and_request_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
+    description: str | None,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        response: Final = {
+            "request_id": "test-request",
+            "data": {"version": 2, "custom_metadata": {"large": 2**100}},
+            "warnings": ["test-warning"],
+            "unknown_field": {"nested": [None, True, ""]},
+        }
+        server.enqueue(ResponseSpec(body=response))
+        server.expected_requests = 1
+        manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, rollout)
+        options: Final = {
+            "secret_manager_settings": {"namespace": "team", "mount": "kv", "path_prefix": "app", "data": "token"}
+        }
+        pending: Final = manager.async_write_secret("KEY", "value", description, options, 2, {"ignored": object()})
+        assert inspect.iscoroutine(pending)
+        assert server.requests == []
+        result: Final = await asyncio.create_task(pending)
+        assert result == response
+        assert tuple(result) == tuple(response)
+        request: Final = server.requests[0]
+        assert request.method == "POST"
+        assert request.headers["x-vault-token"] == "token"
+        namespace: Final = request.headers.get("x-vault-namespace")
+        assert request.path == ("/v1/kv/data/app/KEY" if namespace else "/v1/team/kv/data/app/KEY")
+        assert namespace in (None, "team")
+        assert json.loads(request.raw_body) == {
+            "data": {"token": "value", **({"description": description} if description else {})},
+        }
+        assert options == {
+            "secret_manager_settings": {"namespace": "team", "mount": "kv", "path_prefix": "app", "data": "token"}
+        }
+
+
+@pytest.mark.parametrize("operation", ("write", "delete"))
+@pytest.mark.parametrize("status", (400, 403, 500))
+async def test_public_vault_mutation_http_errors_match_python_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    status: int,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(status=status, body={"errors": ["denied"]})
+        server.expected_requests = 2
+        options: Final = {"namespace": "team", "mount": "kv", "path_prefix": "prefix"}
+        reference_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.PYTHON_ONLY)
+        reference: Final = (
+            await reference_manager.async_write_secret("KEY", "value", optional_params=options)
+            if operation == "write"
+            else await reference_manager.async_delete_secret("KEY", optional_params=options)
+        )
+        native_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        actual: Final = (
+            await native_manager.async_write_secret("KEY", "value", optional_params=options)
+            if operation == "write"
+            else await native_manager.async_delete_secret("KEY", optional_params=options)
+        )
+        assert actual == reference
+        assert tuple(actual) == tuple(reference)
+        assert actual["status"] == "error"
+        assert str(status) in actual["message"]
+
+
+@pytest.mark.parametrize("body", (b"{", b"", b"null", b"[1,2]", b'{"large":1267650600228229401496703205376}'))
+async def test_public_vault_write_response_conversion_matches_python(
+    monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=body)
+        server.expected_requests = 2
+        reference_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.PYTHON_ONLY)
+        reference: Final = await reference_manager.async_write_secret("KEY", "value")
+        native_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        actual: Final = await native_manager.async_write_secret("KEY", "value")
+        assert type(actual) is type(reference)
+        assert actual == reference
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+async def test_public_vault_deletion_invalidates_cached_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.enqueue(ResponseSpec(body=_vault_body("old")))
+        server.enqueue(ResponseSpec(status=204, body=b""))
+        server.enqueue(ResponseSpec(body=_vault_body("after-delete")))
+        server.expected_requests = 3
+        manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, rollout)
+        assert manager.sync_read_secret("KEY") == "old"
+        pending: Final = manager.async_delete_secret("KEY", None, {"ignored": object()}, 2)
+        assert inspect.iscoroutine(pending)
+        assert len(server.requests) == 1
+        assert await asyncio.create_task(pending) == {"status": "success", "message": "Secret KEY deleted successfully"}
+        assert await manager.async_read_secret("KEY") == "after-delete"
+        assert tuple(request.method for request in server.requests) == ("GET", "DELETE", "GET")
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+@pytest.mark.parametrize("same_name", (False, True))
+@pytest.mark.parametrize("delete_status", (204, 403))
+async def test_public_vault_rotation_preserves_response_and_best_effort_deletion(
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
+    same_name: bool,
+    delete_status: int,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        response: Final = {"request_id": "write-id", "data": {"version": 3}, "extra": [1, 2]}
+        server.enqueue(ResponseSpec(body=b"current-existence-is-status-only"))
+        server.enqueue(ResponseSpec(body=response))
+        server.enqueue(ResponseSpec(body=_vault_body("replacement")))
+        if not same_name:
+            server.enqueue(ResponseSpec(status=delete_status, body=b""))
+        server.expected_requests = 3 if same_name else 4
+        manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, rollout)
+        new_name: Final = "OLD" if same_name else "NEW"
+        pending: Final = manager.async_rotate_secret("OLD", new_name, "replacement", timeout=2)
+        assert inspect.iscoroutine(pending)
+        assert server.requests == []
+        assert await asyncio.create_task(pending) == response
+        assert tuple(request.method for request in server.requests) == (
+            ("GET", "POST", "GET") if same_name else ("GET", "POST", "GET", "DELETE")
+        )
+        assert json.loads(server.requests[1].raw_body) == {
+            "data": {"key": "replacement", "description": "Rotated from OLD"},
+        }
+        assert urlsplit(server.requests[2].path).path == f"/v1/secret/data/{new_name}"
+
+
+@pytest.mark.parametrize("stage", ("current", "write", "verify"))
+@pytest.mark.parametrize("status", (404, 403, 500))
+async def test_public_vault_rotation_failure_messages_and_request_counts_match_python(
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    status: int,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        before: Final = (
+            ()
+            if stage == "current"
+            else (
+                (ResponseSpec(body=_vault_body("old")),)
+                if stage == "write"
+                else (
+                    ResponseSpec(body=_vault_body("old")),
+                    ResponseSpec(body={"data": {"version": 2}}),
+                )
+            )
+        )
+        responses: Final = (*before, ResponseSpec(status=status, body={"errors": ["denied"]}))
+        for response in responses * 2:
+            server.enqueue(response)
+        server.expected_requests = len(responses) * 2
+        reference_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.PYTHON_ONLY)
+        reference: Final = await reference_manager.async_rotate_secret("OLD", "NEW", "value")
+        native_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        actual: Final = await native_manager.async_rotate_secret("OLD", "NEW", "value")
+        assert actual == reference
+        assert actual["status"] == "error"
+
+
+@pytest.mark.parametrize("value", (None, "different", True, 42, [1, "two"]))
+async def test_public_vault_rotation_mismatches_do_not_delete_the_old_alias(
+    monkeypatch: pytest.MonkeyPatch,
+    value: JsonValue,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        responses: Final = (
+            ResponseSpec(body=_vault_body("old")),
+            ResponseSpec(body={"data": {"version": 2}}),
+            ResponseSpec(body={"data": {"data": {"key": value}}}),
+        )
+        for response in responses * 2:
+            server.enqueue(response)
+        server.expected_requests = 6
+        reference_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.PYTHON_ONLY)
+        reference: Final = await reference_manager.async_rotate_secret("OLD", "NEW", "value")
+        native_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        actual: Final = await native_manager.async_rotate_secret("OLD", "NEW", "value")
+        assert actual == reference
+        assert actual["status"] == "error"
+        assert all(request.method != "DELETE" for request in server.requests)
+
+
+@pytest.mark.parametrize("operation", ("write", "delete", "rotate"))
+async def test_public_vault_mutation_timeouts_match_python(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=_vault_body("value"), delay=0.25)
+        server.expected_requests = 2
+        reference_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.PYTHON_ONLY)
+        reference: Final = await {
+            "write": partial(reference_manager.async_write_secret, "KEY", "value"),
+            "delete": partial(reference_manager.async_delete_secret, "KEY"),
+            "rotate": partial(reference_manager.async_rotate_secret, "OLD", "NEW", "value"),
+        }[operation](timeout=0.05)
+        native_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        actual: Final = await {
+            "write": partial(native_manager.async_write_secret, "KEY", "value"),
+            "delete": partial(native_manager.async_delete_secret, "KEY"),
+            "rotate": partial(native_manager.async_rotate_secret, "OLD", "NEW", "value"),
+        }[operation](timeout=0.05)
+        if operation == "write":
+            assert isinstance(actual["message"], str)
+            assert isinstance(reference["message"], str)
+            pattern: Final = r"time taken=(\d+(?:\.\d+)?) seconds"
+            assert re.sub(pattern, "time taken=<elapsed> seconds", actual["message"]) == re.sub(
+                pattern,
+                "time taken=<elapsed> seconds",
+                reference["message"],
+            )
+            elapsed: Final = re.search(pattern, actual["message"])
+            assert elapsed is not None
+            assert float(elapsed[1]) >= 0.05
+        else:
+            assert actual == reference
+        assert actual["status"] == "error"
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+@pytest.mark.parametrize("operation", ("write", "delete", "rotate"))
+async def test_public_vault_unsafe_names_fail_before_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
+    operation: str,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.expected_requests = 0
+        manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, rollout)
+        result: Final = await {
+            "write": partial(manager.async_write_secret, "../KEY", "value"),
+            "delete": partial(manager.async_delete_secret, "../KEY"),
+            "rotate": partial(manager.async_rotate_secret, "../KEY", "NEW", "value"),
+        }[operation]()
+        assert result == {"status": "error", "message": "Invalid secret_name '../KEY'"}
+
+
+@pytest.mark.parametrize("operation", ("write", "delete", "rotate"))
+async def test_public_vault_authentication_errors_match_python(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("HCP_VAULT_APPROLE_ROLE_ID", "role")
+    monkeypatch.setenv("HCP_VAULT_APPROLE_SECRET_ID", "secret-id")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(status=403, body={"errors": ["denied"]})
+        server.expected_requests = 2
+        reference_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.PYTHON_ONLY)
+        reference: Final = await {
+            "write": partial(reference_manager.async_write_secret, "KEY", "value"),
+            "delete": partial(reference_manager.async_delete_secret, "KEY"),
+            "rotate": partial(reference_manager.async_rotate_secret, "OLD", "NEW", "value"),
+        }[operation]()
+        native_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        actual: Final = await {
+            "write": partial(native_manager.async_write_secret, "KEY", "value"),
+            "delete": partial(native_manager.async_delete_secret, "KEY"),
+            "rotate": partial(native_manager.async_rotate_secret, "OLD", "NEW", "value"),
+        }[operation]()
+        assert actual == reference
+        assert actual["status"] == "error"
+        assert tuple(request.path for request in server.requests) == ("/v1/auth/approle/login",) * 2
+
+
+async def test_public_vault_rotation_stops_on_a_success_response_containing_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        result: Final = {"status": "error", "message": "write rejected", "extra": 2**100}
+        for response in (ResponseSpec(body=_vault_body("old")), ResponseSpec(body=result)) * 2:
+            server.enqueue(response)
+        server.expected_requests = 4
+        reference_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.PYTHON_ONLY)
+        reference: Final = await reference_manager.async_rotate_secret("OLD", "NEW", "value")
+        native_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        actual: Final = await native_manager.async_rotate_secret("OLD", "NEW", "value")
+        assert actual == reference == result
+        assert tuple(request.method for request in server.requests) == ("GET", "POST", "GET", "POST")
+
+
+async def test_public_native_vault_write_invalidates_stale_cached_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.enqueue(ResponseSpec(body=_vault_body("old")))
+        server.enqueue(ResponseSpec(body={"data": {"version": 2}}))
+        server.enqueue(ResponseSpec(body=_vault_body("new")))
+        server.expected_requests = 3
+        manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        assert manager.sync_read_secret("KEY") == "old"
+        assert await manager.async_write_secret("KEY", "new") == {"data": {"version": 2}}
+        assert manager.sync_read_secret("KEY") == "new"
+        assert tuple(request.method for request in server.requests) == ("GET", "POST", "GET")
+
+
+async def test_public_native_vault_write_rejects_description_overwriting_the_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.expected_requests = 0
+        manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        assert await manager.async_write_secret("KEY", "value", "description", {"data": "description"}) == {
+            "status": "error",
+            "message": "HashiCorp Vault data key conflicts with description",
+        }
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+@pytest.mark.parametrize("operation", ("write", "delete", "rotate"))
+async def test_public_vault_mutations_preserve_missing_extension_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
+    operation: str,
+) -> None:
+    binding: Final[NativeBinding[NativeSecretManagerFactory]] = NativeBinding("unused", validate=lambda value: None)
+    binding.override(None)
+    module: Final = import_module("litellm.secret_managers.hashicorp_secret_manager")
+    _select_provider_reads(monkeypatch, module.__name__, Rollout.PYTHON_ONLY)
+    monkeypatch.setattr(
+        module,
+        "resolve_native_provider_writer",
+        partial(resolve_native_provider_writer, rules=(SecretManagerRule(rollout),), binding=binding),
+    )
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=_vault_body("value"))
+        server.expected_requests = 0 if rollout is Rollout.RUST_REQUIRED else (4 if operation == "rotate" else 1)
+        manager: Final = _vault(monkeypatch, server.base_url)
+        pending: Final = {
+            "write": partial(manager.async_write_secret, "KEY", "value"),
+            "delete": partial(manager.async_delete_secret, "KEY"),
+            "rotate": partial(manager.async_rotate_secret, "OLD", "NEW", "value"),
+        }[operation]()
+        assert inspect.iscoroutine(pending)
+        assert server.requests == []
+        if rollout is Rollout.RUST_REQUIRED:
+            with pytest.raises(RuntimeError, match="runtime is unavailable"):
+                await pending
+        else:
+            result: Final = await pending
+            assert result == (
+                {"status": "success", "message": "Secret KEY deleted successfully"}
+                if operation == "delete"
+                else _vault_body("value")
+            )
+
+
+@pytest.mark.parametrize("body", (None, [], 42, {"data": None}, {"data": {"data": []}}, {}, {"data": {}}))
+async def test_public_vault_rotation_preserves_malformed_verification_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    body: JsonValue,
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        responses: Final = (
+            ResponseSpec(body=_vault_body("old")),
+            ResponseSpec(body={"data": {"version": 2}}),
+            ResponseSpec(body=body),
+        )
+        for response in responses * 2:
+            server.enqueue(response)
+        server.expected_requests = 6
+        reference_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.PYTHON_ONLY)
+        reference: Final = await reference_manager.async_rotate_secret("OLD", "NEW", "value")
+        native_manager: Final = _vault(monkeypatch, server.base_url)
+        _select_vault_mutations(monkeypatch, Rollout.RUST_REQUIRED)
+        actual: Final = await native_manager.async_rotate_secret("OLD", "NEW", "value")
+        assert actual == reference
+        assert actual["status"] == "error"
+        assert all(request.method != "DELETE" for request in server.requests)

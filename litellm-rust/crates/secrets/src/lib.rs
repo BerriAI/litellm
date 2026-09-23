@@ -19,8 +19,9 @@ pub use litellm_secrets_types::{
 pub use native::load_native_manager;
 pub use oidc::{OidcProvider, OidcReference, OidcResolver};
 pub use provider::{
-    PythonMutationError, PythonReadRequest, delete_python_provider, read_python_provider,
-    rotate_python_provider, write_python_provider,
+    PythonMutationError, PythonMutationResponse, PythonReadRequest, delete_python_provider,
+    delete_python_provider_with_context, read_python_provider, rotate_python_provider,
+    rotate_python_provider_with_context, write_python_provider, write_python_provider_with_context,
 };
 pub use resolver::{FailurePolicy, SecretResolver, normalize_nonempty_secret_str};
 pub use state::{SecretManagerState, secret_manager_would_be_consulted};

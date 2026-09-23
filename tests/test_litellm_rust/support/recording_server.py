@@ -97,6 +97,7 @@ def recording_service() -> Iterator[RecordingServer]:
 
         do_POST = _handle
         do_GET = _handle
+        do_DELETE = _handle
 
         def log_message(self, format: str, *args: object) -> None:
             pass
