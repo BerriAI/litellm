@@ -1937,12 +1937,14 @@ def refresh_proxy_server_request_body_snapshot(
     has already stamped ``data["litellm_logging_obj"]`` with a live (non-serializable)
     ``Logging`` instance, so it must be excluded here the same way ``secret_fields``
     and ``proxy_server_request`` are.
+    The live WebSocket also references the ASGI app/router graph, not request body data.
     """
     proxy_server_request = data.get("proxy_server_request")
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
+        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj", "websocket"})
+        | _TRANSPORT_ONLY_CREDENTIAL_KEYS
     )
     proxy_server_request["body"] = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
 
