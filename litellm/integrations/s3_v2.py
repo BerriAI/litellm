@@ -9,9 +9,10 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint; by default each element is
 import asyncio
 import time
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import quote
+from uuid import uuid4
 
 import httpx
 
@@ -26,7 +27,9 @@ from litellm.integrations.s3 import (
     get_s3_object_download_filename,
     get_s3_object_key,
     prompts_only_payload,
+    resolve_s3_batch_file_upload,
     resolve_s3_log_prompts_only,
+    resolve_s3_max_concurrent_uploads,
     resolve_sse_params,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -45,6 +48,13 @@ from .custom_batch_logger import CustomBatchLogger
 
 if TYPE_CHECKING:
     from botocore.credentials import Credentials
+
+
+class S3BatchUploadError(Exception):
+    def __init__(self, failed: int, total: int):
+        self.failed = failed
+        self.total = total
+        super().__init__(f"{failed} of {total} S3 uploads failed; events kept in queue for the next flush")
 
 
 class S3Logger(CustomBatchLogger, BaseAWSLLM):
@@ -239,9 +249,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             params.get("s3_sse_kms_key_id") or s3_sse_kms_key_id,
         )
 
-        self.s3_max_concurrent_uploads = int(params.get("s3_max_concurrent_uploads") or s3_max_concurrent_uploads)
+        self.s3_max_concurrent_uploads = resolve_s3_max_concurrent_uploads(
+            params.get("s3_max_concurrent_uploads", s3_max_concurrent_uploads), DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+        )
 
-        self.s3_batch_file_upload = bool(params.get("s3_batch_file_upload", False)) or s3_batch_file_upload
+        self.s3_batch_file_upload = s3_batch_file_upload or resolve_s3_batch_file_upload(
+            params.get("s3_batch_file_upload")
+        )
 
     def _build_object_url(self, s3_object_key: str) -> str:
         """
@@ -364,7 +378,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.exception("s3 Layer Error - %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
 
-    async def async_upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
+    async def async_upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement) -> bool:
         try:
             import base64
             import hashlib
@@ -442,15 +456,15 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             verbose_logger.exception("Error uploading to s3: %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
+            return False
+        return True
 
-    async def async_send_batch(self):
+    async def async_send_batch(self) -> None:
         """
+        Sends runs from self.log_queue.
 
-        Sends runs from self.log_queue
-
-        Returns: None
-
-        Raises: Does not raise an exception, will only verbose_logger.exception()
+        Raises S3BatchUploadError when any upload failed; CustomBatchLogger.flush_queue
+        keeps the surviving queue entries for the next flush.
         """
         verbose_logger.debug("s3_v2 logger - sending batch of %s", len(self.log_queue))
         batch: Final = tuple(self.log_queue)
@@ -463,18 +477,21 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #  see custom_batch_logger.py which triggers the flush
         #########################################################
         if self.s3_batch_file_upload:
-            await self.async_upload_data_to_s3(self._build_batch_file_element(batch))
+            if not await self.async_upload_data_to_s3(self._build_batch_file_element(batch)):
+                raise S3BatchUploadError(failed=len(batch), total=len(batch))
             return
-        await asyncio.gather(*(self._upload_bounded(element) for element in batch))
+        results: Final = await asyncio.gather(*(self._upload_bounded(element) for element in batch))
+        failed: Final = tuple(element for element, ok in zip(batch, results, strict=True) if not ok)
+        if not failed:
+            return
+        self.log_queue[:] = [*failed, *self.log_queue[len(batch) :]]
+        raise S3BatchUploadError(failed=len(failed), total=len(batch))
 
-    async def _upload_bounded(self, element: s3BatchLoggingElement) -> None:
+    async def _upload_bounded(self, element: s3BatchLoggingElement) -> bool:
         async with self._upload_semaphore:
-            await self.async_upload_data_to_s3(element)
+            return await self.async_upload_data_to_s3(element)
 
     def _build_batch_file_element(self, batch: tuple[s3BatchLoggingElement, ...]) -> s3BatchLoggingElement:
-        from datetime import timezone
-        from uuid import uuid4
-
         now: Final = datetime.now(timezone.utc)
         batch_name: Final = f"batch_{now.strftime('%H-%M-%S')}_{uuid4().hex}"
         return s3BatchLoggingElement(
