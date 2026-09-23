@@ -7,6 +7,7 @@ use litellm_host_python::{
     Completed, Invoke, InvokeError, ResponseOrigin, RouteHost, from_py, lookup, to_py,
 };
 use litellm_http::transport::Error as TransportError;
+use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use pyo3::{
     exceptions::{PyException, PyValueError},
     gc::{PyTraverseError, PyVisit},
@@ -73,14 +74,10 @@ impl MessagesRouteHost {
         }
     }
 
-    fn asynchronous(&self) -> bool {
-        self.asynchronous
-    }
-
     fn public_response(
         &self,
         py: Python<'_>,
-        message: &litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
+        message: &AnthropicMessagesResponse,
         origin: ResponseOrigin,
     ) -> PyResult<Completed> {
         py.import("litellm.rust_bridge.messages.route_host")?
@@ -100,7 +97,7 @@ impl MessagesRouteHost {
         let module = py
             .import("litellm.rust_bridge.call_cache")
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?;
-        if self.asynchronous() {
+        if self.asynchronous {
             let awaitable = module
                 .getattr("lookup")
                 .and_then(|lookup| lookup.call1((self.call_type, arguments)))
@@ -114,19 +111,17 @@ impl MessagesRouteHost {
                 .and_then(|lookup| lookup.call1((self.call_type, arguments)))
                 .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
                 .map(|result| self.cached(&result))
+                .map(Invoke::Ready)
         }
     }
 
-    fn cached(&self, value: &Bound<'_, PyAny>) -> Invoke<Messages> {
+    fn cached(&self, value: &Bound<'_, PyAny>) -> MessagesOpResult {
         if value.is_none() {
-            return Invoke::Ready(MessagesOpResult::Cached(None));
+            return MessagesOpResult::Cached(None);
         }
-        match from_py::<
-            litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
-        >(value)
-        {
-            Ok(message) => Invoke::Ready(MessagesOpResult::Cached(Some(Box::new(message)))),
-            Err(_) => Invoke::Ready(MessagesOpResult::Cached(None)),
+        match from_py::<AnthropicMessagesResponse>(value) {
+            Ok(message) => MessagesOpResult::Cached(Some(Box::new(message))),
+            Err(_) => MessagesOpResult::Cached(None),
         }
     }
 
@@ -221,7 +216,7 @@ impl RouteHost for MessagesRouteHost {
                 .map_err(|error| InvokeError::Python(self.map_failure(py, error))),
             MessagesOp::LookupCache => self.lookup_cache(py, arguments),
             MessagesOp::StoreCache(message) => {
-                let store = if self.asynchronous() {
+                let store = if self.asynchronous {
                     "store"
                 } else {
                     "store_sync"
@@ -246,10 +241,7 @@ impl RouteHost for MessagesRouteHost {
             Some(Pending::Lookup) => {
                 let value =
                     result.map_err(|error| InvokeError::Python(self.map_failure(py, error)))?;
-                match self.cached(value.bind(py)) {
-                    Invoke::Ready(result) => Ok(result),
-                    Invoke::Await(_) => unreachable!("cached() only produces ready results"),
-                }
+                Ok(self.cached(value.bind(py)))
             }
             None => Err(InvokeError::Python(
                 pyo3::exceptions::PyRuntimeError::new_err("route host has no pending operation"),
