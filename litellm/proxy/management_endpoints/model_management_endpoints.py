@@ -340,8 +340,21 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+def _stored_credential_name(existing_litellm_params: GenericLiteLLMParams | None) -> str | None:
+    if existing_litellm_params is None or existing_litellm_params.litellm_credential_name is None:
+        return None
+    return decrypt_value_helper(
+        value=existing_litellm_params.litellm_credential_name,
+        key="litellm_credential_name",
+        exception_type="debug",
+        return_original_value=True,
+    )
+
+
 async def _raise_on_invalid_credential_name(
-    litellm_params: updateLiteLLMParams | None, prisma_client: PrismaClient
+    litellm_params: updateLiteLLMParams | None,
+    existing_litellm_params: GenericLiteLLMParams | None,
+    prisma_client: PrismaClient,
 ) -> None:
     if litellm_params is None or "litellm_credential_name" not in litellm_params.model_fields_set:
         return
@@ -355,6 +368,8 @@ async def _raise_on_invalid_credential_name(
             code=status.HTTP_400_BAD_REQUEST,
             param="litellm_credential_name",
         )
+    if credential_name == _stored_credential_name(existing_litellm_params):
+        return
     if CredentialAccessor.find_credential(credential_name) is not None:
         return
     stored_credential: Final = await CredentialsRepository(WriterPinnedClient(prisma_client.db)).find_by_name(
@@ -1192,7 +1207,7 @@ async def patch_model(
             existing_litellm_params=db_model.litellm_params,
             null_detaches=True,
         )
-        await _raise_on_invalid_credential_name(patch_data.litellm_params, prisma_client)
+        await _raise_on_invalid_credential_name(patch_data.litellm_params, db_model.litellm_params, prisma_client)
 
         ModelManagementAuthChecks.can_user_set_aws_session_tags(
             litellm_params=patch_data.litellm_params,
@@ -1782,10 +1797,11 @@ async def delete_team_models(
     # Under MODEL_RECONCILE_LOCK, for the same reason as delete_model: the rows are
     # gone, but a reconcile holding a pre-delete snapshot would upsert these ids back
     # onto this pod. The lock orders the eviction after any in-flight reconcile.
-    if llm_router is not None:
-        from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK
+    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK, proxy_config
 
-        async with MODEL_RECONCILE_LOCK:
+    async with MODEL_RECONCILE_LOCK:
+        proxy_config.remove_auto_router_catalog_entries(frozenset(deleted_model_ids))
+        if llm_router is not None:
             for model_id in deleted_model_ids:
                 llm_router.delete_deployment(id=model_id)
 
@@ -2011,18 +2027,8 @@ class ModelManagementAuthChecks:
             return True
         if litellm_params.litellm_credential_name is None and not null_detaches:
             return True
-        existing_credential_name: Final = (
-            decrypt_value_helper(
-                value=existing_litellm_params.litellm_credential_name,
-                key="litellm_credential_name",
-                exception_type="debug",
-                return_original_value=True,
-            )
-            if existing_litellm_params is not None and existing_litellm_params.litellm_credential_name is not None
-            else None
-        )
         requested_credential_name: Final = litellm_params.litellm_credential_name
-        if requested_credential_name == existing_credential_name:
+        if requested_credential_name == _stored_credential_name(existing_litellm_params):
             return True
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
@@ -2194,6 +2200,7 @@ async def delete_model(
             llm_router,
             premium_user,
             prisma_client,
+            proxy_config,
             proxy_logging_obj,
             store_model_in_db,
             user_api_key_cache,
@@ -2245,8 +2252,9 @@ async def delete_model(
             # this pod serving a model the database no longer has, until the next
             # reconcile. Taking the lock orders this eviction after any such in-flight
             # reconcile's re-add, so the eviction is the last word.
-            if llm_router is not None:
-                async with MODEL_RECONCILE_LOCK:
+            async with MODEL_RECONCILE_LOCK:
+                proxy_config.remove_auto_router_catalog_entries(frozenset({model_info.id}))
+                if llm_router is not None:
                     llm_router.delete_deployment(id=model_info.id)
 
             # Runs after the row delete so the sibling check sees post-delete state.

@@ -11,6 +11,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
@@ -934,9 +935,30 @@ def test_text_completion_choices_become_assistant_messages_in_choice_order() -> 
         capture_content=True,
     )
 
-    assert data.choices_out == (_assistant_choice(" first", "length"), _assistant_choice(" second", "stop"))
+    assert data.choices_out == (
+        {"index": 0, "logprobs": None, **_assistant_choice(" first", "length")},
+        {"index": 1, "logprobs": None, **_assistant_choice(" second", "stop")},
+    )
     assert data.finish_reasons == ("length", "stop")
     assert data.response_id == "cmpl-1"
+
+
+def test_text_completion_choices_keep_provider_fields_beside_the_synthesized_message() -> None:
+    choice: Final = {
+        "index": 2,
+        "text": "Hello there",
+        "finish_reason": "stop",
+        "logprobs": {"tokens": ["Hello"], "token_logprobs": [-0.1]},
+        "content_filter_results": {"hate": {"filtered": False}},
+        "provider_specific": {"cached": True},
+    }
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload("atext_completion", "gpt-3.5-turbo-instruct", {"choices": [choice]}), capture_content=True
+    )
+
+    assert data.choices_out == (
+        {k: v for k, v in choice.items() if k != "text"} | _assistant_choice("Hello there", "stop"),
+    )
 
 
 def test_text_completion_choices_follow_the_content_capture_gate_but_finish_reasons_do_not() -> None:
@@ -1018,6 +1040,94 @@ def test_moderation_output_follows_the_content_capture_gate() -> None:
 def test_moderation_results_without_a_verdict_produce_no_output() -> None:
     data: Final = LLMCallSpanData.from_standard_logging_payload(
         _route_payload("amoderation", "omni-moderation-latest", {"results": [{"categories": {"violence": True}}]}),
+        capture_content=True,
+    )
+
+    assert data.choices_out == ()
+
+
+def test_rerank_results_become_ranked_indices_and_scores_with_the_document_text() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload(
+            "arerank",
+            "rerank-v4.0-fast",
+            {
+                "id": "rr-1",
+                "results": [
+                    {"index": 2, "relevance_score": 0.91, "document": {"text": "Paris is the capital of France."}},
+                    {"index": 0, "relevance_score": 0.07},
+                    {"index": 1, "relevance_score": 0.02, "document": "not-a-document"},
+                ],
+                "meta": {"billed_units": {"search_units": 1}},
+            },
+        ),
+        capture_content=True,
+    )
+
+    assert data.choices_out == (_assistant_choice("[2] 0.91\nParis is the capital of France.\n\n[0] 0.07\n\n[1] 0.02"),)
+    assert data.finish_reasons == ()
+    assert data.response_id == "rr-1"
+
+
+def test_rerank_output_follows_the_content_capture_gate() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload("arerank", "rerank-v4.0-fast", {"results": [{"index": 0, "relevance_score": 0.5}]})
+    )
+
+    assert data.choices_out == ()
+
+
+def test_rerank_results_without_an_index_and_score_produce_no_output() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload(
+            "arerank",
+            "rerank-v4.0-fast",
+            {"results": [{"index": 0, "document": {"text": "x"}}, {"relevance_score": 0.5}, "not-a-result"]},
+        ),
+        capture_content=True,
+    )
+
+    assert data.choices_out == ()
+
+
+def test_search_results_become_title_url_and_snippet_blocks_in_result_order() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload(
+            "asearch",
+            "exa-search",
+            {
+                "object": "search",
+                "results": [
+                    {"title": "Eiffel Tower", "url": "https://example.com/eiffel", "snippet": "A lattice tower."},
+                    {"url": "https://example.com/bare", "date": "2024-01-01"},
+                    {"title": "no url", "snippet": "kept"},
+                ],
+            },
+        ),
+        capture_content=True,
+    )
+
+    assert data.choices_out == (
+        _assistant_choice(
+            "Eiffel Tower\nhttps://example.com/eiffel\nA lattice tower.\n\nhttps://example.com/bare\n\nno url\nkept"
+        ),
+    )
+    assert data.finish_reasons == ()
+
+
+def test_search_output_follows_the_content_capture_gate() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload("asearch", "exa-search", {"results": [{"url": "https://example.com"}]})
+    )
+
+    assert data.choices_out == ()
+
+
+def test_search_results_without_any_text_field_produce_no_output() -> None:
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload(
+            "asearch", "exa-search", {"results": [{"date": "2024-01-01"}, {"title": "", "url": None}, "not-a-result"]}
+        ),
         capture_content=True,
     )
 
@@ -1234,6 +1344,148 @@ def test_llm_span_data_carries_the_caller_trace_controls():
 
     assert data.trace == controls
     assert LLMCallSpanData.from_standard_logging_payload(_sample_payload()).trace == TraceControls()
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected"),
+    [
+        ({"litellm_session_id": "conv-body"}, "conv-body"),
+        ({"metadata": {"session_id": "conv-meta"}}, "conv-meta"),
+        ({"litellm_metadata": {"session_id": "conv-anthropic"}}, "conv-anthropic"),
+        ({"proxy_server_request": {"headers": {"langfuse_session_id": "conv-header"}}}, "conv-header"),
+        ({"litellm_session_id": "conv-body", "metadata": {"session_id": "conv-meta"}}, "conv-body"),
+        ({"litellm_session_id": "", "metadata": {"session_id": ""}}, None),
+        ({"litellm_trace_id": "trace-only", "metadata": {"trace_id": "trace-only"}}, None),
+        (
+            {
+                "litellm_session_id": "0" * 32,
+                "litellm_trace_id": "0" * 32,
+                "metadata": {"trace_id": "0" * 32},
+            },
+            None,
+        ),
+        (
+            {
+                "litellm_session_id": "0" * 32,
+                "litellm_trace_id": "0" * 32,
+                "metadata": {"trace_id": "0" * 32},
+                "proxy_server_request": {"headers": {"langfuse_session_id": "conv-header"}},
+            },
+            "conv-header",
+        ),
+        (
+            {
+                "litellm_session_id": "minted-by-proxy",
+                "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+            },
+            None,
+        ),
+        (
+            {
+                "litellm_session_id": "minted-by-proxy",
+                "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+                "proxy_server_request": {"headers": {"langfuse_session_id": "conv-header"}},
+            },
+            "conv-header",
+        ),
+        (
+            {
+                "litellm_session_id": "minted-by-proxy",
+                "metadata": {"session_id": "conv-other-key"},
+                "litellm_metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+            },
+            "conv-other-key",
+        ),
+        (
+            {
+                "litellm_session_id": "minted-by-proxy",
+                "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+                "litellm_metadata": {"session_id": "conv-other-key"},
+            },
+            "conv-other-key",
+        ),
+        (
+            {
+                "litellm_session_id": "conv-x-header",
+                "litellm_trace_id": "conv-x-header",
+                "metadata": {"trace_id": "conv-x-header", "session_id": "conv-x-header"},
+            },
+            "conv-x-header",
+        ),
+        ({}, None),
+    ],
+    ids=[
+        "litellm_session_id",
+        "metadata",
+        "anthropic-metadata",
+        "langfuse-header",
+        "litellm_session_id-beats-metadata",
+        "blank-values",
+        "trace-id-is-not-a-session",
+        "backfilled-from-otel-trace-id-is-not-a-conversation",
+        "backfilled-trace-id-does-not-shadow-the-header",
+        "proxy-generated-is-not-a-conversation",
+        "proxy-generated-does-not-shadow-the-header",
+        "proxy-generated-on-litellm_metadata-does-not-shadow-metadata",
+        "proxy-generated-on-metadata-does-not-shadow-litellm_metadata",
+        "x-litellm-session-id-header-sets-trace-and-session",
+        "empty",
+    ],
+)
+def test_llm_call_event_resolves_the_callers_conversation_id(litellm_params, expected):
+    kwargs: Final = {"litellm_params": litellm_params, "litellm_trace_id": "per-request-uuid"}
+    assert LLMCallEvent.from_dict(kwargs).session_id == expected
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "payload", "expected"),
+    [
+        (
+            {"metadata": {"user_api_key_hash": "hsh"}},
+            {"session_id": "minted-then-replayed", "trace_id": "minted-then-replayed"},
+            None,
+        ),
+        (
+            {"metadata": {"user_api_key_hash": "hsh"}},
+            {"session_id": "conv-replayed", "trace_id": "0af7651916cd43dd8448eb211c80319c"},
+            None,
+        ),
+        ({"litellm_session_id": "conv-live"}, {"session_id": "conv-replayed"}, "conv-live"),
+        (
+            {
+                "litellm_session_id": "minted-by-proxy",
+                "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+            },
+            {"session_id": "minted-by-proxy"},
+            None,
+        ),
+    ],
+    ids=[
+        "replayed-minted-session-stays-hidden",
+        "replayed-payload-is-not-a-source",
+        "live-params-win",
+        "generated-stays-hidden",
+    ],
+)
+def test_llm_call_event_never_reads_the_replayed_payloads_session_id(litellm_params, payload, expected):
+    """``/callback_logs`` rebuilds ``litellm_params`` with key metadata only, so a
+    ``StandardLoggingPayload`` minted under ``missing_session_id: generate`` arrives
+    without its generated marker and is indistinguishable from a caller's session;
+    the payload is therefore never a source for the conversation id."""
+    kwargs: Final = {
+        "litellm_params": litellm_params,
+        "standard_logging_object": _sample_payload(**payload),
+    }
+    assert LLMCallEvent.from_dict(kwargs).session_id == expected
+
+
+def test_llm_span_stamps_gen_ai_conversation_id_only_when_the_caller_sent_one():
+    with_session: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(), session_id="conv-1")
+    assert GenAIMapper().map(with_session)[GenAI.CONVERSATION_ID] == "conv-1"
+
+    without: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(trace_id="per-request-uuid"))
+    assert without.session_id is None
+    assert GenAI.CONVERSATION_ID not in GenAIMapper().map(without)
 
 
 def test_llm_span_carries_proxy_request_route():

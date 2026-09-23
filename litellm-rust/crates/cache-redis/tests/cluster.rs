@@ -1,100 +1,67 @@
-//! Contract tests against a real Redis Cluster. Set `LITELLM_TEST_REDIS_CLUSTER_NODES` to a
-//! comma separated `host:port` list (for example `127.0.0.1:7000,127.0.0.1:7001`) to run them.
+//! Tests against a real Redis Cluster. Set `LITELLM_TEST_REDIS_CLUSTER_NODES` to a comma
+//! separated `host:port` list (for example `127.0.0.1:7000,127.0.0.1:7001`) to run them.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+mod support;
+
+use std::{collections::HashSet, time::Duration};
 
 use litellm_cache::{
-    BaseCache, BatchCache, BatchEntry, CacheConnectionStatus, CacheScript, ClaimCache,
-    CounterCache, DeleteCache, Error, ExactCacheContext, FlushCache, IncrementOperation, JsonCodec,
-    ScriptCache,
+    BaseCache, BatchCache, BatchEntry, BoundedCounterCache, BulkDeleteCache, CacheConnectionStatus,
+    CacheScript, ClaimCache, ClientInfoCache, ConnectionCache, CounterCache, DeleteCache,
+    DisconnectCache, Error, ExactCacheContext, FlushCache, IncrementOperation, JsonCodec,
+    PingCache, QueueCache, RefreshTtlCache, ScanCache, ScriptCache, SetCache, TtlCache,
+    TtlPipelineCache,
 };
 use litellm_cache_redis::{
     RedisArg, RedisCache, RedisLpopOperation, RedisLpopResult, RedisNode, RedisRpushOperation,
     RedisTopology,
 };
 use redis::cluster_routing::Slot;
+use rstest::{fixture, rstest};
+use serde_json::json;
+use support::{JsonCache, cluster_cache, cluster_url};
 
-type Cache = RedisCache<JsonCodec<serde_json::Value>>;
+type Counter = RedisCache<JsonCodec<f64>>;
 
-fn topology() -> Option<RedisTopology> {
-    let nodes = std::env::var("LITELLM_TEST_REDIS_CLUSTER_NODES").ok()?;
-    let startup_nodes = nodes
-        .split(',')
-        .map(|node| {
-            let (host, port) = node.trim().rsplit_once(':').expect("host:port");
-            RedisNode {
-                host: host.to_string(),
-                port: port.parse().expect("port"),
-            }
-        })
-        .collect();
-    Some(RedisTopology::Cluster { startup_nodes })
+#[fixture]
+fn cache(#[default("cache")] label: &str) -> Option<JsonCache> {
+    cluster_cache(label, Duration::from_secs(120), JsonCodec::new())
 }
 
-fn namespace(label: &str) -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("cluster-test:{label}:{nanos}")
+#[fixture]
+fn counter(#[default("counter")] label: &str) -> Option<Counter> {
+    cluster_cache(label, Duration::from_secs(60), JsonCodec::new())
 }
 
-fn cluster_url() -> String {
-    std::env::var("LITELLM_TEST_REDIS_CLUSTER_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:7000".into())
-}
-
-fn cluster_cache(label: &str) -> Option<Cache> {
-    let topology = topology()?;
-    Some(
-        Cache::connect(
-            &cluster_url(),
-            &topology,
-            Some(Duration::from_secs(120)),
-            JsonCodec::new(),
-        )
-        .expect("cluster connection")
-        .with_namespace(Some(namespace(label))),
-    )
-}
-
-fn counter_cache(label: &str) -> Option<RedisCache<JsonCodec<f64>>> {
-    let topology = topology()?;
-    Some(
-        RedisCache::connect(
-            &cluster_url(),
-            &topology,
-            Some(Duration::from_secs(60)),
-            JsonCodec::new(),
-        )
-        .expect("cluster connection")
-        .with_namespace(Some(namespace(label))),
-    )
+#[fixture]
+fn context() -> ExactCacheContext {
+    ExactCacheContext::default()
 }
 
 fn multi_slot_keys(count: usize) -> Vec<String> {
     let keys: Vec<String> = (0..count).map(|index| format!("key-{index}")).collect();
-    let slots: std::collections::HashSet<Slot> = keys.iter().map(Slot::for_key).collect();
+    let slots: HashSet<Slot> = keys.iter().map(Slot::for_key).collect();
     assert!(slots.len() > 1, "keys must span multiple slots");
     keys
 }
 
-macro_rules! cluster_or_skip {
-    ($label:expr) => {
-        match cluster_cache($label) {
-            Some(cache) => cache,
-            None => return,
-        }
-    };
+fn seconds(seconds: u64) -> Option<Duration> {
+    Some(Duration::from_secs(seconds))
 }
 
-#[test]
-fn constructor_rejects_clusters_without_startup_nodes() {
-    let error = Cache::connect(
-        "redis://127.0.0.1:7000",
-        &RedisTopology::Cluster {
-            startup_nodes: Vec::new(),
-        },
+#[rstest]
+#[case::no_startup_nodes("redis://127.0.0.1:7000", Vec::new())]
+#[case::unix_socket_url(
+    "redis+unix:///tmp/redis.sock",
+    vec![RedisNode { host: "127.0.0.1".into(), port: 7000 }]
+)]
+fn constructor_rejects_unusable_cluster_configs(
+    #[case] url: &str,
+    #[case] startup_nodes: Vec<RedisNode>,
+) {
+    let error = JsonCache::connect(
+        url,
+        &RedisTopology::Cluster { startup_nodes },
         None,
         JsonCodec::new(),
     )
@@ -102,60 +69,56 @@ fn constructor_rejects_clusters_without_startup_nodes() {
     assert!(matches!(error, Some(Error::Unavailable)));
 }
 
-#[test]
-fn constructor_rejects_unix_socket_urls_for_clusters() {
-    let error = Cache::connect(
-        "redis+unix:///tmp/redis.sock",
-        &RedisTopology::Cluster {
-            startup_nodes: vec![RedisNode {
-                host: "127.0.0.1".into(),
-                port: 7000,
-            }],
-        },
-        None,
-        JsonCodec::new(),
-    )
-    .err();
-    assert!(matches!(error, Some(Error::Unavailable)));
-}
-
-#[test]
-fn single_key_operations_round_trip_with_ttl_rounding() {
-    let cache = cluster_or_skip!("single");
+#[rstest]
+#[tokio::test]
+async fn single_key_operations_round_trip_with_ttl_rounding(
+    #[with("single")] cache: Option<JsonCache>,
+) {
+    let Some(cache) = cache else { return };
     let context = ExactCacheContext {
         ttl: Some(Duration::from_millis(1500)),
     };
     let keys = multi_slot_keys(12);
     for (index, key) in keys.iter().enumerate() {
         cache
-            .set_cache(key, serde_json::json!({ "index": index }), &context)
+            .set_cache(key, json!({ "index": index }), &context)
             .unwrap();
     }
     for (index, key) in keys.iter().enumerate() {
         assert_eq!(
             cache.get_cache(key, &context).unwrap(),
-            Some(serde_json::json!({ "index": index }))
+            Some(json!({ "index": index }))
         );
     }
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let ttl = runtime.block_on(cache.async_get_ttl(&keys[0])).unwrap();
-    assert_eq!(ttl, Some(2));
+    assert_eq!(cache.async_get_ttl(&keys[0]).await.unwrap(), seconds(2));
+    assert!(
+        cache
+            .async_refresh_ttl(&keys[0], seconds(40))
+            .await
+            .unwrap()
+    );
+    assert_eq!(cache.async_get_ttl(&keys[0]).await.unwrap(), seconds(40));
     cache.delete_cache(&keys[0]).unwrap();
     assert_eq!(cache.get_cache(&keys[0], &context).unwrap(), None);
+    assert!(!cache.async_refresh_ttl(&keys[0], None).await.unwrap());
     assert!(cache.sync_ping().unwrap());
+    cache.async_flush_cache().await.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn batch_reads_span_slots_and_preserve_order_with_malformed_entries() {
-    let cache = cluster_or_skip!("batch");
-    let context = ExactCacheContext::default();
+async fn batch_reads_span_slots_and_preserve_order_with_malformed_entries(
+    #[with("batch")] cache: Option<JsonCache>,
+    context: ExactCacheContext,
+) {
+    let Some(cache) = cache else { return };
     let keys = multi_slot_keys(40);
     for (index, key) in keys.iter().enumerate() {
         if index % 5 == 0 {
             continue;
         }
         cache
-            .async_set_cache(key, serde_json::json!(index), context.clone())
+            .async_set_cache(key, json!(index), context.clone())
             .await
             .unwrap();
     }
@@ -181,40 +144,64 @@ async fn batch_reads_span_slots_and_preserve_order_with_malformed_entries() {
         } else if index % 5 == 0 {
             BatchEntry::Miss
         } else {
-            BatchEntry::Hit(serde_json::json!(index))
+            BatchEntry::Hit(json!(index))
         };
         assert_eq!(*entry, expected, "entry {index}");
     }
-    let sync_entries = cache.batch_get_cache(&keys, &context).unwrap();
-    assert_eq!(sync_entries, entries);
+    assert_eq!(cache.batch_get_cache(&keys, &context).unwrap(), entries);
 
     cache.delete_cache_keys(keys.clone()).await.unwrap();
     let entries = cache.async_batch_get_cache(keys, context).await.unwrap();
     assert!(entries.iter().all(|entry| *entry == BatchEntry::Miss));
 }
 
+#[rstest]
 #[tokio::test]
-async fn pipelines_group_by_slot_and_return_results_in_submission_order() {
-    let cache = cluster_or_skip!("pipeline");
+async fn pipelines_group_by_slot_and_return_results_in_submission_order(
+    #[with("pipeline")] cache: Option<JsonCache>,
+    counter: Option<Counter>,
+    context: ExactCacheContext,
+) {
+    let (Some(cache), Some(counter)) = (cache, counter) else {
+        return;
+    };
     let keys = multi_slot_keys(30);
-    let entries = keys
-        .iter()
-        .enumerate()
-        .map(|(index, key)| (key.clone(), serde_json::json!(index)))
-        .collect();
     cache
-        .async_set_cache_pipeline(entries, ExactCacheContext::default())
+        .async_set_cache_pipeline(
+            keys.iter()
+                .enumerate()
+                .map(|(index, key)| (key.clone(), json!(index)))
+                .collect(),
+            context.clone(),
+        )
         .await
         .unwrap();
     let hits = cache
-        .async_batch_get_cache(keys.clone(), ExactCacheContext::default())
+        .async_batch_get_cache(keys.clone(), context.clone())
         .await
         .unwrap();
     assert!(
         hits.iter()
             .enumerate()
-            .all(|(index, entry)| *entry == BatchEntry::Hit(serde_json::json!(index)))
+            .all(|(index, entry)| *entry == BatchEntry::Hit(json!(index)))
     );
+
+    cache
+        .async_set_cache_pipeline_with_ttls(
+            keys.iter()
+                .enumerate()
+                .map(|(index, key)| (key.clone(), json!(index), seconds(index as u64 + 10)))
+                .collect(),
+        )
+        .await
+        .unwrap();
+    for (index, key) in keys.iter().enumerate() {
+        assert_eq!(
+            cache.async_get_ttl(key).await.unwrap(),
+            seconds(index as u64 + 10),
+            "{key}"
+        );
+    }
 
     let queues: Vec<String> = keys.iter().map(|key| format!("queue:{key}")).collect();
     let pushed = cache
@@ -265,9 +252,6 @@ async fn pipelines_group_by_slot_and_return_results_in_submission_order() {
     }
 
     let counters: Vec<String> = keys.iter().map(|key| format!("counter:{key}")).collect();
-    let Some(counter) = counter_cache("counter") else {
-        return;
-    };
     let totals = counter
         .async_increment_pipeline(
             counters
@@ -284,25 +268,63 @@ async fn pipelines_group_by_slot_and_return_results_in_submission_order() {
         .unwrap();
     let expected: Vec<f64> = (0..keys.len()).map(|index| index as f64 + 0.5).collect();
     assert_eq!(totals, expected);
-    assert_eq!(counter.async_get_ttl(&counters[0]).await.unwrap(), Some(30));
+    assert_eq!(
+        counter.async_get_ttl(&counters[0]).await.unwrap(),
+        seconds(30)
+    );
     assert_eq!(counter.async_get_ttl(&counters[1]).await.unwrap(), None);
     counter.async_flush_cache().await.unwrap();
     cache.async_flush_cache().await.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn scan_and_scoped_flush_cover_every_primary() {
-    let cache = cluster_or_skip!("flush");
-    let other = cluster_or_skip!("other");
-    let context = ExactCacheContext::default();
+async fn rpush_and_trim_is_one_transaction_on_the_key_slot(
+    #[with("trim")] cache: Option<JsonCache>,
+) {
+    let Some(cache) = cache else { return };
+    let values = |values: &[&str]| values.iter().map(|value| RedisArg::from(*value)).collect();
+    assert_eq!(
+        cache
+            .async_rpush_and_trim("buf", values(&["a", "b"]), 3)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        cache
+            .async_rpush_and_trim("buf", values(&["c", "d"]), 3)
+            .await
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        cache.async_lpop("buf", Some(10)).await.unwrap(),
+        RedisLpopResult::Values(vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec()])
+    );
+    cache.async_flush_cache().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn scan_and_scoped_flush_cover_every_primary(
+    #[with("flush")] cache: Option<JsonCache>,
+    #[from(cache)]
+    #[with("other")]
+    other: Option<JsonCache>,
+    context: ExactCacheContext,
+) {
+    let (Some(cache), Some(other)) = (cache, other) else {
+        return;
+    };
     let keys = multi_slot_keys(60);
     for key in &keys {
         cache
-            .async_set_cache(key, serde_json::json!(true), context.clone())
+            .async_set_cache(key, json!(true), context.clone())
             .await
             .unwrap();
         other
-            .async_set_cache(key, serde_json::json!(true), context.clone())
+            .async_set_cache(key, json!(true), context.clone())
             .await
             .unwrap();
     }
@@ -325,7 +347,7 @@ async fn scan_and_scoped_flush_cover_every_primary() {
     let kept = other.async_batch_get_cache(keys, context).await.unwrap();
     assert!(
         kept.iter()
-            .all(|entry| *entry == BatchEntry::Hit(serde_json::json!(true)))
+            .all(|entry| *entry == BatchEntry::Hit(json!(true)))
     );
     other.async_flush_cache().await.unwrap();
 }
@@ -361,9 +383,10 @@ fn ping_calls_per_node(startup: &redis::Client) -> Vec<(String, u64)> {
     counts
 }
 
+#[rstest]
 #[tokio::test]
-async fn ping_reaches_every_node() {
-    let cache = cluster_or_skip!("ping");
+async fn ping_reaches_every_node(#[with("ping")] cache: Option<JsonCache>) {
+    let Some(cache) = cache else { return };
     let startup = redis::Client::open(cluster_url()).unwrap();
     let before = ping_calls_per_node(&startup);
     assert!(before.len() >= 2, "{before:?}");
@@ -375,14 +398,63 @@ async fn ping_reaches_every_node() {
     assert!(cache.sync_ping().unwrap());
     let result = cache.test_connection().await.unwrap();
     assert_eq!(result.status, CacheConnectionStatus::Success);
+    assert_eq!(result.message, "Redis Cluster connection test successful");
 }
 
+#[rstest]
 #[tokio::test]
-async fn counters_claims_scripts_and_sets_work_on_the_cluster() {
-    let Some(counter) = counter_cache("counter") else {
+async fn disconnect_closes_idle_connections_and_reconnects_on_demand(
+    #[with("disconnect")] cache: Option<JsonCache>,
+) {
+    let Some(cache) = cache else { return };
+    assert!(cache.ping().await.unwrap());
+    cache.disconnect().await.unwrap();
+    assert!(cache.ping().await.unwrap());
+}
+
+#[rstest]
+#[case::keep_existing_ttl(false)]
+#[case::refresh_ttl(true)]
+#[tokio::test]
+async fn increments_refresh_the_ttl_only_when_asked(
+    counter: Option<Counter>,
+    #[case] refresh_ttl: bool,
+) {
+    let Some(counter) = counter else { return };
+    let context = ExactCacheContext { ttl: seconds(60) };
+    counter
+        .async_set_cache("spend", 0.0, ExactCacheContext { ttl: seconds(600) })
+        .await
+        .unwrap();
+    assert_eq!(
+        counter
+            .async_increment("spend", 1.5, context.clone(), refresh_ttl)
+            .await
+            .unwrap(),
+        1.5
+    );
+    assert_eq!(
+        counter
+            .async_increment("spend", 2.0, context, refresh_ttl)
+            .await
+            .unwrap(),
+        3.5
+    );
+    let ttl = counter.async_get_ttl("spend").await.unwrap().unwrap();
+    assert_eq!(ttl <= Duration::from_secs(60), refresh_ttl, "{ttl:?}");
+    counter.async_flush_cache().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn counters_claims_scripts_and_sets_work_on_the_cluster(
+    counter: Option<Counter>,
+    #[with("claim")] cache: Option<JsonCache>,
+    context: ExactCacheContext,
+) {
+    let (Some(counter), Some(cache)) = (counter, cache) else {
         return;
     };
-    let context = ExactCacheContext::default();
     assert_eq!(
         counter
             .increment_cache("spend", 1.5, context.clone())
@@ -391,7 +463,7 @@ async fn counters_claims_scripts_and_sets_work_on_the_cluster() {
     );
     assert_eq!(
         counter
-            .async_increment("spend", 2.0, context.clone())
+            .async_increment("spend", 2.0, context.clone(), false)
             .await
             .unwrap(),
         3.5
@@ -413,9 +485,8 @@ async fn counters_claims_scripts_and_sets_work_on_the_cluster() {
     assert_eq!(counter.async_set_max("peak", 2.0, None).await.unwrap(), 4.0);
     counter.flush_cache().unwrap();
 
-    let cache = cluster_or_skip!("claim");
-    let owner = serde_json::json!("owner-a");
-    let rival = serde_json::json!("owner-b");
+    let owner = json!("owner-a");
+    let rival = json!("owner-b");
     assert_eq!(
         cache
             .claim_cache("lock", owner.clone(), &[], context.clone())
@@ -453,8 +524,8 @@ async fn counters_claims_scripts_and_sets_work_on_the_cluster() {
         .await
         .unwrap();
     assert_eq!(reply, redis::Value::Okay);
-    assert_eq!(cache.async_get_ttl("scripted").await.unwrap(), Some(5));
-    let evaluated: redis::Value = cache
+    assert_eq!(cache.async_get_ttl("scripted").await.unwrap(), seconds(5));
+    let evaluated = cache
         .async_eval(
             "return redis.call('GET', KEYS[1])".into(),
             vec!["scripted".into()],
@@ -472,13 +543,13 @@ async fn counters_claims_scripts_and_sets_work_on_the_cluster() {
                     RedisArg::Bytes(b"a".to_vec()),
                     RedisArg::Bytes(b"b".to_vec())
                 ],
-                Some(Duration::from_secs(9)),
+                seconds(9),
             )
             .await
             .unwrap(),
         2
     );
-    assert_eq!(cache.async_get_ttl("members").await.unwrap(), Some(9));
+    assert_eq!(cache.async_get_ttl("members").await.unwrap(), seconds(9));
 
     let result = cache.test_connection().await.unwrap();
     assert_eq!(result.status, CacheConnectionStatus::Success);

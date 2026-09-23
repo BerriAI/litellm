@@ -4,13 +4,10 @@ mod credentials;
 mod diagnostics;
 mod errors;
 mod http;
+mod logger;
 mod marshal;
 mod python_settings;
 mod routes;
-#[allow(
-    dead_code,
-    reason = "secret-manager foundations await rollout activation"
-)]
 mod secrets;
 mod tokenizer;
 
@@ -24,6 +21,8 @@ mod _native {
     use crate::diagnostics::{gil_stats, process_state_started, reserve_process_for_forking};
     #[pymodule_export]
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
+    #[pymodule_export]
+    use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -53,7 +52,11 @@ mod _native {
         let dict = module.dict();
         dict.set_item("_CacheTestHandle", py.get_type::<CacheTestHandle>())?;
         dict.set_item("_CacheTestResolver", py.get_type::<CacheTestResolver>())?;
-        dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())
+        dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())?;
+        dict.set_item(
+            "_SecretManagerRuntime",
+            py.get_type::<crate::secrets::runtime::NativeSecretManager>(),
+        )
     }
 }
 
@@ -87,6 +90,7 @@ mod tests {
                 "chat_completions",
                 "achat_completions",
                 "ResponsesWebSocketConnection",
+                "NativeDiagnosticProcessor",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

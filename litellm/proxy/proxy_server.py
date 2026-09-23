@@ -132,6 +132,8 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
+from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
@@ -309,6 +311,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.realtime_errors import (
+    close_after_upstream_handshake_refusal,
     realtime_error_event,
     websocket_close_reason,
 )
@@ -594,6 +597,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
     generate_key_helper_fn,
+    parse_key_alias_pattern,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
@@ -625,6 +629,9 @@ from litellm.proxy.management_endpoints.prompt_caching_requests import (
 )
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
+)
+from litellm.proxy.management_endpoints.session_endpoints import (
+    router as session_management_router,
 )
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
@@ -4852,6 +4859,22 @@ def validate_deployment_complexity_router_placement(model: Mapping[str, object])
         raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
 
 
+def validate_deployment_access_windows(model: Mapping[str, object]) -> None:
+    """
+    Reject a malformed `model_info.access_windows` instead of silently dropping the deployment.
+
+    Checked here rather than on `ModelInfo` because the proxy builds its router with
+    `ignore_invalid_deployments=True`, so a rejection further down turns a bad
+    deployment into a silently missing model instead of a refusal to start.
+    """
+    model_info: Final = model.get("model_info")
+    if not isinstance(model_info, Mapping):
+        return
+    error: Final = access_windows_config_error(model_info, model_name=str(model.get("model_name", "")))
+    if error is not None:
+        raise ValueError(error)
+
+
 def validate_auto_router_capability_limits(model_list: Sequence[Mapping[str, object]], *, limit: int | None) -> None:
     """
     Refuse to start when config.yaml defines more auto-routers claiming a licensed capability than allowed.
@@ -5049,6 +5072,7 @@ class ProxyConfig:
 
     def __init__(self) -> None:
         self.config: Mapping[str, object] = MappingProxyType({})
+        self.auto_router_db_catalog: tuple[AutoRouterCatalogEntry, ...] | None = None
         self._last_semantic_filter_config: dict[str, object] | None = None
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
@@ -6248,6 +6272,8 @@ class ProxyConfig:
                         litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(**value)
                     else:
                         raise Exception(f"Invalid value set for upperbound_key_generate_params - value={value}")
+                elif key == "key_alias_pattern":
+                    litellm.key_alias_pattern = parse_key_alias_pattern(value)
                 elif key == "json_logs" and value is True:
                     litellm.json_logs = True
                     litellm._turn_on_json()
@@ -6318,10 +6344,12 @@ class ProxyConfig:
 
             ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
             use_google_kms: Final = general_settings.get("use_google_kms", False)
-            load_google_kms(use_google_kms=use_google_kms)
+            if use_google_kms:
+                self.initialize_secret_manager(KeyManagementSystem.GOOGLE_KMS.value)
             ### [DEPRECATED] LOAD FROM AZURE KEY VAULT ### old way of loading from azure secret manager
             use_azure_key_vault: Final = general_settings.get("use_azure_key_vault", False)
-            load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
+            if use_azure_key_vault is not False:
+                self.initialize_secret_manager(KeyManagementSystem.AZURE_KEY_VAULT.value)
             ### ALERTING ###
             self._load_alerting_settings(general_settings=general_settings)
             ### PLUGINS ###
@@ -6552,6 +6580,7 @@ class ProxyConfig:
                         model["litellm_params"][k] = get_secret(v)
                 validate_deployment_max_agentic_loops(model)
                 validate_deployment_complexity_router_placement(model)
+                validate_deployment_access_windows(model)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
@@ -6821,6 +6850,7 @@ class ProxyConfig:
         """
         Initialize the relevant secret manager if `key_management_system` is provided
         """
+        previous_client: Final[object] = litellm.secret_manager_client
         if key_management_system is not None:
             if key_management_system == KeyManagementSystem.AZURE_KEY_VAULT.value:
                 ### LOAD FROM AZURE KEY VAULT ###
@@ -6868,6 +6898,11 @@ class ProxyConfig:
                 load_custom_secret_manager(config_file_path=config_file_path)
             else:
                 raise ValueError("Invalid Key Management System selected")
+
+            from litellm.rust_bridge.secret_manager import capture_secret_manager
+
+            if litellm.secret_manager_client is not previous_client:
+                capture_secret_manager(litellm.secret_manager_client, key_management_system)
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """
@@ -7669,6 +7704,12 @@ class ProxyConfig:
     def _should_load_db_object(self, object_type: str | SupportedDBObjectType) -> bool:
         return should_load_db_object(object_type=object_type)
 
+    def remove_auto_router_catalog_entries(self, model_ids: frozenset[str]) -> None:
+        if self.auto_router_db_catalog is not None:
+            self.auto_router_db_catalog = tuple(
+                row for row in self.auto_router_db_catalog if row.model_id not in model_ids
+            )
+
     async def _get_models_from_db(self, prisma_client: PrismaClient) -> Sequence[_ProxyModelRow] | None:
         """
         Fetch all model deployments from the DB.
@@ -7689,6 +7730,7 @@ class ProxyConfig:
             new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(
                 WriterPinnedClient(prisma_client.db)
             ).table.find_many()
+            self.auto_router_db_catalog = build_auto_router_catalog(new_models)
             return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -12513,9 +12555,9 @@ async def realtime_websocket_endpoint(
             user_model=user_model,
         )
         await llm_call
-    except websockets.exceptions.InvalidStatusCode as e:
+    except websockets.exceptions.InvalidStatus as e:
         verbose_proxy_logger.exception("Invalid status code")
-        await websocket.close(code=e.status_code, reason="Invalid status code")
+        await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
     except Exception as e:
         verbose_proxy_logger.exception("Internal server error")
         redacted_error: Final = _redact_string(str(e))
@@ -16981,6 +17023,19 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
     if user_obj and hasattr(user_obj, "__dict__"):
         user_obj.__dict__.pop("password", None)
 
+    # The password just changed via an invitation/reset link; any UI session
+    # minted under the old password may be in hostile hands. Revoke them all —
+    # the caller holds only the short-lived onboarding JWT, and the fresh
+    # session key is minted below, after this sweep.
+    from litellm.proxy.management_endpoints.session_endpoints import (
+        revoke_ui_session_keys,
+    )
+
+    await revoke_ui_session_keys(
+        user_id=invite_obj.user_id,
+        user_api_key_dict=UserAPIKeyAuth(user_id=invite_obj.user_id),
+    )
+
     try:
         jwt_token: Final = await _generate_onboarding_ui_session_token(user_obj=user_obj)
     except Exception as e:
@@ -19400,6 +19455,7 @@ app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(password_management_router)
+app.include_router(session_management_router)
 app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(organization_router)
