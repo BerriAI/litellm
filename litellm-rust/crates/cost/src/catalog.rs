@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::completion_cost::{
+    CompletionCost, ResponseCostError, completion_cost, get_response_cost_from_hidden_params,
+};
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::per_second::per_second_pricing_cost;
 use crate::responses_usage::ChatUsage;
@@ -32,15 +35,49 @@ pub struct ModelCostRequest<'a> {
     pub response_time_ms: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct CompletionCostRequest<'a> {
+    pub token: ModelCostRequest<'a>,
+    pub built_in_tools: f64,
+    pub additional_costs: &'a [f64],
+    pub discount_config: &'a Value,
+    pub margin_config: &'a Value,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ResponseCostRequest<'a> {
+    pub completion: CompletionCostRequest<'a>,
+    pub cache_hit: bool,
+    pub hidden_params: &'a Value,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogError {
     ModelNotFound,
     Pricing(PricingError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogResponseError {
+    Catalog(CatalogError),
+    ProviderCost(ResponseCostError),
+}
+
 impl From<PricingError> for CatalogError {
     fn from(value: PricingError) -> Self {
         Self::Pricing(value)
+    }
+}
+
+impl From<CatalogError> for CatalogResponseError {
+    fn from(value: CatalogError) -> Self {
+        Self::Catalog(value)
+    }
+}
+
+impl From<ResponseCostError> for CatalogResponseError {
+    fn from(value: ResponseCostError) -> Self {
+        Self::ProviderCost(value)
     }
 }
 
@@ -176,5 +213,34 @@ impl ModelInfoCatalog {
 
     pub fn vector_store_search_cost(&self, provider: &str, api_type: Option<&str>) -> (f64, f64) {
         vector_store_search_cost(provider, api_type, self.entries.get("vertex_ai/search_api"))
+    }
+
+    pub fn completion_cost(
+        &self,
+        request: CompletionCostRequest<'_>,
+    ) -> Result<CompletionCost, CatalogError> {
+        let (prompt, output) = self.cost_per_token(request.token)?;
+        Ok(completion_cost(
+            prompt,
+            output,
+            request.built_in_tools,
+            request.additional_costs,
+            request.token.provider,
+            request.discount_config,
+            request.margin_config,
+        ))
+    }
+
+    pub fn response_cost_calculator(
+        &self,
+        request: ResponseCostRequest<'_>,
+    ) -> Result<f64, CatalogResponseError> {
+        if request.cache_hit {
+            return Ok(0.0);
+        }
+        if let Some(reported) = get_response_cost_from_hidden_params(request.hidden_params)? {
+            return Ok(reported);
+        }
+        Ok(self.completion_cost(request.completion)?.total)
     }
 }

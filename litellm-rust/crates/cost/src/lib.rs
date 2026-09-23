@@ -2,6 +2,7 @@ pub mod anthropic_usage;
 pub mod base_rate_selection;
 pub mod batch;
 pub mod catalog;
+pub mod completion_cost;
 pub mod custom_pricing;
 pub mod gemini_cost;
 pub mod generic_cost;

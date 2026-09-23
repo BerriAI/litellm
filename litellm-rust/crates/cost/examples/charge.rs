@@ -4,7 +4,9 @@ use jiff::Timestamp;
 use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchUsage, ModalityRates, batch_cost_calculator,
 };
-use litellm_cost::catalog::{CostCatalog, ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::catalog::{
+    CompletionCostRequest, CostCatalog, ModelCostRequest, ModelInfoCatalog, ResponseCostRequest,
+};
 use litellm_cost::custom_pricing::{
     CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
     normalize_cache_usage,
@@ -551,4 +553,39 @@ fn main() {
     );
     let search = model_info_catalog.vector_store_search_cost("vertex_ai", Some("search_api"));
     println!("rerank={} vector_search={}", rerank.0, search.0);
+    let discount = json!({"openai": 0.1});
+    let margin = json!({"global": {"percentage": 0.2, "fixed_amount": 0.001}});
+    let completion_request = CompletionCostRequest {
+        token: ModelCostRequest {
+            model: "openai/model",
+            provider: Some("openai"),
+            region: None,
+            usage: &off_peak_usage,
+            service_tier: None,
+            data_residency: Some("eu"),
+            vertex_location: None,
+            at,
+            response_time_ms: None,
+        },
+        built_in_tools: 0.01,
+        additional_costs: &[0.02],
+        discount_config: &discount,
+        margin_config: &margin,
+    };
+    let completion_total = model_info_catalog
+        .completion_cost(completion_request)
+        .unwrap();
+    let provider_total = model_info_catalog
+        .response_cost_calculator(ResponseCostRequest {
+            completion: completion_request,
+            cache_hit: false,
+            hidden_params: &json!({
+                "additional_headers": {"llm_provider-x-litellm-response-cost": "0.031"}
+            }),
+        })
+        .unwrap();
+    println!(
+        "completion_total={:.8} provider_total={provider_total:.3}",
+        completion_total.total
+    );
 }
