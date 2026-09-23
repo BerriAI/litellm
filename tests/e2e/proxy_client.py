@@ -87,6 +87,7 @@ from models import (
     RouterSettingsResponse,
     SearchToolCreateBody,
     SearchToolCreateResponse,
+    SessionSpendLogsParams,
     SpendLogRow,
     SpendLogs,
     SpendLogsPage,
@@ -507,13 +508,16 @@ class ProxyClient:
             )
         ).info
 
-    def memory_summary_everywhere(self) -> Mapping[str, Result[MemorySummaryResponse]]:
+    def memory_summary_everywhere(
+        self, *, timeout: float | None = None
+    ) -> Mapping[str, Result[MemorySummaryResponse]]:
         return {
             url: transport.get(
                 "/debug/memory/summary",
                 headers=self.management_headers(transport=transport),
                 params=NoBody(),
                 response_type=MemorySummaryResponse,
+                timeout=timeout,
             )
             for url, transport in self.replicas.items()
         }
@@ -1004,19 +1008,26 @@ class ProxyClient:
             response_type=CountTokensResponse,
         )
 
-    def messages(self, key: str, body: AnthropicMessagesBody) -> Result[AnthropicMessagesResponse]:
+    def messages(
+        self, key: str, body: AnthropicMessagesBody, *, session_id: str | None = None
+    ) -> Result[AnthropicMessagesResponse]:
         """POST /v1/messages (Anthropic-native). The response is either the
         Anthropic-shape passthrough (`content`) or the OpenAI-normalized shape
-        (`choices`); AnthropicMessagesResponse models both."""
+        (`choices`); AnthropicMessagesResponse models both. `session_id` goes out
+        as the `x-litellm-session-id` header, the way Claude Code sends it through
+        ANTHROPIC_CUSTOM_HEADERS, so every spend row the call produces shares it."""
         return self.transport.post(
             "/v1/messages",
-            headers=self._anthropic_headers(key),
+            headers=self._anthropic_headers(key, session_id=session_id),
             json=body,
             response_type=AnthropicMessagesResponse,
         )
 
-    def _anthropic_headers(self, key: str) -> AnthropicHeaders:
-        return AnthropicHeaders(authorization=self.transport.bearer(key).authorization)
+    def _anthropic_headers(self, key: str, *, session_id: str | None = None) -> AnthropicHeaders:
+        return AnthropicHeaders(
+            authorization=self.transport.bearer(key).authorization,
+            x_litellm_session_id=session_id,
+        )
 
     # ---- spend read-back ------------------------------------------------
 
@@ -1059,6 +1070,27 @@ class ProxyClient:
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None
     ) -> list[SpendLogRow]:
         return self._poll(lambda: self.spend_logs(SpendLogsParams(api_key=key)), min_rows, predicate)
+
+    def session_spend_logs(self, session_id: str) -> list[SpendLogRow]:
+        """GET /spend/logs/session/ui, the per-session view the Admin UI logs page
+        opens when a session id is clicked."""
+        return unwrap(
+            self.transport.get(
+                "/spend/logs/session/ui",
+                headers=self.management_headers(),
+                params=SessionSpendLogsParams(session_id=session_id),
+                response_type=SpendLogsPage,
+            )
+        ).data
+
+    def poll_logs_for_session(
+        self,
+        session_id: str,
+        *,
+        min_rows: int = 1,
+        predicate: RowsPredicate | None = None,
+    ) -> list[SpendLogRow]:
+        return self._poll(lambda: self.session_spend_logs(session_id), min_rows, predicate)
 
     def poll_logs_for_request_id(
         self,

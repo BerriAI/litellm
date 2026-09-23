@@ -779,9 +779,15 @@ def _joined_choice(parts: tuple[str, ...]) -> tuple[_Choice, ...]:
     return (_text_choice("\n\n".join(parts)),) if parts else ()
 
 
+def _text_completion_choice(choice: Mapping[str, object], text: str) -> Mapping[str, object]:
+    synthesized: Final = _text_choice(text, as_str(choice.get("finish_reason")))
+    merged: Final = (*choice.items(), *synthesized.items())
+    return {k: v for k, v in merged if k != "text"}  # mutable-ok: mappers json.dumps and isinstance(dict) it
+
+
 def _completion_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     return tuple(
-        _text_choice(text, as_str(choice.get("finish_reason")))
+        _text_completion_choice(choice, text)
         if "message" not in choice and isinstance(text := choice.get("text"), str)
         else choice
         for choice in _dicts(response.get("choices"))

@@ -935,9 +935,30 @@ def test_text_completion_choices_become_assistant_messages_in_choice_order() -> 
         capture_content=True,
     )
 
-    assert data.choices_out == (_assistant_choice(" first", "length"), _assistant_choice(" second", "stop"))
+    assert data.choices_out == (
+        {"index": 0, "logprobs": None, **_assistant_choice(" first", "length")},
+        {"index": 1, "logprobs": None, **_assistant_choice(" second", "stop")},
+    )
     assert data.finish_reasons == ("length", "stop")
     assert data.response_id == "cmpl-1"
+
+
+def test_text_completion_choices_keep_provider_fields_beside_the_synthesized_message() -> None:
+    choice: Final = {
+        "index": 2,
+        "text": "Hello there",
+        "finish_reason": "stop",
+        "logprobs": {"tokens": ["Hello"], "token_logprobs": [-0.1]},
+        "content_filter_results": {"hate": {"filtered": False}},
+        "provider_specific": {"cached": True},
+    }
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _route_payload("atext_completion", "gpt-3.5-turbo-instruct", {"choices": [choice]}), capture_content=True
+    )
+
+    assert data.choices_out == (
+        {k: v for k, v in choice.items() if k != "text"} | _assistant_choice("Hello there", "stop"),
+    )
 
 
 def test_text_completion_choices_follow_the_content_capture_gate_but_finish_reasons_do_not() -> None:

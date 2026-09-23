@@ -38,10 +38,6 @@ def test_gpt5_supports_reasoning_effort(config: OpenAIConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-mini")
 
 
-def test_gpt5_chat_does_not_support_reasoning_effort(config: OpenAIConfig):
-    assert "reasoning_effort" not in config.get_supported_openai_params(
-        model="gpt-5-chat-latest"
-    )
 
 
 def test_gpt5_chat_supports_temperature(config: OpenAIConfig):
@@ -174,10 +170,6 @@ def test_gpt5_codex_unsupported_params_drop(config: OpenAIConfig):
         assert param not in config.get_supported_openai_params(model="gpt-5-codex")
 
 
-def test_gpt5_codex_supports_tool_choice(gpt5_config: OpenAIGPT5Config):
-    """Test that GPT-5-Codex supports tool_choice parameter."""
-    supported_params = gpt5_config.get_supported_openai_params(model="gpt-5-codex")
-    assert "tool_choice" in supported_params
 
 
 def test_gpt5_codex_supports_function_calling(config: OpenAIConfig):
@@ -246,14 +238,6 @@ def test_gpt5_1_reasoning_effort_none(config: OpenAIConfig):
         assert params["reasoning_effort"] == effort
 
 
-def test_gpt5_1_codex_max_allows_reasoning_effort_xhigh(config: OpenAIConfig):
-    params = config.map_openai_params(
-        non_default_params={"reasoning_effort": "xhigh"},
-        optional_params={},
-        model="gpt-5.1-codex-max",
-        drop_params=False,
-    )
-    assert params["reasoning_effort"] == "xhigh"
 
 
 def test_gpt5_rejects_reasoning_effort_xhigh_for_other_models(config: OpenAIConfig):

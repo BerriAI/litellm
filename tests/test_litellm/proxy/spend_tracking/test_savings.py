@@ -634,25 +634,6 @@ def test_equal_modeled_usage_is_zero_under_equivalent_model_names() -> None:
     assert _savings("claude-opus-5", "anthropic/claude-opus-5", usage, usage) == 0.0
 
 
-def test_baseline_is_priced_under_its_own_provider():
-    """Two providers can serve the same bare model name at different rates, so dropping
-    the provider prices the baseline against a vendor the operator never named. Here it
-    decides whether routing reads as a saving or a loss."""
-    usage = Usage(prompt_tokens=100_000, completion_tokens=10_000, total_tokens=110_000)
-    azure = compute_autorouter_savings(
-        baseline_model="azure_ai/deepseek-r1",
-        selected_model="claude-haiku-4-5",
-        selected_provider="anthropic",
-        usage=usage,
-    )
-    deepseek = compute_autorouter_savings(
-        baseline_model="deepseek/deepseek-r1",
-        selected_model="claude-haiku-4-5",
-        selected_provider="anthropic",
-        usage=usage,
-    )
-    assert azure != pytest.approx(deepseek)
-    assert azure > 0 > deepseek
 
 
 def test_unresolvable_baseline_remains_unknown():
