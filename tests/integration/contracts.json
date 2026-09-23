@@ -2022,6 +2022,9 @@
         ],
         "tests/integration/providers/test_anthropic_legacy_thinking_budget_wire.py::test_claude_4_6_thinking_budget_tokens_on_messages_is_forwarded_instead_of_rewritten_to_adaptive": [
             "providers.anthropic_messages.claude_4_6_legacy_thinking_budget_reaches_the_wire_unchanged"
+        ],
+        "tests/integration/providers/test_responses_bridge_incomplete.py::test_messages_over_responses_deployment_with_max_tokens_one_reaches_openai_as_sixteen": [
+            "providers.responses_bridge.sub_minimum_max_tokens_is_raised_to_the_openai_floor"
         ]
     },
     "browser": {
