@@ -126,6 +126,13 @@ fn number(value: Option<&Value>) -> Option<f64> {
     }
 }
 
+pub fn response_time_ms_for_cost(response: Option<&Value>, fallback: Option<f64>) -> Option<f64> {
+    response
+        .and_then(|response| response.get("_response_ms"))
+        .and_then(Value::as_f64)
+        .or(fallback)
+}
+
 fn duration(request: CompletionResponseCostRequest<'_>) -> f64 {
     request.transcription_duration_seconds.unwrap_or_else(|| {
         request
@@ -605,7 +612,10 @@ pub fn completion_cost_from_response(
             data_residency: request.data_residency,
             vertex_location: request.vertex_location,
             at: request.at,
-            response_time_ms: request.response_time_ms,
+            response_time_ms: response_time_ms_for_cost(
+                request.input.model_selection.response,
+                request.response_time_ms,
+            ),
         };
         catalog.cost_per_token_for_call(cost_request, call)
     })

@@ -4,7 +4,7 @@ use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::completion_input::{CompletionInputRequest, ResponseKind};
 use litellm_cost::completion_response::{
     BuiltInToolCostConfig, CompletionResponseCostError, CompletionResponseCostRequest,
-    completion_cost_from_response,
+    completion_cost_from_response, response_time_ms_for_cost,
 };
 use litellm_cost::model_selection::ModelSelectionRequest;
 use litellm_cost::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
@@ -137,6 +137,51 @@ fn response_cost_prices_built_in_web_search_from_selected_model() {
     .unwrap();
     assert_eq!(result.model, "openai/served");
     assert!((result.cost.total - 0.145).abs() < 1e-12);
+}
+
+#[rstest]
+#[case(json!({"_response_ms": 2000.0}), Some(5000.0), Some(2000.0))]
+#[case(json!({"_response_ms": "not numeric"}), Some(5000.0), Some(5000.0))]
+#[case(json!({}), None, None)]
+fn response_time_prefers_numeric_response_stamp(
+    #[case] response: Value,
+    #[case] fallback: Option<f64>,
+    #[case] expected: Option<f64>,
+) {
+    assert_eq!(
+        response_time_ms_for_cost(Some(&response), fallback),
+        expected
+    );
+}
+
+#[rstest]
+fn stamped_response_time_prices_wall_clock_model() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/timed".to_owned(),
+        json!({"input_cost_per_second": 0.02}),
+    )]));
+    let response = json!({
+        "model": "timed",
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        "_response_ms": 2000.0
+    });
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("timed"),
+        Some("openai"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            response_time_ms: Some(5000.0),
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 0.04).abs() < 1e-12);
 }
 
 #[rstest]
