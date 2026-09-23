@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/responses/test_responses_utils.py::TestResponseAPILoggingUtils
+
 use litellm_cost::responses_usage::{
     UsageError, is_response_api_usage, text_tokens_without_nested_reasoning,
     transform_response_api_usage_to_chat_usage,

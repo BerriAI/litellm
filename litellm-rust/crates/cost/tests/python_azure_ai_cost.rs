@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/llms/azure_ai/test_azure_ai_cost_calculator.py::TestAzureModelRouterFlatCost
+
 use std::collections::HashMap;
 
 use jiff::Timestamp;

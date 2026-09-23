@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/litellm_core_utils/test_ptu_pricing.py::test_a_complete_reservation_is_accepted
+
 use litellm_cost::ptu_pricing::{
     MAX_COST_PER_PTU_PER_HOUR, MAX_PTU_COUNT, PTU_ZEROED_PRICING_FIELDS, SEARCH_CONTEXT_SIZES,
     azure_spillover, declares_ptu, is_spilled_over_ptu_request, ptu_config_error,

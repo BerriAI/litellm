@@ -1,5 +1,8 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/test_cost_calculator.py::test_cost_calculator_with_response_cost_in_additional_headers
+// mirrors: local_testing/test_completion_cost.py
+
 use std::collections::HashMap;
 
 use litellm_cost::catalog::ModelInfoCatalog;

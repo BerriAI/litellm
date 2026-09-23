@@ -1,5 +1,8 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: unit/a2a_protocol/test_cost_calculator.py::test_asend_message_uses_input_output_cost_per_token
+// mirrors: test_litellm/proxy/_experimental/mcp_server/test_mcp_cost_calculator.py::TestMCPCostCalculator::test_calculate_mcp_tool_call_cost_with_tool_specific_cost
+
 use litellm_cost::a2a_cost::calculate_a2a_cost;
 use litellm_cost::mcp_cost::calculate_mcp_tool_call_cost;
 use rstest::rstest;

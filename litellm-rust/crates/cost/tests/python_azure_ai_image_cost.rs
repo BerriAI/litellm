@@ -1,5 +1,8 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/llms/azure_ai/image_generation/test_mai_image_generation.py::TestAzureMAIImageGeneration::test_mai_image_cost_calculator_token_based
+// mirrors: test_litellm/llms/azure_ai/image_generation/test_azure_ai_flux2_image_generation.py::test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel
+
 use std::collections::HashMap;
 
 use jiff::Timestamp;

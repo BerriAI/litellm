@@ -1,6 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
-// mirrors: crates/cost/tests/generate_python_fixtures.py (wire_usage + wire_response surfaces)
+// mirrors: crates/cost/tests/generate_python_fixtures.py
+// (wire_usage + wire_response surfaces)
 
 use serde_json::Value;
 

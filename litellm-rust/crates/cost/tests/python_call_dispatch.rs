@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/test_cost_calculator.py::test_per_query_priced_rerank_deployment_completion_cost_is_nonzero
+
 use std::collections::HashMap;
 
 use litellm_cost::catalog::{CatalogCallError, CostCall, ModelCostRequest, ModelInfoCatalog};

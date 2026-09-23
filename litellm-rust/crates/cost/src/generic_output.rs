@@ -1,17 +1,9 @@
 use serde_json::Value;
 
+use crate::base_rate_selection::tier_key;
 use crate::generic_input::get_cost_per_unit;
 use crate::generic_usage::parse_completion_tokens_details;
 use crate::responses_usage::ChatUsage;
-
-fn tier_key(base: &str, service_tier: Option<&str>) -> String {
-    match service_tier.map(str::to_ascii_lowercase).as_deref() {
-        Some("flex") => format!("{base}_flex"),
-        Some("priority" | "fast") => format!("{base}_priority"),
-        Some("ultrafast") => format!("{base}_ultrafast"),
-        _ => base.to_owned(),
-    }
-}
 
 pub fn resolve_reasoning_token_cost(
     model_info: &Value,

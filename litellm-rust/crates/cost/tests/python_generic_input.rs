@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/litellm_core_utils/llm_cost_calc/test_llm_cost_calc_utils.py::test_calculate_cache_writing_cost
+
 use litellm_cost::generic_input::{
     InputBaseRates, calculate_cache_writing_cost, calculate_cost_component, calculate_input_cost,
     get_cost_per_unit,
@@ -24,6 +26,8 @@ fn rates() -> InputBaseRates {
 #[case(json!({"input_cost_per_audio_token": 0.0}), "input_cost_per_audio_token", Some(1e-6), Some(0.0))]
 #[case(json!({"input_cost_per_audio_token": "3e-6"}), "input_cost_per_audio_token_priority", None, Some(3e-6))]
 #[case(json!({"input_cost_per_audio_token": "bad"}), "input_cost_per_audio_token", Some(1e-6), Some(1e-6))]
+#[case(json!({"input_cost_per_audio_token": 3e-6}), "input_cost_per_audio_token_auto", None, Some(3e-6))]
+#[case(json!({"input_cost_per_audio_token": 3e-6}), "input_cost_per_audio_token_standard", None, None)]
 fn get_cost_per_unit_parses_string_rates_and_falls_back_from_tier(
     #[case] model_info: serde_json::Value,
     #[case] key: &str,

@@ -1,5 +1,8 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/test_cost_calculator.py::test_default_image_cost_calculator
+// mirrors: integration/pricing/test_ocr_page_pricing.py
+
 use std::collections::HashMap;
 
 use litellm_cost::batch::{

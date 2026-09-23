@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/litellm_core_utils/llm_cost_calc/test_guardrail_cost.py::test_bedrock_guardrail_cost_prices_each_counter
+
 use std::collections::BTreeMap;
 
 use litellm_cost::guardrail_cost::{

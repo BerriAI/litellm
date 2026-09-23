@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/litellm_core_utils/llm_cost_calc/test_llm_cost_calc_utils.py::test_generic_cost_per_token_tiered_pricing_is_all_or_nothing
+
 use litellm_cost::tiered_pricing::{select_tier_for_input, tier_rate};
 use rstest::rstest;
 use serde_json::{Value, json};

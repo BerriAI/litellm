@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: image_gen_tests/test_bedrock_image_gen_unit_tests.py::test_cost_calculator_stability1
+
 use std::collections::HashMap;
 
 use jiff::Timestamp;

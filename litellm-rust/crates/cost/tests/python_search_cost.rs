@@ -1,5 +1,8 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/llms/bedrock/search/test_agentcore_search_transformation.py::TestAgentCoreSearchEdgeCases::test_search_cost_lookup_is_mapped
+// mirrors: unit/llms/parallel_ai/test_parallel_ai_search.py::test_explicit_mode_wins_over_processor
+
 use std::collections::HashMap;
 
 use litellm_cost::catalog::ModelInfoCatalog;

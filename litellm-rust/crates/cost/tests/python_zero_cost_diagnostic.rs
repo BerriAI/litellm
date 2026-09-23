@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/litellm_core_utils/llm_cost_calc/test_zero_cost_diagnostic.py::test_missing_pricing_key_names_every_rate_the_usage_needs
+
 use std::collections::HashMap;
 
 use litellm_cost::catalog::ModelInfoCatalog;

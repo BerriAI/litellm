@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/test_gpt_image_cost_calculator.py
+
 use std::collections::HashMap;
 
 use jiff::Timestamp;

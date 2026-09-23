@@ -1,5 +1,8 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/llms/gemini/test_cost_calculator.py
+// mirrors: test_litellm/llms/vertex_ai/image_generation/test_vertex_ai_image_generation_cost_calculator.py::test_vertex_image_generation_cost_adds_web_search_grounding
+
 use std::collections::HashMap;
 
 use jiff::Timestamp;

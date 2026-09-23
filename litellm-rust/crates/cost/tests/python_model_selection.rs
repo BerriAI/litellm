@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/test_cost_calculator.py::test_select_model_name_keeps_base_model_free_of_region
+
 use std::collections::HashMap;
 
 use litellm_cost::catalog::ModelInfoCatalog;

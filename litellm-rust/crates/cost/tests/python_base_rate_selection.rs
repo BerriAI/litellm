@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/litellm_core_utils/llm_cost_calc/test_llm_cost_calc_utils.py::test_get_token_base_cost_picks_highest_crossed_tier
+
 use litellm_cost::base_rate_selection::{
     TokenBaseRates, get_tiered_reasoning_rate, get_token_base_cost_without_off_peak,
     uses_inclusive_token_thresholds,
@@ -95,6 +97,35 @@ fn get_token_base_cost_without_off_peak_uses_tier_specific_threshold_keys() {
     assert_eq!(rates.cache_creation, 8e-6);
     assert_eq!(rates.cache_creation_above_1hr, 9e-6);
     assert_eq!(rates.cache_read, 6e-6);
+}
+
+#[rstest]
+fn threshold_detection_excludes_auto_and_keeps_plain_thresholds() {
+    let model_info = json!({
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 4e-6,
+        "input_cost_per_token_above_128k_tokens": 5e-6,
+        "input_cost_per_token_above_128k_tokens_auto": 9e-6,
+        "output_cost_per_token_above_128k_tokens": 7e-6
+    });
+    let rates = get_token_base_cost_without_off_peak(&model_info, 128_001, Some("auto"), false);
+    assert_eq!(
+        rates.input, 5e-6,
+        "_auto-suffixed threshold keys are non-standard; the plain threshold rate applies"
+    );
+}
+
+#[rstest]
+fn non_standard_threshold_suffixes_match_python_service_tier_suffixes() {
+    let mut python_suffixes: Vec<String> = litellm_cost::pricing::ServiceTier::SUFFIXES
+        .into_iter()
+        .map(|tier| format!("_{}", tier.as_str()))
+        .collect();
+    python_suffixes.push("_batches".to_string());
+    assert_eq!(
+        litellm_cost::base_rate_selection::NON_STANDARD_THRESHOLD_SUFFIXES.to_vec(),
+        python_suffixes
+    );
 }
 
 #[rstest]

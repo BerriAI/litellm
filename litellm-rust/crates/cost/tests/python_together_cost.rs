@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: local_testing/test_completion_cost.py::test_together_ai_qwen_completion_cost
+
 use std::collections::HashMap;
 
 use jiff::Timestamp;

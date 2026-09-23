@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/rag/test_main.py::test_aquery_billed_cost_includes_priced_vector_store_search
+
 use litellm_cost::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use rstest::rstest;
 use serde_json::json;

@@ -1,6 +1,7 @@
-// mirrors: crates/cost/tests/generate_python_fixtures.py (pinning + model_info_projection surfaces)
-
 #![allow(clippy::disallowed_types)]
+
+// mirrors: crates/cost/tests/generate_python_fixtures.py
+// (pinning + model_info_projection surfaces)
 
 use serde_json::Value;
 

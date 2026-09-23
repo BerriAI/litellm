@@ -1,5 +1,8 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/test_video_generation.py::TestVideoGeneration
+// mirrors: unit/llms/openai/transcriptions/test_transcription_duration_hidden.py::TestCostCalculatorReadsDurationFromHiddenParams
+
 use litellm_cost::non_token::Error;
 use litellm_cost::openai_cost::{
     cost_router, video_generation_cost, video_output_cost_per_second,

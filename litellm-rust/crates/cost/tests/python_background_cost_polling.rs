@@ -1,3 +1,5 @@
+// mirrors: test_litellm/interactions/test_background_cost_polling.py::test_poll_intervals_double_up_to_the_cap_and_stay_inside_the_timeout
+
 use litellm_cost::background_cost_polling::{
     is_pollable_background_interaction, missing_usage_is_expected, poll_intervals,
 };

@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/litellm_core_utils/llm_cost_calc/test_usage_object_transformation.py::test_detects_interactions_usage_object
+
 use litellm_cost::interactions_usage::{
     is_interactions_usage_object, transform_interactions_usage_object,
 };

@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: crates/cost/tests/generate_python_fixtures.py
+
 use std::collections::HashMap;
 
 use jiff::Timestamp;

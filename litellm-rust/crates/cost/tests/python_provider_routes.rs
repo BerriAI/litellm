@@ -1,5 +1,8 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/llms/openai/test_cost_calculation.py::test_shipped_per_second_models_bill_a_non_zero_cost
+// mirrors: test_litellm/llms/databricks/test_databricks_cost_calculator.py
+
 use std::collections::HashMap;
 
 use jiff::Timestamp;

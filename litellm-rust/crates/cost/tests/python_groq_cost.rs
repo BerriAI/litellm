@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: unit/llms/groq/test_groq_cost_calculator.py::test_bills_searches_and_opens_together
+
 use litellm_cost::groq_cost::cost_per_web_search_request;
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;

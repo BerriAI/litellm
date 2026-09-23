@@ -1,5 +1,7 @@
 #![allow(clippy::disallowed_types)]
 
+// mirrors: test_litellm/litellm_core_utils/llm_cost_calc/test_usage_object_transformation.py
+
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
 use serde_json::{Value, json};

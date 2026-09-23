@@ -7,6 +7,15 @@ use crate::off_peak::{
 };
 use crate::tiered_pricing::{select_tier_for_input, tier_rate};
 
+pub const NON_STANDARD_THRESHOLD_SUFFIXES: [&str; 6] = [
+    "_ultrafast",
+    "_priority",
+    "_auto",
+    "_flex",
+    "_fast",
+    "_batches",
+];
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TokenBaseRates {
     pub input: f64,
@@ -102,16 +111,9 @@ fn crossed_threshold(
         .iter()
         .filter(|(key, value)| {
             key.starts_with("input_cost_per_token_above_")
-                && ![
-                    "_ultrafast",
-                    "_priority",
-                    "_standard",
-                    "_flex",
-                    "_fast",
-                    "_batches",
-                ]
-                .iter()
-                .any(|suffix| key.ends_with(suffix))
+                && !NON_STANDARD_THRESHOLD_SUFFIXES
+                    .iter()
+                    .any(|suffix| key.ends_with(suffix))
                 && !value.is_null()
         })
         .filter_map(|(key, _)| threshold_number(key).map(|threshold| (key.as_str(), threshold)))
