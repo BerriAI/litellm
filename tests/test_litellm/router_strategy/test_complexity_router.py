@@ -6877,6 +6877,34 @@ class TestSessionAffinity:
         assert response.model == "o1-preview"
 
     @pytest.mark.asyncio
+    async def test_session_affinity_pin_falls_back_to_local_cache_when_redis_fails(
+        self, mock_router_instance, basic_config
+    ):
+        """When redis_cache raises an exception (e.g. outage or connection error),
+        gracefully fall back to local cache so routing is not interrupted."""
+        redis_cache = AsyncMock()
+        redis_cache.async_get_cache = AsyncMock(side_effect=Exception("Redis connection error"))
+        dual_cache = AsyncMock()
+        dual_cache.redis_cache = redis_cache
+        dual_cache.async_get_cache = AsyncMock(return_value="gpt-4o-mini")
+        mock_router_instance.cache = dual_cache
+
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "session_affinity": True,
+            },
+        )
+        response = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
+        )
+        redis_cache.async_get_cache.assert_called_once()
+        dual_cache.async_get_cache.assert_called_once()
+        assert response.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
     async def test_different_api_keys_do_not_share_pin(self, mock_router_instance, session_affinity_config):
         """A session_id is client-supplied and unauthenticated; two different callers
         (API keys) reusing the same session_id must not poison each other's pin."""

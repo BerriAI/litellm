@@ -3975,10 +3975,18 @@ class ComplexityRouter(CustomLogger):
 
         if cache_key is not None and pin_replay_allowed:
             cache = self.litellm_router_instance.cache
+            pinned_value: Optional[Any] = None
             if getattr(cache, "redis_cache", None) is not None:
-                pinned_value: Final = await cache.redis_cache.async_get_cache(key=cache_key)
+                try:
+                    pinned_value = await cache.redis_cache.async_get_cache(key=cache_key)
+                except Exception as e:
+                    verbose_router_logger.debug(
+                        "ComplexityRouter: Failed to read session affinity from redis_cache, falling back to cache. Error: %s",
+                        e,
+                    )
+                    pinned_value = await cache.async_get_cache(key=cache_key)
             else:
-                pinned_value: Final = await cache.async_get_cache(key=cache_key)
+                pinned_value = await cache.async_get_cache(key=cache_key)
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
                 user_message: Final = _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None
