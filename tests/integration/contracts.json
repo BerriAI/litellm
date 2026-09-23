@@ -2067,6 +2067,9 @@
         ],
         "tests/integration/authorization/test_access_group_model_listing.py::test_team_key_lists_models_granted_through_team_access_group": [
             "authorization.access_groups.team_key_lists_models_granted_through_team_access_group"
+        ],
+        "tests/integration/spend/test_end_user_spend_without_proxy_user.py::test_end_user_spend_lands_for_key_without_user_id_when_auth_cache_is_redis": [
+            "spend.end_user.charged_when_key_has_no_user_id_and_auth_cache_is_redis"
         ]
     },
     "browser": {
