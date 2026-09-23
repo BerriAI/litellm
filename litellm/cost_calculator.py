@@ -1261,9 +1261,7 @@ def _get_transcription_usage_duration(completion_response: object) -> float | No
     seconds: Final = (
         usage_object.get("seconds") if isinstance(usage_object, dict) else getattr(usage_object, "seconds", None)
     )
-    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds < 0:
-        return None
-    return float(seconds)
+    return normalized_audio_duration_seconds(seconds)
 
 
 def _extraction_usage(usage: ExtractionUsage) -> Usage:
