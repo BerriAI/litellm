@@ -257,11 +257,6 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
 
 
 def raise_on_invalid_logging_metadata(metadata: Mapping[str, object] | None) -> None:
-    """Reject a metadata payload whose ``logging`` entries the runtime cannot honor.
-
-    Without this the same config the management surface rejects would be
-    accepted here and then silently ignored or misrouted at request time.
-    """
     error: Final = logging_metadata_config_error(metadata)
     if error is not None:
         raise HTTPException(status_code=400, detail={"error": error})  # mutable-ok: FastAPI detail contract
