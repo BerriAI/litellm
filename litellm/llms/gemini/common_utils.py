@@ -511,11 +511,15 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             "model": model_to_use,
             "contents": payload.contents if payload is not None else contents,
             **(
-                {"system_instruction": payload.system_instruction}
+                {"system_instruction": payload.system_instruction}  # mutable-ok: kwargs dict for acount_tokens
                 if payload is not None and payload.system_instruction is not None
-                else {}
+                else {}  # mutable-ok: kwargs dict for acount_tokens
             ),
-            **({"tools": payload.tools} if payload is not None and payload.tools is not None else {}),
+            **(
+                {"tools": payload.tools}  # mutable-ok: kwargs dict for acount_tokens
+                if payload is not None and payload.tools is not None
+                else {}  # mutable-ok: kwargs dict for acount_tokens
+            ),
         }
         count_tokens_params_request.update(count_tokens_params)
         try:

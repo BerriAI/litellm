@@ -135,14 +135,16 @@ class GoogleAIStudioTokenCounter:
         # Prepare request body - clean up contents to remove unsupported fields
         cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
         request_body: Final = (
-            {"contents": cleaned_contents}
+            {"contents": cleaned_contents}  # mutable-ok: httpx json body takes a plain dict
             if system_instruction is None and tools is None
-            else {
-                "generateContentRequest": {
+            else {  # mutable-ok: httpx json body takes a plain dict
+                "generateContentRequest": {  # mutable-ok: httpx json body takes a plain dict
                     "model": f"models/{model}",
                     "contents": cleaned_contents,
-                    **({"systemInstruction": system_instruction} if system_instruction is not None else {}),
-                    **({"tools": tools} if tools is not None else {}),
+                    **(  # mutable-ok: httpx json body takes a plain dict
+                        {"systemInstruction": system_instruction} if system_instruction is not None else {}
+                    ),
+                    **({"tools": tools} if tools is not None else {}),  # mutable-ok: httpx json body takes a plain dict
                 }
             }
         )

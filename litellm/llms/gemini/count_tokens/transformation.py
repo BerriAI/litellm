@@ -30,13 +30,13 @@ def build_count_tokens_payload(
     system: object | None,
     tools: Sequence[Mapping[str, object]] | None,
 ) -> GeminiCountTokensPayload:
-    anthropic_request: Final[AnthropicMessagesRequest] = cast(
-        AnthropicMessagesRequest,  # cast-ok: untrusted client payload, adapter reads the anthropic-shape keys only
-        {
+    anthropic_request: Final[AnthropicMessagesRequest] = cast(  # cast-ok: adapter reads only the keys supplied
+        AnthropicMessagesRequest,
+        {  # mutable-ok: transient request dict for the anthropic adapter
             "model": model,
-            "messages": list(messages),
-            **({"system": system} if system else {}),
-            **({"tools": list(tools)} if tools else {}),
+            "messages": list(messages),  # mutable-ok: adapter contract takes a list of messages
+            **({"system": system} if system else {}),  # mutable-ok: transient request dict for the anthropic adapter
+            **({"tools": list(tools)} if tools else {}),  # mutable-ok: transient request dict for the anthropic adapter
         },
     )
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
@@ -44,7 +44,7 @@ def build_count_tokens_payload(
     )
     system_instruction, remaining_messages = _transform_system_message(
         supports_system_message=True,
-        messages=list(openai_request["messages"]),
+        messages=list(openai_request["messages"]),  # mutable-ok: helper pops the leading system message
     )
     contents: Final = _gemini_convert_messages_with_history(
         messages=remaining_messages,
@@ -52,10 +52,16 @@ def build_count_tokens_payload(
         custom_llm_provider="gemini",
     )
     openai_tools: Final = openai_request.get("tools")
+    gemini_tools: Final = (
+        VertexGeminiConfig()._map_function(
+            value=[dict(tool) for tool in openai_tools],  # mutable-ok: _map_function takes plain tool dicts
+            optional_params={},  # mutable-ok: _map_function signature takes a dict
+        )
+        if openai_tools
+        else None
+    )
     return GeminiCountTokensPayload(
         contents=contents,
         system_instruction=system_instruction,
-        tools=VertexGeminiConfig()._map_function(value=[dict(tool) for tool in openai_tools], optional_params={})
-        if openai_tools
-        else None,
+        tools=gemini_tools,
     )
