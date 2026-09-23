@@ -108,7 +108,7 @@ openai_files_instance: Final = OpenAIFilesAPI()
 azure_files_instance: Final = AzureOpenAIFilesAPI()
 vertex_ai_files_instance: Final = VertexAIFilesHandler()
 bedrock_files_instance: Final = BedrockFilesHandler()
-xai_batches_instance: Final = XAIBatchesHandler()
+xai_batch_results_instance: Final = XAIBatchesHandler()
 #################################################
 
 
@@ -911,7 +911,7 @@ def file_content(
             )
 
         if custom_llm_provider == LlmProviders.XAI.value and is_xai_batch_results_id(file_id):
-            return xai_batches_instance.batch_results_content(
+            return xai_batch_results_instance.batch_results_content(
                 _is_async=_is_async,
                 batch_id=file_id,
                 api_base=optional_params.api_base,

@@ -2,8 +2,10 @@ from typing import Final
 
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.types.llms.openai import OpenAIFileObject
 
 API_BASE: Final = "https://api.x.ai"
 KEY: Final = "xai-test-key"
@@ -83,4 +85,5 @@ async def test_list_files_reads_data_array() -> None:
 
     listed: Final = await litellm.afile_list(custom_llm_provider="xai", api_key=KEY, api_base=API_BASE)
 
-    assert [f.id for f in listed] == ["file_07"]
+    files: Final = TypeAdapter(tuple[OpenAIFileObject, ...]).validate_python(listed)
+    assert [f.id for f in files] == ["file_07"]

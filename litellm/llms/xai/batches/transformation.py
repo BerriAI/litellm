@@ -50,7 +50,7 @@ def xai_batches_error(
     return XAIBatchesError(
         status_code=status_code,
         message=error_message,
-        headers=headers if isinstance(headers, httpx.Headers) else httpx.Headers(dict(headers)),
+        headers=headers if isinstance(headers, httpx.Headers) else httpx.Headers(tuple(headers.items())),
     )
 
 
@@ -196,7 +196,7 @@ def to_litellm_batch(batch: XAIBatch, endpoint: str = DEFAULT_BATCH_ENDPOINT) ->
             completed=batch.state.num_success,
             failed=batch.state.num_error + batch.state.num_cancelled,
         ),
-        metadata={"name": batch.name} if batch.name else None,
+        metadata={"name": batch.name} if batch.name else None,  # mutable-ok: LiteLLMBatch.metadata is a dict
     )
 
 
@@ -228,11 +228,30 @@ def to_create_batch_body(create_batch_data: CreateBatchRequest) -> XAICreateBatc
     input_file_id: Final = create_batch_data.get("input_file_id")
     if not input_file_id:
         raise xai_batches_error("input_file_id is required to create an xAI batch", 400, _EMPTY_HEADERS)
-    metadata: Final = create_batch_data.get("metadata") or {}
-    return XAICreateBatchRequest(name=metadata.get("name") or DEFAULT_BATCH_NAME, input_file_id=input_file_id)
+    metadata: Final = create_batch_data.get("metadata")
+    name: Final = metadata.get("name") if metadata else None
+    return XAICreateBatchRequest(name=name or DEFAULT_BATCH_NAME, input_file_id=input_file_id)
 
 
-def _result_to_openai_line(result: XAIBatchResult) -> Mapping[str, object]:
+class OpenAIBatchOutputError(TypedDict):
+    code: ReadOnly[str]
+    message: ReadOnly[str]
+
+
+class OpenAIBatchOutputResponse(TypedDict):
+    status_code: ReadOnly[int]
+    request_id: ReadOnly[object]
+    body: ReadOnly[Mapping[str, object]]
+
+
+class OpenAIBatchOutputLine(TypedDict):
+    id: ReadOnly[str]
+    custom_id: ReadOnly[str]
+    response: ReadOnly[OpenAIBatchOutputResponse | None]
+    error: ReadOnly[OpenAIBatchOutputError | None]
+
+
+def _result_to_openai_line(result: XAIBatchResult) -> OpenAIBatchOutputLine:
     """One output JSONL line. xAI wraps the body in a one-key map named after the endpoint
     (``chat_get_completion``, ``responses``, ``image_generation``, ...); the value is the OpenAI body."""
     error: Final = result.batch_result.error
@@ -241,18 +260,18 @@ def _result_to_openai_line(result: XAIBatchResult) -> Mapping[str, object]:
     if body is None:
         message: Final = error.message if error is not None else "xAI returned no response for this request"
         code: Final = str(error.code) if error is not None and error.code is not None else "request_failed"
-        return {
-            "id": f"batch_req_{result.batch_request_id}",
-            "custom_id": result.batch_request_id,
-            "response": None,
-            "error": {"code": code, "message": message},
-        }
-    return {
-        "id": f"batch_req_{result.batch_request_id}",
-        "custom_id": result.batch_request_id,
-        "response": {"status_code": 200, "request_id": body.get("id"), "body": body},
-        "error": None,
-    }
+        return OpenAIBatchOutputLine(
+            id=f"batch_req_{result.batch_request_id}",
+            custom_id=result.batch_request_id,
+            response=None,
+            error=OpenAIBatchOutputError(code=code, message=message),
+        )
+    return OpenAIBatchOutputLine(
+        id=f"batch_req_{result.batch_request_id}",
+        custom_id=result.batch_request_id,
+        response=OpenAIBatchOutputResponse(status_code=200, request_id=body.get("id"), body=body),
+        error=None,
+    )
 
 
 def results_to_openai_jsonl(results: Sequence[XAIBatchResult]) -> bytes:

@@ -5,15 +5,15 @@ Every operation is one or more plain HTTP calls with the same auth header, so th
 paths share the URL builders and response mapping in ``transformation.py`` and differ only in the client.
 """
 
-from collections.abc import Coroutine, Mapping
-from typing import Any, Final
+from collections.abc import Coroutine
+from typing import Final, NotRequired, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.types.llms.openai import CreateBatchRequest, HttpxBinaryResponseContent
@@ -35,7 +35,12 @@ from .transformation import (
     xai_batches_url,
 )
 
-_JSONL_HEADERS: Final[Mapping[str, str]] = {"content-type": "application/jsonl"}
+_JSONL_CONTENT_TYPE: Final = ("content-type", "application/jsonl")
+
+
+class _PageParams(TypedDict):
+    limit: ReadOnly[int]
+    pagination_token: NotRequired[ReadOnly[str]]
 
 
 def _raise_for_status(response: httpx.Response) -> httpx.Response:
@@ -44,9 +49,10 @@ def _raise_for_status(response: httpx.Response) -> httpx.Response:
     return response
 
 
-def _results_params(after: str | None, limit: int | None) -> dict[str, str | int]:  # mutable-ok: httpx params
-    params: Final[dict[str, str | int]] = {"limit": limit or XAI_RESULTS_PAGE_SIZE}  # mutable-ok: httpx params
-    return {**params, "pagination_token": after} if after else params
+def _results_params(after: str | None, limit: int | None) -> dict[str, object]:  # mutable-ok: httpx params
+    if after is None:
+        return dict(_PageParams(limit=limit or XAI_RESULTS_PAGE_SIZE))  # mutable-ok: httpx params
+    return dict(_PageParams(limit=limit or XAI_RESULTS_PAGE_SIZE, pagination_token=after))  # mutable-ok: httpx params
 
 
 def _jsonl_response(url: str, results: tuple[XAIBatchResult, ...]) -> HttpxBinaryResponseContent:
@@ -54,22 +60,25 @@ def _jsonl_response(url: str, results: tuple[XAIBatchResult, ...]) -> HttpxBinar
         response=httpx.Response(
             status_code=200,
             content=results_to_openai_jsonl(results),
-            headers=dict(_JSONL_HEADERS),  # mutable-ok: httpx.Response takes a dict
+            headers=(_JSONL_CONTENT_TYPE,),
             request=httpx.Request(method="GET", url=url),
         )
     )
 
 
 class XAIBatchesHandler:
-    def __init__(self, sync_client: HTTPHandler | None = None, async_client: AsyncHTTPHandler | None = None):
+    def __init__(self, sync_client: HTTPHandler | None = None, async_client: AsyncHTTPHandler | None = None) -> None:
         self._sync_client = sync_client
         self._async_client = async_client
 
     def _sync(self, timeout: float | httpx.Timeout) -> HTTPHandler:
-        return self._sync_client or _get_httpx_client(params={"timeout": timeout})
+        return self._sync_client or HTTPHandler(timeout=timeout)
 
     def _async(self, timeout: float | httpx.Timeout) -> AsyncHTTPHandler:
-        return self._async_client or get_async_httpx_client(llm_provider=LlmProviders.XAI, params={"timeout": timeout})
+        return self._async_client or get_async_httpx_client(
+            llm_provider=LlmProviders.XAI,
+            params={"timeout": timeout},  # mutable-ok: get_async_httpx_client takes a dict
+        )
 
     def create_batch(
         self,
@@ -78,7 +87,7 @@ class XAIBatchesHandler:
         api_base: str | None,
         api_key: str | None,
         timeout: float | httpx.Timeout,
-    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+    ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
         url: Final = xai_batches_url(api_base)
         headers: Final = get_xai_auth_headers(api_key=api_key)
         body: Final = dict(to_create_batch_body(create_batch_data))  # mutable-ok: httpx json body
@@ -100,7 +109,7 @@ class XAIBatchesHandler:
         api_base: str | None,
         api_key: str | None,
         timeout: float | httpx.Timeout,
-    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+    ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
         url: Final = xai_batches_url(api_base, batch_id)
         headers: Final = get_xai_auth_headers(api_key=api_key)
         if _is_async:
@@ -120,7 +129,7 @@ class XAIBatchesHandler:
         api_base: str | None,
         api_key: str | None,
         timeout: float | httpx.Timeout,
-    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+    ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
         url: Final = xai_batches_url(api_base, batch_id, suffix=":cancel")
         headers: Final = get_xai_auth_headers(api_key=api_key)
         if _is_async:
@@ -141,7 +150,7 @@ class XAIBatchesHandler:
         timeout: float | httpx.Timeout,
         after: str | None = None,
         limit: int | None = None,
-    ) -> OpenAIBatchListResponse | Coroutine[Any, Any, OpenAIBatchListResponse]:
+    ) -> OpenAIBatchListResponse | Coroutine[None, None, OpenAIBatchListResponse]:
         url: Final = xai_batches_url(api_base)
         headers: Final = get_xai_auth_headers(api_key=api_key)
         params: Final = _results_params(after, limit)
@@ -162,7 +171,7 @@ class XAIBatchesHandler:
         api_base: str | None,
         api_key: str | None,
         timeout: float | httpx.Timeout,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+    ) -> HttpxBinaryResponseContent | Coroutine[None, None, HttpxBinaryResponseContent]:
         """Walk every page of ``GET /v1/batches/{id}/results`` and render it as an OpenAI output JSONL."""
         url: Final = xai_batches_url(api_base, batch_id, suffix="/results")
         headers: Final = get_xai_auth_headers(api_key=api_key)
