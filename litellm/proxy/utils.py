@@ -998,7 +998,7 @@ def _stamp_deployment_attribution(
     if "model_info" not in attribution:
         return attribution
     if litellm_params.get("metadata") is None:
-        litellm_params["metadata"] = {}  # mutable-ok: legacy logging payload is populated in place
+        litellm_params["metadata"] = {}  # rebind-ok: populated in place  # mutable-ok: seeded literal
     metadata: Final = litellm_params["metadata"]
     if not isinstance(metadata, dict):
         return attribution
@@ -1052,8 +1052,7 @@ def _deployment_attribution_for_model_group(model_group: object, team_id: str | 
     )
     return MappingProxyType(
         {
-            # mutable-ok: frozen immediately by the outer MappingProxyType
-            **({"custom_llm_provider": shared_provider} if shared_provider is not None else {}),
+            **({"custom_llm_provider": shared_provider} if shared_provider is not None else {}),  # mutable-ok: frozen immediately by the outer MappingProxyType
             **(
                 {  # mutable-ok: frozen immediately by the outer MappingProxyType
                     "model_info": dict(  # mutable-ok: preserve the router's mutable model-info payload

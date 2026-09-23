@@ -3126,9 +3126,7 @@ async def move_guardrails_to_metadata(
     - Moves include_guardrail_response into request metadata before provider dispatch
     """
     if "include_guardrail_response" in data:
-        data[_metadata_variable_name][
-            "include_guardrail_response"
-        ] = (  # rebind-ok: pre-call hooks mutate the shared request dict in place
+        data[_metadata_variable_name]["include_guardrail_response"] = (  # rebind-ok: pre-call hooks mutate request dict
             data.pop("include_guardrail_response") is True
         )
 
