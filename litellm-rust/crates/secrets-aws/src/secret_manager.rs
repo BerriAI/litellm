@@ -2,6 +2,8 @@ mod client;
 mod read;
 mod write;
 
+pub use read::is_bootstrap_key;
+
 use litellm_auth_aws::constants::AWS_BEDROCK_RUNTIME_ENDPOINT;
 use std::{collections::BTreeMap, sync::Arc};
 

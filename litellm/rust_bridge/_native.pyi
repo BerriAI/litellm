@@ -2,6 +2,7 @@ from asyncio import Future
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import Never, final
 
+import httpx
 from pydantic import JsonValue
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
@@ -388,4 +389,12 @@ class _SecretManagerRuntime:
     @property
     def system(self) -> str: ...
     def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> JsonValue: ...
-    def async_read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> Future[JsonValue]: ...
+    def read_secret_async(self, name: str, settings: Mapping[str, object] | None = None) -> Future[JsonValue]: ...
+    def sync_read_secret(
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
+    ) -> JsonValue: ...
+    def async_read_secret(
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
+    ) -> Future[JsonValue]: ...

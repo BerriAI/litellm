@@ -5,6 +5,7 @@ mod error;
 mod handler;
 mod native;
 mod oidc;
+mod provider;
 mod resolver;
 pub mod source;
 mod state;
@@ -17,6 +18,7 @@ pub use litellm_secrets_types::{
 };
 pub use native::load_native_manager;
 pub use oidc::{OidcProvider, OidcReference, OidcResolver};
+pub use provider::{PythonReadRequest, read_python_provider};
 pub use resolver::{FailurePolicy, SecretResolver, normalize_nonempty_secret_str};
 pub use state::{SecretManagerState, secret_manager_would_be_consulted};
 

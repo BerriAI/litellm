@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
 from importlib import import_module
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Never
+from urllib.parse import urlsplit
 
+import httpx
 import pytest
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 from pydantic import JsonValue
 
 import litellm
@@ -21,6 +28,7 @@ from litellm.rust_bridge.secret_manager import (
     NativeSecretManagerRuntime,
     capture_secret_manager,
     native_secret_manager_config,
+    resolve_native_provider_reader,
     resolve_native_secret_manager,
 )
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
@@ -28,6 +36,7 @@ from litellm.secret_managers.dispatch import get_secret_from_manager
 from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretManager
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
+
 
 @pytest.fixture(autouse=True)
 def preserve_manager_globals(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -426,7 +435,7 @@ async def test_aws_primary_values_match_python_handler(
         )
         handle: Final = native._SecretManagerRuntime.from_client(manager)
         assert handle is not None
-        asynchronous: Final = await handle.async_read_secret("KEY", settings.model_dump(mode="json"))
+        asynchronous: Final = await handle.read_secret_async("KEY", settings.model_dump(mode="json"))
         assert type(actual) is type(reference) is type(value)
         assert actual == reference == value
         assert type(asynchronous) is type(reference)
@@ -440,6 +449,7 @@ async def test_aws_primary_values_match_python_handler(
     (
         (400, {"__type": "ResourceNotFoundException"}),
         (403, {"__type": "AccessDeniedException"}),
+        (500, {"__type": "InternalServiceError"}),
         (200, {"Name": "without-string"}),
         (200, {"SecretString": ""}),
     ),
@@ -503,5 +513,295 @@ async def test_aws_primary_json_errors_preserve_python_exception_details(
         handle: Final = native._SecretManagerRuntime.from_client(manager)
         assert handle is not None
         with pytest.raises(type(reference.value)) as asynchronous:
-            await handle.async_read_secret("KEY", settings.model_dump(mode="json"))
+            await handle.read_secret_async("KEY", settings.model_dump(mode="json"))
         assert asynchronous.value.args == reference.value.args
+
+
+def _select_provider_reads(monkeypatch: pytest.MonkeyPatch, module_name: str, rollout: Rollout) -> None:
+    module: Final = import_module(module_name)
+    monkeypatch.setattr(
+        module,
+        "resolve_native_provider_reader",
+        partial(resolve_native_provider_reader, rules=(SecretManagerRule(rollout),)),
+    )
+    if rollout is Rollout.RUST_REQUIRED:
+        monkeypatch.setattr(module, "_get_httpx_client", _forbid_python_http)
+        monkeypatch.setattr(module, "get_async_httpx_client", _forbid_python_http)
+
+
+def _forbid_python_http(*args: object, **kwargs: object) -> Never:
+    raise AssertionError("native reads must not construct a Python HTTP client")
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+async def test_public_aws_reads_preserve_coroutines_and_per_call_credentials(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as initial, recording_service() as selected:
+        initial.expected_requests = 0
+        selected.expected_requests = 2
+        selected.default_response = ResponseSpec(body={"SecretString": "value"})
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "environment-access")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "environment-secret")
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", initial.base_url)
+        manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
+        _select_provider_reads(monkeypatch, "litellm.secret_managers.aws_secret_manager_v2", rollout)
+        options: Final = {
+            "aws_region_name": "us-west-2",
+            "aws_bedrock_runtime_endpoint": selected.base_url,
+            "aws_access_key_id": "operation-access",
+            "aws_secret_access_key": "operation-secret",
+            "aws_session_token": "operation-session",
+        }
+        pending: Final = manager.async_read_secret(secret_name="KEY", optional_params=dict(options), timeout=2)
+        assert inspect.iscoroutine(pending)
+        assert selected.requests == []
+        assert await asyncio.create_task(pending) == "value"
+        assert manager.sync_read_secret("KEY", dict(options), 2) == "value"
+        assert tuple(json.loads(request.raw_body) for request in selected.requests) == ({"SecretId": "KEY"},) * 2
+        assert all(
+            "Credential=operation-access/" in request.headers["authorization"]
+            and "/us-west-2/" in request.headers["authorization"]
+            and request.headers["x-amz-security-token"] == "operation-session"
+            for request in selected.requests
+        )
+        for request in selected.requests:
+            signed_headers: Final = request.headers["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+            signed_request: Final = AWSRequest(
+                method=request.method,
+                url=selected.base_url + request.path,
+                data=request.raw_body,
+                headers={name: request.headers[name] for name in signed_headers},
+            )
+            signed_request.context["timestamp"] = request.headers["x-amz-date"]
+            signer: Final = SigV4Auth(
+                Credentials(options["aws_access_key_id"], options["aws_secret_access_key"], options["aws_session_token"]),
+                "secretsmanager", options["aws_region_name"],
+            )
+            string_to_sign: Final = signer.string_to_sign(signed_request, signer.canonical_request(signed_request))
+            assert request.headers["authorization"].split("Signature=")[1] == signer.signature(
+                string_to_sign, signed_request
+            )
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+async def test_public_aws_primary_reads_ignore_operation_overrides_like_python(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server, recording_service() as unused:
+        server.default_response = ResponseSpec(body={"SecretString": '{"KEY":true}'})
+        server.expected_requests = 2
+        unused.expected_requests = 0
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", server.base_url)
+        manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
+        _select_provider_reads(monkeypatch, "litellm.secret_managers.aws_secret_manager_v2", rollout)
+        options: Final = {"aws_bedrock_runtime_endpoint": unused.base_url}
+        assert manager.sync_read_secret("KEY", options, 0, "primary") is True
+        assert await manager.async_read_secret(
+            "KEY", optional_params=options, timeout=0, primary_secret_name="primary"
+        ) is True
+        assert tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": "primary"},) * 2
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+async def test_public_aws_bootstrap_names_only_bypass_sync_reads(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body={"SecretString": "remote-access"})
+        server.expected_requests = 1
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "environment-access")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "environment-secret")
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", server.base_url)
+        manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
+        _select_provider_reads(monkeypatch, "litellm.secret_managers.aws_secret_manager_v2", rollout)
+        assert manager.sync_read_secret("AWS_ACCESS_KEY_ID") == "environment-access"
+        assert server.requests == []
+        assert await manager.async_read_secret("AWS_ACCESS_KEY_ID") == "remote-access"
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+@pytest.mark.parametrize("timeout", (0.05, httpx.Timeout(1, read=0.05)))
+async def test_public_aws_read_timeouts_follow_the_python_http_handler(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout, timeout: float | httpx.Timeout
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body={"SecretString": "too-late"}, delay=0.25)
+        server.expected_requests = 2
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", server.base_url)
+        manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
+        _select_provider_reads(monkeypatch, "litellm.secret_managers.aws_secret_manager_v2", rollout)
+        assert manager.sync_read_secret("KEY", timeout=timeout) is None
+        assert await manager.async_read_secret("KEY", timeout=timeout) is None
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+async def test_public_vault_reads_keep_overrides_cache_and_coroutines(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=_vault_body("value"))
+        server.expected_requests = 2
+        manager: Final = _vault(monkeypatch, server.base_url)
+        _select_provider_reads(monkeypatch, "litellm.secret_managers.hashicorp_secret_manager", rollout)
+        options: Final = {"secret_manager_settings": {"mount": "team", "path_prefix": "keys", "data": "key"}}
+        pending: Final = manager.async_read_secret("KEY", options)
+        assert inspect.iscoroutine(pending)
+        assert server.requests == []
+        assert await asyncio.create_task(pending) == "value"
+        assert manager.sync_read_secret(secret_name="KEY", optional_params=options) == "value"
+        assert manager.sync_read_secret("KEY") == "value"
+        assert urlsplit(server.requests[0].path).path == "/v1/team/data/keys/KEY"
+        assert urlsplit(server.requests[1].path).path == "/v1/secret/data/KEY"
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+@pytest.mark.parametrize("status", (404, 403))
+async def test_public_vault_failed_reads_return_none_without_replay(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout, status: int
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(status=status, body={"errors": ["unavailable"]})
+        server.expected_requests = 2
+        manager: Final = _vault(monkeypatch, server.base_url)
+        _select_provider_reads(monkeypatch, "litellm.secret_managers.hashicorp_secret_manager", rollout)
+        assert manager.sync_read_secret("KEY") is None
+        assert await manager.async_read_secret("KEY") is None
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+async def test_public_cyberark_reads_reuse_authentication_and_cached_values(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    from litellm.proxy import proxy_server
+    from litellm.secret_managers.cyberark_secret_manager import CyberArkSecretManager
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    with recording_service() as server:
+        server.enqueue(ResponseSpec(body="authentication-token"))
+        server.default_response = ResponseSpec(body="secret-value")
+        server.expected_requests = 2
+        monkeypatch.setenv("CYBERARK_API_BASE", server.base_url)
+        monkeypatch.setenv("CYBERARK_API_KEY", "api-key")
+        monkeypatch.setenv("CYBERARK_ACCOUNT", "account")
+        monkeypatch.setenv("CYBERARK_USERNAME", "reader")
+        manager: Final = CyberArkSecretManager()
+        _select_provider_reads(monkeypatch, "litellm.secret_managers.cyberark_secret_manager", rollout)
+        pending: Final = manager.async_read_secret(secret_name="KEY", timeout=0)
+        assert inspect.iscoroutine(pending)
+        assert server.requests == []
+        assert await asyncio.create_task(pending) == '"secret-value"'
+        assert manager.sync_read_secret("KEY", timeout=0) == (
+            '"secret-value"' if rollout is Rollout.RUST_REQUIRED else "secret-value"
+        )
+        assert tuple(request.path for request in server.requests) == (
+            "/authn/account/reader/authenticate", "/secrets/account/variable/KEY"
+        )
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+async def test_public_native_selection_and_missing_extension_keep_the_python_method(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout
+) -> None:
+    binding: Final[NativeBinding[NativeSecretManagerFactory]] = NativeBinding("unused", validate=lambda value: None)
+    binding.override(None)
+    module: Final = import_module("litellm.secret_managers.aws_secret_manager_v2")
+    monkeypatch.setattr(
+        module, "resolve_native_provider_reader",
+        partial(resolve_native_provider_reader, rules=(SecretManagerRule(rollout),), binding=binding),
+    )
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body={"SecretString": "python-value"})
+        server.expected_requests = 0 if rollout is Rollout.RUST_REQUIRED else 1
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", server.base_url)
+        manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
+        pending: Final = manager.async_read_secret("KEY")
+        if rollout is Rollout.RUST_REQUIRED:
+            with pytest.raises(RuntimeError, match="runtime is unavailable"):
+                await pending
+        else:
+            assert await pending == "python-value"
+
+
+def test_public_aws_bootstrap_read_does_not_initialize_a_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    module: Final = import_module("litellm.secret_managers.aws_secret_manager_v2")
+    monkeypatch.setattr(module, "resolve_native_provider_reader", _forbid_python_http)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "bootstrap-value")
+    assert AWSSecretsManagerV2().sync_read_secret("AWS_ACCESS_KEY_ID") == "bootstrap-value"
+
+
+@pytest.mark.parametrize("rollout", (Rollout.PYTHON_ONLY, Rollout.RUST_REQUIRED))
+@pytest.mark.parametrize("override", ("", 42))
+def test_public_vault_prefix_overrides_match_python_string_conversion(
+    monkeypatch: pytest.MonkeyPatch, rollout: Rollout, override: str | int
+) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("HCP_VAULT_PATH_PREFIX", "default-prefix")
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=_vault_body("value"))
+        server.expected_requests = 1
+        manager: Final = _vault(monkeypatch, server.base_url)
+        _select_provider_reads(monkeypatch, "litellm.secret_managers.hashicorp_secret_manager", rollout)
+        assert manager.sync_read_secret("KEY", {"path_prefix": override}) == "value"
+        assert urlsplit(server.requests[0].path).path == (
+            f"/v1/secret/data/{override}/KEY" if override else "/v1/secret/data/KEY"
+        )
+
+
+@pytest.mark.parametrize("value", ("native-value", None))
+def test_public_google_reader_uses_the_selected_binding_without_replaying_python(
+    monkeypatch: pytest.MonkeyPatch, value: str | None
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.secret_managers.google_secret_manager import GoogleSecretManager
+
+    class Manager(GoogleSecretManager):
+        def sync_construct_request_headers(self) -> dict[str, str]:
+            raise AssertionError("selected native reads must not construct Python auth headers")
+
+    class Reader(_RecordingRuntime):
+        def sync_read_secret(
+            self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+            timeout: float | httpx.Timeout | None = None,
+        ) -> str | None:
+            return self.read_secret(secret_name)
+
+        async def async_read_secret(
+            self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+            timeout: float | httpx.Timeout | None = None,
+        ) -> str | None:
+            return self.sync_read_secret(secret_name)
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("GOOGLE_SECRET_MANAGER_PROJECT_ID", "project")
+    manager: Final = Manager()
+    runtime: Final = Reader("google_secret_manager", value)
+
+    class Factory:
+        @staticmethod
+        def from_client(candidate: object) -> NativeSecretManagerRuntime:
+            assert candidate is manager
+            return runtime
+
+    binding: Final[NativeBinding[NativeSecretManagerFactory]] = NativeBinding("unused", validate=lambda value: None)
+    binding.override(Factory)
+    module: Final = import_module("litellm.secret_managers.google_secret_manager")
+    monkeypatch.setattr(
+        module, "resolve_native_provider_reader",
+        partial(resolve_native_provider_reader, rules=(SecretManagerRule(Rollout.RUST_REQUIRED),), binding=binding),
+    )
+    assert manager.get_secret_from_google_secret_manager(secret_name="KEY") == value
+    assert runtime.calls == (("KEY", None),)

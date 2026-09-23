@@ -1,6 +1,7 @@
 pub(crate) mod callback;
 pub(crate) mod config;
 mod error;
+mod provider;
 pub(crate) mod resolved;
 pub(crate) mod runtime;
 

@@ -44,6 +44,9 @@ impl SecretOperationContext {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AwsOperationContext {
+    pub access_key_id: Option<SecretValue>,
+    pub secret_access_key: Option<SecretValue>,
+    pub session_token: Option<SecretValue>,
     pub timeout: Option<Duration>,
     pub region_name: Option<String>,
     pub role_name: Option<String>,

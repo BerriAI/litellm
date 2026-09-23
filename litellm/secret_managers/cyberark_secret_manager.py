@@ -15,6 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import KeyManagementSystem
+from litellm.rust_bridge.secret_manager import resolve_native_provider_reader
 
 from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 from .main import str_to_bool
@@ -186,6 +187,10 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             Optional[str]: The secret value if found, None otherwise
         """
+        native: Final = resolve_native_provider_reader(self, "cyberark")
+        if native is not None:
+            return await native.async_read_secret(secret_name, optional_params, timeout)
+
         # Check cache first
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
@@ -232,6 +237,10 @@ class CyberArkSecretManager(BaseSecretManager):
         Returns:
             Optional[str]: The secret value if found, None otherwise
         """
+        native: Final = resolve_native_provider_reader(self, "cyberark")
+        if native is not None:
+            return native.sync_read_secret(secret_name, optional_params, timeout)
+
         # Check cache first
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)

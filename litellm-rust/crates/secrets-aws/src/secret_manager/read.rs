@@ -1,4 +1,5 @@
 use super::*;
+use aws_sdk_secretsmanager::config::retry::RetryConfig;
 use litellm_secrets_types::PythonSecretRead;
 
 #[derive(Clone, Copy)]
@@ -42,6 +43,41 @@ impl AwsSecretsManagerV2 {
             .await
     }
 
+    pub async fn read_provider_payload_for_python(
+        &self,
+        name: &str,
+        primary_name: Option<&str>,
+        context: &AwsOperationContext,
+        synchronous: bool,
+        environment: &(dyn Lookup + Sync),
+    ) -> Result<PythonSecretRead, Error> {
+        if synchronous && is_bootstrap_key(name) {
+            return Ok(PythonSecretRead::Value(
+                environment
+                    .get(name)
+                    .map(SecretValue::new)
+                    .map(Secret::String),
+            ));
+        }
+        if let Some(primary) = primary_name.filter(|value| !value.is_empty()) {
+            let value = if synchronous && is_bootstrap_key(primary) {
+                environment.get(primary).map(SecretValue::new)
+            } else {
+                self.read_with_policy(primary, ReadPolicy::Python).await?
+            };
+            return Ok(match value.filter(|value| !value.expose().is_empty()) {
+                Some(value) => PythonSecretRead::PrimaryJson(value),
+                None => PythonSecretRead::Value(None),
+            });
+        }
+        let client = self.client_for_context(context)?;
+        let value = match Self::read_with_client(&client, name, ReadPolicy::Python).await {
+            Err(Error::Read(_) | Error::MissingString | Error::Timeout) => None,
+            result => result?,
+        };
+        Ok(PythonSecretRead::Value(value.map(Secret::String)))
+    }
+
     async fn read_payload(
         &self,
         name: &str,
@@ -49,7 +85,7 @@ impl AwsSecretsManagerV2 {
         environment: &(dyn Lookup + Sync),
         policy: ReadPolicy,
     ) -> Result<PythonSecretRead, Error> {
-        if bootstrap_key(name) {
+        if is_bootstrap_key(name) {
             return Ok(PythonSecretRead::Value(
                 environment
                     .get(name)
@@ -63,7 +99,7 @@ impl AwsSecretsManagerV2 {
                 .await
                 .map(|value| PythonSecretRead::Value(value.map(Secret::String))),
             Some(primary) => {
-                let value = if bootstrap_key(primary) {
+                let value = if is_bootstrap_key(primary) {
                     environment.get(primary).map(SecretValue::new)
                 } else {
                     self.read_with_policy(primary, policy).await?
@@ -84,8 +120,13 @@ impl AwsSecretsManagerV2 {
         name: &str,
         policy: ReadPolicy,
     ) -> Result<Option<SecretValue>, Error> {
-        match (self.async_read_secret(name).await, policy) {
-            (Err(Error::Read(_) | Error::MissingString), ReadPolicy::Python) => Ok(None),
+        match (
+            Self::read_with_client(&self.client, name, policy).await,
+            policy,
+        ) {
+            (Err(Error::Read(_) | Error::MissingString | Error::Timeout), ReadPolicy::Python) => {
+                Ok(None)
+            }
             (result, _) => result,
         }
     }
@@ -98,7 +139,29 @@ impl AwsSecretsManagerV2 {
         client: &Client,
         name: &str,
     ) -> Result<Option<SecretValue>, Error> {
-        match client.get_secret_value().secret_id(name).send().await {
+        Self::read_with_client(client, name, ReadPolicy::Native).await
+    }
+
+    async fn read_with_client(
+        client: &Client,
+        name: &str,
+        policy: ReadPolicy,
+    ) -> Result<Option<SecretValue>, Error> {
+        let request = client.get_secret_value().secret_id(name);
+        let response = match policy {
+            ReadPolicy::Native => request.send().await,
+            ReadPolicy::Python => {
+                request
+                    .customize()
+                    .config_override(
+                        aws_sdk_secretsmanager::config::Builder::new()
+                            .retry_config(RetryConfig::disabled()),
+                    )
+                    .send()
+                    .await
+            }
+        };
+        match response {
             Ok(response) => response
                 .secret_string
                 .map(SecretValue::new)
@@ -138,7 +201,7 @@ impl BaseSecretManager for AwsSecretsManagerV2 {
     }
 }
 
-fn bootstrap_key(name: &str) -> bool {
+pub fn is_bootstrap_key(name: &str) -> bool {
     matches!(
         name,
         AWS_ACCESS_KEY_ID

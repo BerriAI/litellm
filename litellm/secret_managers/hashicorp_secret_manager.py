@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import KeyManagementSystem
+from litellm.rust_bridge.secret_manager import resolve_native_provider_reader
 
 from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 
@@ -405,6 +406,10 @@ class HashicorpSecretManager(BaseSecretManager):
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
         Returns the entire data dict from data.data, or None on failure.
         """
+        native: Final = resolve_native_provider_reader(self, "hashicorp_vault")
+        if native is not None:
+            return await native.async_read_secret(secret_name, optional_params, timeout)
+
         async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
         )
@@ -436,6 +441,10 @@ class HashicorpSecretManager(BaseSecretManager):
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
         Returns the entire data dict from data.data, or None on failure.
         """
+        native: Final = resolve_native_provider_reader(self, "hashicorp_vault")
+        if native is not None:
+            return native.sync_read_secret(secret_name, optional_params, timeout)
+
         sync_client: Final = _get_httpx_client()
         try:
             target: Final = self._build_secret_target(secret_name, optional_params)

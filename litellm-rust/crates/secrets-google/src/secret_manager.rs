@@ -137,7 +137,10 @@ impl GoogleSecretManager {
         ) {
             self.python_misses.insert(name.to_owned(), ()).await;
         }
-        result
+        match result {
+            Ok(None) => Err(Error::Status(404)),
+            result => result,
+        }
     }
 
     async fn read(&self, name: &str) -> Result<Option<SecretValue>, Error> {

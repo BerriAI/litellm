@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manager_failure_uses_environment_fallback() {
+    async fn aws_read_failure_preserves_absence_without_environment_fallback() {
         let name = "LITELLM_RUST_BRIDGE_MANAGER_FAILURE";
         unsafe { std::env::set_var(name, "env-key") };
         let server = MockServer::start().await;
@@ -131,7 +131,7 @@ mod tests {
         )
         .await;
         unsafe { std::env::remove_var(name) };
-        assert_eq!(result.as_deref(), Some("env-key"));
+        assert_eq!(result, None);
         assert_eq!(missing, None);
     }
 

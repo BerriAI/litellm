@@ -334,7 +334,7 @@ async fn python_reads_reuse_cached_absence_until_expiry(
     .await;
     let result = manager.get_secret_for_python("key").await;
     match status {
-        404 => assert!(result.unwrap().is_none()),
+        404 => assert!(matches!(result, Err(Error::Status(404)))),
         403 => assert!(matches!(result, Err(Error::Status(403)))),
         200 => assert!(matches!(result, Err(Error::MissingPayload))),
         _ => unreachable!(),
@@ -372,13 +372,10 @@ async fn python_cached_absence_expires_and_allows_recovery() {
     .expect(1)
     .mount_as_scoped(&server)
     .await;
-    assert!(
-        manager
-            .get_secret_for_python("key")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(matches!(
+        manager.get_secret_for_python("key").await,
+        Err(Error::Status(404))
+    ));
     drop(missing);
     tokio::time::sleep(Duration::from_millis(40)).await;
     Mock::given(path(

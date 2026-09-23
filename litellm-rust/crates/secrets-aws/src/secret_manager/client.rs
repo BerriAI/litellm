@@ -89,7 +89,11 @@ impl ContextClientFactory {
                 &settings,
                 self.environment.as_ref(),
             )?))
-            .credentials_provider(auth::Credentials::new(&settings, self.environment.clone()));
+            .credentials_provider(auth::Credentials::with_context(
+                &settings,
+                self.environment.clone(),
+                context,
+            ));
         let builder = match context.timeout {
             Some(timeout) => builder.timeout_config(
                 aws_sdk_secretsmanager::config::timeout::TimeoutConfig::builder()

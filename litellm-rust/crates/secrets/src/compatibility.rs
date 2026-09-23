@@ -29,6 +29,10 @@ pub async fn get_secret_from_python_manager(
         _ => get_secret_from_manager(manager, name, settings, environment).await,
     };
     match result {
+        #[cfg(feature = "google")]
+        Err(Error::Google(litellm_secrets_google::Error::Status(404))) => {
+            Err(Error::ManagedSecretMissing)
+        }
         #[cfg(feature = "azure")]
         Err(Error::Azure(litellm_secrets_azure::Error::MissingValue)) => Ok(None),
         Ok(None)

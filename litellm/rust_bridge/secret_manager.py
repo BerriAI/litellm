@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Final, Protocol, runtime_checkable
 
+import httpx
 from pydantic import JsonValue
 
 from litellm.rust_bridge.bindings import NativeBinding
@@ -204,4 +205,36 @@ def resolve_native_secret_manager(
     runtime: Final = factory.from_client(client)
     if runtime is not None and runtime.system != system:
         raise ValueError("Native secret manager system does not match configuration")
+    return runtime
+
+
+@runtime_checkable
+class NativeProviderReader(Protocol):
+    def sync_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None: ...
+
+    def async_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Awaitable[str | None]: ...
+
+
+def resolve_native_provider_reader(
+    client: object,
+    system: str,
+    rules: Rules | None = None,
+    *,
+    binding: NativeBinding[NativeSecretManagerFactory] = NATIVE_SECRET_MANAGER,
+) -> NativeProviderReader | None:
+    runtime: Final = resolve_native_secret_manager(client, system, rules, binding=binding)
+    if runtime is None:
+        return None
+    if not isinstance(runtime, NativeProviderReader):
+        raise TypeError("Rust secret manager provider reads are unavailable")
     return runtime

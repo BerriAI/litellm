@@ -204,8 +204,60 @@ impl NativeSecretManager {
                 .and_then(|value| python_secret_value(value, &name))
         })
     }
-    #[pyo3(signature = (name, settings=None))]
+    #[pyo3(signature = (secret_name, optional_params=None, timeout=None, primary_secret_name=None))]
+    fn sync_read_secret(
+        &self,
+        py: Python<'_>,
+        secret_name: String,
+        optional_params: Option<&Bound<'_, PyAny>>,
+        timeout: Option<&Bound<'_, PyAny>>,
+        primary_secret_name: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let backend = self.backend()?;
+        let request = super::provider::read_request(
+            self.configuration.system,
+            secret_name,
+            optional_params,
+            timeout,
+            primary_secret_name,
+            true,
+        )?;
+        run_sync_value(py, async move {
+            litellm_secrets::read_python_provider(&backend, &request, &ProcessEnvironment)
+                .await
+                .map_err(|error| PyValueError::new_err(error.to_string()))
+                .and_then(|value| python_secret_value(value, &request.secret_name))
+        })
+    }
+
+    #[pyo3(signature = (secret_name, optional_params=None, timeout=None, primary_secret_name=None))]
     fn async_read_secret<'py>(
+        &self,
+        py: Python<'py>,
+        secret_name: String,
+        optional_params: Option<&Bound<'py, PyAny>>,
+        timeout: Option<&Bound<'py, PyAny>>,
+        primary_secret_name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let backend = self.backend()?;
+        let request = super::provider::read_request(
+            self.configuration.system,
+            secret_name,
+            optional_params,
+            timeout,
+            primary_secret_name,
+            false,
+        )?;
+        run_async_value(py, async move {
+            litellm_secrets::read_python_provider(&backend, &request, &ProcessEnvironment)
+                .await
+                .map_err(|error| PyValueError::new_err(error.to_string()))
+                .and_then(|value| python_secret_value(value, &request.secret_name))
+        })
+    }
+
+    #[pyo3(signature = (name, settings=None))]
+    fn read_secret_async<'py>(
         &self,
         py: Python<'py>,
         name: String,
