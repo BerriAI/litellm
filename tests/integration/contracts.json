@@ -76,6 +76,21 @@
     "tests/integration/configuration/test_effective_settings.py::test_credential_value_update_and_model_reload_reach_provider": [
       "mgmt.credential.update.saved_value_reaches_wire"
     ],
+    "tests/integration/configuration/test_fips_mode_boot.py::test_fips_mode_refuses_to_serve_when_this_python_does_not_enforce_fips": [
+      "other.configuration.fips_mode.refuses_boot_when_provider_does_not_enforce_fips"
+    ],
+    "tests/integration/configuration/test_fips_mode_boot.py::test_fips_mode_refuses_to_serve_with_tls_verification_disabled[environment]": [
+      "other.configuration.fips_mode.refuses_boot_with_tls_verification_disabled"
+    ],
+    "tests/integration/configuration/test_fips_mode_boot.py::test_fips_mode_refuses_to_serve_with_tls_verification_disabled[config]": [
+      "other.configuration.fips_mode.refuses_boot_with_tls_verification_disabled"
+    ],
+    "tests/integration/configuration/test_fips_mode_boot.py::test_fips_mode_refuses_to_serve_on_a_value_that_is_not_a_boolean": [
+      "other.configuration.fips_mode.refuses_boot_on_malformed_value"
+    ],
+    "tests/integration/configuration/test_fips_mode_boot.py::test_fips_mode_off_serves_even_with_tls_verification_disabled": [
+      "other.configuration.fips_mode.off_leaves_boot_unchanged"
+    ],
     "tests/integration/management/test_partial_update_sequences.py::test_denied_key_update_preserves_saved_grants_and_serving": [
       "mgmt.key.update.denied_request_preserves_effective_state"
     ],

@@ -68,8 +68,15 @@ def owned_proxy(
         yield owned.gateway
 
 
+@dataclass(frozen=True, slots=True)
+class LaunchedProxy:
+    port: int
+    process: subprocess.Popen[bytes]
+    log: Path
+
+
 @contextmanager
-def owned_proxy_process(
+def launched_proxy(
     gateway: Gateway,
     directory: Path,
     overrides: Mapping[str, str],
@@ -77,7 +84,7 @@ def owned_proxy_process(
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
-) -> Iterator[OwnedProxy]:
+) -> Iterator[LaunchedProxy]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port: Final = reserve.getsockname()[1]
@@ -116,18 +123,7 @@ def owned_proxy_process(
             start_new_session=True,
         )
         try:
-            with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=15, trust_env=False) as client:
-                deadline: Final = time.monotonic() + 70
-                while True:
-                    assert process.poll() is None, "Owned proxy exited before readiness"
-                    try:
-                        if client.get("/health/readiness", timeout=2).status_code == 200:
-                            break
-                    except httpx.TransportError:
-                        pass
-                    assert time.monotonic() < deadline, "Owned proxy readiness deadline exceeded"
-                    time.sleep(0.1)
-                yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, log_path)
+            yield LaunchedProxy(port, process, log_path)
         finally:
             root_stopped: Final = stop_root_process(process)
             residual: Final = group_members(process.pid)
@@ -142,3 +138,55 @@ def owned_proxy_process(
             survivors: Final = group_members(process.pid)
             assert not survivors, "Owned proxy child survived cleanup"
             assert root_stopped and not remaining, "Owned proxy required forced cleanup"
+
+
+def refused_boot_log(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+) -> str:
+    """Start the proxy and return its log once it exits non-zero instead of becoming ready."""
+    with launched_proxy(gateway, directory, overrides, config=config) as launched:
+        with httpx.Client(base_url=f"http://127.0.0.1:{launched.port}", timeout=15, trust_env=False) as client:
+            deadline: Final = time.monotonic() + 70
+            while launched.process.poll() is None:
+                try:
+                    ready: Final = client.get("/health/readiness", timeout=2).status_code == 200
+                except httpx.TransportError:
+                    ready = False
+                assert not ready, f"Proxy became ready instead of refusing to boot:\n{launched.log.read_text()}"
+                assert time.monotonic() < deadline, "Proxy neither exited nor became ready within the deadline"
+                time.sleep(0.1)
+        assert launched.process.returncode != 0, (
+            f"Proxy exited 0 instead of refusing to boot:\n{launched.log.read_text()}"
+        )
+        return launched.log.read_text()
+
+
+@contextmanager
+def owned_proxy_process(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+    remove_environment: tuple[str, ...] = (),
+    workers: int = 1,
+) -> Iterator[OwnedProxy]:
+    with launched_proxy(
+        gateway, directory, overrides, config=config, remove_environment=remove_environment, workers=workers
+    ) as launched:
+        with httpx.Client(base_url=f"http://127.0.0.1:{launched.port}", timeout=15, trust_env=False) as client:
+            deadline: Final = time.monotonic() + 70
+            while True:
+                assert launched.process.poll() is None, "Owned proxy exited before readiness"
+                try:
+                    if client.get("/health/readiness", timeout=2).status_code == 200:
+                        break
+                except httpx.TransportError:
+                    pass
+                assert time.monotonic() < deadline, "Owned proxy readiness deadline exceeded"
+                time.sleep(0.1)
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), launched.process, launched.log)
