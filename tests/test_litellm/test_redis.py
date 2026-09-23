@@ -1,7 +1,7 @@
 import inspect
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 import redis
@@ -312,6 +312,33 @@ def test_sync_cluster_authenticates_with_gcp_credentials(clean_redis_environment
     assert "username" not in kwargs
     assert "password" not in kwargs
     assert "redis_connect_func" not in kwargs
+
+
+def test_sync_cluster_kwargs_send_the_entra_token_on_connect(clean_redis_environment, monkeypatch):
+    monkeypatch.setenv("REDIS_USERNAME", "identity-object-id")
+    credential = MagicMock()
+    credential.get_token.return_value = SimpleNamespace(token="azure-access-token")
+
+    with (
+        patch("azure.identity.DefaultAzureCredential", return_value=credential),
+        patch("redis.RedisCluster", autospec=True) as cluster,
+    ):
+        get_redis_client(
+            startup_nodes=[{"host": "cluster-node", "port": 6379}],
+            azure_redis_ad_token=True,
+            password="stale-password",
+        )
+
+    auth_keys = ("username", "password", "credential_provider")
+    connection = redis.Connection(**{k: v for k, v in cluster.call_args.kwargs.items() if k in auth_keys})
+    connection.send_command = MagicMock()
+    connection.read_response = MagicMock(return_value=b"OK")
+
+    connection.on_connect()
+
+    assert connection.send_command.call_args_list[0] == call(
+        "AUTH", "identity-object-id", "azure-access-token", check_health=False
+    )
 
 
 def test_async_cluster_preserves_credential_provider_identity(clean_redis_environment):
