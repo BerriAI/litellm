@@ -2,13 +2,14 @@ use std::collections::HashMap;
 
 use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchTier, BatchUsage, ModalityRates, batch_cost_calculator,
-    get_batch_cost_rates,
+    batch_cost_from_model_info, get_batch_cost_rates,
 };
 use litellm_cost::catalog::{DefaultImageCostRequest, ModelInfoCatalog};
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, Unit, VideoRates, calculate_image,
     calculate_ocr_batch, calculate_ocr_with_tables, calculate_video,
 };
+use litellm_cost::responses_usage::{ChatUsage, PromptTokenDetails};
 use litellm_cost::{Rate, ThresholdPolicy};
 use rstest::rstest;
 use serde_json::json;
@@ -426,6 +427,52 @@ fn get_batch_cost_rates_selects_each_field_at_its_own_threshold() {
             Rate::Value(8.0)
         )
     );
+}
+
+#[rstest]
+#[case(200_000, 1e-6, 4e-6)]
+#[case(250_000, 1e-6, 5e-6)]
+#[case(300_000, 2e-6, 5e-6)]
+fn batch_model_info_crosses_input_and_output_thresholds_independently(
+    #[case] prompt_tokens: u64,
+    #[case] input_rate: f64,
+    #[case] output_rate: f64,
+) {
+    let model_info = json!({
+        "input_cost_per_token_batches": 1e-6,
+        "input_cost_per_token_above_272k_tokens_batches": 2e-6,
+        "output_cost_per_token_batches": 4e-6,
+        "output_cost_per_token_above_200k_tokens_batches": 5e-6
+    });
+    let usage = ChatUsage {
+        prompt_tokens,
+        completion_tokens: 1,
+        total_tokens: prompt_tokens + 1,
+        ..ChatUsage::default()
+    };
+    let cost = batch_cost_from_model_info(&model_info, &usage, Some("openai"), None).unwrap();
+    assert!((cost.prompt - prompt_tokens as f64 * input_rate).abs() < 1e-12);
+    assert_eq!(cost.completion, output_rate);
+}
+
+#[rstest]
+fn batch_model_info_bills_cache_writes_as_input_without_a_batch_cache_rate() {
+    let model_info = json!({
+        "input_cost_per_token_batches": 1e-7,
+        "input_cost_per_token_above_272k_tokens_batches": 2e-7,
+        "cache_creation_input_token_cost": 2.5e-7,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-7
+    });
+    let usage = ChatUsage {
+        prompt_tokens: 300_000,
+        prompt_tokens_details: Some(PromptTokenDetails {
+            cache_creation_tokens: Some(100_000),
+            ..PromptTokenDetails::default()
+        }),
+        ..ChatUsage::default()
+    };
+    let cost = batch_cost_from_model_info(&model_info, &usage, Some("openai"), None).unwrap();
+    assert_eq!(cost.prompt, 300_000.0 * 2e-7);
 }
 
 #[rstest]
