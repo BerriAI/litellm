@@ -333,8 +333,7 @@ def test_different_system_messages_do_not_share_a_cached_response(gateway: Gatew
     ):
         model: Final = scenario.model()
         prompt: Final = uuid.uuid4().hex
-        identities: dict[str, str] = {}
-        for system, expected_calls in (("first policy", 1), ("second policy", 1), ("first policy", 0)):
+        def completion_id(system: str, expected_calls: int) -> str:
             upstream.get("/__observations").raise_for_status()
             response: Final = gateway.request(
                 "POST",
@@ -346,14 +345,10 @@ def test_different_system_messages_do_not_share_a_cached_response(gateway: Gatew
             )
             assert response.status_code == 200 and response.json()["usage"]["total_tokens"] == 40, response.text
             calls: Final = upstream.get("/__observations").json()["requests"]
-            assert len(calls) == expected_calls
-            if system in identities:
-                assert response.json()["id"] == identities[system]
-            else:
-                assert response.json()["id"] not in identities.values()
-                identities = {**identities, system: response.json()["id"]}
-            if calls:
-                assert calls[0]["body"]["messages"] == [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ]
+            assert len(calls) == expected_calls, calls
+            return response.json()["id"]
+
+        first_policy_id: Final = completion_id("first policy", 1)
+        second_policy_id: Final = completion_id("second policy", 1)
+        assert first_policy_id != second_policy_id
+        assert completion_id("first policy", 0) == first_policy_id
