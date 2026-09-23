@@ -228,7 +228,7 @@ async def test_line_items_skipped_for_unsupported_provider(recorder):
     litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
     file_mock: Final = AsyncMock(side_effect=_file_content)
     with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
-        await _log_completed_batch(_parent_logging(custom_llm_provider="bedrock"), _batch())
+        await _log_completed_batch(_parent_logging(custom_llm_provider="cohere"), _batch())
 
     file_mock.assert_not_awaited()
     assert len(recorder.success_events) == 1
@@ -391,6 +391,94 @@ ANTHROPIC_OUTPUT_JSONL = json.dumps(
 ).encode()
 
 
+BEDROCK_INPUT_JSONL = b"\n".join(
+    [
+        json.dumps(
+            {
+                "recordId": "br-anth",
+                "modelInput": {"messages": [{"role": "user", "content": "hi br-anth"}]},
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "recordId": "br-titan",
+                "modelInput": {"inputText": "embed me"},
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "recordId": "br-conv",
+                "modelInput": {"messages": [{"role": "user", "content": "hi br-conv"}]},
+            }
+        ).encode(),
+    ]
+)
+
+BEDROCK_OUTPUT_JSONL = b"\n".join(
+    [
+        json.dumps(
+            {
+                "recordId": "br-anth",
+                "modelOutput": {
+                    "id": "msg_br",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "bedrock claude hi"}],
+                    "model": "anthropic.claude-3",
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 2, "output_tokens": 3},
+                },
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "recordId": "br-titan",
+                "modelOutput": {"embedding": [0.1, 0.2], "inputTextTokenCount": 4},
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "recordId": "br-conv",
+                "modelOutput": {
+                    "output": {"message": {"role": "assistant", "content": [{"text": "converse hi"}]}},
+                    "stopReason": "end_turn",
+                    "usage": {"inputTokens": 5, "outputTokens": 6, "totalTokens": 11},
+                    "metrics": {"latencyMs": 12},
+                },
+            }
+        ).encode(),
+    ]
+)
+
+MISTRAL_INPUT_JSONL = json.dumps(
+    {
+        "custom_id": "mis",
+        "body": {"model": "mistral-small", "messages": [{"role": "user", "content": "hi mis"}]},
+    }
+).encode()
+
+MISTRAL_OUTPUT_JSONL = json.dumps(
+    {
+        "custom_id": "mis",
+        "response": {
+            "status_code": 200,
+            "body": {
+                "id": "mis-1",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "mistral hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            },
+        },
+    }
+).encode()
+
+
 def _edge_file_content(file_id: str, **_kwargs):
     return SimpleNamespace(
         content={
@@ -398,6 +486,10 @@ def _edge_file_content(file_id: str, **_kwargs):
             "output-2": EDGE_OUTPUT_JSONL,
             "input-anth": ANTHROPIC_INPUT_JSONL,
             "output-anth": ANTHROPIC_OUTPUT_JSONL,
+            "input-bed": BEDROCK_INPUT_JSONL,
+            "output-bed": BEDROCK_OUTPUT_JSONL,
+            "input-mist": MISTRAL_INPUT_JSONL,
+            "output-mist": MISTRAL_OUTPUT_JSONL,
         }[file_id]
     )
 
@@ -502,3 +594,65 @@ async def test_line_items_anthropic_shapes(recorder):
     assert payload["response"]["choices"][0]["message"]["content"] == "hello b2"
     assert payload["prompt_tokens"] == 1
     assert payload["completion_tokens"] == 2
+
+
+def _provider_batch(batch_id: str, input_file_id: str, output_file_id: str) -> LiteLLMBatch:
+    return LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        endpoint="/v1/chat/completions",
+        input_file_id=input_file_id,
+        output_file_id=output_file_id,
+        error_file_id=None,
+        status="completed",
+        completion_window="24h",
+        created_at=1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_line_items_bedrock_shapes(recorder):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    file_mock: Final = AsyncMock(side_effect=_edge_file_content)
+    with (
+        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(
+            _parent_logging(custom_llm_provider="bedrock"),
+            _provider_batch("batch_bed", "input-bed", "output-bed"),
+        )
+
+    by_id = {_hidden(e).get("batch_custom_id"): e for e in recorder.success_events}
+
+    anthropic_line = _payload(by_id["br-anth"])
+    assert anthropic_line["response"]["choices"][0]["message"]["content"] == "bedrock claude hi"
+    assert anthropic_line["prompt_tokens"] == 2
+    assert anthropic_line["completion_tokens"] == 3
+
+    titan_line = _payload(by_id["br-titan"])
+    assert titan_line["response"]["data"][0]["embedding"] == [0.1, 0.2]
+    assert titan_line["prompt_tokens"] == 4
+
+    converse_line = _payload(by_id["br-conv"])
+    assert converse_line["response"]["choices"][0]["message"]["content"] == "converse hi"
+    assert converse_line["prompt_tokens"] == 5
+    assert converse_line["completion_tokens"] == 6
+
+
+@pytest.mark.asyncio
+async def test_line_items_mistral_shape(recorder):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    file_mock: Final = AsyncMock(side_effect=_edge_file_content)
+    with (
+        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(
+            _parent_logging(custom_llm_provider="mistral"),
+            _provider_batch("batch_mist", "input-mist", "output-mist"),
+        )
+
+    line = next(e for e in recorder.success_events if _hidden(e).get("batch_custom_id") == "mis")
+    assert _hidden(line)["batch_line_status_code"] == 200
+    assert _payload(line)["response"]["choices"][0]["message"]["content"] == "mistral hi"

@@ -25,7 +25,9 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
-_BatchLineProvider: TypeAlias = Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"]
+_BatchLineProvider: TypeAlias = Literal[
+    "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"
+]
 
 _SUPPORTED_LINE_PROVIDERS: Final = frozenset(get_args(_BatchLineProvider))
 
@@ -131,14 +133,24 @@ _BatchLineResult: TypeAlias = "ModelResponse | EmbeddingResponse | ResponsesAPIR
 
 
 def _line_result(
-    call_type: str, custom_llm_provider: _BatchLineProvider, response_body: Mapping[str, object]
+    call_type: str,
+    custom_llm_provider: _BatchLineProvider,
+    model: str,
+    response_body: Mapping[str, object],
 ) -> _BatchLineResult:
+    if custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.batches.transformation import bedrock_batch_line_to_response
+
+        bedrock_result: Final = bedrock_batch_line_to_response(response_body, model)
+        if bedrock_result is None:
+            raise ValueError(f"unrecognized bedrock batch output line shape. keys={sorted(response_body)}")
+        return bedrock_result
     if call_type == "aembedding":
         return EmbeddingResponse(**response_body)  # pyright: ignore[reportArgumentType]  # provider output bodies are dicts expanded as response ctor kwargs
     if call_type == "aresponses":
         return ResponsesAPIResponse(**response_body)  # pyright: ignore[reportArgumentType]  # same as above
     if custom_llm_provider == "anthropic":
-        from litellm.litellm_core_utils.litellm_logging import anthropic_message_to_model_response
+        from litellm.llms.anthropic.chat.transformation import anthropic_message_to_model_response
 
         return anthropic_message_to_model_response(response_body, None)
     return ModelResponse(**response_body)  # pyright: ignore[reportArgumentType]  # same as above
@@ -216,9 +228,10 @@ async def _emit_line_event(
     start_time: Final = parent_start_time if isinstance(parent_start_time, datetime) else datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
     parent_params: Final = _as_object_mapping(parent.litellm_params) or _EMPTY_BODY  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped upstream
 
+    model: Final = _line_model(response_body, request_body, parent)
     child: Final = _new_child_logging(
         parent=parent,
-        model=_line_model(response_body, request_body, parent),
+        model=model,
         messages=_line_messages(request_body),
         call_type=call_type,
         start_time=start_time,
@@ -250,7 +263,7 @@ async def _emit_line_event(
 
     stats: Final = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info)
     try:
-        result: Final = _line_result(call_type, custom_llm_provider, response_body)
+        result: Final = _line_result(call_type, custom_llm_provider, model, response_body)
     except Exception:  # noqa: BLE001  # one unparseable line must not drop the rest of the batch's line events
         verbose_logger.warning(
             "batch output line could not be reconstructed as a %s response, skipping it. custom_id=%s",

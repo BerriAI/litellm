@@ -27,7 +27,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateBatchRequest,
 )
-from litellm.types.utils import LiteLLMBatch, LlmProviders, Usage
+from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, LlmProviders, ModelResponse, Usage
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
@@ -94,6 +94,41 @@ def titan_embedding_usage_from_batch_output(model_output: Mapping[str, object]) 
         completion_tokens=0,
         total_tokens=input_text_token_count,
     )
+
+
+def bedrock_batch_line_to_response(
+    model_output: Mapping[str, object], model: str
+) -> ModelResponse | EmbeddingResponse | None:
+    """Reconstruct a Bedrock batch output line (the ``modelOutput`` object) into
+    the litellm response type its shape implies, or None when the shape is
+    unrecognized."""
+    if "embedding" in model_output:
+        embedding: Final = model_output.get("embedding")
+        return EmbeddingResponse(
+            model=model,
+            data=[{"object": "embedding", "index": 0, "embedding": embedding if isinstance(embedding, list) else []}],
+            usage=titan_embedding_usage_from_batch_output(model_output),
+        )
+    if "output" in model_output:
+        from ..chat.converse_transformation import AmazonConverseConfig
+
+        return AmazonConverseConfig()._transform_response(  # pyright: ignore[reportPrivateUsage]  # same reconstruction the converse chat path performs on the live response
+            model=model,
+            response=Response(200, json=dict(model_output)),
+            model_response=ModelResponse(),
+            stream=False,
+            logging_obj=None,
+            optional_params={},
+            api_key=None,
+            data="",
+            messages=[],
+            encoding=None,
+        )
+    if "content" in model_output:
+        from litellm.llms.anthropic.chat.transformation import anthropic_message_to_model_response
+
+        return anthropic_message_to_model_response(model_output, None)
+    return None
 
 
 class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
