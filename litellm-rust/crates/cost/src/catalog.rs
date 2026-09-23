@@ -13,6 +13,7 @@ use crate::completion_cost::{
 };
 use crate::custom_pricing::CustomTokenRates;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
+use crate::image_response_cost::calculate_image_response_cost_from_usage;
 use crate::per_second::per_second_pricing_cost;
 use crate::prompt_caching_savings::{
     PromptCachingSavingsRequest, calculate_prompt_caching_savings,
@@ -270,6 +271,20 @@ impl ModelInfoCatalog {
                 at: request.at,
             },
         ))
+    }
+
+    pub fn calculate_image_response_cost_from_usage(
+        &self,
+        model: &str,
+        provider: Option<&str>,
+        region: Option<&str>,
+        image_response: &Value,
+        at: Timestamp,
+    ) -> Option<f64> {
+        let model_info = self
+            .select_model_key(model, provider, region)
+            .and_then(|key| self.entries.get(key))?;
+        calculate_image_response_cost_from_usage(image_response, model_info, provider, at)
     }
 
     pub fn rerank_cost(

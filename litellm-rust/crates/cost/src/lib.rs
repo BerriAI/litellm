@@ -11,6 +11,7 @@ pub mod generic_input;
 pub mod generic_output;
 pub mod generic_usage;
 pub mod guardrail_cost;
+pub mod image_response_cost;
 pub mod interactions_usage;
 pub mod non_token;
 pub mod off_peak;

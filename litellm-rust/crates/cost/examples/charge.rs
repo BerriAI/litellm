@@ -521,6 +521,10 @@ fn main() {
             json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 4e-6, "cache_read_input_token_cost": 0.5e-6}),
         ),
         (
+            "openai/image_model".to_owned(),
+            json!({"input_cost_per_token": 5e-6, "input_cost_per_image_token": 8e-6, "output_cost_per_image_token": 3e-5}),
+        ),
+        (
             "vertex_ai/rerank".to_owned(),
             json!({"input_cost_per_query": 0.25}),
         ),
@@ -626,4 +630,20 @@ fn main() {
         })
         .unwrap();
     println!("prompt_caching_savings={savings:.6}");
+    let image_usage_cost = model_info_catalog
+        .calculate_image_response_cost_from_usage(
+            "image_model",
+            Some("openai"),
+            None,
+            &json!({"usage": {
+                "input_tokens": 531,
+                "output_tokens": 158,
+                "total_tokens": 689,
+                "input_tokens_details": {"text_tokens": 19, "image_tokens": 512},
+                "output_tokens_details": {"image_tokens": 158}
+            }}),
+            at,
+        )
+        .unwrap();
+    println!("image_usage_cost={image_usage_cost:.6}");
 }
