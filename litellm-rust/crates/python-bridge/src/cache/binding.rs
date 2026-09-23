@@ -40,6 +40,14 @@ impl ResolvedCache {
         }
     }
 
+    pub(super) fn native_service(&self) -> PyResult<Option<NativeResponseCache>> {
+        self.check_process()?;
+        Ok(match &self.binding {
+            CacheBinding::Native(service) => Some(service.clone()),
+            _ => None,
+        })
+    }
+
     fn check_process(&self) -> PyResult<()> {
         if matches!(self.binding, CacheBinding::Native(_)) && self.pid != std::process::id() {
             return Err(PyRuntimeError::new_err(
@@ -70,6 +78,33 @@ impl ResolvedCache {
 
 #[pymethods]
 impl ResolvedCache {
+    #[staticmethod]
+    pub(crate) fn from_selected(cache: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let py = cache.py();
+        let binding = if cache.is_none() {
+            CacheBinding::Disabled
+        } else if let Ok(handle) = cache.extract::<PyRef<'_, super::handle::CacheTestHandle>>() {
+            CacheBinding::Native(handle.service()?)
+        } else if let Some(service) = super::facade::resolve(py, cache)? {
+            CacheBinding::Native(service)
+        } else if let Some(runtime) = cache
+            .getattr_opt("_native_cache")?
+            .filter(|value| !value.is_none())
+        {
+            match runtime
+                .getattr("native")?
+                .extract::<PyRef<'_, ResolvedCache>>()?
+                .native_service()?
+            {
+                Some(service) => CacheBinding::Native(service),
+                None => CacheBinding::PythonCallback(PythonCallback::new(cache.clone().unbind())),
+            }
+        } else {
+            CacheBinding::PythonCallback(PythonCallback::new(cache.clone().unbind()))
+        };
+        Ok(Self::new(binding))
+    }
+
     #[staticmethod]
     fn from_cache(cache: &Bound<'_, PyAny>) -> PyResult<Self> {
         let config = match NativeCacheConfig::project(cache)? {
