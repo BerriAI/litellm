@@ -144,10 +144,11 @@ def test_advisor_api_base_without_api_key_is_rejected_before_the_proxy_anthropic
     gateway: Gateway, tmp_path: Path
 ) -> None:
     identity: Final = "advisor-leak-" + uuid.uuid4().hex
+    question: Final = _QUESTION + " " + identity
 
     def executor(request: Request) -> Reply:
         assert request.target == "/v1/chat/completions", request.target
-        return _executor_reply(json.loads(request.body), identity)
+        return _executor_reply(json.loads(request.body), identity, question)
 
     def caller_host(request: Request) -> Reply:
         return _advice_reply(identity)

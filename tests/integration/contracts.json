@@ -2125,9 +2125,6 @@
         "tests/integration/providers/test_bedrock_marengo_embed_3_wire.py::test_marengo_3_text_embedding_nests_input_text_under_input_type": [
             "providers.bedrock_embedding.marengo_3_text_input_reaches_bedrock_nested_under_input_type"
         ],
-        "tests/integration/routing/test_request_payload_release.py::test_worker_memory_settles_after_a_burst_of_large_chat_requests": [
-            "other.routing.memory.large_request_payloads_are_released_after_the_request_ends"
-        ],
         "tests/integration/providers/test_bedrock_mantle_wire.py::test_chat_completions_bridge_signs_mantle_responses_request_with_deployment_aws_keys": [
             "providers.bedrock_mantle.chat_bridge_keeps_deployment_aws_credentials_for_sigv4"
         ],
