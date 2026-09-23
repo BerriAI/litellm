@@ -25,6 +25,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
+    RateLimitedModel,
     _AUDIO_BYTES_PER_TOKEN,
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
@@ -308,7 +309,7 @@ async def test_model_scope_refund_targets_reserved_model(rate_limiter):
 
     stash = get_or_create_request_stash()
     stash.reserved_tokens = 100
-    stash.reserved_model = reserved_model
+    stash.reserved_model = RateLimitedModel(requested=reserved_model, group=reserved_model)
     stash.reserved_scopes = frozenset({("model_per_team", f"{team_id}:{reserved_model}")})
 
     mock_kwargs = {
@@ -3668,6 +3669,43 @@ async def test_post_call_success_hook_contains_header_merge_failures(
         user_api_key_dict=UserAPIKeyAuth(),
         response=response,
     )
+
+
+@pytest.mark.asyncio
+async def test_the_project_itpm_reservation_counts_the_request_off_the_event_loop(rate_limiter):
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    handler, _cache = rate_limiter
+    stash = get_or_create_request_stash()
+    warm_tokenizer("claude-fable-5")
+    data: dict[str, object] = {
+        "model": "claude-fable-5",
+        "messages": [{"role": "user", "content": text * 100}],
+    }
+    itpm_descriptor = {
+        "key": PROJECT_ITPM_DESCRIPTOR_KEY,
+        "value": "proj-loop:claude-fable-5",
+        "rate_limit": {"tokens_per_unit": 10_000_000, "window_size": 60},
+    }
+
+    _, took, lags = await timed_with_loop_lags(
+        lambda: handler._reserve_project_io_tokens_or_raise(
+            descriptors=[itpm_descriptor],
+            data=data,
+            requested_model="claude-fable-5",
+            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-itpm-loop"), project_id="proj-loop"),
+            tpm_reservation_scopes=[],
+            tpm_reservation_amount=0,
+        )
+    )
+
+    assert stash.rate_limit_response is not None
+    assert_loop_stayed_free(took, lags)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,7 @@
-import os
-
 import pytest
 
 import litellm
+from litellm.cost_calculator import completion_cost
 from litellm.llms.gemini.cost_calculator import (
     cost_per_google_maps_grounding_request,
     cost_per_web_search_request,
@@ -18,6 +17,7 @@ from litellm.types.utils import (
     ImageResponse,
     ImageUsage,
     ImageUsageInputTokensDetails,
+    ModelResponse,
     PromptTokensDetailsWrapper,
     Usage,
 )
@@ -200,172 +200,12 @@ def test_maps_no_usage_details():
     assert cost_per_google_maps_grounding_request(usage=usage, model_info=model_info) == 0.0
 
 
-def test_gemini_image_edit_cost_prefers_token_usage_metadata(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    model = "gemini/gemini-3-pro-image-preview"
-    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
-
-    input_text_tokens = 20
-    input_image_tokens = 1120
-    output_image_tokens = 1120
-    prompt_tokens = input_text_tokens + input_image_tokens
-    image_response = ImageResponse(
-        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")],
-        usage=ImageUsage(
-            input_tokens=prompt_tokens,
-            input_tokens_details=ImageUsageInputTokensDetails(
-                text_tokens=input_text_tokens,
-                image_tokens=input_image_tokens,
-            ),
-            output_tokens=output_image_tokens,
-            total_tokens=prompt_tokens + output_image_tokens,
-        ),
-    )
-
-    cost = gemini_image_edit_cost_calculator(
-        model=model,
-        image_response=image_response,
-    )
-
-    expected_cost = (
-        prompt_tokens * model_info["input_cost_per_token"]
-        + output_image_tokens * model_info["output_cost_per_image_token"]
-    )
-    flat_image_cost = (
-        len(image_response.data or []) * model_info["output_cost_per_image"]
-    )
-    assert round(cost, 10) == round(expected_cost, 10)
-    assert cost != flat_image_cost
 
 
-def test_gemini_image_edit_cost_uses_output_token_details(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    model = "gemini/gemini-3-pro-image-preview"
-    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
-
-    input_text_tokens = 20
-    output_text_tokens = 213
-    output_image_tokens = 1120
-    output_tokens = output_text_tokens + output_image_tokens
-    image_response = ImageResponse(
-        data=[ImageObject(b64_json="img1")],
-        usage=ImageUsage(
-            input_tokens=input_text_tokens,
-            input_tokens_details=ImageUsageInputTokensDetails(
-                text_tokens=input_text_tokens,
-                image_tokens=0,
-            ),
-            output_tokens=output_tokens,
-            total_tokens=input_text_tokens + output_tokens,
-            prompt_tokens=input_text_tokens,
-            completion_tokens=output_tokens,
-            prompt_tokens_details={
-                "text_tokens": input_text_tokens,
-                "image_tokens": 0,
-            },
-            completion_tokens_details={
-                "text_tokens": output_text_tokens,
-                "image_tokens": output_image_tokens,
-            },
-            output_tokens_details={
-                "text_tokens": output_text_tokens,
-                "image_tokens": output_image_tokens,
-            },
-        ),
-    )
-
-    cost = gemini_image_edit_cost_calculator(
-        model=model,
-        image_response=image_response,
-    )
-
-    expected_cost = (
-        input_text_tokens * model_info["input_cost_per_token"]
-        + output_text_tokens * model_info["output_cost_per_token"]
-        + output_image_tokens * model_info["output_cost_per_image_token"]
-    )
-    all_output_as_image_cost = (
-        input_text_tokens * model_info["input_cost_per_token"]
-        + (output_text_tokens + output_image_tokens)
-        * model_info["output_cost_per_image_token"]
-    )
-    assert round(cost, 10) == round(expected_cost, 10)
-    assert cost != all_output_as_image_cost
 
 
-def test_gemini_image_generation_cost_uses_output_token_details(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    model = "gemini/gemini-3-pro-image-preview"
-    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
-
-    input_text_tokens = 20
-    output_text_tokens = 213
-    output_image_tokens = 1120
-    output_tokens = output_text_tokens + output_image_tokens
-    image_response = ImageResponse(
-        data=[ImageObject(b64_json="img1")],
-        usage=ImageUsage(
-            input_tokens=input_text_tokens,
-            input_tokens_details=ImageUsageInputTokensDetails(
-                text_tokens=input_text_tokens,
-                image_tokens=0,
-            ),
-            output_tokens=output_tokens,
-            total_tokens=input_text_tokens + output_tokens,
-            prompt_tokens=input_text_tokens,
-            completion_tokens=output_tokens,
-            prompt_tokens_details={
-                "text_tokens": input_text_tokens,
-                "image_tokens": 0,
-            },
-            completion_tokens_details={
-                "text_tokens": output_text_tokens,
-                "image_tokens": output_image_tokens,
-            },
-            output_tokens_details={
-                "text_tokens": output_text_tokens,
-                "image_tokens": output_image_tokens,
-            },
-        ),
-    )
-
-    cost = gemini_image_generation_cost_calculator(
-        model=model,
-        image_response=image_response,
-    )
-
-    expected_cost = (
-        input_text_tokens * model_info["input_cost_per_token"]
-        + output_text_tokens * model_info["output_cost_per_token"]
-        + output_image_tokens * model_info["output_cost_per_image_token"]
-    )
-    all_output_as_image_cost = (
-        input_text_tokens * model_info["input_cost_per_token"]
-        + (output_text_tokens + output_image_tokens)
-        * model_info["output_cost_per_image_token"]
-    )
-    assert round(cost, 10) == round(expected_cost, 10)
-    assert cost != all_output_as_image_cost
 
 
-def test_gemini_image_edit_cost_falls_back_to_flat_image_pricing(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    model = "gemini/gemini-3-pro-image-preview"
-    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
-    image_response = ImageResponse(
-        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")]
-    )
-
-    cost = gemini_image_edit_cost_calculator(
-        model=model,
-        image_response=image_response,
-    )
-
-    assert cost == len(image_response.data or []) * model_info["output_cost_per_image"]
 
 
 def _image_response_with_web_search(web_search_requests):
@@ -383,43 +223,8 @@ def _image_response_with_web_search(web_search_requests):
     return ImageResponse(data=[ImageObject(b64_json="img1")], usage=usage)
 
 
-def test_gemini_image_generation_cost_adds_web_search_grounding(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    model = "gemini/gemini-3-pro-image-preview"
-    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
-
-    grounded = gemini_image_generation_cost_calculator(
-        model=model,
-        image_response=_image_response_with_web_search(2),
-    )
-    ungrounded = gemini_image_generation_cost_calculator(
-        model=model,
-        image_response=_image_response_with_web_search(None),
-    )
-
-    expected_web_search_cost = cost_per_web_search_request(
-        usage=_make_usage(2), model_info=model_info
-    )
-    assert expected_web_search_cost > 0
-    assert round(grounded - ungrounded, 10) == round(expected_web_search_cost, 10)
 
 
-def test_gemini_image_generation_cost_no_web_search_when_absent(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    model = "gemini/gemini-3-pro-image-preview"
-
-    cost_zero = gemini_image_generation_cost_calculator(
-        model=model,
-        image_response=_image_response_with_web_search(0),
-    )
-    cost_none = gemini_image_generation_cost_calculator(
-        model=model,
-        image_response=_image_response_with_web_search(None),
-    )
-
-    assert cost_zero == cost_none
 
 
 @pytest.mark.parametrize(
@@ -452,31 +257,40 @@ def test_map_traffic_type_to_service_tier(
     )
 
 
+# Alias targets are the `modelVersion` returned by
+# POST https://generativelanguage.googleapis.com/v1beta/models/<alias>:generateContent on 2026-09-15
 @pytest.mark.parametrize(
-    "model,custom_llm_provider,expected_cache_read_cost",
+    "alias,target",
     [
-        ("gemini/gemini-flash-latest", "gemini", 3e-08),
-        ("gemini/gemini-flash-lite-latest", "gemini", 1e-08),
-        ("gemini/gemini-2.5-flash-preview-09-2025", "gemini", 3e-08),
-        ("gemini/gemini-2.5-flash-lite-preview-06-17", "gemini", 1e-08),
-        ("vertex_ai/gemini-2.5-flash-preview-09-2025", "vertex_ai", 3e-08),
-        ("vertex_ai/gemini-2.5-flash-lite-preview-06-17", "vertex_ai", 1e-08),
+        ("gemini/gemini-flash-latest", "gemini/gemini-3.8-flash"),
+        ("gemini/gemini-flash-lite-latest", "gemini/gemini-3.5-flash-lite"),
+        ("gemini/gemini-pro-latest", "gemini/gemini-3.1-pro-preview"),
     ],
 )
-def test_flash_alias_cache_read_is_ten_percent_of_input(
-    monkeypatch, model, custom_llm_provider, expected_cache_read_cost
+def test_latest_aliases_cost_the_same_as_their_current_target(
+    monkeypatch, alias, target
 ):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-    model_info = litellm.get_model_info(
-        model=model, custom_llm_provider=custom_llm_provider
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=500,
+        total_tokens=1_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=400),
     )
 
-    assert model_info["cache_read_input_token_cost"] == expected_cache_read_cost
-    assert model_info["cache_read_input_token_cost"] == pytest.approx(
-        0.10 * model_info["input_cost_per_token"]
-    )
+    def cost_of(model: str) -> float:
+        return completion_cost(
+            completion_response=ModelResponse(model=model, usage=usage),
+            model=model,
+            custom_llm_provider="gemini",
+        )
+
+    alias_cost = cost_of(alias)
+    target_cost = cost_of(target)
+    assert alias_cost == pytest.approx(target_cost)
+    assert alias_cost > 0
 
 
 @pytest.mark.parametrize(

@@ -1,8 +1,8 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from typing import Final
+from unittest.mock import MagicMock, Mock, patch
 
-import httpx
 import pytest
 
 
@@ -14,11 +14,12 @@ from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
-    ResponsesAPIRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
 from litellm.types.router import GenericLiteLLMParams
+
+_ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
 
 class TestOpenAIResponsesAPIConfig:
@@ -1832,6 +1833,46 @@ class TestResponsesSurfaceSharesTheEffortRule:
         )
         assert ("temperature" in mapped) is temperature_survives
 
+    @pytest.mark.parametrize(
+        "model, effort, top_p_survives",
+        [
+            ("gpt-5.1", None, True),
+            ("gpt-5.4", None, True),
+            ("gpt-5.5", None, False),
+            ("gpt-5.6-terra", None, False),
+            ("gpt-5.6-sol", None, False),
+            ("gpt-5.6-terra", "none", True),
+            ("gpt-5.6-terra", "medium", False),
+            ("gpt-6-astra", None, False),
+            ("gpt-6-astra", "low", False),
+        ],
+    )
+    def test_top_p_follows_the_resolved_effort(self, local_model_cost_map, model, effort, top_p_survives):
+        params = {"top_p": 0.9}
+        if effort is not None:
+            params["reasoning"] = {"effort": effort}
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=params,
+            model=model,
+            drop_params=True,
+        )
+        assert ("top_p" in mapped) is top_p_survives
+
+    def test_top_p_raises_without_drop_params(self, local_model_cost_map):
+        with pytest.raises(litellm.UnsupportedParamsError):
+            OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"top_p": 0.9},
+                model="gpt-5.5",
+                drop_params=False,
+            )
+
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"top_p": 0.9, "reasoning": {"effort": "none"}},
+            model="gpt-5.6-terra",
+            drop_params=False,
+        )
+        assert mapped["top_p"] == 0.9
+
 
 class TestFlattenToolSchemaCombinatorsWiring:
     """Regression tests for MCP tools with a top-level anyOf schema (Codex Desktop).
@@ -2020,6 +2061,86 @@ class TestFlattenToolSchemaCombinatorsWiring:
 
         assert result["tools"][0] is opaque_tool
         assert "anyOf" not in result["tools"][1]["parameters"]
+
+
+class TestToolSchemaRegexPatternWiring:
+    """Claude Code's Artifact tool reaches /v1/responses (the /v1/messages bridge) with an
+    ECMA-262 ``pattern``; OpenAI compiles patterns with Python ``re`` and 400s
+    "'...' is not a 'regex'" for every model family, so the keyword is dropped.
+    """
+
+    def _artifact_tool(self):
+        return {
+            "type": "function",
+            "name": "Artifact",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN},
+                    "doc_id": {"type": "string", "pattern": r"^(?!\.\.?(?:/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"},
+                },
+                "required": ["field"],
+            },
+        }
+
+    @pytest.mark.parametrize("model", ["gpt-5.6", "gpt-4o", "o3"])
+    def test_openai_drops_only_the_pattern_python_re_rejects_for_every_family(self, model):
+        tool = self._artifact_tool()
+
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model=model,
+            input="hi",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        properties = result["tools"][0]["parameters"]["properties"]
+        assert properties["field"] == {"type": "string"}
+        assert properties["doc_id"] == tool["parameters"]["properties"]["doc_id"]
+        assert result["tools"][0]["parameters"]["required"] == ["field"]
+        assert tool["parameters"]["properties"]["field"]["pattern"] == _ARTIFACT_FIELD_PATTERN
+        assert json.loads(json.dumps(result["tools"])) == result["tools"]
+
+    def test_openai_drops_patterns_inside_codex_namespace_tools(self):
+        namespace = {"type": "namespace", "name": "mcp__claude", "tools": [self._artifact_tool()]}
+
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input="hi",
+            response_api_optional_request_params={"tools": [namespace]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["tools"][0]["parameters"]["properties"]["field"] == {"type": "string"}
+
+    def test_openai_compact_request_drops_patterns(self):
+        _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
+            model="gpt-5.6",
+            input="hi",
+            response_api_optional_request_params={"tools": [self._artifact_tool()]},
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["tools"][0]["parameters"]["properties"]["field"] == {"type": "string"}
+
+    def test_non_openai_subclass_keeps_patterns(self):
+        from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
+
+        tool = self._artifact_tool()
+
+        result = HostedVLLMResponsesAPIConfig().transform_responses_api_request(
+            model="hosted_vllm/qwen",
+            input="hi",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0] is tool
 
 
 class TestReasoningFollowsModelSupport:

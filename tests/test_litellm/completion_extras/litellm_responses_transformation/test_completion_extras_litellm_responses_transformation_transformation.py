@@ -2,7 +2,7 @@ import datetime
 import json
 import os
 import unittest
-from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
@@ -12,6 +12,7 @@ import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
+from litellm.types.llms.openai import REASONING_EFFORT
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
@@ -830,6 +831,24 @@ def test_convert_tools_to_responses_format():
     assert result[0]["name"] == "test"
 
 
+def test_convert_tools_to_responses_format_passes_flat_function_tool_through():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    flat_tool = {
+        "type": "function",
+        "name": "shell",
+        "description": "Run a shell command",
+        "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]},
+    }
+
+    converted = handler._convert_tools_to_responses_format([flat_tool])
+
+    assert converted == [flat_tool]
+
+
 def test_extract_extra_body_params_reasoning_effort_override():
     """Test that reasoning_effort from extra_body overrides top-level reasoning_effort"""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -1597,17 +1616,6 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
-
-        # Test 5: every REASONING_EFFORT level reaches the provider, and anything else (a typo, an
-        # unshipped level, "default") is dropped so the request still succeeds at the provider default
-        from litellm.types.llms.openai import Reasoning
-
-        for effort in ("max", "xhigh", "none"):
-            result_passthrough = handler._map_reasoning_effort(effort)
-            assert result_passthrough == Reasoning(effort=effort)
-        for dropped in ("ultra", "hgih", "unknown_value", "", "default"):
-            assert handler._map_reasoning_effort(dropped) is None
-        print("✓ Enumerated levels pass through and unknown ones are dropped")
 
         print(
             "✓ All reasoning_effort behaviors work correctly with flag/env var control"
@@ -2481,6 +2489,30 @@ def test_transform_request_bedrock_mantle_tools_keeps_reasoning_effort(monkeypat
     )
 
     assert result["reasoning"] == {"effort": reasoning_effort}
+
+
+@pytest.mark.parametrize(
+    "reasoning_effort",
+    [5, ["low"], "hgih", "", {"effort": 5}, {"effort": "max"}, *get_args(REASONING_EFFORT)],
+)
+def test_transform_request_never_drops_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, reasoning_effort: int | list[str] | str | dict[str, object]
+):
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    expected_effort: Final = reasoning_effort["effort"] if isinstance(reasoning_effort, dict) else reasoning_effort
+
+    result: Final = handler.transform_request(
+        model="gpt-5.4",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"reasoning_effort": reasoning_effort},
+        litellm_params={"custom_llm_provider": "openai"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert result["reasoning"]["effort"] == expected_effort
 
 
 def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
@@ -4147,3 +4179,176 @@ def test_streaming_final_chunk_carries_provider_metadata():
     assert chunks[-1]["content_filters"] == content_filters
     assert "background" not in chunks[-1]
     assert all("service_tier" not in chunk for chunk in chunks[:-1])
+
+
+def _system_input_item(text: str) -> dict[str, object]:
+    return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
+
+
+def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Read the file."},
+            {"role": "system", "content": "<total_tokens>14982391 tokens left</total_tokens>"},
+            {"role": "user", "content": "Now summarize it."},
+        ]
+    )
+
+    assert instructions == "You are a helpful assistant."
+    assert input_items == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Read the file."}]},
+        _system_input_item("<total_tokens>14982391 tokens left</total_tokens>"),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Now summarize it."}]},
+    ]
+
+
+def test_leading_system_strings_still_join_instructions_without_a_following_turn():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "system", "content": "Be brief."},
+            {"role": "system", "content": "Answer in French."},
+        ]
+    )
+
+    assert instructions == "Be brief. Answer in French."
+    assert input_items == []
+
+
+def test_mid_conversation_system_reminder_as_string_and_as_text_block_produce_identical_input_items():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    reminder: Final = "<total_tokens>14982391 tokens left</total_tokens>"
+
+    as_string, string_instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [{"role": "user", "content": "Read the file."}, {"role": "system", "content": reminder}]
+    )
+    as_block, block_instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "Read the file."},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": reminder, "cache_control": {"type": "ephemeral"}}],
+            },
+        ]
+    )
+
+    assert string_instructions is None
+    assert block_instructions is None
+    assert json.dumps(as_string) == json.dumps(as_block)
+    assert as_string[1] == _system_input_item(reminder)
+
+
+def test_claude_code_shaped_history_keeps_a_byte_stable_input_prefix_across_requests():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    top_level_system: Final = [{"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}]
+    first_reminder: Final = "<system-reminder>27k chars of deferred tools</system-reminder>"
+    second_reminder: Final = "<total_tokens>14982391 tokens left</total_tokens>"
+    first_request_messages: Final = [
+        {"role": "system", "content": top_level_system},
+        {"role": "user", "content": "Read inventory.py."},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": first_reminder, "cache_control": {"type": "ephemeral"}}],
+        },
+    ]
+    second_request_messages: Final = [
+        {"role": "system", "content": top_level_system},
+        {"role": "user", "content": "Read inventory.py."},
+        {"role": "system", "content": first_reminder},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": '{"file_path": "inventory.py"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "ITEMS = []"},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": second_reminder, "cache_control": {"type": "ephemeral"}}],
+        },
+    ]
+
+    first_request: Final = handler.transform_request(
+        model="gpt-5.6-luna",
+        messages=first_request_messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    second_request: Final = handler.transform_request(
+        model="gpt-5.6-luna",
+        messages=second_request_messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert "instructions" not in first_request
+    assert "instructions" not in second_request
+    assert first_request["input"][0] == _system_input_item("You are Claude Code.")
+    assert json.dumps(second_request["input"][: len(first_request["input"])]) == json.dumps(first_request["input"])
+    assert second_request["input"][len(first_request["input"]) :] == [
+        {"type": "function_call", "call_id": "call_1", "name": "Read", "arguments": '{"file_path": "inventory.py"}'},
+        {"type": "function_call_output", "call_id": "call_1", "output": [{"type": "input_text", "text": "ITEMS = []"}]},
+        _system_input_item(second_reminder),
+    ]
+
+
+def test_system_string_after_a_developer_message_stays_in_input_in_client_order():
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "developer", "content": "Always answer in French."},
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "Bonjour"},
+        ]
+    )
+
+    assert instructions is None
+    assert [item["role"] for item in input_items] == ["developer", "system", "user"]
+    assert input_items[1] == _system_input_item("Be brief.")
+
+
+def test_map_optional_params_verbosity_merges_into_text():
+    """Chat verbosity must land on Responses text.verbosity alongside text.format regardless of key order."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    responses_api_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        {"verbosity": "low", "response_format": {"type": "json_object"}},
+        responses_api_request,
+    )
+    assert responses_api_request["text"]["verbosity"] == "low"
+    assert responses_api_request["text"]["format"]["type"] == "json_object"
+
+    reversed_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        {"response_format": {"type": "json_object"}, "verbosity": "low"},
+        reversed_request,
+    )
+    assert reversed_request["text"]["verbosity"] == "low"
+    assert reversed_request["text"]["format"]["type"] == "json_object"
+
+    verbosity_only_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        {"verbosity": "low"},
+        verbosity_only_request,
+    )
+    assert verbosity_only_request["text"] == {"verbosity": "low"}

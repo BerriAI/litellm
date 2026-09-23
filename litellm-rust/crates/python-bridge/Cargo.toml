@@ -10,32 +10,67 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [features]
-default = ["abi3"]
+default = ["abi3", "fast", "huggingface", "tiktoken"]
 abi3 = ["pyo3/abi3-py310"]
 extension-module = ["pyo3/extension-module"]
 panic-test = []
-trace-parity = [
-    "dep:tracing",
-    "litellm-core/observability",
-    "litellm-ai-gateway/trace-parity",
-]
+fast = ["litellm-token-counter/fast"]
+huggingface = ["litellm-token-counter/huggingface"]
+tiktoken = ["litellm-token-counter/tiktoken"]
 
 [dependencies]
+fancy-regex.workspace = true
+litellm-tracing.workspace = true
+litellm-host.workspace = true
+bytes.workspace = true
 futures-util.workspace = true
-tracing = { workspace = true, optional = true }
-litellm-core = { workspace = true, features = ["bedrock-auth"] }
-litellm-ai-gateway = { workspace = true, default-features = false }
-litellm-python-interop.workspace = true
+litellm-cache.workspace = true
+litellm-cache-azure-blob.workspace = true
+litellm-cache-memory.workspace = true
+litellm-cache-redis.workspace = true
+litellm-cache-s3.workspace = true
+litellm-cache-gcs.workspace = true
+litellm-cache-disk.workspace = true
+litellm-cache-redis-semantic.workspace = true
+litellm-cache-response.workspace = true
+litellm-cache-qdrant-semantic.workspace = true
+qdrant-client.workspace = true
+litellm-cache-valkey-semantic = { path = "../cache-valkey-semantic" }
+serde.workspace = true
+litellm-auth.workspace = true
+litellm-auth-aws.workspace = true
+litellm-callbacks-legacy-python.workspace = true
+litellm-core.workspace = true
+litellm-core-utils.workspace = true
+litellm-auth-gcp.workspace = true
+litellm-http.workspace = true
+litellm-llms.workspace = true
+litellm-secrets = { workspace = true, features = ["aws", "azure", "google", "hashicorp", "cyberark"] }
+litellm-secrets-types.workspace = true
+litellm-types.workspace = true
+litellm-host-python.workspace = true
+litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
-serde.workspace = true
+reqwest.workspace = true
+redis = { version = "1.7.0", features = ["tls-rustls"] }
 serde_json.workspace = true
-tokio.workspace = true
+veil.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+url.workspace = true
 
 [dev-dependencies]
-criterion = "0.8.2"
+litellm-secrets-aws.workspace = true
+serde.workspace = true
+serde_with.workspace = true
+criterion.workspace = true
+futures-util.workspace = true
+rstest.workspace = true
+sha2.workspace = true
 tokio-tungstenite.workspace = true
-tracing.workspace = true
+wiremock = "0.6.5"
+aws-sdk-secretsmanager = "1.117.0"
 
 [[bench]]
 name = "serialization"

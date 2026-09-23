@@ -1,58 +1,40 @@
+use litellm_http::{outbound::OutboundRequest, request::truncate_error_body};
+use litellm_llms::base_llm::chat::transformation::ProviderChatResponseData;
+use litellm_types::utils::ChatCompletionsResponse;
 use serde_json::Value;
 
-use crate::error::Error;
-use crate::http_utils::{http_request, truncate_error_body};
-
-use super::client::http_client;
-use super::prepare::prepare_provider_request;
-use super::transformation::ChatCompletionsAuth;
-use super::types::{
-    ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
-    ResolvedChatCompletionsRequest,
+use super::{Error, client::http_client, prepare::prepare_provider_request};
+use crate::chat_completions::types::{
+    ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_chat_completions_provider_call(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
     let request = prepare_provider_request(request)?;
-    let body = serde_json::to_vec(&request.body).map_err(|err| {
-        Error::InvalidRequest(format!(
-            "failed to serialize chat completions request: {err}"
-        ))
-    })?;
-    let headers = signed_headers(&request, &body).await?;
+    let outbound = outbound_request(&request).await?;
 
-    let mut request_builder = http_client().post(&request.url).body(body);
-    for (key, value) in &headers {
-        request_builder = request_builder.header(key, value);
-    }
-    if let Some(duration) = request.timeout {
-        request_builder = request_builder.timeout(duration);
-    }
-
-    let response = http_request(request_builder).await.map_err(|err| {
+    let response = outbound.send(http_client()).await.map_err(|err| {
         // Failing to establish the connection means the request never went out,
         // so the host can still serve it. Everything else here, a timeout
         // above all, may have reached the provider and been answered.
         if err.is_connect() || err.is_builder() {
-            Error::Connect(err.to_string())
+            Error::Transport(litellm_http::transport::Error::Connect(err.to_string()))
         } else {
-            Error::Network(err.to_string())
+            Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
         }
     })?;
 
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+    let text = response.text().await.map_err(|err| {
+        Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
+    })?;
 
     if !status.is_success() {
-        return Err(Error::Http {
+        return Err(Error::Transport(litellm_http::transport::Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
-        });
+        }));
     }
 
     let body: Value = serde_json::from_str(&text).map_err(|err| {
@@ -61,6 +43,7 @@ pub(super) async fn execute_chat_completions_provider_call(
     request
         .config
         .transform_response(&request.model, ProviderChatResponseData { body })
+        .map_err(Error::from)
         .map_err(as_response_error)
 }
 
@@ -75,77 +58,30 @@ pub(super) async fn execute_chat_completions_provider_call(
 /// can only mean the provider was already called.
 pub(super) fn as_response_error(err: Error) -> Error {
     match err {
-        already @ (Error::InvalidResponse(_) | Error::Http { .. }) => already,
+        already @ (Error::InvalidResponse(_)
+        | Error::Transport(litellm_http::transport::Error::Http { .. })) => already,
         other => Error::InvalidResponse(other.to_string()),
     }
 }
 
-#[cfg(feature = "bedrock-auth")]
-pub(super) async fn signed_headers(
+pub(super) async fn outbound_request(
     request: &ProviderChatCompletionsRequest,
-    body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
-    use std::collections::BTreeMap;
-    use std::time::SystemTime;
-
-    use crate::providers::bedrock::aws_base::{
-        aws_auth_config, aws_signature_headers, host_supplied_credentials,
-        is_sigv4_computed_header, resolve_credentials, sign_bedrock_post,
-    };
-
-    let ChatCompletionsAuth::AwsSigV4 { region } = &request.auth else {
-        return Ok(request.upstream_headers.clone());
-    };
-    // Reattaching a header the signer also emits would put both copies on the
-    // wire, and Bedrock rejects that pair. Python instead drops the caller's
-    // copy and prefers a forwarded Authorization over the signature, so leave
-    // the request to Python rather than serving it a different way here.
-    if request
-        .upstream_headers
-        .iter()
-        .any(|(name, _)| is_sigv4_computed_header(name))
-    {
-        return Err(Error::Unsupported(
-            "request forwards a header AWS SigV4 computes",
-        ));
-    }
-    let env_lookup = |key: &str| std::env::var(key).ok();
-    let unsigned: BTreeMap<String, String> = request.upstream_headers.iter().cloned().collect();
-    // A host with its own resolution chain hands the result down; only fall
-    // back to deriving credentials here when it supplied none.
-    let credentials = match host_supplied_credentials(&request.optional_params) {
-        Some(credentials) => credentials,
-        None => {
-            resolve_credentials(
-                aws_auth_config(&request.optional_params, &env_lookup),
-                &env_lookup,
-            )
-            .await?
+) -> Result<OutboundRequest, Error> {
+    crate::outbound::outbound_request(
+        &request.auth,
+        request.url.clone(),
+        request.upstream_headers.clone(),
+        &request.body,
+        request.timeout,
+        &request.optional_params,
+    )
+    .await
+    .map_err(|error| match error {
+        // Python drops the caller's copy and prefers a forwarded Authorization
+        // over the signature, so leave the request to it.
+        Error::Http(litellm_http::Error::ComputedHeader(_)) => {
+            Error::Unsupported("request forwards a header AWS SigV4 computes")
         }
-    };
-    let signature = sign_bedrock_post(
-        &request.url,
-        body,
-        &aws_signature_headers(&unsigned),
-        region,
-        &credentials,
-        SystemTime::now(),
-    )?;
-    // Every original header goes back on the wire alongside the computed ones,
-    // as Python reattaches them. The guard above already rejected the names
-    // that would collide, so no name appears twice.
-    Ok(unsigned.into_iter().chain(signature).collect())
-}
-
-#[cfg(not(feature = "bedrock-auth"))]
-pub(super) async fn signed_headers(
-    request: &ProviderChatCompletionsRequest,
-    _body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
-    match &request.auth {
-        ChatCompletionsAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
-            "AWS SigV4 requires the bedrock-auth feature",
-        )),
-        _ => Ok(request.upstream_headers.clone()),
-    }
+        other => other,
+    })
 }

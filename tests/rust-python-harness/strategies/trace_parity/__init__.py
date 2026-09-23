@@ -26,13 +26,17 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
         ModuleCaseSpec(
             coverage=Coverage.PARTIAL,
             module="tests.rust-python-harness.strategies.trace_parity.sdk.messages.case",
-            note="Async only until anthropic_messages_handler supports sync calls.",
+            note="Success paths are async; sync tracing captures the currently unsupported behavior.",
         ),
         surface="sdk",
     ),
     CaseDefinition(
         "responses",
-        NotImplementedCaseSpec(reason="No Responses trace-parity case is registered."),
+        ModuleCaseSpec(
+            coverage=Coverage.PARTIAL,
+            module="tests.rust-python-harness.strategies.trace_parity.sdk.responses.case",
+            note="Core create paths: native, streaming, provider error, Azure override, and chat bridge.",
+        ),
         surface="sdk",
     ),
     CaseDefinition(
@@ -67,11 +71,7 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
     ),
     CaseDefinition(
         "messages",
-        ModuleCaseSpec(
-            coverage=Coverage.PARTIAL,
-            module="tests.rust-python-harness.strategies.trace_parity.gateway.messages.case",
-            note="Non-streaming success paths only.",
-        ),
+        NotImplementedCaseSpec(reason="No gateway Messages trace-parity case is registered."),
         surface="gateway",
     ),
     CaseDefinition(
@@ -99,8 +99,8 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
 STRATEGY: Final = StrategyDefinition(
     id="trace_parity",
     order=20,
-    label="Trace parity",
-    description="Compare pipeline steps, order, and nesting between Python profiler frames and Rust spans via an explicit mapping.",
+    label="Traces",
+    description="Print Python profiler frames for representative pipeline scenarios.",
     directory=Path(__file__).parent,
     runnable_spec=ModuleCaseSpec,
     cases=CASES,

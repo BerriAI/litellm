@@ -1,11 +1,17 @@
 import React from "react";
-import { Control } from "react-hook-form";
+import { Control, UseFormReturn } from "react-hook-form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CircleHelp } from "lucide-react";
 import { FormField } from "@/components/shared/form/FormField";
+import { toast } from "@/lib/toast";
+import AgentSelector from "../agent_management/AgentSelector";
+import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import NumericalInput from "../shared/numerical_input";
-import { KeyEditFormValues } from "./keyEditFormValues";
+import SkillSelector from "../skills/SkillSelector";
+import { moveTagsOutOfMetadataJson } from "./keyEditFieldNormalizers";
+import { AgentsAndGroups, KeyEditFormValues } from "./keyEditFormValues";
 
 export const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode => (
   <>
@@ -51,6 +57,117 @@ export const KeyTypeSelect = ({
       ))}
     </SelectContent>
   </Select>
+);
+
+const SKILLS_HINT =
+  "Enabled skills are visible to every key. Grant disabled (private) Claude Code plugins to this key here.";
+
+const TPD_HINT =
+  "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the key's TPM/RPM limits. Online requests keep using TPM/RPM.";
+
+export const KeyRateLimitFields = ({ control }: { control: Control<KeyEditFormValues> }) => (
+  <>
+    <FormField control={control} name="tpm_limit" label="TPM Limit">
+      {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
+    </FormField>
+
+    <FormField control={control} name="tpm_limit_type">
+      {({ value, onChange, id }) => (
+        <RateLimitTypeFormItem
+          id={id}
+          type="tpm"
+          name="tpm_limit_type"
+          showDetailedDescriptions={false}
+          value={value as string | null}
+          onChange={onChange}
+        />
+      )}
+    </FormField>
+
+    <FormField control={control} name="rpm_limit" label="RPM Limit">
+      {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
+    </FormField>
+
+    <FormField control={control} name="rpm_limit_type">
+      {({ value, onChange, id }) => (
+        <RateLimitTypeFormItem
+          id={id}
+          type="rpm"
+          name="rpm_limit_type"
+          showDetailedDescriptions={false}
+          value={value as string | null}
+          onChange={onChange}
+        />
+      )}
+    </FormField>
+
+    <FormField control={control} name="tpd_limit" label={labelWithHint("TPD Limit (batch)", TPD_HINT)}>
+      {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
+    </FormField>
+  </>
+);
+
+export const KeyAgentAndSkillFields = ({
+  control,
+  accessToken,
+}: {
+  control: Control<KeyEditFormValues>;
+  accessToken: string;
+}) => (
+  <>
+    <FormField control={control} name="agents_and_groups" label="Agents / Access Groups">
+      {({ value, onChange }) => (
+        <AgentSelector
+          onChange={onChange}
+          value={value as AgentsAndGroups | undefined}
+          accessToken={accessToken}
+          placeholder="Select agents or access groups (optional)"
+        />
+      )}
+    </FormField>
+
+    <FormField control={control} name="skills" label={labelWithHint("Skills", SKILLS_HINT)}>
+      {({ value, onChange }) => (
+        <SkillSelector onChange={onChange} value={value as string[] | undefined} accessToken={accessToken} />
+      )}
+    </FormField>
+  </>
+);
+
+type KeyEditForm = Pick<
+  UseFormReturn<KeyEditFormValues, unknown, KeyEditFormValues>,
+  "control" | "getValues" | "setValue"
+>;
+
+export const moveMetadataTagsToTagsField = (form: KeyEditForm): void => {
+  const moved = moveTagsOutOfMetadataJson(form.getValues("metadata"), form.getValues("tags"));
+  if (moved === null) return;
+  form.setValue("metadata", moved.metadata, { shouldDirty: true });
+  form.setValue("tags", moved.tags, { shouldDirty: true });
+  if (moved.movedTags.length > 0) {
+    toast.info(`Moved ${moved.movedTags.join(", ")} from metadata to the Tags field`);
+  }
+};
+
+export const KeyMetadataField = ({ form }: { form: KeyEditForm }) => (
+  <FormField
+    control={form.control}
+    name="metadata"
+    label="Metadata"
+    description="Tags are managed by the Tags field above. A tags array typed here is moved to that field."
+  >
+    {(field) => (
+      <Textarea
+        {...field}
+        value={(field.value as string | undefined) ?? ""}
+        rows={10}
+        onBlur={() => {
+          field.onBlur();
+          moveMetadataTagsToTagsField(form);
+        }}
+      />
+    )}
+  </FormField>
 );
 
 export const KeyBudgetNumberField = ({

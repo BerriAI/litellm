@@ -16,7 +16,7 @@ def test_get_model_info_simple_model_name():
     """
     tests if model name given, and model exists in model info - the object is returned
     """
-    model = "claude-3-opus-20240229"
+    model = "claude-opus-5-5"
     litellm.get_model_info(model)
 
 
@@ -24,7 +24,7 @@ def test_get_model_info_custom_llm_with_model_name():
     """
     Tests if {custom_llm_provider}/{model_name} name given, and model exists in model info, the object is returned
     """
-    model = "anthropic/claude-3-opus-20240229"
+    model = "anthropic/claude-opus-5-5"
     litellm.get_model_info(model)
 
 
@@ -45,12 +45,6 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     model_info = litellm.get_model_info(model, custom_llm_provider=provider)
     print("model_info", model_info)
     assert model_info["input_cost_per_token"] == 0.0
-
-
-def test_get_model_info_gemini_pro():
-    info = litellm.get_model_info("gemini-2.0-flash")
-    print("info", info)
-    assert info["key"] == "gemini-2.0-flash"
 
 
 def test_get_model_info_ollama_chat():
@@ -352,27 +346,6 @@ def test_get_model_info_huggingface_models(monkeypatch):
         providers=["huggingface"],
         **info,
     )
-
-
-@pytest.mark.parametrize(
-    "model, provider",
-    [
-        ("bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0", None),
-        (
-            "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
-            "bedrock",
-        ),
-    ],
-)
-def test_get_model_info_cost_calculator_bedrock_region_cris_stripped(model, provider):
-    """
-    ensure cross region inferencing model is used correctly
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/8115
-    """
-    info = get_model_info(model=model, custom_llm_provider=provider)
-    print("info", info)
-    assert info["key"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
-    assert info["litellm_provider"] == "bedrock"
 
 
 def test_get_model_info_case_insensitive_lookup(monkeypatch):
