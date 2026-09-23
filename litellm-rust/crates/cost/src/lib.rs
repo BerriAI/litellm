@@ -36,6 +36,7 @@ pub mod tool_call_cost_tracking;
 pub mod tool_cost_dispatch;
 pub mod transcription_usage;
 pub mod usage_dispatch;
+pub mod vertex_cost;
 pub mod xai_cost;
 
 #[derive(Clone, Copy, Debug, PartialEq)]

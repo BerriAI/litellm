@@ -46,6 +46,10 @@ use crate::speech_cost::{
     lyria_generation_cost, select_cost_metric_for_model, transcription_usage_has_token_details,
 };
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
+use crate::vertex_cost::{
+    CostRoute, cost_per_character as vertex_cost_per_character,
+    cost_per_token as vertex_cost_per_token, cost_router as vertex_cost_router,
+};
 use crate::xai_cost::{cost_per_token as xai_cost_per_token, reported_cost as xai_reported_cost};
 use crate::{Cost, Pricing, PricingError, Rates, Request, calculate};
 
@@ -253,6 +257,32 @@ impl ModelInfoCatalog {
         region: Option<&str>,
     ) -> Option<&'a str> {
         select_model_key(&self.entries, model, provider, region)
+    }
+
+    pub fn vertex_cost(
+        &self,
+        request: ModelCostRequest<'_>,
+        call_type: &str,
+        prompt_characters: Option<f64>,
+        completion_characters: Option<f64>,
+    ) -> Result<(f64, f64), CatalogError> {
+        if vertex_cost_router(request.model, request.provider.unwrap_or(""), call_type)
+            == CostRoute::PerToken
+        {
+            return self.cost_per_token(request);
+        }
+        let key = self
+            .select_model_key(request.model, request.provider, request.region)
+            .ok_or(CatalogError::ModelNotFound)?;
+        Ok(vertex_cost_per_character(
+            request.model,
+            request.usage,
+            &self.entries[key],
+            (prompt_characters, completion_characters),
+            request.service_tier,
+            request.vertex_location,
+            request.at,
+        ))
     }
 
     pub fn databricks_cost_per_token(
@@ -559,6 +589,15 @@ impl ModelInfoCatalog {
             return Ok(fireworks_cost_per_token(
                 request.usage,
                 &self.entries[key],
+                request.at,
+            ));
+        }
+        if request.provider == Some("vertex_ai") {
+            return Ok(vertex_cost_per_token(
+                request.usage,
+                &model_info,
+                request.service_tier,
+                request.vertex_location,
                 request.at,
             ));
         }

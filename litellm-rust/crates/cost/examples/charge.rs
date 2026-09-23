@@ -545,6 +545,10 @@ fn main() {
             json!({"input_cost_per_token": 0.002, "output_cost_per_token": 0.003, "provider_specific_entry": {"fast": 2.0, "us": 1.1}, "search_context_cost_per_query": {"search_context_size_medium": 0.005}}),
         ),
         (
+            "vertex_ai/gemini-3-sample".to_owned(),
+            json!({"input_cost_per_character": 0.0001, "output_cost_per_character": 0.0002, "regional_endpoint_uplift_multiplier": 1.1}),
+        ),
+        (
             "azure/speech".to_owned(),
             json!({"mode": "audio_speech", "input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "output_cost_per_second": 0.02}),
         ),
@@ -943,5 +947,23 @@ fn main() {
         "anthropic_fast={:.3} anthropic_search={:.3}",
         anthropic_cost.0 + anthropic_cost.1,
         anthropic_search
+    );
+    let vertex = model_info_catalog
+        .vertex_cost(
+            ModelCostRequest {
+                model: "gemini-3-sample",
+                provider: Some("vertex_ai"),
+                usage: &router_usage,
+                vertex_location: Some("us-east5"),
+                ..speech_request
+            },
+            "completion",
+            Some(400.0),
+            Some(80.0),
+        )
+        .unwrap();
+    println!(
+        "vertex_character_input={:.3} vertex_character_output={:.3}",
+        vertex.0, vertex.1
     );
 }
