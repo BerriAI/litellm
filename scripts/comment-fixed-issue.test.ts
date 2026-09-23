@@ -24,6 +24,7 @@ import {
   type IssueClosure,
   type LinkedIssue,
   type LinkedPullRequest,
+  type PullRequestsPage,
 } from "./comment-fixed-issue";
 
 const MERGE_COMMIT = "68c4c82ac977b48b2b81ee8d633d5771307c6162";
@@ -47,10 +48,19 @@ const closure = (closer: Closer, state: IssueClosure["state"] = "CLOSED"): Issue
   timelineItems: { nodes: [{ closer }] },
 });
 
+const page = (pages: readonly (readonly LinkedPullRequest[])[], index: number): PullRequestsPage => ({
+  pageInfo: { hasNextPage: index + 1 < pages.length, endCursor: String(index + 1) },
+  nodes: pages[index] ?? [],
+});
+
+const cursorIndex = (after: string | null): number => (after === null ? 0 : Number(after));
+
 const closedBy = (closer: Closer, state?: IssueClosure["state"], linked: readonly LinkedPullRequest[] = []): ClosedIssue => ({
   ...closure(closer, state),
-  closedByPullRequestsReferences: { nodes: linked },
+  closedByPullRequestsReferences: page([linked], 0),
 });
+
+const reopenedAt = (createdAt: string): LinkedPullRequest["reopens"] => ({ nodes: [{ createdAt }] });
 
 const linkedIssue = (number: number, closer: Closer = mergedPr, state?: IssueClosure["state"]): LinkedIssue => ({
   number,
@@ -66,6 +76,7 @@ const openPr = (number: number, overrides: Partial<LinkedPullRequest> = {}): Lin
   baseRefName: "main",
   repository: { nameWithOwner: "BerriAI/litellm" },
   closingIssuesReferences: links(linkedIssue(ISSUE)),
+  reopens: { nodes: [] },
   ...overrides,
 });
 
@@ -92,6 +103,7 @@ interface World {
   readonly comments?: readonly Comment[];
   readonly pullRequestComments?: Readonly<Record<number, readonly Comment[]>>;
   readonly openPullRequests?: readonly (readonly LinkedPullRequest[])[];
+  readonly linkedPullRequests?: readonly (readonly LinkedPullRequest[])[];
   readonly version?: string;
   // Which existing rc.1 tags contain the merge commit; a tag absent from the map does not exist
   readonly tags?: Readonly<Record<string, boolean>>;
@@ -108,11 +120,14 @@ function fakeApi(world: World = {}): { readonly api: GitHubApi; readonly writes:
       if (method === "POST" && path === "/graphql") {
         const { query, variables } = body as { query: string; variables: { after: string | null } };
         if (query === OPEN_PULL_REQUESTS_QUERY) {
-          const index = variables.after === null ? 0 : Number(variables.after);
-          const pageInfo = { hasNextPage: index + 1 < pages.length, endCursor: String(index + 1) };
-          return { data: { repository: { pullRequests: { pageInfo, nodes: pages[index] ?? [] } } } } as T;
+          return { data: { repository: { pullRequests: page(pages, cursorIndex(variables.after)) } } } as T;
         }
-        return { data: { repository: { issue: world.issue === undefined ? closedBy(mergedPr) : world.issue } } } as T;
+        const issue = world.issue === undefined ? closedBy(mergedPr) : world.issue;
+        if (issue === null || world.linkedPullRequests === undefined) {
+          return { data: { repository: { issue } } } as T;
+        }
+        const closedByPullRequestsReferences = page(world.linkedPullRequests, cursorIndex(variables.after));
+        return { data: { repository: { issue: { ...issue, closedByPullRequestsReferences } } } } as T;
       }
       if (method !== "GET") {
         writes.push(`${method} ${path} ${JSON.stringify(body)}`);
@@ -434,14 +449,56 @@ describe("handleFixedIssue", () => {
   });
 
   test("a pull request this workflow closed once and its author reopened stays open", async () => {
+    const reopened = openPr(41760, { reopens: reopenedAt("2026-09-19T00:00:00Z") });
     const { api, writes } = fakeApi({
-      issue: closedBy(mergedPr, "CLOSED", [openPr(41760), openPr(41761)]),
+      issue: closedBy(mergedPr, "CLOSED", [reopened, openPr(41761)]),
       pullRequestComments: { 41760: [supersededComment] },
     });
     const { pullRequests } = await handleFixedIssue(api, config, ISSUE, noPause);
     expect(pullRequests[0]).toEqual({ kind: "skip", number: 41760, reason: "was closed by this workflow once and reopened" });
     expect(pullRequests[1]?.kind).toBe("closed");
     expect(writes.filter((write) => write.includes("41760"))).toEqual([]);
+  });
+
+  test("a pull request whose comment landed but whose close failed is closed on the next run without a second comment", async () => {
+    const reopenedBeforeTheComment = openPr(41761, { reopens: reopenedAt("2026-09-17T00:00:00Z") });
+    const { api, writes } = fakeApi({
+      issue: closedBy(mergedPr, "CLOSED", [openPr(41760), reopenedBeforeTheComment]),
+      pullRequestComments: { 41760: [supersededComment], 41761: [supersededComment] },
+    });
+    const { pullRequests } = await handleFixedIssue(api, config, ISSUE, noPause);
+    expect(pullRequests).toEqual([
+      { kind: "closed", number: 41760, body: supersededComment.body },
+      { kind: "closed", number: 41761, body: supersededComment.body },
+    ]);
+    expect(writes.filter((write) => write.includes("/4176"))).toEqual([
+      'PATCH /repos/BerriAI/litellm/pulls/41760 {"state":"closed"}',
+      'PATCH /repos/BerriAI/litellm/pulls/41761 {"state":"closed"}',
+    ]);
+  });
+
+  test("a superseded marker pasted by anyone but the workflow neither keeps a pull request open nor replaces its comment", async () => {
+    const forged: Comment = { ...supersededComment, id: 3, user: { type: "User", login: "someone" } };
+    const { api, writes } = fakeApi({
+      issue: closedBy(mergedPr, "CLOSED", [openPr(41760, { reopens: reopenedAt("2026-09-19T00:00:00Z") })]),
+      pullRequestComments: { 41760: [forged] },
+    });
+    const { pullRequests } = await handleFixedIssue(api, config, ISSUE, noPause);
+    expect(pullRequests).toEqual([{ kind: "closed", number: 41760, body: oneFixBody }]);
+    expect(writes.filter((write) => write.includes("/41760"))).toEqual([
+      `POST /repos/BerriAI/litellm/issues/41760/comments ${JSON.stringify({ body: oneFixBody })}`,
+      'PATCH /repos/BerriAI/litellm/pulls/41760 {"state":"closed"}',
+    ]);
+  });
+
+  test("every page of linked pull requests is read, not just the first", async () => {
+    const { api } = fakeApi({ linkedPullRequests: [[openPr(41760)], [openPr(41761)], [openPr(41762)]] });
+    const { pullRequests } = await handleFixedIssue(api, config, ISSUE, noPause);
+    expect(pullRequests).toEqual([
+      { kind: "closed", number: 41760, body: oneFixBody },
+      { kind: "closed", number: 41761, body: oneFixBody },
+      { kind: "closed", number: 41762, body: oneFixBody },
+    ]);
   });
 
   test("a linked pull request from a fork or one still tied to another open issue is reported, not closed", async () => {

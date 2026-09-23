@@ -46,23 +46,24 @@ export interface LinkedPullRequest {
   readonly baseRefName: string;
   readonly repository: { readonly nameWithOwner: string };
   readonly closingIssuesReferences: { readonly totalCount: number; readonly nodes: readonly LinkedIssue[] };
+  readonly reopens: { readonly nodes: readonly { readonly createdAt: string }[] };
+}
+
+export interface PullRequestsPage {
+  readonly pageInfo: { readonly hasNextPage: boolean; readonly endCursor: string | null };
+  readonly nodes: readonly LinkedPullRequest[];
 }
 
 export interface ClosedIssue extends IssueClosure {
-  readonly closedByPullRequestsReferences: { readonly nodes: readonly LinkedPullRequest[] };
+  readonly closedByPullRequestsReferences: PullRequestsPage;
 }
 
 interface TimelineResponse {
   readonly data?: { readonly repository?: { readonly issue: ClosedIssue | null } };
 }
 
-interface OpenPullRequestsPage {
-  readonly pageInfo: { readonly hasNextPage: boolean; readonly endCursor: string | null };
-  readonly nodes: readonly LinkedPullRequest[];
-}
-
 interface OpenPullRequestsResponse {
-  readonly data?: { readonly repository?: { readonly pullRequests: OpenPullRequestsPage } };
+  readonly data?: { readonly repository?: { readonly pullRequests: PullRequestsPage } };
 }
 
 interface MatchingRef {
@@ -125,6 +126,7 @@ const MAX_LINKED_PULL_REQUESTS = 50;
 const MAX_LINKED_ISSUES = 10;
 const SWEEP_PAGE_SIZE = 100;
 const CLOSE_PAUSE_MS = 1000;
+const WORKFLOW_LOGIN = "github-actions[bot]";
 const isReleaseLine = (base: string): boolean => base.startsWith("release/") || base.includes("stable");
 
 const CLOSURE_FRAGMENT = `fragment Closure on Issue {
@@ -148,13 +150,17 @@ const LINKED_PULL_REQUEST_FRAGMENT = `fragment Linked on PullRequest {
   baseRefName
   repository { nameWithOwner }
   closingIssuesReferences(first: ${MAX_LINKED_ISSUES}) { totalCount nodes { number repository { nameWithOwner } ...Closure } }
+  reopens: timelineItems(last: 1, itemTypes: [REOPENED_EVENT]) { nodes { ... on ReopenedEvent { createdAt } } }
 }`;
 
-export const CLOSER_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+export const CLOSER_QUERY = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
       ...Closure
-      closedByPullRequestsReferences(first: ${MAX_LINKED_PULL_REQUESTS}) { nodes { ...Linked } }
+      closedByPullRequestsReferences(first: ${MAX_LINKED_PULL_REQUESTS}, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { ...Linked }
+      }
     }
   }
 }
@@ -353,6 +359,11 @@ export function supersededBody(fixes: readonly Fix[], defaultBranch: string): st
   return `${SUPERSEDED_MARKER}\n${pairs} on ${defaultBranch}, so this pull request is closed. Reopen it if something was missed.`;
 }
 
+function reopenedAfter(pullRequest: LinkedPullRequest, comment: Comment): boolean {
+  const reopen = pullRequest.reopens.nodes[0];
+  return reopen !== undefined && Date.parse(reopen.createdAt) > Date.parse(comment.created_at);
+}
+
 async function closePullRequest(
   api: GitHubApi,
   config: FixedConfig,
@@ -370,15 +381,18 @@ async function closePullRequest(
   }
   const issuePath = `/repos/${config.repo}/issues/${pullRequest.number}`;
   const comments = await listAll<Comment>(api, `${issuePath}/comments`);
-  if (comments.some((comment) => comment.body.includes(SUPERSEDED_MARKER))) {
+  const marker = comments.find((comment) => comment.user.login === WORKFLOW_LOGIN && comment.body.includes(SUPERSEDED_MARKER));
+  if (marker !== undefined && reopenedAfter(pullRequest, marker)) {
     return { kind: "skip", number: pullRequest.number, reason: "was closed by this workflow once and reopened" };
   }
-  const body = supersededBody(verdict.fixes, config.defaultBranch);
+  const body = marker?.body ?? supersededBody(verdict.fixes, config.defaultBranch);
   if (config.closeDryRun) {
     return { kind: "closed", number: pullRequest.number, body };
   }
-  await pause();
-  await api.request("POST", `${issuePath}/comments`, { body });
+  if (marker === undefined) {
+    await pause();
+    await api.request("POST", `${issuePath}/comments`, { body });
+  }
   await pause();
   await api.request("PATCH", `/repos/${config.repo}/pulls/${pullRequest.number}`, { state: "closed" });
   return { kind: "closed", number: pullRequest.number, body };
@@ -396,18 +410,31 @@ export function closePullRequests(
   );
 }
 
+type NextPage = (after: string | null) => Promise<PullRequestsPage>;
+
+async function collectPages(page: PullRequestsPage, nextPage: NextPage): Promise<readonly LinkedPullRequest[]> {
+  if (!page.pageInfo.hasNextPage) {
+    return page.nodes;
+  }
+  return [...page.nodes, ...(await collectPages(await nextPage(page.pageInfo.endCursor), nextPage))];
+}
+
+async function closedIssue(api: GitHubApi, config: FixedConfig, issueNumber: number, after: string | null): Promise<ClosedIssue | null> {
+  const [owner, name] = config.repo.split("/");
+  const response = await api.request<TimelineResponse>("POST", "/graphql", {
+    query: CLOSER_QUERY,
+    variables: { owner, name, number: issueNumber, after },
+  });
+  return response.data?.repository?.issue ?? null;
+}
+
 export async function handleFixedIssue(
   api: GitHubApi,
   config: FixedConfig,
   issueNumber: number,
   pause: () => Promise<void>,
 ): Promise<IssueOutcome> {
-  const [owner, name] = config.repo.split("/");
-  const response = await api.request<TimelineResponse>("POST", "/graphql", {
-    query: CLOSER_QUERY,
-    variables: { owner, name, number: issueNumber },
-  });
-  const issue = response.data?.repository?.issue ?? null;
+  const issue = await closedIssue(api, config, issueNumber, null);
   if (issue === null) {
     return { comment: skip("not an issue in this repository"), pullRequests: [] };
   }
@@ -416,29 +443,37 @@ export async function handleFixedIssue(
     return { comment: closer, pullRequests: [] };
   }
   const comment = await commentFixedIssue(api, config, issueNumber, closer);
-  const open = issue.closedByPullRequestsReferences.nodes.filter((pullRequest) => pullRequest.state === "OPEN");
+  const nextPage: NextPage = async (after) => {
+    const more = await closedIssue(api, config, issueNumber, after);
+    if (more === null) {
+      throw new Error(`#${issueNumber} came back without data while reading its linked pull requests after cursor ${after}`);
+    }
+    return more.closedByPullRequestsReferences;
+  };
+  const linked = await collectPages(issue.closedByPullRequestsReferences, nextPage);
+  const open = linked.filter((pullRequest) => pullRequest.state === "OPEN");
   const pullRequests = await closePullRequests(api, config, open, pause);
   return { comment, pullRequests };
 }
 
-async function openPullRequests(api: GitHubApi, config: FixedConfig, after: string | null): Promise<readonly LinkedPullRequest[]> {
+async function openPullRequests(api: GitHubApi, config: FixedConfig): Promise<readonly LinkedPullRequest[]> {
   const [owner, name] = config.repo.split("/");
-  const response = await api.request<OpenPullRequestsResponse>("POST", "/graphql", {
-    query: OPEN_PULL_REQUESTS_QUERY,
-    variables: { owner, name, after },
-  });
-  const page = response.data?.repository?.pullRequests;
-  if (page === undefined) {
-    throw new Error(`open pull requests after cursor ${after} came back without data: ${JSON.stringify(response)}`);
-  }
-  if (!page.pageInfo.hasNextPage) {
-    return page.nodes;
-  }
-  return [...page.nodes, ...(await openPullRequests(api, config, page.pageInfo.endCursor))];
+  const nextPage: NextPage = async (after) => {
+    const response = await api.request<OpenPullRequestsResponse>("POST", "/graphql", {
+      query: OPEN_PULL_REQUESTS_QUERY,
+      variables: { owner, name, after },
+    });
+    const page = response.data?.repository?.pullRequests;
+    if (page === undefined) {
+      throw new Error(`open pull requests after cursor ${after} came back without data: ${JSON.stringify(response)}`);
+    }
+    return page;
+  };
+  return collectPages(await nextPage(null), nextPage);
 }
 
 export async function sweep(api: GitHubApi, config: FixedConfig, pause: () => Promise<void>): Promise<SweepOutcome> {
-  const open = await openPullRequests(api, config, null);
+  const open = await openPullRequests(api, config);
   const linked = open.filter((pullRequest) => pullRequest.closingIssuesReferences.nodes.length > 0);
   return { considered: open.length, pullRequests: await closePullRequests(api, config, linked, pause) };
 }
