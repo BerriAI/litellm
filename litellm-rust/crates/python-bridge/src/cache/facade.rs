@@ -84,6 +84,20 @@ const VALKEY_POOL: RedisPoolAttributes = STANDALONE_POOL;
 /// `Cache._native_cache` holds the runtime `Cache.__init__` resolved.
 const INSTANCE_STATE: &[&str] = &["_native_cache"];
 
+/// Class attributes the interpreter manages and may add lazily after capture (for
+/// example `abc.ABC` gaining `_abc_impl` on first subclass check); any other added
+/// name is a caller mutation and invalidates the guard.
+const INTERPRETER_ATTRIBUTES: &[&str] = &[
+    "_abc_impl",
+    "__abstractmethods__",
+    "__weakref__",
+    "__dict__",
+    "__doc__",
+    "__module__",
+    "__firstlineno__",
+    "__static_attributes__",
+];
+
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
@@ -167,7 +181,14 @@ impl ObjectGuard {
             }
             let attributes = class.getattr("__dict__")?;
             if attributes.len()? != expected.attributes.len() {
-                return Ok(false);
+                for item in attributes.call_method0("items")?.try_iter()? {
+                    let (name, _): (String, Bound<'_, PyAny>) = item?.extract()?;
+                    if !expected.attributes.iter().any(|(known, _)| known == &name)
+                        && !INTERPRETER_ATTRIBUTES.contains(&name.as_str())
+                    {
+                        return Ok(false);
+                    }
+                }
             }
             for (name, value) in &expected.attributes {
                 if (instance.contains(name)?

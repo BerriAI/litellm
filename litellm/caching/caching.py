@@ -24,6 +24,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.rust_bridge.response_cache import select_response_cache
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, all_litellm_params
 
@@ -316,8 +317,6 @@ class Cache:
 
         from litellm.rust_bridge.response_cache import resolve_response_cache
 
-        # The Rust catalog picks the store per backend. When it selects Rust, the storage calls
-        # below go to the native runtime and the Python backend stays only for its direct API.
         self._native_cache = resolve_response_cache(self)
 
     # Params whose values carry prompt content. Excluded from semantic-cache
@@ -623,13 +622,14 @@ class Cache:
                 cache_key = kwargs["cache_key"]
             else:
                 cache_key = self.get_cache_key(**kwargs)
-            if cache_key is not None and self._native_cache is not None:
-                request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
+            native: Final = select_response_cache(self) if dynamic_cache_object is None else None
+            if cache_key is not None and native is not None:
+                request = native.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
                 if request is None:
                     return None
                 if not self._is_semantic_cache():
-                    return self._native_cache.lookup(request)
-                response, similarity = self._native_cache.lookup_semantic(request)
+                    return native.lookup(request)
+                response, similarity = native.lookup_semantic(request)
                 self._stamp_semantic_similarity(kwargs, similarity)
                 return response
             if cache_key is not None:
@@ -664,13 +664,14 @@ class Cache:
                 cache_key = kwargs["cache_key"]
             else:
                 cache_key = self.get_cache_key(**kwargs)
-            if cache_key is not None and self._native_cache is not None:
-                request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
+            native: Final = select_response_cache(self) if dynamic_cache_object is None else None
+            if cache_key is not None and native is not None:
+                request = native.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
                 if request is None:
                     return None
                 if not self._is_semantic_cache():
-                    return await self._native_cache.async_lookup(request)
-                response, similarity = await self._native_cache.async_lookup_semantic(request)
+                    return await native.async_lookup(request)
+                response, similarity = await native.async_lookup_semantic(request)
                 self._stamp_semantic_similarity(kwargs, similarity)
                 return response
             if cache_key is not None:
@@ -729,10 +730,11 @@ class Cache:
         try:
             if self.should_use_cache(**kwargs) is not True:
                 return
-            if self._native_cache is not None:
-                request = self._native_request(kwargs)
+            native: Final = select_response_cache(self)
+            if native is not None:
+                request = self._native_request(kwargs, native)
                 if request is not None:
-                    self._native_cache.store(request, _native_response(result))
+                    native.store(request, _native_response(result))
                 return
             cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
@@ -753,10 +755,11 @@ class Cache:
         try:
             if self.should_use_cache(**kwargs) is not True:
                 return
-            if self._native_cache is not None:
-                request = self._native_request(kwargs)
+            native: Final = select_response_cache(self) if dynamic_cache_object is None else None
+            if native is not None:
+                request = self._native_request(kwargs, native)
                 if request is not None:
-                    await self._native_cache.async_store(request, _native_response(result))
+                    await native.async_store(request, _native_response(result))
                 return
             if self.type == "redis" and self.redis_flush_size is not None:
                 # high traffic - fill in results in memory and then flush
@@ -939,14 +942,15 @@ class Cache:
                 cache_key, cached_data, kwargs = self.add_embedding_response_to_cache(result, kwargs["input"], kwargs)
                 cache_list.append((cache_key, cached_data))
 
-            if self._native_cache is not None:
+            native: Final = select_response_cache(self) if dynamic_cache_object is None else None
+            if native is not None:
                 entries: Final = tuple(
                     (request, cached_data["response"])
                     for cache_key, cached_data in cache_list
-                    if (request := self._native_request(MappingProxyType({**kwargs, "cache_key": cache_key})))
+                    if (request := self._native_request(MappingProxyType({**kwargs, "cache_key": cache_key}), native))
                     is not None
                 )
-                await self._native_cache.async_store_batch(
+                await native.async_store_batch(
                     tuple(request for request, _ in entries),
                     tuple(response for _, response in entries),
                 )
@@ -957,11 +961,11 @@ class Cache:
         except Exception as e:
             self._log_add_cache_failure(e)
 
-    def _native_request(self, kwargs: Mapping[str, object]) -> "NativeCacheRequest | None":
-        if self._native_cache is None:
-            return None
+    def _native_request(
+        self, kwargs: Mapping[str, object], native: "ResponseCacheRuntime"
+    ) -> "NativeCacheRequest | None":
         cache_key: Final = kwargs.get("cache_key")
-        return self._native_cache.request(
+        return native.request(
             self,
             kwargs
             if isinstance(cache_key, str)

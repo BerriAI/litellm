@@ -29,6 +29,7 @@ import redis
 from azure.storage.blob import ContainerClient
 
 import litellm
+import litellm.caching.caching as caching_module
 from litellm.caching.azure_blob_cache import AzureBlobCache
 from litellm.caching.caching import Cache, disable_cache, enable_cache, update_cache
 from litellm.caching.disk_cache import DiskCache
@@ -286,6 +287,15 @@ async def test_inference_resolver_declines_a_native_runtime_whose_facade_changed
     assert replacement.get_cache("stale-only") is None
     assert replacement.get_cache("swapped-backend") is None
 
+    stale: Final = facade._native_cache
+    facade.add_cache({"answer": 7}, cache_key="facade-swapped")
+    assert facade.cache.get_cache("facade-swapped")["response"] == {"answer": 7}
+    assert facade.get_cache(cache_key="facade-swapped") == {"answer": 7}
+    if stale is not None:
+        request: Final = stale.request(facade, {"cache_key": "facade-swapped"})
+        assert request is not None
+        assert await stale.async_lookup(request) is None
+
 
 def test_existing_global_lifecycle_remains_the_resolver_source_of_truth() -> None:
     resolver: Final = _CacheTestResolver(litellm)
@@ -393,7 +403,7 @@ def test_registered_facade_uses_native_and_instance_overrides_fall_back() -> Non
     assert native.kind == "native"
     native.store(request(), {"source": "native"})
     assert native.lookup(request()) == {"source": "native"}
-    assert cast(CacheLookup, facade).get_cache(cache_key="key") is None
+    assert cast(CacheLookup, facade).get_cache(cache_key="key") == {"source": "native"}
     sentinel: Final = object()
 
     def outer_override(**_kwargs: object) -> object:
@@ -413,6 +423,40 @@ def test_registered_facade_uses_native_and_instance_overrides_fall_back() -> Non
         backend_fallback: Final = resolver.resolve()
         assert backend_fallback.kind == "python_callback"
         assert backend_fallback.lookup(None, callback_kwargs={"cache_key": "key"}) == {"source": "override"}
+
+
+def test_a_late_backend_class_attribute_invalidates_the_native_selection() -> None:
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    handle: Final = _CacheTestHandle.memory()
+    handle._bind_facade(facade)
+    resolver: Final = _CacheTestResolver(SimpleNamespace(cache=facade))
+    assert resolver.resolve().kind == "native"
+
+    def extra_method(_self: object) -> object:
+        return object()
+
+    setattr(type(facade.cache), "extra_method", extra_method)
+    try:
+        assert resolver.resolve().kind == "python_callback"
+    finally:
+        delattr(type(facade.cache), "extra_method")
+    assert resolver.resolve().kind == "native"
+
+
+def test_an_interpreter_added_class_attribute_keeps_the_native_selection() -> None:
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    handle: Final = _CacheTestHandle.memory()
+    resolver: Final = _CacheTestResolver(SimpleNamespace(cache=facade))
+    implementation: Final = InMemoryCache.__dict__["_abc_impl"]
+    delattr(InMemoryCache, "_abc_impl")
+    try:
+        handle._bind_facade(facade)
+        assert resolver.resolve().kind == "native"
+        setattr(InMemoryCache, "_abc_impl", implementation)
+        assert resolver.resolve().kind == "native"
+    finally:
+        if "_abc_impl" not in InMemoryCache.__dict__:
+            setattr(InMemoryCache, "_abc_impl", implementation)
 
 
 def test_facade_subclasses_backend_replacement_and_configuration_changes_are_not_bypassed() -> None:
@@ -1124,7 +1168,7 @@ async def test_gcs_facade_binds_only_exact_matching_configuration(
     assert binding.kind == "native"
     await binding.async_store(request("native"), {"value": "native"})
     assert await binding.async_lookup(request("native")) == {"value": "native"}
-    assert cast(CacheLookup, facade).get_cache(cache_key="native") is None
+    assert cast(CacheLookup, facade).get_cache(cache_key="native") == {"value": "native"}
 
     with rebound(facade.cache, "bucket_name", "other"):
         assert resolver.resolve().kind == "python_callback"
@@ -2145,6 +2189,66 @@ async def test_memory_facade_writes_bypass_the_python_backend(monkeypatch: pytes
     assert facade.get_cache(**kwargs) == {"answer": 1}
 
 
+async def test_python_facade_and_rust_resolver_share_the_selected_native_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    require_rust(monkeypatch, LiteLLMCacheType.LOCAL)
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    with rebound(litellm, "cache", facade):
+        resolver: Final = _CacheTestResolver(litellm)
+        native: Final = resolver.resolve()
+        assert native.kind == "native"
+
+        facade.add_cache({"source": "python"}, cache_key="python-write")
+        assert native.lookup(request("python-write")) == {"source": "python"}
+
+        await native.async_store(request("rust-write"), {"source": "rust"})
+        assert await facade.async_get_cache(cache_key="rust-write") == {"source": "rust"}
+
+
+async def test_dynamic_backend_overrides_native_facade_for_reads_and_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    require_rust(monkeypatch, LiteLLMCacheType.LOCAL)
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    native_runtime(facade)
+    override: Final = InMemoryCache()
+    kwargs: Final = completion_kwargs("override")
+    key: Final = facade.get_cache_key(**kwargs)
+
+    await facade.async_add_cache({"answer": "override"}, dynamic_cache_object=override, **kwargs)
+
+    assert facade.get_cache(dynamic_cache_object=override, **kwargs) == {"answer": "override"}
+    assert await facade.async_get_cache(dynamic_cache_object=override, **kwargs) == {"answer": "override"}
+    assert facade.get_cache(**kwargs) is None
+    assert facade.cache.get_cache(key) is None
+
+
+async def test_dynamic_backend_overrides_native_embedding_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    require_rust(monkeypatch, LiteLLMCacheType.LOCAL)
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    native_runtime(facade)
+    override: Final = InMemoryCache()
+    inputs: Final = [f"alpha {uuid4().hex}", f"beta {uuid4().hex}"]
+    result: Final = EmbeddingResponse(
+        model="text-embedding-3-small",
+        data=[
+            {"object": "embedding", "index": 0, "embedding": [0.1, 0.2]},
+            {"object": "embedding", "index": 1, "embedding": [0.3, 0.4]},
+        ],
+    )
+
+    await facade.async_add_cache_pipeline(
+        result,
+        dynamic_cache_object=override,
+        model="text-embedding-3-small",
+        input=inputs,
+    )
+
+    for text, expected in zip(inputs, ([0.1, 0.2], [0.3, 0.4]), strict=True):
+        kwargs: Final = {"model": "text-embedding-3-small", "input": text}
+        cached: Final = await facade.async_get_cache(dynamic_cache_object=override, **kwargs)
+        assert isinstance(cached, dict)
+        assert cached["embedding"] == expected
+        assert await facade.async_get_cache(**kwargs) is None
+
+
 @pytest.mark.parametrize("cache_factory", SHARED_STORE_BACKENDS, indirect=True)
 async def test_native_and_python_facades_share_one_wire_format(
     cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
@@ -2383,7 +2487,7 @@ def test_native_semantic_hit_stamps_similarity_on_request_metadata(
     facade copies it to the caller's metadata; the native path must report it the same way."""
     facade: Final = Cache()
     facade.type = semantic_type
-    facade._native_cache = ResponseCacheRuntime(cast(NativeResponseCacheRuntime, _SemanticHit()))  # pyright: ignore[reportPrivateUsage]  # the native path under test has no public setter
+    selected: Final = ResponseCacheRuntime(cast(NativeResponseCacheRuntime, _SemanticHit()))
     metadata: Final[dict[str, object]] = {}
     kwargs: Final = {
         "cache_key": "semantic-key",
@@ -2391,7 +2495,8 @@ def test_native_semantic_hit_stamps_similarity_on_request_metadata(
         "metadata": metadata,
     }
 
-    result: Final = asyncio.run(facade.async_get_cache(**kwargs)) if use_async else facade.get_cache(**kwargs)
+    with rebound(caching_module, "select_response_cache", lambda cache: selected):
+        result: Final = asyncio.run(facade.async_get_cache(**kwargs)) if use_async else facade.get_cache(**kwargs)
 
     assert result == {"answer": 42}
     assert metadata["semantic-similarity"] == 0.97

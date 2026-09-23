@@ -66,6 +66,9 @@ class NativeResponseCacheRuntimeFactory(Protocol):
     @staticmethod
     def from_cache(cache: CacheFacade) -> NativeResponseCacheRuntime: ...
 
+    @staticmethod
+    def from_selected(cache: object) -> NativeResponseCacheRuntime: ...
+
 
 def _runtime_factory(value: object) -> NativeResponseCacheRuntimeFactory | None:
     return cast(NativeResponseCacheRuntimeFactory, value) if callable(getattr(value, "from_cache", None)) else None
@@ -146,6 +149,20 @@ class ResponseCacheRuntime:
 
     async def async_flush(self) -> None:
         await self.native.async_flush()
+
+
+def select_response_cache(cache: CacheFacade) -> ResponseCacheRuntime | None:
+    factory: Final = _RUNTIME.load()
+    if factory is None:
+        return None
+    try:
+        selected: Final = factory.from_selected(cache)
+    except Exception as error:  # noqa: BLE001  # the decline class lives in the extension, not importable at module scope
+        declined: Final = native_exception_types()
+        if declined is None or not isinstance(error, declined[0]):
+            raise
+        return None
+    return ResponseCacheRuntime(selected) if selected.kind == "native" else None
 
 
 def resolve_response_cache(
