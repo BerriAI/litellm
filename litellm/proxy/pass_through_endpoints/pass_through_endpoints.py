@@ -41,6 +41,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
@@ -851,6 +852,15 @@ def _resolve_team_callback_wiring(
     )
 
 
+def _truncate_upstream_error_body(body: str) -> str:
+    if len(body) <= PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
+        return body
+    return (
+        f"{body[:PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS]}... "
+        f"(truncated, {len(body) - PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS} more chars)"
+    )
+
+
 async def _log_passthrough_upstream_failure(
     response: httpx.Response,
     user_api_key_dict: UserAPIKeyAuth,
@@ -868,6 +878,15 @@ async def _log_passthrough_upstream_failure(
         return
     from litellm.proxy.proxy_server import proxy_logging_obj
 
+    await response.aread()
+    upstream_error_body: Final = _truncate_upstream_error_body(response.text)
+    verbose_proxy_logger.warning(
+        "pass_through_endpoint: upstream %s %s returned %s: %s",
+        response.request.method,
+        response.url.copy_with(query=None, fragment=None),
+        response.status_code,
+        upstream_error_body,
+    )
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError:
@@ -880,7 +899,7 @@ async def _log_passthrough_upstream_failure(
         # rate-limit errors already are.
         synthetic_exception: Final = HTTPException(
             status_code=response.status_code,
-            detail=f"Upstream passthrough request failed with status {response.status_code}",
+            detail=f"Upstream passthrough request failed with status {response.status_code}: {upstream_error_body}",
         )
         try:
             await proxy_logging_obj.post_call_failure_hook(
