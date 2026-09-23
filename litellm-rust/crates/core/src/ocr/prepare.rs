@@ -1,11 +1,9 @@
 use litellm_auth::{InputSource, SecretValue, Sourced};
-use litellm_llms::base_llm::{
-    inference::secrets::Secrets,
-    ocr::{
-        handler::OcrClient,
-        transformation::{OcrConnection, OcrCredentialInputs, PreparedOcrRequest},
-    },
+use litellm_llms::base_llm::ocr::{
+    handler::OcrClient,
+    transformation::{OcrConnection, OcrCredentialInputs, PreparedOcrRequest},
 };
+use litellm_secrets::source::Secrets;
 
 use super::provider_config::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
