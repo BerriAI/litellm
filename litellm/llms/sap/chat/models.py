@@ -1,11 +1,12 @@
 import warnings
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Final, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-def validate_different_content(v: str | dict | list) -> str:
+def validate_different_content(v: str | Mapping[str, object] | Sequence[object]) -> str:
     if v in ((), {}, []):
         return ""
     elif isinstance(v, dict) and "text" in v:
@@ -24,9 +25,34 @@ def validate_different_content(v: str | dict | list) -> str:
     raise ValueError("Content must be a string")
 
 
+def _has_cache_control(v: str | Mapping[str, object] | Sequence[object]) -> bool:
+    if isinstance(v, Mapping):
+        return v.get("cache_control") is not None
+    if isinstance(v, str):
+        return False
+    return any(isinstance(item, Mapping) and item.get("cache_control") is not None for item in v)
+
+
+def validate_cacheable_content(
+    v: str | Mapping[str, object] | Sequence[object],
+) -> str | tuple[Mapping[str, object], ...]:
+    if not _has_cache_control(v):
+        return validate_different_content(v)
+
+    blocks: Final = (v,) if isinstance(v, Mapping) else v
+    normalized: Final = ({"type": "text", "text": item} if isinstance(item, str) else item for item in blocks)
+    return tuple(block for block in normalized if isinstance(block, Mapping) and block.get("text"))
+
+
+class CacheControl(BaseModel):
+    type_: Literal["ephemeral"] = Field(default="ephemeral", alias="type")
+    ttl: str | None = None
+
+
 class TextContent(BaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
+    cache_control: CacheControl | None = None
 
 
 class ImageURLContent(BaseModel):
@@ -88,9 +114,9 @@ class SAPMessage(BaseModel):
     """
 
     role: Literal["system", "developer"] = "system"
-    content: str
+    content: str | Sequence[TextContent]
 
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    _content_validator = field_validator("content", mode="before")(validate_cacheable_content)
 
 
 class SAPUserMessage(BaseModel):
