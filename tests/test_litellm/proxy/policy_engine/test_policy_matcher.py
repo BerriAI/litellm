@@ -6,6 +6,7 @@ Tests:
 - Scope matching via attachments (teams, keys, models)
 """
 
+import logging
 from typing import Final
 
 import pytest
@@ -374,3 +375,57 @@ class TestChainMatchingProperties:
             )
             if name not in base:
                 assert f"g-{name}" not in resolved.guardrails, "a condition-missed child must not add its own guardrail"
+
+
+class TestAncestorAdmissionLogging:
+    @staticmethod
+    def _chain() -> dict[str, Policy]:  # mutable-ok: PolicyResolver takes dict[str, Policy]
+        return {  # mutable-ok: PolicyResolver takes dict[str, Policy]
+            "parent": Policy(guardrails=PolicyGuardrails(add=["g-parent"])),  # mutable-ok: pydantic list field
+            "child": Policy(
+                inherit="parent",
+                guardrails=PolicyGuardrails(add=["g-child"]),  # mutable-ok: pydantic list field
+                condition=PolicyCondition(model="gpt-5.5"),
+            ),
+        }
+
+    def test_logs_when_admitted_through_ancestor_only(self, caplog):
+        context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-4o")
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            result: Final = PolicyMatcher.get_policies_with_matching_conditions(
+                policy_names=["child"], context=context, policies=self._chain()
+            )
+        records: Final = [r for r in caplog.records if "applied through ancestor" in r.getMessage()]
+        assert result == ["child"]
+        assert len(records) == 1
+        assert "applied through ancestor 'parent'" in records[0].getMessage()
+        assert "'child'" in records[0].getMessage()
+
+    def test_no_log_when_own_condition_matches(self, caplog):
+        context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            result: Final = PolicyMatcher.get_policies_with_matching_conditions(
+                policy_names=["child"], context=context, policies=self._chain()
+            )
+        assert result == ["child"]
+        assert not [r for r in caplog.records if "applied through ancestor" in r.getMessage()]
+
+    def test_no_log_when_no_chain_member_applies(self, caplog):
+        policies: Final = {  # mutable-ok: PolicyResolver takes dict[str, Policy]
+            "parent": Policy(
+                guardrails=PolicyGuardrails(add=["g-parent"]),  # mutable-ok: pydantic list field
+                condition=PolicyCondition(model="claude-opus-4-1"),
+            ),
+            "child": Policy(
+                inherit="parent",
+                guardrails=PolicyGuardrails(add=["g-child"]),  # mutable-ok: pydantic list field
+                condition=PolicyCondition(model="gpt-5.5"),
+            ),
+        }
+        context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-4o")
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            result: Final = PolicyMatcher.get_policies_with_matching_conditions(
+                policy_names=["child"], context=context, policies=policies
+            )
+        assert result == []
+        assert not [r for r in caplog.records if "applied through ancestor" in r.getMessage()]

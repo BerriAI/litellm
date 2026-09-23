@@ -168,7 +168,8 @@ class PolicyMatcher:
         resolver then drops only the chain members whose own condition fails,
         so a child whose condition misses still contributes the guardrails of
         its unconditional ancestors. A missing policy resolves to an empty
-        chain and does not apply.
+        chain and does not apply. Admissions where the policy's own condition
+        missed but an ancestor applies are logged at INFO.
 
         Args:
             policy_names: List of policy names to filter
@@ -184,10 +185,22 @@ class PolicyMatcher:
 
         def chain_applies(policy_name: str) -> bool:
             chain: Final = PolicyResolver.resolve_inheritance_chain(policy_name=policy_name, policies=resolved)
-            return any(
-                (policy := resolved.get(name)) is not None
-                and (policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context))
+            applying: Final = tuple(
+                name
                 for name in chain
+                if (policy := resolved.get(name)) is not None
+                and (policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context))
             )
+            if applying and policy_name not in applying:
+                verbose_proxy_logger.info(
+                    "Policy '%s' applied through ancestor '%s' although its own condition did not match "
+                    "(team_alias=%s, key_alias=%s, model=%s)",
+                    policy_name,
+                    applying[0],
+                    context.team_alias,
+                    context.key_alias,
+                    context.model,
+                )
+            return bool(applying)
 
         return [policy_name for policy_name in policy_names if chain_applies(policy_name)]
