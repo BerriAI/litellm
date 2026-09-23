@@ -1733,7 +1733,7 @@ class LiteLLMProxyRequestSetup:
                     ):  # don't override k-v pair sent by request (user request)
                         data[_metadata_variable_name]["spend_logs_metadata"][key] = value
             else:
-                data[_metadata_variable_name]["spend_logs_metadata"] = key_metadata["spend_logs_metadata"]
+                data[_metadata_variable_name]["spend_logs_metadata"] = dict(key_metadata["spend_logs_metadata"])
 
         ## KEY-LEVEL DISABLE FALLBACKS
         if "disable_fallbacks" in key_metadata and isinstance(key_metadata["disable_fallbacks"], bool):
@@ -1748,6 +1748,46 @@ class LiteLLMProxyRequestSetup:
             management_endpoint_metadata=key_metadata,
             _metadata_variable_name=_metadata_variable_name,
         )
+        return data
+
+    @staticmethod
+    def add_team_and_project_level_controls(
+        user_api_key_dict: UserAPIKeyAuth, data: dict, _metadata_variable_name: str
+    ) -> dict:
+        ## TEAM-LEVEL SPEND LOGS/TAGS
+        team_metadata: Final = user_api_key_dict.team_metadata or {}
+        if "tags" in team_metadata and team_metadata["tags"] is not None:
+            data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=data[_metadata_variable_name].get("tags"),
+                tags_to_add=team_metadata["tags"],
+            )
+        if "disable_global_guardrails" in team_metadata and isinstance(
+            team_metadata["disable_global_guardrails"], bool
+        ):
+            data[_metadata_variable_name]["disable_global_guardrails"] = team_metadata["disable_global_guardrails"]
+        if "opted_out_global_guardrails" in team_metadata and isinstance(
+            team_metadata["opted_out_global_guardrails"], list
+        ):
+            data[_metadata_variable_name]["opted_out_global_guardrails"] = team_metadata["opted_out_global_guardrails"]
+        if "spend_logs_metadata" in team_metadata and isinstance(team_metadata["spend_logs_metadata"], dict):
+            if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
+                data[_metadata_variable_name]["spend_logs_metadata"], dict
+            ):
+                for key, value in team_metadata["spend_logs_metadata"].items():
+                    if (
+                        key not in data[_metadata_variable_name]["spend_logs_metadata"]
+                    ):  # don't override k-v pair sent by request (user request)
+                        data[_metadata_variable_name]["spend_logs_metadata"][key] = value
+            else:
+                data[_metadata_variable_name]["spend_logs_metadata"] = dict(team_metadata["spend_logs_metadata"])
+
+        ## PROJECT-LEVEL TAGS
+        project_metadata: Final = user_api_key_dict.project_metadata or {}
+        if "tags" in project_metadata and project_metadata["tags"] is not None:
+            data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=data[_metadata_variable_name].get("tags"),
+                tags_to_add=project_metadata["tags"],
+            )
         return data
 
     @staticmethod
@@ -2267,38 +2307,13 @@ async def add_litellm_data_to_request(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
     )
-    ## TEAM-LEVEL SPEND LOGS/TAGS
+    data = LiteLLMProxyRequestSetup.add_team_and_project_level_controls(
+        user_api_key_dict=user_api_key_dict,
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+    )
     team_metadata: Final = user_api_key_dict.team_metadata or {}
-    if "tags" in team_metadata and team_metadata["tags"] is not None:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-            request_tags=data[_metadata_variable_name].get("tags"),
-            tags_to_add=team_metadata["tags"],
-        )
-    if "disable_global_guardrails" in team_metadata and isinstance(team_metadata["disable_global_guardrails"], bool):
-        data[_metadata_variable_name]["disable_global_guardrails"] = team_metadata["disable_global_guardrails"]
-    if "opted_out_global_guardrails" in team_metadata and isinstance(
-        team_metadata["opted_out_global_guardrails"], list
-    ):
-        data[_metadata_variable_name]["opted_out_global_guardrails"] = team_metadata["opted_out_global_guardrails"]
-    if "spend_logs_metadata" in team_metadata and isinstance(team_metadata["spend_logs_metadata"], dict):
-        if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
-            data[_metadata_variable_name]["spend_logs_metadata"], dict
-        ):
-            for key, value in team_metadata["spend_logs_metadata"].items():
-                if (
-                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
-                ):  # don't override k-v pair sent by request (user request)
-                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
-        else:
-            data[_metadata_variable_name]["spend_logs_metadata"] = team_metadata["spend_logs_metadata"]
-
-    ## PROJECT-LEVEL TAGS
     project_metadata: Final = user_api_key_dict.project_metadata or {}
-    if "tags" in project_metadata and project_metadata["tags"] is not None:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-            request_tags=data[_metadata_variable_name].get("tags"),
-            tags_to_add=project_metadata["tags"],
-        )
 
     # inherited_tags: every tag key/team/project policy contributed, read
     # directly from those three sources rather than snapshotted off the shared
