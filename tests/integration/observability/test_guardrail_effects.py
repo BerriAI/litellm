@@ -357,7 +357,7 @@ def test_responses_pre_call_denial_streams_sse_with_typed_message_item(gateway: 
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
             observed.get("/__observations")
             response: Final = candidate.request(
@@ -399,7 +399,7 @@ def test_responses_pre_call_denial_returns_json_with_typed_message_item(gateway:
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
             observed.get("/__observations")
             response: Final = candidate.request(
@@ -476,7 +476,7 @@ def test_responses_pre_call_denial_openai_sdk_streams_typed_message(gateway: Gat
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(use_chat_completions_api=True)
         client: Final = OpenAI(
             base_url=f"{candidate.client.base_url}/v1", api_key=candidate.key, max_retries=0, timeout=15
         )
@@ -500,7 +500,7 @@ async def test_responses_pre_call_denial_openai_async_sdk_streams_typed_message(
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(use_chat_completions_api=True)
         client: Final = AsyncOpenAI(
             base_url=f"{candidate.client.base_url}/v1", api_key=candidate.key, max_retries=0, timeout=15
         )
@@ -518,7 +518,7 @@ def test_responses_pre_call_denial_openai_sdk_returns_typed_message(gateway: Gat
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(use_chat_completions_api=True)
         client: Final = OpenAI(
             base_url=f"{candidate.client.base_url}/v1", api_key=candidate.key, max_retries=0, timeout=15
         )
@@ -537,7 +537,7 @@ def test_responses_pre_call_denial_reports_zero_usage(gateway: Gateway, tmp_path
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(use_chat_completions_api=True)
         response: Final = candidate.request(
             "POST", "/v1/responses", {"model": model, "input": "say hi", "stream": False, "guardrails": [identity]}
         )
@@ -552,7 +552,7 @@ def test_responses_pre_call_denial_stream_string_true_returns_json(gateway: Gate
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(use_chat_completions_api=True)
         response: Final = candidate.request(
             "POST", "/v1/responses", {"model": model, "input": "say hi", "stream": "true", "guardrails": [identity]}
         )
@@ -576,7 +576,7 @@ def test_responses_pre_call_denial_stream_event_vocabulary(gateway: Gateway, tmp
     loaded["guardrails"].append(_deny_guardrail(second))
     config.write_text(yaml.safe_dump(loaded))
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
             observed.get("/__observations")
             response: Final = candidate.request(
@@ -611,7 +611,7 @@ def test_responses_pre_call_denial_stream_large_denial_text(gateway: Gateway, tm
     denial: Final = ("Denied: " + "mixed ascii and unicode text " * 200 + "fin")[:5000]
     config: Final = _responses_denial_config(tmp_path, identity, denial)
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(use_chat_completions_api=True)
         response: Final = candidate.request(
             "POST",
             "/v1/responses",
@@ -632,7 +632,7 @@ def test_responses_pre_call_denial_stream_requests_have_distinct_ids(gateway: Ga
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(use_chat_completions_api=True)
         with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
             observed.get("/__observations")
             responses: Final = tuple(
