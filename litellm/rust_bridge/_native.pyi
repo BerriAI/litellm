@@ -439,40 +439,25 @@ class _SecretManagerRuntime:
     def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> JsonValue: ...
     def read_secret_async(self, name: str, settings: Mapping[str, object] | None = None) -> Future[JsonValue]: ...
     def async_write_secret(
-        self,
-        secret_name: str,
-        secret_value: str,
-        description: str | None = None,
+        self, secret_name: str, secret_value: str, description: str | None = None,
         optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None,
-        tags: object = None,
+        timeout: float | httpx.Timeout | None = None, tags: object = None,
     ) -> Future[dict[str, JsonValue]]: ...
     def async_delete_secret(
-        self,
-        secret_name: str,
-        recovery_window_in_days: int | None = None,
+        self, secret_name: str, recovery_window_in_days: int | None = None,
         optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> Future[dict[str, JsonValue]]: ...
     def async_rotate_secret(
-        self,
-        current_secret_name: str,
-        new_secret_name: str,
-        new_secret_value: str,
+        self, current_secret_name: str, new_secret_name: str, new_secret_value: str,
         optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> Future[dict[str, JsonValue]]: ...
     def sync_read_secret(
-        self,
-        secret_name: str,
-        optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None,
-        primary_secret_name: str | None = None,
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
     ) -> JsonValue: ...
     def async_read_secret(
-        self,
-        secret_name: str,
-        optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None,
-        primary_secret_name: str | None = None,
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
     ) -> Future[JsonValue]: ...
