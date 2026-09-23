@@ -25,7 +25,6 @@ def _this_python_enforces_fips() -> bool:
     return False
 
 
-@pytest.mark.covers("other.configuration.fips_mode.refuses_boot_when_provider_does_not_enforce_fips")
 def test_fips_mode_refuses_to_serve_when_this_python_does_not_enforce_fips(gateway: Gateway, tmp_path: Path) -> None:
     if _this_python_enforces_fips():
         pytest.skip("Runner OpenSSL enforces FIPS, so this leg cannot observe the non-enforcing refusal")
@@ -34,7 +33,6 @@ def test_fips_mode_refuses_to_serve_when_this_python_does_not_enforce_fips(gatew
     assert "LITELLM_FIPS_MODE" in log and "does not enforce FIPS" in log, log
 
 
-@pytest.mark.covers("other.configuration.fips_mode.refuses_boot_with_tls_verification_disabled")
 @pytest.mark.parametrize("source", ("environment", "config"))
 def test_fips_mode_refuses_to_serve_with_tls_verification_disabled(
     gateway: Gateway, tmp_path: Path, source: str
@@ -53,14 +51,12 @@ def test_fips_mode_refuses_to_serve_with_tls_verification_disabled(
     assert ("SSL_VERIFY" if source == "environment" else "litellm_settings.ssl_verify") in log, log
 
 
-@pytest.mark.covers("other.configuration.fips_mode.refuses_boot_on_malformed_value")
 def test_fips_mode_refuses_to_serve_on_a_value_that_is_not_a_boolean(gateway: Gateway, tmp_path: Path) -> None:
     log: Final = refused_boot_log(gateway, tmp_path, {"LITELLM_FIPS_MODE": "enforced"})
     assert REFUSAL in log, log
     assert "LITELLM_FIPS_MODE=enforced" in log and "true or false" in log, log
 
 
-@pytest.mark.covers("other.configuration.fips_mode.off_leaves_boot_unchanged")
 def test_fips_mode_off_serves_even_with_tls_verification_disabled(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy(gateway, tmp_path, {"LITELLM_FIPS_MODE": "false", "SSL_VERIFY": "false"}) as candidate:
         assert candidate.client.get("/health/readiness").status_code == 200

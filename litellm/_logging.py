@@ -9,7 +9,7 @@ import sys
 from collections.abc import Iterator
 from datetime import datetime
 from logging import Formatter
-from typing import Any, Final, TextIO
+from typing import Final, TextIO
 from urllib.parse import unquote
 
 import litellm
@@ -672,13 +672,13 @@ def _try_parse_json_message(message: str) -> dict[str, object] | None:
     msg_stripped: Final = message.strip()
     if not (msg_stripped.startswith("{") or msg_stripped.startswith("[")):
         return None
-    parsed: Final = safe_json_loads(message, default=None)
+    parsed: Final[object] = safe_json_loads(message, default=None)
     if parsed is None or not isinstance(parsed, dict):
         return None
     return parsed
 
 
-def _try_parse_embedded_python_dict(message: str) -> dict[str, Any] | None:
+def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
     """
     Try to find and parse a Python dict repr (e.g. str(d) or repr(d)) embedded in
     the message. Handles patterns like:
@@ -702,7 +702,7 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, Any] | None:
                 if depth == 0:
                     substr = message[start : j + 1]
                     try:
-                        result = ast.literal_eval(substr)
+                        result: object = ast.literal_eval(substr)
                         if isinstance(result, dict) and len(result) > 0:
                             return result
                     except (ValueError, SyntaxError, TypeError):
