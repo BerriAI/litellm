@@ -190,10 +190,7 @@ def test_delegated_auth_forwards_the_callers_bearer_untouched(gateway: Gateway, 
         peer.drain()
         outcome: Final = caller.call(f"{alias}-add", ADD, identity if entry in ("mcp", "root", "sse", "rest") else None)
         assert outcome.ok, outcome.raw
-        seen: Final = _authorizations(peer)
-        if seen == (None,) and entry == "rest":
-            pytest.skip("BUG: /mcp-rest/tools/call drops the caller's Authorization on an oauth_delegate server")
-        assert seen == (f"Bearer {token}".encode(),), seen
+        assert _authorizations(peer) == (f"Bearer {token}".encode(),)
 
 
 @dataclass(frozen=True, slots=True)

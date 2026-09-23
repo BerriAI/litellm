@@ -1166,6 +1166,7 @@ if MCP_AVAILABLE:
                 if mcp_server_auth_headers:
                     data["mcp_server_auth_headers"] = mcp_server_auth_headers
                 data["raw_headers"] = raw_headers_from_request
+                caller_oauth2_headers: Final = MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
 
                 # Extract user_api_key_auth from metadata and add to top level
                 # call_mcp_tool expects user_api_key_auth as a top-level parameter
@@ -1197,7 +1198,7 @@ if MCP_AVAILABLE:
                     user_api_key_auth=data.get("user_api_key_auth"),
                     mcp_auth_header=data.get("mcp_auth_header"),
                     mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
-                    oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
+                    oauth2_headers=user_oauth_extra_headers or caller_oauth2_headers or None,
                     raw_headers=data.get("raw_headers"),
                     client_ip=IPAddressUtils.get_mcp_client_ip(request),
                     litellm_logging_obj=data.get("litellm_logging_obj"),
