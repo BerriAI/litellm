@@ -26,24 +26,7 @@ impl HashicorpVault {
     ) -> Result<Value, Error> {
         let location: SecretLocation =
             self.secret_location_with_context(secret_name, &context.operation)?;
-        let data_key: String = data_key(&context.operation);
-        if context.description.is_some() && data_key == "description" {
-            return Err(Error::DataKeyConflictsWithDescription);
-        }
-        let data: HashMap<String, Value> = match context.description.as_deref() {
-            Some(description) => [
-                (data_key, Value::String(value.expose().to_owned())),
-                (
-                    "description".to_owned(),
-                    Value::String(description.to_owned()),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-            None => [(data_key, Value::String(value.expose().to_owned()))]
-                .into_iter()
-                .collect(),
-        };
+        let data = write_data(value, context)?;
         let metadata = with_timeout(&context.operation, async {
             let client = self.client_for_location(&location).await?;
             match kv2::set(client.as_ref(), &location.mount, &location.path, &data).await {
@@ -185,4 +168,23 @@ impl SecretRotator for HashicorpVault {
         )
         .await
     }
+}
+
+pub(super) fn write_data(
+    value: &SecretValue,
+    context: &SecretWriteContext<HashicorpOperationContext>,
+) -> Result<Value, Error> {
+    let data_key = data_key(&context.operation);
+    if context.description.is_some() && data_key == "description" {
+        return Err(Error::DataKeyConflictsWithDescription);
+    }
+    let data = std::iter::once((data_key, Value::String(value.expose().to_owned())))
+        .chain(
+            context
+                .description
+                .as_ref()
+                .map(|description| ("description".to_owned(), Value::String(description.clone()))),
+        )
+        .collect();
+    Ok(Value::Object(data))
 }
