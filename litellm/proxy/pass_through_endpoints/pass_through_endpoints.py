@@ -5,7 +5,7 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import count, groupby
@@ -859,7 +859,61 @@ def _truncate_upstream_error_body(body: str) -> str:
         return body
     return (
         f"{body[:PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS]}... "
-        f"(truncated, {len(body) - PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS} more chars)"
+        f"(truncated at {PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS} chars)"
+    )
+
+
+def _sanitize_upstream_error_body(body: str) -> str:
+    return " ".join("".join(char if char.isprintable() else " " for char in body).split())
+
+
+class _PrefixReplayStream(httpx.AsyncByteStream):
+    def __init__(self, prefix: bytes, rest: AsyncIterator[bytes], upstream: httpx.Response) -> None:
+        self._prefix: Final = prefix
+        self._rest: Final = rest
+        self._upstream: Final = upstream
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        if self._prefix:
+            yield self._prefix
+        async for chunk in self._rest:
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self._upstream.aclose()
+
+
+async def _read_error_body_preview(
+    stream: AsyncIterator[bytes],
+) -> tuple[bytes, AsyncIterator[bytes]]:
+    collected: Final[list[bytes]] = []  # mutable-ok: accumulated until the preview byte budget, then joined once
+    total = 0  # rebind-ok: running byte count against the preview budget
+    async for chunk in stream:
+        collected.append(chunk)
+        total += len(chunk)
+        if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
+            break
+    return b"".join(collected), stream
+
+
+def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
+    return httpx.Headers(
+        [(name, value) for name, value in headers.raw if name.lower() not in (b"content-encoding", b"content-length")]
+    )
+
+
+async def _error_body_preview_and_relay(response: httpx.Response) -> tuple[str, httpx.Response]:
+    if response.is_stream_consumed:
+        return response.text, response
+    body_iter: Final = response.aiter_bytes()
+    prefix, rest = await _read_error_body_preview(body_iter)
+    preview_text: Final = prefix.decode(response.encoding or "utf-8", errors="replace")
+    return preview_text, httpx.Response(
+        status_code=response.status_code,
+        headers=_headers_without_body_framing(response.headers),
+        stream=_PrefixReplayStream(prefix=prefix, rest=rest, upstream=response),
+        request=response.request,
+        extensions=response.extensions,
     )
 
 
@@ -868,24 +922,26 @@ async def _log_passthrough_upstream_failure(
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,
     logging_obj: LiteLLMLoggingObj,
-) -> None:
+) -> httpx.Response:
     """Fire LiteLLM-side failure hooks (spend tracking, alerting callbacks) for
     an upstream 4xx/5xx passthrough response.
 
     Passthrough must return the upstream status/body/headers to the client
-    unchanged, so this never raises or transforms the response - it only
-    mirrors the monitoring side effect that ``post_call_failure_hook`` would
-    have received had the error originated inside LiteLLM.
+    unchanged, so this never raises; it mirrors the monitoring side effect
+    that ``post_call_failure_hook`` would have received had the error
+    originated inside LiteLLM, and returns the response the caller must
+    relay (a prefix-replay replacement when the error preview was pulled
+    off an unconsumed streaming body).
     """
     if response.status_code < 400:
-        return
+        return response
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    await response.aread()
+    preview_text, relay_response = await _error_body_preview_and_relay(response)
     upstream_error_body: Final = (
         REDACTED_BY_LITELLM
         if should_redact_message_logging(logging_obj.model_call_details)
-        else _truncate_upstream_error_body(response.text)
+        else _truncate_upstream_error_body(_sanitize_upstream_error_body(preview_text))
     )
     verbose_proxy_logger.warning(
         "pass_through_endpoint: upstream %s %s returned %s: %s",
@@ -920,6 +976,7 @@ async def _log_passthrough_upstream_failure(
                 "pass_through_endpoint: post_call_failure_hook raised for upstream error",
                 exc_info=True,
             )
+    return relay_response
 
 
 async def _relay_reporting_failures(
@@ -1349,7 +1406,7 @@ async def pass_through_request(
                 headers=response.headers,
             )
 
-            await _log_passthrough_upstream_failure(
+            relay_response: Final = await _log_passthrough_upstream_failure(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
                 request_payload=_build_passthrough_failure_request_payload(
@@ -1364,13 +1421,13 @@ async def pass_through_request(
 
             # Call response headers hook for streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=response.headers,
+                headers=relay_response.headers,
                 litellm_call_id=litellm_call_id,
             )
             callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
-                response=response,
+                response=relay_response,
                 request_headers=dict(request.headers),
             )
             if callback_headers:
@@ -1381,7 +1438,7 @@ async def pass_through_request(
                     stream=_own_streamed_managed_ids(
                         stream=_relay_reporting_failures(
                             stream=PassThroughStreamingHandler.chunk_processor(
-                                response=response,
+                                response=relay_response,
                                 request_body=_parsed_body,
                                 litellm_logging_obj=logging_obj,
                                 endpoint_type=endpoint_type,
@@ -1389,7 +1446,7 @@ async def pass_through_request(
                                 passthrough_success_handler_obj=pass_through_endpoint_logging,
                                 url_route=str(url),
                             ),
-                            upstream_status=response.status_code,
+                            upstream_status=relay_response.status_code,
                             user_api_key_dict=user_api_key_dict,
                             request_payload=_build_passthrough_failure_request_payload(
                                 parsed_body=_parsed_body,
@@ -1403,10 +1460,10 @@ async def pass_through_request(
                         user_api_key_dict=user_api_key_dict,
                     ),
                     ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
-                    upstream_headers=response.headers,
+                    upstream_headers=relay_response.headers,
                 ),
                 headers=_response_headers,
-                status_code=response.status_code,
+                status_code=relay_response.status_code,
             )
 
         if state_raw_body is not None:
@@ -1441,7 +1498,7 @@ async def pass_through_request(
             logging_obj.stream = True
             logging_obj.model_call_details["stream"] = True
 
-            await _log_passthrough_upstream_failure(
+            detected_relay_response: Final = await _log_passthrough_upstream_failure(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
                 request_payload=_build_passthrough_failure_request_payload(
@@ -1456,13 +1513,13 @@ async def pass_through_request(
 
             # Call response headers hook for detected streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=response.headers,
+                headers=detected_relay_response.headers,
                 litellm_call_id=litellm_call_id,
             )
             callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
-                response=response,
+                response=detected_relay_response,
                 request_headers=dict(request.headers),
             )
             if callback_headers:
@@ -1473,7 +1530,7 @@ async def pass_through_request(
                     stream=_own_streamed_managed_ids(
                         stream=_relay_reporting_failures(
                             stream=PassThroughStreamingHandler.chunk_processor(
-                                response=response,
+                                response=detected_relay_response,
                                 request_body=_parsed_body,
                                 litellm_logging_obj=logging_obj,
                                 endpoint_type=endpoint_type,
@@ -1481,7 +1538,7 @@ async def pass_through_request(
                                 passthrough_success_handler_obj=pass_through_endpoint_logging,
                                 url_route=str(url),
                             ),
-                            upstream_status=response.status_code,
+                            upstream_status=detected_relay_response.status_code,
                             user_api_key_dict=user_api_key_dict,
                             request_payload=_build_passthrough_failure_request_payload(
                                 parsed_body=_parsed_body,
@@ -1495,10 +1552,10 @@ async def pass_through_request(
                         user_api_key_dict=user_api_key_dict,
                     ),
                     ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
-                    upstream_headers=response.headers,
+                    upstream_headers=detected_relay_response.headers,
                 ),
                 headers=_response_headers,
-                status_code=response.status_code,
+                status_code=detected_relay_response.status_code,
             )
 
         if not _should_buffer_passthrough_response(response):

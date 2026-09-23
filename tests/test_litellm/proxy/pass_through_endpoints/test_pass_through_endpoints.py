@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import json
 import logging
 import os
@@ -4267,7 +4268,7 @@ async def test_truncate_upstream_error_body_caps_at_log_limit():
 
     long_body: Final = "a" * 5000
     truncated: Final = _truncate_upstream_error_body(long_body)
-    assert truncated == f"{'a' * 4096}... (truncated, 904 more chars)"
+    assert truncated == f"{'a' * 4096}... (truncated at 4096 chars)"
 
     upstream_response: Final = httpx.Response(
         status_code=500,
@@ -4300,7 +4301,7 @@ async def test_truncate_upstream_error_body_caps_at_log_limit():
                 )
 
     detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
-    assert detail == f"Upstream passthrough request failed with status 500: {'a' * 4096}... (truncated, 904 more chars)"
+    assert detail == f"Upstream passthrough request failed with status 500: {'a' * 4096}... (truncated at 4096 chars)"
 
 
 @pytest.mark.asyncio
@@ -4424,6 +4425,189 @@ async def test_passthrough_upstream_error_body_redacted_when_message_logging_off
     else:
         assert "upstream body says the project was not found" in logged_body
         assert detail == f"Upstream passthrough request failed with status 404: {upstream_content.decode()}"
+
+
+class _ChunkedUpstreamErrorBodyStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks: Final = chunks
+        self.served: int = 0
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            self.served += 1
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_upstream_error_reads_only_preview_and_relays_full_body():
+    chunk_size: Final = 1024
+    chunks: Final = tuple(b"x" * chunk_size for _ in range(6))
+    upstream_content: Final = b"".join(chunks)
+    body_stream: Final = _ChunkedUpstreamErrorBodyStream(chunks)
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/plain"},
+        stream=body_stream,
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+
+    served_at_warning: list[int] = []
+    real_warning: Final = verbose_proxy_logger.warning
+
+    def _recording_warning(*args, **kwargs):
+        if args and args[0] == "pass_through_endpoint: upstream %s %s returned %s: %s":
+            served_at_warning.append(body_stream.served)
+        return real_warning(*args, **kwargs)
+
+    with patch.object(verbose_proxy_logger, "warning", side_effect=_recording_warning):
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+            ) as mock_get_client:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                    mock_success_handler.return_value = None
+
+                    async_client: Final = MagicMock()
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    response: Final = await pass_through_request(
+                        request=_upstream_error_request(),
+                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                        stream=True,
+                    )
+
+    assert isinstance(response, StreamingResponse)
+    assert response.status_code == 500
+    streamed_chunks: Final = [chunk async for chunk in response.body_iterator]
+    streamed_bytes: Final = b"".join(
+        chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in streamed_chunks
+    )
+    assert streamed_bytes == upstream_content
+
+    assert served_at_warning == [5], (
+        "only the chunks needed to exceed the 4096-byte preview budget may be pulled before the warning"
+    )
+    expected_body: Final = f"{'x' * 4096}... (truncated at 4096 chars)"
+    assert (
+        mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
+        == f"Upstream passthrough request failed with status 500: {expected_body}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_upstream_error_gzip_body_decoded_for_log_and_client():
+    upstream_content: Final = b'{"error": {"message": "gzipped upstream says the project was not found"}}'
+    compressed: Final = gzip.compress(upstream_content)
+    upstream_response: Final = httpx.Response(
+        status_code=502,
+        headers={"content-type": "text/event-stream", "content-encoding": "gzip"},
+        stream=_ChunkedUpstreamErrorBodyStream((compressed[:10], compressed[10:])),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+
+    with patch.object(verbose_proxy_logger, "warning") as mock_warning:
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+            ) as mock_get_client:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                    mock_success_handler.return_value = None
+
+                    async_client: Final = MagicMock()
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    response: Final = await pass_through_request(
+                        request=_upstream_error_request(),
+                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                        stream=True,
+                    )
+
+    assert isinstance(response, StreamingResponse)
+    streamed_chunks: Final = [chunk async for chunk in response.body_iterator]
+    streamed_bytes: Final = b"".join(
+        chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in streamed_chunks
+    )
+    assert streamed_bytes == upstream_content
+
+    upstream_warnings: Final = [
+        call
+        for call in mock_warning.call_args_list
+        if call.args[0] == "pass_through_endpoint: upstream %s %s returned %s: %s"
+    ]
+    assert len(upstream_warnings) == 1, mock_warning.call_args_list
+    logged_body: Final = str(upstream_warnings[0].args[4])
+    assert "gzipped upstream says the project was not found" in logged_body
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_upstream_error_body_sanitized_against_log_forging():
+    upstream_content: Final = b'{"error": "line one"}\n2026-01-01 FAKE LOG LINE\x1b[31m'
+    upstream_response: Final = httpx.Response(
+        status_code=404,
+        headers={"content-type": "application/json"},
+        content=upstream_content,
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:generateContent"),
+    )
+
+    with patch.object(verbose_proxy_logger, "warning") as mock_warning:
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+            ) as mock_get_client:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+                ) as mock_processing:
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                    mock_processing.get_custom_headers.return_value = {}
+
+                    async_client: Final = MagicMock()
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    await pass_through_request(
+                        request=_upstream_error_request(),
+                        target="http://target-api.com/v1beta/models/claude-nope-9:generateContent",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                    )
+
+    upstream_warnings: Final = [
+        call
+        for call in mock_warning.call_args_list
+        if call.args[0] == "pass_through_endpoint: upstream %s %s returned %s: %s"
+    ]
+    assert len(upstream_warnings) == 1, mock_warning.call_args_list
+    logged_body: Final = str(upstream_warnings[0].args[4])
+    assert logged_body == '{"error": "line one"} 2026-01-01 FAKE LOG LINE [31m'
+    assert "\n" not in logged_body
+    assert "\x1b" not in logged_body
+
+    detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
+    assert (
+        detail
+        == 'Upstream passthrough request failed with status 404: {"error": "line one"} 2026-01-01 FAKE LOG LINE [31m'
+    )
 
 
 class _UpstreamDroppingMidStream(httpx.AsyncByteStream):
