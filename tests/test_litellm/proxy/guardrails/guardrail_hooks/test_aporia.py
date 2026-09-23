@@ -1,36 +1,28 @@
-"""Tests for how the Aporia guardrail acts on Aporia's verdict.
-
-Aporia answers with one of four actions. Only ``passthrough`` says the content
-may go out as written; ``modify`` and ``rephrase`` are interventions. Forwarding
-the original for those defeats the guardrail and reports success while doing it
-(#41097).
-"""
-
 import json
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.aporia_ai.aporia_ai import AporiaGuardrail
 
 
-def _guardrail(action: Any, include_action: bool = True) -> AporiaGuardrail:
-    """An AporiaGuardrail whose /validate call answers with one verdict."""
-    guardrail = AporiaGuardrail(
-        guardrail_name="aporia",
-        api_key="k",
-        api_base="https://example.invalid",
-    )
-    body = {"action": action} if include_action else {"reason": "no action key"}
+def _guardrail(body: dict[str, str | None]) -> tuple[AporiaGuardrail, AsyncMock]:
     response = MagicMock()
     response.status_code = 200
     response.text = json.dumps(body)
     response.json = MagicMock(return_value=body)
-    guardrail.async_handler = MagicMock()
-    guardrail.async_handler.post = AsyncMock(return_value=response)
-    return guardrail
+    post = AsyncMock(return_value=response)
+    handler = MagicMock(spec=AsyncHTTPHandler)
+    handler.post = post
+    guardrail = AporiaGuardrail(
+        guardrail_name="aporia",
+        api_key="k",
+        api_base="https://example.invalid",
+        async_handler=handler,
+    )
+    return guardrail, post
 
 
 async def _validate(guardrail: AporiaGuardrail) -> None:
@@ -42,21 +34,19 @@ async def _validate(guardrail: AporiaGuardrail) -> None:
 
 @pytest.mark.asyncio
 async def test_passthrough_is_forwarded():
-    """The accept control: a cleanly scanned request must still go out, or the
-    guardrail is a wall rather than a filter."""
-    guardrail = _guardrail("passthrough")
+    guardrail, post = _guardrail({"action": "passthrough"})
 
     await _validate(guardrail)
 
-    # It reached Aporia and came back without raising, which is the whole
-    # observable effect of letting a request through.
-    guardrail.async_handler.post.assert_awaited_once()
+    post.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_block_is_refused():
+    guardrail, _ = _guardrail({"action": "block"})
+
     with pytest.raises(HTTPException) as exc:
-        await _validate(_guardrail("block"))
+        await _validate(guardrail)
 
     assert exc.value.status_code == 400
     assert "Violated guardrail policy" in str(exc.value.detail)
@@ -64,11 +54,11 @@ async def test_block_is_refused():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["modify", "rephrase"])
-async def test_an_intervention_is_not_forwarded_unchanged(action):
-    """Aporia is saying this should not ship as written, and litellm cannot
-    apply the modification from this response — so it must not ship it."""
+async def test_an_intervention_is_not_forwarded_unchanged(action: str):
+    guardrail, _ = _guardrail({"action": action})
+
     with pytest.raises(HTTPException) as exc:
-        await _validate(_guardrail(action))
+        await _validate(guardrail)
 
     assert exc.value.status_code == 400
     assert action in str(exc.value.detail)
@@ -76,18 +66,11 @@ async def test_an_intervention_is_not_forwarded_unchanged(action):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "action,include_action",
-    [
-        ("BLOCK", True),
-        ("blocked", True),
-        ("", True),
-        (None, True),
-        (None, False),
-    ],
+    "body",
+    [{"action": "BLOCK"}, {"action": "blocked"}, {"action": ""}, {"action": None}, {}],
 )
-async def test_a_verdict_it_cannot_read_is_not_taken_for_permission(action, include_action):
-    """A response shape change, or an error object with no action at all, used
-    to forward. A guardrail that cannot tell what it was told is not the one to
-    decide the content is fine."""
+async def test_a_verdict_it_cannot_read_is_not_taken_for_permission(body: dict[str, str | None]):
+    guardrail, _ = _guardrail(body)
+
     with pytest.raises(HTTPException):
-        await _validate(_guardrail(action, include_action=include_action))
+        await _validate(guardrail)
