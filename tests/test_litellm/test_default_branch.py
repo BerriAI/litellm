@@ -24,7 +24,7 @@ def _commit(repo: Path, message: str) -> None:
 def remote_and_clone(tmp_path: Path) -> tuple[Path, Path]:
     seed: Final = tmp_path / "seed"
     seed.mkdir()
-    _git(seed, "init", "-q", "-b", "litellm_internal_staging")
+    _git(seed, "init", "-q", "-b", "release_branch")
     (seed / "scripts").mkdir()
     for name in (
         "default_branch.py",
@@ -47,7 +47,7 @@ def remote_and_clone(tmp_path: Path) -> tuple[Path, Path]:
     _commit(seed, "main base")
     remote: Final = tmp_path / "remote.git"
     _git(tmp_path, "clone", "-q", "--bare", str(seed), str(remote))
-    _git(remote, "symbolic-ref", "HEAD", "refs/heads/litellm_internal_staging")
+    _git(remote, "symbolic-ref", "HEAD", "refs/heads/release_branch")
     repo: Final = tmp_path / "clone"
     _git(tmp_path, "clone", "-q", "--single-branch", str(remote), str(repo))
     return remote, repo
@@ -78,13 +78,13 @@ def test_existing_single_branch_clone_follows_remote_switch(remote_and_clone: tu
     remote, repo = remote_and_clone
     before: Final = _resolve(repo)
     assert before.returncode == 0, before.stderr
-    assert before.stdout.strip() == "origin/litellm_internal_staging"
+    assert before.stdout.strip() == "origin/release_branch"
     _git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
     after: Final = _resolve(repo)
     assert after.returncode == 0, after.stderr
     assert after.stdout.strip() == "origin/main"
     assert _git(repo, "rev-parse", "origin/main") == _git(remote, "rev-parse", "main")
-    assert _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD").endswith("/litellm_internal_staging")
+    assert _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD").endswith("/release_branch")
 
 
 @pytest.mark.parametrize("missing_head", [False, True])
@@ -106,7 +106,7 @@ def test_unverifiable_default_never_uses_cached_head(
     assert "No changed" not in checked.stdout
 
 
-@pytest.mark.parametrize("base_ref", ["HEAD", "origin/litellm_internal_staging"])
+@pytest.mark.parametrize("base_ref", ["HEAD", "origin/release_branch"])
 def test_explicit_base_works_without_remote_access(
     remote_and_clone: tuple[Path, Path],
     base_ref: str,
@@ -134,7 +134,7 @@ def test_budget_ratchet_compares_against_new_default(remote_and_clone: tuple[Pat
     assert "limit raised 0 -> 1" in checked.stdout
     assert "base origin/main" in checked.stdout
     overridden: Final = subprocess.run(
-        [*command, "--base", "origin/litellm_internal_staging"],
+        [*command, "--base", "origin/release_branch"],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -170,7 +170,7 @@ def test_migration_freshness_refuses_stale_branch_after_switch(remote_and_clone:
     after: Final = _freshness(repo)
     assert after.returncode == 3
     assert "1 commit(s) behind origin/main" in after.stderr
-    overridden: Final = _freshness(repo, "litellm_internal_staging")
+    overridden: Final = _freshness(repo, "release_branch")
     assert overridden.returncode == 0, overridden.stderr
     _git(repo, "merge", "--ff-only", "origin/main")
     updated: Final = _freshness(repo)
@@ -184,9 +184,9 @@ def test_migration_freshness_refuses_unavailable_remote(remote_and_clone: tuple[
     result: Final = _freshness(repo)
     assert result.returncode == 3
     assert "Could not discover origin's default branch" in result.stderr
-    explicit: Final = _freshness(repo, "litellm_internal_staging")
+    explicit: Final = _freshness(repo, "release_branch")
     assert explicit.returncode == 3
-    assert "git fetch origin litellm_internal_staging" in explicit.stderr
+    assert "git fetch origin release_branch" in explicit.stderr
 
 
 @pytest.mark.parametrize(

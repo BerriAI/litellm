@@ -108,7 +108,7 @@ def _run_step(tmp_path: Path, changed: list[str], base_sha: str = "basesha") -> 
     env["BASE_SHA"] = base_sha
     env["HEAD_SHA"] = "headsha"
     env["GITHUB_WORKSPACE"] = str(REPO_ROOT)
-    env["GITHUB_REF_NAME"] = "litellm_internal_staging"
+    env["GITHUB_REF_NAME"] = "release_branch"
     env["CHANGED_FILES"] = str(changed_file)
     env["NPM_LOG"] = str(npm_log)
 
