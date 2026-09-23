@@ -76,10 +76,11 @@ _LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
 _LANGFUSE_INGESTION_VERSION: Final = "4"
 _NO_REST_RETRIES: Final = RequestOptions(max_retries=0)
 _TRUNCATION_MARKER: Final = "<truncated due to size exceeding limit>"
+_METADATA_PREFIXES: Final = (LangfuseOtelSpanAttributes.OBSERVATION_METADATA, LangfuseOtelSpanAttributes.TRACE_METADATA)
 _TRUNCATION_GROUPS: Final = (
     (LangfuseOtelSpanAttributes.OBSERVATION_INPUT, LangfuseOtelSpanAttributes.TRACE_INPUT),
     (LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT, LangfuseOtelSpanAttributes.TRACE_OUTPUT),
-    (LangfuseOtelSpanAttributes.OBSERVATION_METADATA, LangfuseOtelSpanAttributes.TRACE_METADATA),
+    _METADATA_PREFIXES,
 )
 _SERVER_FLOOR_HINT: Final = (
     "; the OTLP traces route needs a self-hosted Langfuse server on 3.63.0 or newer "
@@ -605,6 +606,11 @@ def _group_size(attributes: Mapping[str, AttributeValue], group: tuple[str, ...]
     )
 
 
+def _marker_key(prefix: str) -> str:
+    """Langfuse reads input and output as one string but metadata only as flattened keys, so the marker gets one."""
+    return f"{prefix}.truncated" if prefix in _METADATA_PREFIXES else prefix
+
+
 def _truncated(span: ReadableSpan) -> ReadableSpan | None:
     """The span with its largest remaining input, output or metadata replaced by the marker the v2 consumer wrote
     when an event went over ``LANGFUSE_MAX_EVENT_SIZE_BYTES``, or ``None`` once all three are gone."""
@@ -614,7 +620,9 @@ def _truncated(span: ReadableSpan) -> ReadableSpan | None:
         return None
     kept: Final = {key: value for key, value in attributes.items() if not _in_group(key, largest)}
     marked: Final = {
-        prefix: _TRUNCATION_MARKER for prefix in largest if any(_in_group(key, (prefix,)) for key in attributes)
+        _marker_key(prefix): _TRUNCATION_MARKER
+        for prefix in largest
+        if any(_in_group(key, (prefix,)) for key in attributes)
     }
     return ReadableSpan(
         name=span.name,

@@ -1313,13 +1313,15 @@ def test_exporter_truncates_a_single_oversized_span_the_way_v2_did_instead_of_dr
 
 
 def test_exporter_truncates_largest_first_and_drops_only_when_nothing_is_left(monkeypatch, caplog):
+    """Langfuse stores a bare ``langfuse.observation.metadata`` string as nothing, so the metadata marker travels
+    under a flattened key the way every other metadata value does."""
     monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", lambda _: None)
     span = _generation_span(
         **{
             "langfuse.observation.input": "i" * 3000,
             "langfuse.observation.output": "o" * 2000,
             "langfuse.observation.metadata.a": "m" * 500,
-            "langfuse.observation.metadata.b": "m" * 500,
+            "langfuse.trace.metadata.b": "m" * 500,
         }
     )
     posted: list[dict[str, str]] = []
@@ -1343,9 +1345,14 @@ def test_exporter_truncates_largest_first_and_drops_only_when_nothing_is_left(mo
         [],
         ["langfuse.observation.input"],
         ["langfuse.observation.input", "langfuse.observation.output"],
-        ["langfuse.observation.input", "langfuse.observation.metadata", "langfuse.observation.output"],
+        [
+            "langfuse.observation.input",
+            "langfuse.observation.metadata.truncated",
+            "langfuse.observation.output",
+            "langfuse.trace.metadata.truncated",
+        ],
     ]
-    assert "langfuse.observation.metadata.a" not in posted[-1]
+    assert "langfuse.observation.metadata.a" not in posted[-1] and "langfuse.trace.metadata.b" not in posted[-1]
     assert "dropping it" in caplog.text
 
 
