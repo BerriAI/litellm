@@ -1954,6 +1954,9 @@
     "tests/integration/providers/test_deepseek_vision_wire.py::test_deepseek_vision_forwards_image_url_content_list_instead_of_collapsing_to_text": [
       "other.provider_wire.deepseek.vision_image_content_list_reaches_provider"
     ],
+    "tests/integration/providers/test_anthropic_messages_fireworks_stop_wire.py::test_messages_stop_sequences_to_fireworks_are_sent_as_stop_not_stop_sequences": [
+      "providers.anthropic_messages_adapter.stop_sequences_and_disabled_thinking_reach_openai_compatible_provider_as_stop_and_reasoning_effort"
+    ],
     "tests/integration/providers/test_fireworks_ai_router_slug_wire.py::test_fireworks_router_slug_chat_sends_router_resource_not_models_path": [
       "other.provider_wire.fireworks_ai.router_slug_chat_sends_router_resource_name"
     ],
