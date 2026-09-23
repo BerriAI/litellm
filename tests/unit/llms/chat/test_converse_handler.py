@@ -146,10 +146,10 @@ class TestBedrockRegionInModelPath:
 
 
 def _stream_completion_with_spied_iter_bytes(model: str, stream_chunk_size: int | None = None) -> MagicMock:
-    mock_response = MagicMock()
+    mock_response: Final = MagicMock()
     mock_response.status_code = 200
     mock_response.iter_bytes = MagicMock(return_value=iter([]))
-    client = HTTPHandler()
+    client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
 
     litellm.completion(
@@ -323,10 +323,10 @@ def _stream_converse_completion_with_spied_client(
     monkeypatch: pytest.MonkeyPatch, stream_chunk_size: int | None = None
 ) -> tuple[MagicMock, MagicMock, LitellmParamsRecorder]:
     recorder: Final = record_litellm_params(monkeypatch)
-    mock_response = MagicMock()
+    mock_response: Final = MagicMock()
     mock_response.status_code = 200
     mock_response.iter_bytes = MagicMock(return_value=iter([]))
-    client = HTTPHandler()
+    client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
 
     litellm.completion(
@@ -371,12 +371,12 @@ async def _astream_converse_completion_with_spied_client(
         return
         yield b""
 
-    mock_response = MagicMock()
+    mock_response: Final = MagicMock()
     mock_response.status_code = 200
     recorder: Final = record_litellm_params(monkeypatch)
     mock_response.aiter_bytes = MagicMock(return_value=_no_bytes())
-    aiter_bytes_spy = mock_response.aiter_bytes
-    client = AsyncHTTPHandler()
+    aiter_bytes_spy: Final = mock_response.aiter_bytes
+    client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=mock_response)
 
     await litellm.acompletion(
@@ -423,18 +423,18 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     monkeypatch: pytest.MonkeyPatch, stream_chunk_size: int | None, expected_chunk_size: int | None
 ) -> None:
     recorder: Final = record_litellm_params(monkeypatch)
-    mock_response = MagicMock()
+    mock_response: Final = MagicMock()
     mock_response.status_code = 200
     mock_response.iter_bytes = MagicMock(return_value=iter([]))
-    client = HTTPHandler()
+    client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
-    deployment_params = {
+    deployment_params: Final = {
         "model": "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
         "aws_access_key_id": "fake",
         "aws_secret_access_key": "fake",
         "aws_region_name": "us-east-1",
     }
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "converse-chunked",
