@@ -1145,7 +1145,7 @@ async def _update_mcp_server_row(
     server_id: str,
     data_dict: Mapping[str, object],
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
-    identifier_write: Final = any(data_dict.get(field) is not None for field in ("server_name", "alias"))
+    identifier_write: Final = any(field in data_dict for field in ("server_name", "alias"))
 
     async def _update(
         table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
@@ -1155,15 +1155,28 @@ async def _update_mcp_server_row(
             data=data_dict,
         )
 
-    if identifier_write:
+    if not identifier_write:
+        return await _update(_mcp_server_table_actions(prisma_client))
+    if "alias" in data_dict and data_dict["alias"] is None and "server_name" not in data_dict:
+        # Clearing the alias drops the prefix to the stored server_name, which
+        # may already belong to another row, so that name needs the check too.
+        existing: Final = await _db_find_mcp_server_row(prisma_client, server_id)
+        if existing is None:
+            return await _update(_mcp_server_table_actions(prisma_client))
         return await _mcp_server_write_if_identifier_free(
             prisma_client,
-            server_name=_identifier_field(data_dict, "server_name"),
-            alias=_identifier_field(data_dict, "alias"),
+            server_name=existing.server_name,
+            alias=None,
             exclude_server_id=server_id,
             write=_update,
         )
-    return await _update(_mcp_server_table_actions(prisma_client))
+    return await _mcp_server_write_if_identifier_free(
+        prisma_client,
+        server_name=_identifier_field(data_dict, "server_name"),
+        alias=_identifier_field(data_dict, "alias"),
+        exclude_server_id=server_id,
+        write=_update,
+    )
 
 
 async def update_mcp_server(

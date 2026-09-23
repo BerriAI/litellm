@@ -153,6 +153,9 @@ def test_duplicate_alias_is_rejected_so_tool_prefixes_cannot_collide(gateway: Ga
         )
         assert colliding_rename.status_code == 400, colliding_rename.text
 
+        cleared_alias: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": second_identity, "alias": None})
+        assert cleared_alias.status_code == 202, cleared_alias.text
+
         name: Final = tool_names(gateway, key, identity)["add"]
         response: Final = call_tool(gateway, key, identity, name, ADD)
         assert response.status_code == 200, response.text
