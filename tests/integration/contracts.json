@@ -1930,6 +1930,9 @@
     "tests/integration/providers/test_bedrock_mantle_wire.py::test_bedrock_mantle_context_overflow_returns_400_saying_prompt_is_too_long": [
       "other.provider_wire.bedrock_mantle.context_overflow_is_reported_as_prompt_too_long"
     ],
+    "tests/integration/providers/test_bedrock_marengo_embed_3_wire.py::test_marengo_3_text_embedding_nests_input_text_under_input_type": [
+      "providers.bedrock_embedding.marengo_3_text_input_reaches_bedrock_nested_under_input_type"
+    ],
     "tests/integration/providers/test_bedrock_messages_web_search_replay_wire.py::test_replayed_intercepted_web_search_turn_reaches_bedrock_as_text_and_answers": [
       "providers.bedrock_messages.replayed_intercepted_web_search_turn_is_flattened_to_text"
     ],
