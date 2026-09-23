@@ -2990,13 +2990,13 @@ def test_translation_prefers_provider_duration_over_audio_byte_estimate():
         {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
     )
     streaming._capture_translation_output_audio(
-        {"type": "session.closed", "usage": {"type": "duration", "output_seconds": 0.5}}
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 0.25, "output_seconds": 0.5}}
     )
     streaming._finalize_translation_usage()
 
     closed_events = [event for event in streaming.messages if event.get("type") == "session.closed"]
     assert len(closed_events) == 1
-    assert closed_events[0]["usage"] == {"type": "duration", "output_seconds": 0.5}
+    assert closed_events[0]["usage"] == {"type": "duration", "input_seconds": 0.25, "output_seconds": 0.5}
 
 
 @pytest.mark.asyncio

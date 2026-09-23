@@ -3023,14 +3023,21 @@ def handle_realtime_translation_cost_calculation(
     custom_llm_provider: str,
     litellm_model_name: str,
 ) -> float:
-    output_seconds = 0.0  # rebind-ok: duration is accumulated across translation close events
-    for result in results:
-        if result.get("type") != _TRANSLATION_CLOSED_EVENT_TYPE:
-            continue
-        usage = result.get("usage")
-        if isinstance(usage, dict) and isinstance(usage.get("output_seconds"), (int, float)):
-            output_seconds += float(usage["output_seconds"])
-    if output_seconds <= 0:
+    usage_events: Final = tuple(
+        usage
+        for result in results
+        if result.get("type") == _TRANSLATION_CLOSED_EVENT_TYPE
+        if isinstance(usage := result.get("usage"), dict)
+    )
+    input_seconds: Final = sum(
+        float(usage["input_seconds"]) for usage in usage_events if isinstance(usage.get("input_seconds"), (int, float))
+    )
+    output_seconds: Final = sum(
+        float(usage["output_seconds"])
+        for usage in usage_events
+        if isinstance(usage.get("output_seconds"), (int, float))
+    )
+    if input_seconds <= 0 and output_seconds <= 0:
         return 0.0
     try:
         model_info: Final = litellm.get_model_info(
@@ -3039,10 +3046,15 @@ def handle_realtime_translation_cost_calculation(
         )
     except Exception:  # noqa: BLE001  # unknown model metadata should yield zero translation cost
         return 0.0
+    input_cost_per_second: Final = model_info.get("input_cost_per_second")
     output_cost_per_second: Final = model_info.get("output_cost_per_second")
-    if not isinstance(output_cost_per_second, (int, float)):
-        return 0.0
-    return output_seconds * output_cost_per_second
+    input_cost: Final = (
+        input_seconds * input_cost_per_second if isinstance(input_cost_per_second, (int, float)) else 0.0
+    )
+    output_cost: Final = (
+        output_seconds * output_cost_per_second if isinstance(output_cost_per_second, (int, float)) else 0.0
+    )
+    return input_cost + output_cost
 
 
 def handle_realtime_transcription_cost_calculation(

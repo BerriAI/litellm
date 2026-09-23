@@ -441,12 +441,15 @@ class RealTimeStreaming:
             usage: Final = event_obj.get("usage")
             output_seconds: Final = usage.get("output_seconds") if isinstance(usage, dict) else None
             if isinstance(output_seconds, (int, float)):
+                input_seconds: Final = usage.get("input_seconds") if isinstance(usage, dict) else None
                 if not self._should_store_message(event_obj):
                     self.messages.append(
                         OpenAIRealtimeTranslationClosedEvent(
                             type="session.closed",
                             usage=OpenAIRealtimeTranslationDurationUsage(
-                                type="duration", output_seconds=output_seconds
+                                type="duration",
+                                output_seconds=output_seconds,
+                                **({"input_seconds": input_seconds} if isinstance(input_seconds, (int, float)) else {}),
                             ),
                         )
                     )

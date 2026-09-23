@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final, Protocol, cast
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.types.realtime import RealtimeQueryParams
@@ -39,16 +40,30 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
         pass
 
 
+def azure_realtime_requires_ga(model: str) -> bool:
+    try:
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure")
+    except Exception:  # noqa: BLE001  # unmapped deployments can select a protocol explicitly
+        return False
+    return (model_info.get("provider_specific_entry") or {}).get("realtime_ga_only") == 1
+
+
 def azure_realtime_protocol_for_client(
     configured_protocol: object,
     *,
+    model: str,
+    realtime_mode: str,
     query_params: RealtimeQueryParams | None,
     websocket: ScopedWebSocket,
 ) -> str:
+    if azure_realtime_requires_ga(model):
+        if isinstance(configured_protocol, str) and configured_protocol.upper() not in ("GA", "V1"):
+            raise ValueError(f"{model} requires the Azure OpenAI v1 Realtime API")
+        return "GA"
+    if realtime_mode == "translation" or (query_params or {}).get("intent") == "transcription":
+        return "GA"
     if isinstance(configured_protocol, str) and configured_protocol:
         return configured_protocol
-    if (query_params or {}).get("intent") == "transcription":
-        return "GA"
     return "beta" if client_sent_openai_beta_realtime_header(websocket) else "GA"
 
 

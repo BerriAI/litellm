@@ -10,7 +10,6 @@ import httpx
 
 import litellm
 from litellm.constants import (
-    AZURE_GA_REALTIME_MODELS,
     AZURE_OPENAI_AUDIO_PROVIDERS,
     REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
     REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
@@ -50,8 +49,6 @@ from ..utils import client as wrapper_client
 
 if TYPE_CHECKING:
     from fastapi import WebSocket
-
-    from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 
 azure_realtime: Final = AzureOpenAIRealtime()
 openai_realtime: Final = OpenAIRealtime()
@@ -112,21 +109,6 @@ def _build_litellm_metadata(kwargs: dict) -> dict:
     return metadata
 
 
-def _resolve_azure_realtime_protocol(
-    model: str,
-    realtime_protocol: str | None,
-    query_params: RealtimeQueryParams | None,
-    realtime_mode: str,
-) -> str:
-    if model in AZURE_GA_REALTIME_MODELS:
-        if realtime_protocol is not None and realtime_protocol.upper() not in ("GA", "V1"):
-            raise ValueError(f"{model} requires the Azure OpenAI v1 Realtime API")
-        return "GA"
-    if realtime_mode == "translation" or (query_params or {}).get("intent") == "transcription":
-        return "GA"
-    return realtime_protocol or "beta"
-
-
 def _get_realtime_http_provider_config(
     custom_llm_provider: str,
     dynamic_api_base: str | None,
@@ -164,19 +146,18 @@ def _get_realtime_http_provider_config(
 
 
 def _get_realtime_http_extra_headers(
-    custom_llm_provider: str,
+    provider_config: BaseRealtimeHTTPConfig | None,
     litellm_params: GenericLiteLLMParams,
     resolved_api_key: str,
     extra_headers: Mapping[str, object] | None,
 ) -> Mapping[str, object] | None:
-    resolved_headers: Final = {  # mutable-ok: Azure authentication may extend caller-supplied headers
-        **(extra_headers or {})
-    }
-    if custom_llm_provider == "azure" and not resolved_api_key:
-        azure_ad_token: Final = get_azure_ad_token(litellm_params)
-        if azure_ad_token:
-            resolved_headers["Authorization"] = f"Bearer {azure_ad_token}"
-    return resolved_headers or None
+    if provider_config is None:
+        return extra_headers
+    return provider_config.get_extra_headers(
+        litellm_params=litellm_params,
+        api_key=resolved_api_key,
+        extra_headers=extra_headers,
+    )
 
 
 @wrapper_client
@@ -229,7 +210,7 @@ async def acreate_realtime_client_secret(
         litellm_params=litellm_params,
     )
     resolved_extra_headers: Final = _get_realtime_http_extra_headers(
-        custom_llm_provider=custom_llm_provider,
+        provider_config=provider_config,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
         extra_headers=kwargs.get("extra_headers"),
@@ -302,7 +283,7 @@ async def acreate_realtime_translation_client_secret(
         litellm_params=litellm_params,
     )
     resolved_extra_headers: Final = _get_realtime_http_extra_headers(
-        custom_llm_provider=custom_llm_provider,
+        provider_config=provider_config,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
         extra_headers=kwargs.get("extra_headers"),
@@ -385,7 +366,7 @@ async def acreate_realtime_transcription_session(
         litellm_params=litellm_params,
     )
     resolved_extra_headers: Final = _get_realtime_http_extra_headers(
-        custom_llm_provider=custom_llm_provider,
+        provider_config=provider_config,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
         extra_headers=kwargs.get("extra_headers"),
@@ -660,17 +641,12 @@ async def _arealtime(
             or litellm_params.get("realtime_protocol")
             or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
         )
-        realtime_protocol: Final = _resolve_azure_realtime_protocol(
+        realtime_protocol: Final = azure_realtime_protocol_for_client(
+            configured_realtime_protocol,
             model=model,
-            realtime_protocol=(
-                configured_realtime_protocol
-                if model in AZURE_GA_REALTIME_MODELS or realtime_mode == "translation"
-                else azure_realtime_protocol_for_client(
-                    configured_realtime_protocol, query_params=query_params, websocket=websocket
-                )
-            ),
             query_params=query_params,
             realtime_mode=realtime_mode,
+            websocket=websocket,
         )
         await azure_realtime.async_realtime(
             model=model,

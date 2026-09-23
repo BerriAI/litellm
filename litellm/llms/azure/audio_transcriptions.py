@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
+from litellm.llms.base_llm.audio_transcription.transformation import sdk_compatible_transcription_request_data
 from litellm.types.utils import FileTypes
 from litellm.utils import (
     TranscriptionResponse,
@@ -40,11 +41,12 @@ class AzureAudioTranscription(AzureChatCompletion):
         custom_llm_provider: str = "azure",
     ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
+        sdk_data: Final = sdk_compatible_transcription_request_data(data)
 
         if atranscription is True:
             return self.async_audio_transcriptions(
                 audio_file=audio_file,
-                data=data,
+                data=sdk_data,
                 model_response=model_response,
                 timeout=timeout,
                 api_key=api_key,
@@ -86,7 +88,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         )
 
         response: Final = azure_client.audio.transcriptions.create(
-            **data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
+            **sdk_data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
             timeout=timeout,
         )
 

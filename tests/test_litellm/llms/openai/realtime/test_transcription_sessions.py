@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+import litellm
 
 from litellm.llms.azure.realtime.http_transformation import AzureRealtimeHTTPConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -46,15 +47,18 @@ def test_azure_transcription_session_url_uses_deployment_and_api_version():
 
 
 @pytest.mark.parametrize("api_version", [None, "v1", "latest", "preview"])
-def test_azure_ga_realtime_http_urls(api_version):
+def test_azure_ga_realtime_http_urls(api_version, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
     cfg = AzureRealtimeHTTPConfig()
     base = "https://my.openai.azure.com"
 
-    assert cfg.get_complete_url(base, "gpt-realtime-2", api_version) == (f"{base}/openai/v1/realtime/client_secrets")
-    assert cfg.get_realtime_calls_url(base, "gpt-realtime-2", api_version) == (f"{base}/openai/v1/realtime/calls")
+    assert cfg.get_complete_url(base, "gpt-realtime-2.1", api_version) == (f"{base}/openai/v1/realtime/client_secrets")
+    assert cfg.get_realtime_calls_url(base, "gpt-realtime-2.1", api_version) == (f"{base}/openai/v1/realtime/calls")
     assert cfg.get_transcription_session_url(base, "gpt-live-transcribe", api_version) == (
         f"{base}/openai/v1/realtime/transcription_sessions"
     )
+    litellm.get_model_info.cache_clear()
 
 
 def test_request_resolves_model_returns_none_when_both_absent():

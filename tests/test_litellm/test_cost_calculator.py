@@ -4685,3 +4685,23 @@ def test_realtime_translation_duration_cost(_local_model_cost_map):
     )
 
     assert actual == pytest.approx(2 * litellm.model_cost[model]["output_cost_per_second"])
+
+
+def test_realtime_translation_duration_cost_includes_provider_input_usage(_local_model_cost_map):
+    from litellm.cost_calculator import handle_realtime_translation_cost_calculation
+
+    model: Final = "gpt-realtime-translate"
+    events: Final[OpenAIRealtimeStreamList] = [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 3.0, "output_seconds": 2.0}}
+    ]
+    actual: Final = handle_realtime_translation_cost_calculation(
+        results=events,
+        custom_llm_provider="openai",
+        litellm_model_name=model,
+    )
+
+    expected: Final = (
+        3 * litellm.model_cost[model]["input_cost_per_second"]
+        + 2 * litellm.model_cost[model]["output_cost_per_second"]
+    )
+    assert actual == pytest.approx(expected)

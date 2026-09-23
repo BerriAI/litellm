@@ -72,7 +72,6 @@ from litellm.constants import (
     OPENAI_CHAT_COMPLETION_PARAMS as _openai_completion_params,  # backwards compatibility
     OPENAI_FINISH_REASONS,
     OPENAI_FINISH_REASONS as _openai_finish_reasons,  # backwards compatibility
-    OPENAI_REALTIME_AND_TRANSCRIPTION_MODELS,
     openai_compatible_endpoints,
     openai_compatible_providers,
     openai_text_completion_compatible_providers,
@@ -1008,7 +1007,6 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
 
 
 _populate_provider_model_sets(model_cost)
-open_ai_chat_completion_models.update(OPENAI_REALTIME_AND_TRANSCRIPTION_MODELS)
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 
 # this is maintained for Exception Mapping

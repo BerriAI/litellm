@@ -7879,8 +7879,14 @@ def _validate_gpt_transcription_request(
     response_format: str | None,
     api_version: str | None,
 ) -> str | None:
-    model_info: Final = get_model_info(model=model) if model in litellm.model_cost else {}
+    model_cost_key: Final = f"{custom_llm_provider}/{model}" if custom_llm_provider == "azure" else model
+    model_info: Final = (
+        get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        if model_cost_key in litellm.model_cost
+        else {}
+    )
     supported_endpoints: Final = model_info.get("supported_endpoints")
+    provider_specific_entry: Final = model_info.get("provider_specific_entry") or {}
     if language is not None and languages is not None:
         raise litellm.UnsupportedParamsError(
             message="language and languages cannot be used together",
@@ -7893,14 +7899,14 @@ def _validate_gpt_transcription_request(
             model=model,
             llm_provider=custom_llm_provider,
         )
-    if model == "gpt-transcribe" and response_format not in (None, "json"):
+    if provider_specific_entry.get("transcription_json_only") == 1 and response_format not in (None, "json"):
         raise litellm.UnsupportedParamsError(
-            message="gpt-transcribe only supports response_format='json'",
+            message=f"{model} only supports response_format='json'",
             model=model,
             llm_provider=custom_llm_provider,
         )
-    if custom_llm_provider == "azure" and model == "gpt-transcribe":
-        if api_version in (None, "v1", "latest", "preview"):
+    if provider_specific_entry.get("transcription_deployment_api") == 1:
+        if api_version in ("v1", "latest", "preview"):
             return litellm.AZURE_DEFAULT_API_VERSION
         return api_version
     return api_version
