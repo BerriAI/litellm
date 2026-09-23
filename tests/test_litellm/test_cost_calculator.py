@@ -348,7 +348,7 @@ def test_realtime_transcription_honors_deployment_pricing_override(monkeypatch):
         },
     ]
 
-    public_rate_cost = 120.0 * (0.017 / 60)
+    public_rate_cost = 120.0 * litellm.model_cost["gpt-realtime-whisper"]["input_cost_per_second"]
     assert public_rate_cost > 0, "the public ASR rate must be non-zero for this test to mean anything"
 
     without_override = handle_realtime_stream_cost_calculation(
@@ -413,7 +413,8 @@ def test_realtime_transcription_partial_override_keeps_unset_rates(monkeypatch):
         custom_pricing_model=deployment_id,
     )
 
-    expected = 120.0 * (0.017 / 60)
+    expected = 120.0 * litellm.model_cost["gpt-realtime-whisper"]["input_cost_per_second"]
+    assert expected > 0, "the public ASR per-second rate must be non-zero for this test to mean anything"
     assert cost == pytest.approx(expected, rel=1e-9), (
         "duration must keep the ASR per-second rate the override left unset"
     )
