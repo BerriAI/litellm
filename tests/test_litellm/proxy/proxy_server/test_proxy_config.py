@@ -4829,11 +4829,38 @@ async def test_ProxyConfig__update_general_settings_ignores_keys_no_write_api_ca
     await pc._update_general_settings(
         {
             "max_parallel_requests": 7,
+            "allowed_ips": ["10.0.0.1"],
             "role_permissions": [{"role": "proxy_admin", "models": ["x"]}],
         }
     )
     from litellm.proxy import proxy_server as ps
 
     assert ps.general_settings["max_parallel_requests"] == 7
+    assert ps.general_settings["allowed_ips"] == ["10.0.0.1"]
     assert ps.general_settings.get("role_permissions") is None
     assert "role_permissions" not in ps.general_settings
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_logs_ignored_keys_once(monkeypatch):
+    from litellm.proxy.proxy_server import _log_ignored_general_settings_keys
+
+    warnings: Final = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.verbose_proxy_logger.warning",
+        lambda *args, **kwargs: warnings.append(args[0] % args[1:]),
+    )
+    _log_ignored_general_settings_keys.cache_clear()
+    pc = ProxyConfig()
+    row: Final = {"role_permissions": [{"role": "proxy_admin", "models": ["x"]}]}
+    await pc._update_general_settings(row)
+    await pc._update_general_settings(row)
+    assert warnings == [
+        "Ignoring general_settings keys from the DB that no supported write path produces: role_permissions"
+    ]
+
+    await pc._update_general_settings({"max_parallel_requests": 8})
+    assert warnings == [
+        "Ignoring general_settings keys from the DB that no supported write path produces: role_permissions"
+    ]
