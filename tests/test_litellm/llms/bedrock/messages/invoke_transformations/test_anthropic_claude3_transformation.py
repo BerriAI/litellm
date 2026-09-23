@@ -7,7 +7,7 @@ import struct
 import zlib
 from datetime import datetime
 from types import SimpleNamespace
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import Mock
 
@@ -3427,7 +3427,7 @@ def _bedrock_event_frame(payload: Mapping[str, object]) -> bytes:
 
 
 class _GatedAsyncByteStream(httpx.AsyncByteStream):
-    def __init__(self, chunks: list[bytes], gate: asyncio.Event) -> None:
+    def __init__(self, chunks: Sequence[bytes], gate: asyncio.Event) -> None:
         self._chunks = chunks
         self._gate = gate
 
@@ -3447,7 +3447,7 @@ async def test_get_async_streaming_response_iterator_yields_small_frame_before_u
     response: Final = httpx.Response(
         200,
         stream=_GatedAsyncByteStream(
-            chunks=[
+            chunks=(
                 _bedrock_event_frame(
                     {
                         "type": "message_start",
@@ -3467,7 +3467,7 @@ async def test_get_async_streaming_response_iterator_yields_small_frame_before_u
                         "usage": {"input_tokens": 3, "output_tokens": 9},
                     }
                 ),
-            ],
+            ),
             gate=gate,
         ),
     )
