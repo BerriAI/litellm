@@ -1852,6 +1852,9 @@
     "tests/integration/spend/test_disconnected_bedrock_messages_stream_billing.py::test_client_disconnect_mid_bedrock_messages_stream_still_bills_terminal_usage": [
       "spend.anthropic_messages_stream.client_disconnect_bills_terminal_bedrock_usage"
     ],
+    "tests/integration/spend/test_messages_stream_usage_cost.py::test_bedrock_messages_stream_usage_cost_matches_recorded_spend_with_custom_cache_rates": [
+      "spend.anthropic_messages_stream.streamed_usage_cost_equals_recorded_spend"
+    ],
     "tests/integration/spend/test_failed_dispatch_tokens.py::test_provider_500_after_dispatch_records_estimated_prompt_tokens_on_failure_row": [
       "spend.failed_dispatch.failure_row_records_estimated_input_tokens"
     ],
