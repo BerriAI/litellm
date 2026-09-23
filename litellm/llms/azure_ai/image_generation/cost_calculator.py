@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Any, Final, cast
+from typing import Any, Final
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
@@ -10,21 +10,21 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.types.utils import ImageResponse, ModelInfo
 
 
-def _input_cost_per_pixel(resolved: ModelInfo) -> float:
-    deployment_price: Final = _get_cost_per_unit(resolved, "input_cost_per_pixel", default_value=None)
+def _pixel_rate(resolved: ModelInfo, cost_key: str) -> float:
+    deployment_price: Final = _get_cost_per_unit(resolved, cost_key, default_value=None)
     if deployment_price is not None:
         return deployment_price
     model_cost_key: Final = resolved.get("key")
     shared_entry: Final = litellm.model_cost.get(model_cost_key) if model_cost_key is not None else None
     if shared_entry is None:
         return 0.0
-    return shared_entry.get("input_cost_per_pixel") or 0.0
+    return shared_entry.get(cost_key) or 0.0
 
 
-def _reference_cost(model_cost: Mapping[str, object], image_response: ImageResponse) -> float:
+def _reference_cost(resolved: ModelInfo, image_response: ImageResponse) -> float:
     pixels: Final = image_response._hidden_params.get("reference_pixels")
-    rate: Final = model_cost.get("input_cost_per_reference_pixel") or 0.0
-    return float(rate) * pixels if isinstance(pixels, int) and isinstance(rate, (int, float)) else 0.0
+    rate: Final = _pixel_rate(resolved, "input_cost_per_reference_pixel")
+    return rate * pixels if isinstance(pixels, int) else 0.0
 
 
 def cost_calculator(
@@ -57,11 +57,8 @@ def cost_calculator(
         from litellm.cost_calculator import default_image_cost_calculator
 
         num_images: Final = n if n is not None else len(image_response.data or ())
-        model_cost: Final = cast(  # cast-ok: litellm.model_cost is an untyped shared dict
-            Mapping[str, object], litellm.model_cost.get(_model_info.get("key") or model) or {}
-        )
         output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
-        input_cost_per_pixel: Final[float] = _input_cost_per_pixel(_model_info)
+        input_cost_per_pixel: Final[float] = _pixel_rate(_model_info, "input_cost_per_pixel")
         width: Final = optional_params.get("width") if optional_params else None
         height: Final = optional_params.get("height") if optional_params else None
         pixel_size: Final = (
@@ -82,6 +79,6 @@ def cost_calculator(
             if input_cost_per_pixel
             else 0.0
         )
-        return generated_cost + _reference_cost(model_cost, image_response)
+        return generated_cost + _reference_cost(_model_info, image_response)
 
     raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")

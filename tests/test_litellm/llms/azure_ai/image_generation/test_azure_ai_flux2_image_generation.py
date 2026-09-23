@@ -302,6 +302,40 @@ def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel() -> None:
     assert cost == pytest.approx(2e-07 * 2048 * 1024 * 2)
 
 
+def test_flux2_flex_reference_cost_prefers_deployment_rate() -> None:
+    response: Final = ImageResponse(
+        data=[ImageObject(b64_json="aW1n")], hidden_params={"reference_pixels": 1048576}, size="1024x1024"
+    )
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="FLUX.2-flex",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size="1024x1024",
+        call_type="image_edit",
+        model_info={"input_cost_per_pixel": 2e-07, "input_cost_per_reference_pixel": 3e-07},
+    )
+
+    assert cost == pytest.approx(2e-07 * 1048576 + 3e-07 * 1048576)
+
+
+def test_unlisted_azure_ai_model_bills_deployment_reference_rate() -> None:
+    response: Final = ImageResponse(
+        data=[ImageObject(b64_json="aW1n")], hidden_params={"reference_pixels": 1048576}, size="1024x1024"
+    )
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="unlisted-flux-deployment",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size="1024x1024",
+        call_type="image_edit",
+        model_info={"input_cost_per_pixel": 1e-07, "input_cost_per_reference_pixel": 1e-07},
+    )
+
+    assert cost == pytest.approx(1e-07 * 1048576 * 2)
+
+
 def test_unlisted_azure_ai_model_bills_deployment_input_cost_per_pixel() -> None:
     response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
 
