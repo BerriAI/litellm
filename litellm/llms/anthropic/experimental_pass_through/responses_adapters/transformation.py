@@ -152,9 +152,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if not isinstance(content, list):
             return []  # mutable-ok: API message payload
         return [  # mutable-ok: API message payload
-            with_prompt_cache_breakpoint(
-                {"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint")
-            )
+            with_prompt_cache_breakpoint({"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint"))
             for block in content
             if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
         ]

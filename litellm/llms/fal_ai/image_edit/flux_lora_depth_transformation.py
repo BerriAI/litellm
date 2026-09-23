@@ -63,9 +63,7 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         if len(images) > 1:
             raise ValueError(f"{FLUX_LORA_DEPTH_ENDPOINT} accepts exactly one control image")
         provider_params: Final[Mapping[str, object]] = MappingProxyType(
-            {
-                key: value for key, value in image_edit_optional_request_params.items() if key != "mask"
-            }
+            {key: value for key, value in image_edit_optional_request_params.items() if key != "mask"}
         )
         request_body: Final[dict[str, object]] = {  # mutable-ok: base class contract returns a dict
             "prompt": prompt,

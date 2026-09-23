@@ -95,9 +95,7 @@ def logged_relay_shape(
         parsed: Final = shape.parse(body)
     except ValidationError:
         return None
-    logging_obj.call_type = (
-        shape.call_type.value
-    )
+    logging_obj.call_type = shape.call_type.value
     return parsed
 
 

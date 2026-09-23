@@ -278,9 +278,7 @@ def _prepare_hook_input(
     guardrail loops do this."""
     if "metadata" not in data:
         data["metadata"] = {}  # mutable-ok: request metadata bucket, hooks mutate it
-    data["metadata"]["guardrails"] = [
-        step.guardrail
-    ]
+    data["metadata"]["guardrails"] = [step.guardrail]
 
     scans_raw_request: Final = callback.scan_raw_request
     hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data

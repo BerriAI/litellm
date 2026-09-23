@@ -2956,8 +2956,8 @@ class Router:
                             if not fallback_headers_are_settled:
                                 fallback_headers_are_settled = True
                                 # a fallback that failed over again only repoints itself once it yields
-                                prepared_fallback_hidden_params = (
-                                    Router._adopt_fallback_response_headers(wrapper_ref, fallback_response)
+                                prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                                    wrapper_ref, fallback_response
                                 )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
@@ -3515,8 +3515,8 @@ class Router:
                             if not fallback_headers_are_settled:
                                 fallback_headers_are_settled = True
                                 # a fallback that failed over again only repoints itself once it yields
-                                prepared_fallback_hidden_params = (
-                                    Router._adopt_fallback_response_headers(wrapper_ref, fallback_response)
+                                prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                                    wrapper_ref, fallback_response
                                 )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
@@ -10951,10 +10951,8 @@ class Router:
             model_group_info.supports_fast_mode = model_group_info.supports_fast_mode and (
                 AnthropicModelInfo.supports_fast_mode(litellm_model, llm_provider)
             )
-            deployment_reasoning_efforts = (
-                resolve_supported_reasoning_efforts(
-                    model_info, deployment_is_mapped=deployment_is_mapped
-                )
+            deployment_reasoning_efforts = resolve_supported_reasoning_efforts(
+                model_info, deployment_is_mapped=deployment_is_mapped
             )
             if deployment_reasoning_efforts is None:
                 reasoning_efforts_unknown = True

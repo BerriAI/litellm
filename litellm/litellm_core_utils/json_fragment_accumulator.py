@@ -21,9 +21,7 @@ class JSONFragmentAccumulator:
 
     def __init__(self) -> None:
         self._chunks: list[str] = []  # mutable-ok: O(1) append; string concat would copy the buffer each time
-        self._buffer: str = (
-            ""
-        )
+        self._buffer: str = ""
         self._offset: int = 0
         self._could_close: bool = False
 

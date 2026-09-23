@@ -1266,9 +1266,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
             response_usage: Final = bedrock_guardrail_response.get("usage")
             if isinstance(response_usage, dict):
-                completed_chunk_usages.append(
-                    response_usage
-                )
+                completed_chunk_usages.append(response_usage)
             return bedrock_guardrail_response
 
         status_code, detail_message = self._parse_bedrock_guardrail_error_response(httpx_response)

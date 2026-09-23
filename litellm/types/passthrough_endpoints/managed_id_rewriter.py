@@ -55,9 +55,7 @@ class ManagedObjectRow(ManagedResourceRow, Protocol):
     unified_object_id: str
 
 
-RowT = TypeVar(
-    "RowT", bound=ManagedResourceRow
-)
+RowT = TypeVar("RowT", bound=ManagedResourceRow)
 
 
 class ManagedTable(Protocol[RowT]):

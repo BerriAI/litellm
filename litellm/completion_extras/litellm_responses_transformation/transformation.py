@@ -191,7 +191,6 @@ def _as_chat_reasoning_items(
 ) -> list[ChatCompletionReasoningItem] | None:
     if not reasoning_items:
         return None
-    # describes, and TypedDict invariance is what stops the two from unifying here.
     return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
 
 

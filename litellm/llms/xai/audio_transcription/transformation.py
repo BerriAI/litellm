@@ -168,9 +168,7 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 for word in payload.words
             ]
 
-        hidden_params: Final[dict[str, object]] = dict(
-            payload.model_dump(mode="json")
-        )
+        hidden_params: Final[dict[str, object]] = dict(payload.model_dump(mode="json"))
         if payload.duration is not None:
             hidden_params["audio_transcription_duration"] = payload.duration
         response._hidden_params = hidden_params  # pyright: ignore[reportPrivateUsage]  # TranscriptionResponse exposes no public hidden-params setter

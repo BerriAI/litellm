@@ -135,9 +135,7 @@ def _dump_agent_params(raw: Mapping[str, object]) -> dict[str, object]:
 
 _AGENT_PARAMS_MASKER: Final = SensitiveDataMasker()
 _REDACT_AGENT_PARAMS_MAX_DEPTH: Final = 10
-_AGENT_PARAMS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(
-    dict[str, object]
-)
+_AGENT_PARAMS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _AGENT_PARAMS_SEQUENCE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _EMPTY_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 

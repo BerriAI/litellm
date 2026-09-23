@@ -623,9 +623,7 @@ async def flush_baseline_accounting(client: PrismaClient) -> None:
     store: Final = BaselineAccountingStore.for_client(client)
     async with client.baseline_accounting_lock:
         batch: Final = tuple(client.baseline_accounting_transactions[:32])
-        client.baseline_accounting_transactions = client.baseline_accounting_transactions[
-            32:
-        ]
+        client.baseline_accounting_transactions = client.baseline_accounting_transactions[32:]
         more_queued: Final = bool(client.baseline_accounting_transactions)
     try:
         remaining: Final = await asyncio.wait_for(_flush_records(store, batch), timeout=5)

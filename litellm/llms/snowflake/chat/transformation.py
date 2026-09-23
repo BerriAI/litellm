@@ -192,11 +192,7 @@ def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-
 
 
 def _clean_input_schema(schema: object) -> object:
-    return (
-        {key: value for key, value in schema.items() if key != "$schema"}
-        if isinstance(schema, Mapping)
-        else schema
-    )
+    return {key: value for key, value in schema.items() if key != "$schema"} if isinstance(schema, Mapping) else schema
 
 
 class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
@@ -299,9 +295,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 )
         return anthropic_tools
 
-    def _extract_system_and_messages(
-        self, messages: list[AllMessageValues]
-    ) -> tuple[list[dict] | None, list[dict]]:
+    def _extract_system_and_messages(self, messages: list[AllMessageValues]) -> tuple[list[dict] | None, list[dict]]:
         """
         Split messages into system prompt and conversation turns for Anthropic format.
 
@@ -330,9 +324,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                         {  # mutable-ok: JSON wire system block
                             "type": "text",
                             "text": block.get("text", ""),
-                            **(
-                                {"cache_control": block["cache_control"]} if "cache_control" in block else {}
-                            ),
+                            **({"cache_control": block["cache_control"]} if "cache_control" in block else {}),
                         }
                         for block in content
                         if isinstance(block, Mapping) and block.get("type") == "text"
@@ -380,9 +372,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 tool_call_id_value = (
                     msg.get("tool_call_id", "") if isinstance(msg, dict) else getattr(msg, "tool_call_id", "")
                 )
-                tool_call_id = (
-                    tool_call_id_value if isinstance(tool_call_id_value, str) else ""
-                )
+                tool_call_id = tool_call_id_value if isinstance(tool_call_id_value, str) else ""
                 tool_result_block = _convert_tool_result_to_anthropic(content, tool_call_id, msg_cache_control)
                 if (
                     conversation

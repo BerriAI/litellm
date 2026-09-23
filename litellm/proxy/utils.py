@@ -602,15 +602,11 @@ def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple
     return (guardrails, others)
 
 
-def _merge_pipeline_metadata_bucket(
-    data: dict, bucket_key: str, modified_bucket_value: object
-) -> None:
+def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket_value: object) -> None:
     if not isinstance(modified_bucket_value, dict):
         return
     modified_bucket: Final = cast("dict[str, object]", modified_bucket_value)  # cast-ok: metadata buckets are str-keyed
-    surviving_writes: Final = {
-        key: value for key, value in modified_bucket.items() if key != "guardrails"
-    }
+    surviving_writes: Final = {key: value for key, value in modified_bucket.items() if key != "guardrails"}
     existing_bucket: Final = data.get(bucket_key)
     if isinstance(existing_bucket, dict):
         cast("dict[str, object]", existing_bucket).update(surviving_writes)  # cast-ok: metadata buckets are str-keyed
@@ -618,9 +614,7 @@ def _merge_pipeline_metadata_bucket(
         data[bucket_key] = surviving_writes
 
 
-def _merge_pipeline_metadata_writes(
-    data: dict, modified_data: Mapping[str, object]
-) -> None:
+def _merge_pipeline_metadata_writes(data: dict, modified_data: Mapping[str, object]) -> None:
     """
     Copy metadata-bucket writes from a pipeline's working copy back onto the request.
 
@@ -1975,9 +1969,7 @@ class ProxyLogging:
         """
         scans_raw_request: Final = callback.scan_raw_request
         should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
-        input_data: Final = (
-            independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
-        )
+        input_data: Final = independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
         # _process_guardrail_callback always calls mark_pre_call_hook_ran on a
         # successful run, which unconditionally stamps bookkeeping metadata onto
         # the dict regardless of whether the guardrail's own hook mutated
@@ -2168,9 +2160,7 @@ class ProxyLogging:
             if pipeline.mode != event_hook:
                 continue
 
-            step_input: dict = (
-                {**data, "response": current_response} if current_response is not None else data
-            )
+            step_input: dict = {**data, "response": current_response} if current_response is not None else data
 
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,

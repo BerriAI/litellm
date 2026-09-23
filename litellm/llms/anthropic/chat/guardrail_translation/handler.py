@@ -199,9 +199,7 @@ def _write_back_system_block(system: object, block_idx: int, response: str) -> N
         return
     text_blocks: Final = tuple(block for block in system if isinstance(block, dict) and block.get("type") == "text")
     if block_idx < len(text_blocks):
-        text_blocks[block_idx]["text"] = (
-            response
-        )
+        text_blocks[block_idx]["text"] = response
 
 
 def _write_back_message_text(message: _WritableMessage, target: MessageTextTarget, response: str) -> None:
@@ -214,19 +212,13 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
                 message["content"] = response
         case ContentBlockTextTarget(content_idx=content_idx):
             if isinstance(content, list):
-                content[content_idx]["text"] = (
-                    response
-                )
+                content[content_idx]["text"] = response
         case ToolResultStringTarget(content_idx=content_idx):
             if isinstance(content, list):
-                content[content_idx]["content"] = (
-                    response
-                )
+                content[content_idx]["content"] = response
         case ToolResultBlockTextTarget(content_idx=content_idx, block_idx=block_idx):
             if isinstance(content, list):
-                content[content_idx]["content"][block_idx]["text"] = (
-                    response
-                )
+                content[content_idx]["content"][block_idx]["text"] = response
         case _:
             assert_never(target)
 
@@ -603,13 +595,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             *(item for one_message in extracted for item in one_message.scanned),
         )
         texts_to_check: Final = [item.text for item in scanned]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
-        images_to_check: Final = [
-            image for one_message in extracted for image in one_message.images
-        ]
+        images_to_check: Final = [image for one_message in extracted for image in one_message.images]
         scanned_tool_calls: Final = tuple(item for one_message in extracted for item in one_message.tool_calls)
-        tool_calls_to_check: Final = [
-            item.tool_call for item in scanned_tool_calls
-        ]
+        tool_calls_to_check: Final = [item.tool_call for item in scanned_tool_calls]
         pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -697,9 +685,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(
-        self, data: dict
-    ) -> AllMessageValues | None:
+    def _hoisted_top_level_system_message(self, data: dict) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:
@@ -1098,9 +1084,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             match item.target:
                 case SystemStringTarget():
                     if isinstance(data.get("system"), str):
-                        data["system"] = (
-                            guardrail_response
-                        )
+                        data["system"] = guardrail_response
                 case SystemBlockTextTarget(block_idx=block_idx):
                     _write_back_system_block(data.get("system"), block_idx, guardrail_response)
                 case (

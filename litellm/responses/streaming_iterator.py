@@ -1633,9 +1633,7 @@ def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple
     params: Final[Mapping[str, object]] = (
         nested
         if _is_json_object(nested) and nested
-        else MappingProxyType(
-            {k: v for k, v in msg_obj.items() if k != "type"}
-        )
+        else MappingProxyType({k: v for k, v in msg_obj.items() if k != "type"})
     )
     text_parts: Final[list[str]] = []  # mutable-ok: local accumulator built in one pass, not shared
     pending: Final[list[object]] = [  # mutable-ok: explicit worklist avoids recursion
@@ -2743,9 +2741,7 @@ class ManagedResponsesWebSocketHandler:
         directly (before serialization) to avoid a redundant JSON round-trip on
         every chunk.  Returns the completed event dict, or ``None``.
         """
-        completed_event: _MutableJsonObject | None = (
-            None
-        )
+        completed_event: _MutableJsonObject | None = None
         stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
         async for chunk in stream_response:
             if chunk is None:

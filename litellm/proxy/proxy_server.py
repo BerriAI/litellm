@@ -5261,9 +5261,7 @@ class ProxyConfig:
             return
 
         with open(f"{user_config_file_path}", "w") as config_file:
-            yaml.dump(
-                dict(new_config), config_file, default_flow_style=False
-            )
+            yaml.dump(dict(new_config), config_file, default_flow_style=False)
 
     async def _save_changed_config_section(
         self,

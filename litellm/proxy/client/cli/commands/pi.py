@@ -208,9 +208,7 @@ def sync_models_json(
 ) -> PiSyncError | None:
     """Replace only the litellm provider entry, leaving the rest of the file intact."""
     try:
-        current: Final = (
-            _MODELS_FILE_ADAPTER.validate_json(path.read_text()) if path.exists() else {}
-        )
+        current: Final = _MODELS_FILE_ADAPTER.validate_json(path.read_text()) if path.exists() else {}
     except (OSError, ValidationError) as e:
         return PiSyncError(f"Could not read {path} as a JSON object: {e}. Fix or move the file, then retry.")
     existing_providers: Final = current.get("providers", {})  # mutable-ok: JSON object default

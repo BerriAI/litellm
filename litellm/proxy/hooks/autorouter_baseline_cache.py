@@ -230,9 +230,7 @@ class AutoRouterBaselineCache(CustomLogger):
 async def invalidate_baseline_cache(logging_obj: Logging, reason: str, *, completed: bool = False) -> None:
     context: Final = logging_obj.baseline_cache_context
     if context is not None:
-        logging_obj.baseline_cache_context = replace(
-            context, invalidated=reason
-        )
+        logging_obj.baseline_cache_context = replace(context, invalidated=reason)
         logging_obj.baseline_observation = context.capture.model_copy(
             update=MappingProxyType(
                 {

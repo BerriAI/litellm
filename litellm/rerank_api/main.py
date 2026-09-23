@@ -44,9 +44,7 @@ async def arerank(
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
-    _custom_llm_provider: str | None = (
-        None
-    )
+    _custom_llm_provider: str | None = None
     try:
         loop: Final = asyncio.get_event_loop()
         kwargs["arerank"] = True

@@ -4137,9 +4137,7 @@ async def reset_team_member_budget_fn(
 
     team_default_budget_id: Final = await _existing_team_default_budget_id(team_obj, prisma_client)
     budget_link: Final = (
-        {
-            "connect": {"budget_id": team_default_budget_id}
-        }
+        {"connect": {"budget_id": team_default_budget_id}}
         if team_default_budget_id is not None
         else {"disconnect": True}  # mutable-ok: same prisma data= argument
     )

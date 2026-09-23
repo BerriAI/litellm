@@ -114,9 +114,7 @@ class BatchFileUsage(BaseModel):
     # each target a different model, so the project's per-model ITPM/OTPM
     # quota for a row's actual model must be charged with that row's own
     # tokens -- see `_create_project_io_descriptors_for_models`.
-    per_model_usage: dict[str, dict[str, int]] = Field(
-        default_factory=dict
-    )
+    per_model_usage: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
 class _PROXY_BatchRateLimiter(CustomLogger):

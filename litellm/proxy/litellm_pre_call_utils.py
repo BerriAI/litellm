@@ -3126,11 +3126,7 @@ async def move_guardrails_to_metadata(
     - Moves include_guardrail_response into request metadata before provider dispatch
     """
     if "include_guardrail_response" in data:
-        data[_metadata_variable_name][
-            "include_guardrail_response"
-        ] = (
-            data.pop("include_guardrail_response") is True
-        )
+        data[_metadata_variable_name]["include_guardrail_response"] = data.pop("include_guardrail_response") is True
 
     # Early-out: skip all guardrails processing when nothing is configured
     key_metadata: Final = user_api_key_dict.metadata

@@ -130,7 +130,9 @@ def base_counts(ref: str) -> dict:
         # the body (or the `worktree add` itself) failed. rmtree is already best-effort.
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(worktree)],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
         )
         shutil.rmtree(parent, ignore_errors=True)
 
@@ -141,10 +143,7 @@ def over_ceiling(head: dict, budget: dict) -> frozenset:
     A rule can only breach when it is over its limit, so when none are the base
     comparison cannot change the verdict and the base worktree scan can be skipped.
     """
-    return frozenset(
-        rule for rule, spec in budget.items()
-        if head.get(rule, 0) > spec["limit"]
-    )
+    return frozenset(rule for rule, spec in budget.items() if head.get(rule, 0) > spec["limit"])
 
 
 def evaluate(head: dict, base: dict, budget: dict) -> list:
@@ -188,15 +187,11 @@ def cmd_check(base: str) -> None:
         return
     new = introduced(
         head,
-        parse_changed_lines(
-            _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
-        ),
+        parse_changed_lines(_run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])),
     )
     print(f"FAIL: LIT-rule totals exceed their limit (base {base}):")
     for breach in breaches:
-        print(
-            f"  {breach.rule}: total {breach.total} over limit {breach.cap} (this change added {breach.added})"
-        )
+        print(f"  {breach.rule}: total {breach.total} over limit {breach.cap} (this change added {breach.added})")
         for violation in sorted(v for v in new if v.code == breach.rule):
             print(f"    {violation.file}:{violation.line}")
     print(
@@ -222,7 +217,8 @@ def ratcheted_budget(budget: dict, current: dict, base: dict, seeded: frozenset 
     """
     return {
         rule: {
-            "limit": spec["limit"] if rule in seeded
+            "limit": spec["limit"]
+            if rule in seeded
             else max(0, spec["limit"] - max(0, base.get(rule, 0) - current.get(rule, 0)))
         }
         for rule, spec in sorted(budget.items())
@@ -232,7 +228,9 @@ def ratcheted_budget(budget: dict, current: dict, base: dict, seeded: frozenset 
 def _base_budget_rules(base_point: str) -> frozenset:
     proc = subprocess.run(
         ["git", "show", f"{base_point}:{BUDGET_PATH.name}"],
-        cwd=REPO_ROOT, capture_output=True, text=True,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
     )
     if proc.returncode != 0:
         return frozenset()
@@ -249,17 +247,12 @@ def cmd_update(base_ref: str) -> None:
     budget = json.loads(BUDGET_PATH.read_text())
     base_point = resolve_base_point(base_ref)
     seeded = frozenset(budget) - _base_budget_rules(base_point)
-    updated = ratcheted_budget(
-        budget, count_by_rule(head_violations()), base_counts(base_point), seeded
-    )
+    updated = ratcheted_budget(budget, count_by_rule(head_violations()), base_counts(base_point), seeded)
     BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
     cleared = sum(budget[rule]["limit"] - updated[rule]["limit"] for rule in updated)
     print(f"Ratcheted LIT-rule limits down by {cleared} violations this branch fixed")
     if seeded:
-        print(
-            "Left untouched (seeded on this branch, absent from the base budget): "
-            + ", ".join(sorted(seeded))
-        )
+        print("Left untouched (seeded on this branch, absent from the base budget): " + ", ".join(sorted(seeded)))
 
 
 def main() -> None:

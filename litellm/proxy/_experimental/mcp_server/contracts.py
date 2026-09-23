@@ -67,14 +67,10 @@ class OperationContext:
             self.user_api_key_auth,
             self.mcp_auth_header,
             list(self.mcp_servers) if self.mcp_servers is not None else None,  # mutable-ok: legacy policy list input
-            {
-                key: dict(value) for key, value in self.mcp_server_auth_headers.items()
-            }
+            {key: dict(value) for key, value in self.mcp_server_auth_headers.items()}
             if self.mcp_server_auth_headers is not None
             else None,
-            dict(self.oauth2_headers)
-            if self.oauth2_headers is not None
-            else None,
+            dict(self.oauth2_headers) if self.oauth2_headers is not None else None,
             dict(self.raw_headers) if self.raw_headers is not None else None,  # mutable-ok: legacy request header input
             self.client_ip,
         )

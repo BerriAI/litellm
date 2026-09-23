@@ -355,9 +355,7 @@ def build_scan_metadata(request_metadata: Mapping[str, object]) -> Mapping[str, 
     Passing the whole thing through would carry values that cannot be copied, such as the parent
     OTel span, and would hand every record proxy state it has no business seeing.
     """
-    return MappingProxyType(
-        {key: value for key, value in request_metadata.items() if key in _SCAN_METADATA_KEYS}
-    )
+    return MappingProxyType({key: value for key, value in request_metadata.items() if key in _SCAN_METADATA_KEYS})
 
 
 async def _scan_record(
