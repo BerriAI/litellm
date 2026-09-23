@@ -1376,6 +1376,7 @@ class KeyUpdateBody(BaseModel):
     max_budget: float | Cleared | None = None
     budget_duration: str | Cleared | None = None
     metadata: KeyMetadata | None = None
+    allowed_routes: list[str] | None = None
 
 
 class KeyBlockBody(BaseModel):

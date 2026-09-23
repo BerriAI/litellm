@@ -22,6 +22,7 @@ ALLOWED_RAW_CLIENT_FILES = {
     "conftest.py": ("requests",),
     "claude_code/pr_gate_version_resolver.py": ("urllib.request",),
     "mcp/oauth_chat_client.py": ("httpx",),
+    "management/management_mcp_client.py": ("httpx2",),
 }
 
 EXCEPTION_ONLY_NAMES = frozenset({"RequestException", "ConnectionError", "Timeout", "HTTPError"})

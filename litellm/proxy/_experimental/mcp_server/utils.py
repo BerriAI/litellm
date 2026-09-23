@@ -527,7 +527,7 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
         if server_name and MCP_TOOL_PREFIX_SEPARATOR in server_name
         else (
             f"Server name '{server_name}' is reserved for the built-in management MCP endpoint "
-            "(/{litellm-management}/mcp). Use a different name or alias."
+            "(/litellm-management/mcp). Use a different name or alias."
             if server_name and server_name.lower() == RESERVED_MANAGEMENT_MCP_SERVER_NAME
             else None
         )

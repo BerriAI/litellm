@@ -280,3 +280,19 @@ def test_backend_allowlist():
 
     assert "/litellm-management/mcp" in BACKEND_EXACT_PATHS
     assert "/litellm-management/mcp/" in BACKEND_EXACT_PATHS
+
+
+def test_disabled_flag_404_and_dynamic_alias_route_via_fastapi_app():
+    from fastapi.testclient import TestClient
+    from litellm.proxy.proxy_server import app
+
+    mgmt_server._active_server = None
+    client = TestClient(app, raise_server_exceptions=False)
+    try:
+        assert client.post("/litellm-management/mcp", content=b"{}").status_code == 404
+
+        mgmt_server._active_server = mgmt_server.ManagementMCPServer()
+        assert client.post("/litellm-management/mcp", content=b"{}").status_code == 403
+        assert client.post("/nonexistent-alias/mcp", content=b"{}").status_code == 404
+    finally:
+        mgmt_server._active_server = None

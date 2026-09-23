@@ -197,7 +197,7 @@ def _request_body(tool: ManagementTool, arguments: BaseModel) -> bytes:
         return b""
     if tool.name == "update_access_group":
         return _coerce(UpdateAccessGroupArguments, arguments).data.model_dump_json(exclude_unset=True).encode()
-    return json.dumps(_model_fields(arguments, drop_none=False)).encode()
+    return arguments.model_dump_json(exclude_unset=True).encode()
 
 
 def _substituted_path(tool: ManagementTool, arguments: BaseModel) -> str:
@@ -217,8 +217,9 @@ def _build_request(tool: ManagementTool, arguments: BaseModel, ctx: ManagementRe
         for name, value in ctx.raw_headers
         if name.decode("latin-1").lower() not in _STRIPPED_REQUEST_HEADERS
     ) + (((b"content-type", b"application/json"),) if body else ())
+    arg_fields: Final = _model_fields(arguments, drop_none=False)
     path_params: Final[dict[str, object]] = {  # mutable-ok: ASGI path_params must be a mutable dict
-        name: getattr(arguments, name) for name in path_param_names(tool) if getattr(arguments, name, None) is not None
+        name: arg_fields[name] for name in path_param_names(tool) if arg_fields.get(name) is not None
     }
     scope: Final[Scope] = {
         "type": "http",

@@ -559,7 +559,7 @@ class LiteLLMRoutes(enum.Enum):
     # allowed_routes=["mcp_routes"], which should cover both halves.
     mcp_routes = mcp_inference_routes + mcp_management_routes
 
-    # Built-in management MCP endpoint — control-plane only. Gated by
+    # Built-in management MCP endpoint, control-plane only. Gated by
     # DISABLE_ADMIN_ENDPOINTS through management_routes; deliberately not part
     # of mcp_routes so keys allowed for MCP tool calls cannot manage keys.
     management_mcp_routes = [  # mutable-ok: sibling route-group lists are plain lists consumed by RouteChecks
