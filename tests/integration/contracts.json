@@ -2019,6 +2019,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/providers/test_bedrock_mantle_wire.py::test_bedrock_mantle_messages_stream_relays_anthropic_sse_instead_of_failing_on_event_stream_decode": [
+      "providers.bedrock_mantle.messages_stream_sends_stream_true_and_relays_sse_events"
     ]
   },
   "browser": {
