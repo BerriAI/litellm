@@ -970,7 +970,16 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
             )
             assert len(children) >= 2, children
             os.kill(children[0], signal.SIGKILL)
-            eventually(lambda: group_members(owned.process.pid), lambda members: all(m.is_running() for m in members))
+            expected: Final = len(children)
+            eventually(
+                lambda: tuple(
+                    member.pid
+                    for member in group_members(owned.process.pid)
+                    if member.pid != owned.process.pid and member.is_running()
+                ),
+                lambda pids: len(pids) >= expected,
+                seconds=30,
+            )
 
             def burst(index: int) -> httpx.Response:
                 return candidate.request(
