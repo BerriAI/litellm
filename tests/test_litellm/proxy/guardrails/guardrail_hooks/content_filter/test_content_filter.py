@@ -2462,6 +2462,75 @@ class TestContentFilterGuardrail:
         assert len(result["texts"]) == 1
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Do we have an alternative option if there are 11 people or 12?",
+            "Can the executive review this for 10 or 15 minutes?",
+            "Please update the doc, or 12 of us will be confused.",
+        ],
+    )
+    async def test_conditional_sql_injection_ignores_words_inside_other_words(self, text):
+        """
+        Identifier and block words should only match whole words. "alter" in
+        "alternative" and "or 1" in "or 15" are not SQL.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-sql-word-boundaries",
+            categories=[
+                {
+                    "category": "prompt_injection_sql",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": [text]},
+            request_data={},
+            input_type="request",
+        )
+        assert result["texts"][0] == text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "SELECT name FROM users WHERE id = 5 OR 1=1",
+            "SELECT * FROM users -- skip the password check",
+            "SELECT @@version",
+            "Run SELECT name FROM users WHERE id = 5 OR 1 to list everyone.",
+        ],
+    )
+    async def test_conditional_sql_injection_still_blocks_real_sql(self, text):
+        """
+        Block words that start or end with punctuation ("--", "@@version") used to
+        get a word boundary on both sides, so they never matched after a space.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-sql-word-boundaries",
+            categories=[
+                {
+                    "category": "prompt_injection_sql",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "severity_threshold": "medium",
+                }
+            ],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": [text]},
+                request_data={},
+                input_type="request",
+            )
+        assert exc_info.value.status_code == 400
+        assert "prompt_injection_sql" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
     async def test_conditional_racial_bias_category(self):
         """
         Test the conditional racial bias category that uses identifier + block word logic.
