@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -9,6 +10,11 @@ from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_handler import make_sync_call
 from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from tests._support.stream_chunk_size import (
+    _LitellmParamsRecorder,
+    _keys_at_every_depth,
+    _record_litellm_params,
+)
 
 
 
@@ -311,6 +317,143 @@ def test_completion_plumbs_stream_chunk_size_through_converse():
         stream_chunk_size=2048,
     )
     iter_bytes_spy.assert_called_once_with(chunk_size=2048)
+
+
+def _stream_converse_completion_with_spied_client(
+    monkeypatch: pytest.MonkeyPatch, **kwargs
+) -> tuple[MagicMock, MagicMock, _LitellmParamsRecorder]:
+    recorder: Final = _record_litellm_params(monkeypatch)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+
+    litellm.completion(
+        model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **kwargs,
+    )
+    return mock_response.iter_bytes, client.post, recorder
+
+
+def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    iter_bytes_spy, post_spy, recorder = _stream_converse_completion_with_spied_client(
+        monkeypatch, stream_chunk_size=64
+    )
+
+    iter_bytes_spy.assert_called_once_with(chunk_size=64)
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in _keys_at_every_depth(json.loads(data)), data
+    assert len(recorder.seen) == 1
+    assert recorder.seen[0]["stream_chunk_size"] == 64
+
+
+def test_completion_without_stream_chunk_size_uses_default_chunking(monkeypatch: pytest.MonkeyPatch):
+    iter_bytes_spy, _, recorder = _stream_converse_completion_with_spied_client(monkeypatch)
+
+    iter_bytes_spy.assert_called_once_with(chunk_size=None)
+    assert len(recorder.seen) == 1
+    assert recorder.seen[0]["stream_chunk_size"] is None
+
+
+async def _astream_converse_completion_with_spied_client(
+    monkeypatch: pytest.MonkeyPatch, **kwargs
+) -> tuple[MagicMock, AsyncMock, _LitellmParamsRecorder]:
+    async def _no_bytes():
+        return
+        yield b""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    recorder: Final = _record_litellm_params(monkeypatch)
+    mock_response.aiter_bytes = MagicMock(return_value=_no_bytes())
+    aiter_bytes_spy = mock_response.aiter_bytes
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=mock_response)
+
+    await litellm.acompletion(
+        model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **kwargs,
+    )
+    return aiter_bytes_spy, client.post, recorder
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_converse_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    aiter_bytes_spy, post_spy, recorder = await _astream_converse_completion_with_spied_client(
+        monkeypatch, stream_chunk_size=64
+    )
+
+    aiter_bytes_spy.assert_called_once_with(chunk_size=64)
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in _keys_at_every_depth(json.loads(data)), data
+    assert len(recorder.seen) == 1
+    assert recorder.seen[0]["stream_chunk_size"] == 64
+
+
+@pytest.mark.asyncio
+async def test_acompletion_without_stream_chunk_size_uses_default_chunking(monkeypatch: pytest.MonkeyPatch):
+    aiter_bytes_spy, _, recorder = await _astream_converse_completion_with_spied_client(monkeypatch)
+
+    aiter_bytes_spy.assert_called_once_with(chunk_size=None)
+    assert len(recorder.seen) == 1
+    assert recorder.seen[0]["stream_chunk_size"] is None
+
+
+@pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), (None, None)])
+def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
+    monkeypatch: pytest.MonkeyPatch, stream_chunk_size, expected_chunk_size
+):
+    recorder: Final = _record_litellm_params(monkeypatch)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+    deployment_params = {
+        "model": "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "converse-chunked",
+                "litellm_params": deployment_params
+                | ({} if stream_chunk_size is None else {"stream_chunk_size": stream_chunk_size}),
+            }
+        ]
+    )
+
+    router.completion(
+        model="converse-chunked",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+    )
+
+    mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
+    data: Final = client.post.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in _keys_at_every_depth(json.loads(data)), data
+    assert len(recorder.seen) == 1
+    assert recorder.seen[0]["stream_chunk_size"] == stream_chunk_size
 
 
 def _bedrock_error_response(status_code: int, request_id: str) -> httpx.Response:

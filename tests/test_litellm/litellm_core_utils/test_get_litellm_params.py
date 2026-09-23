@@ -90,6 +90,10 @@ class TestGetLitellmParamsKwargsExtraction:
         assert "s3_endpoint_url" not in result_without_s3_kwargs
         assert "s3_region_name" not in result_without_s3_kwargs
 
+    def test_stream_chunk_size_is_carried_as_a_litellm_param(self):
+        assert get_litellm_params(stream_chunk_size=64)["stream_chunk_size"] == 64
+        assert get_litellm_params()["stream_chunk_size"] is None
+
     def test_s3_credential_kwargs_are_forwarded_for_s3_signing(self):
         result = get_litellm_params(s3_access_key_id="s3-key", s3_secret_access_key="s3-secret")
         assert result["s3_access_key_id"] == "s3-key"
