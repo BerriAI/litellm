@@ -81,9 +81,7 @@ async def list_tool_names(endpoint: McpEndpoint) -> tuple[str, ...]:
 async def call_tool(endpoint: McpEndpoint, name: str, arguments: Mapping[str, object]) -> ToolOutcome:
     async with _client_session(endpoint) as session:
         result: Final[mcp_types.CallToolResult] = await session.call_tool(name, dict(arguments))
-        text: Final = "".join(
-            content.text for content in result.content if isinstance(content, mcp_types.TextContent)
-        )
+        text: Final = "".join(content.text for content in result.content if isinstance(content, mcp_types.TextContent))
         raw_structured: Final[object] = result.structured_content  # pyright: ignore[reportAny]  # SDK declares structuredContent Any; validated into dict[str, object] right here
         structured: Final[dict[str, object] | None] = (
             _STRUCTURED_ADAPTER.validate_python(raw_structured) if raw_structured is not None else None

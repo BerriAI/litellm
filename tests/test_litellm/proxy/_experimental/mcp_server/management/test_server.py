@@ -1,9 +1,9 @@
 import asyncio
-from datetime import datetime, timezone
+import json
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from starlette.applications import Starlette
@@ -11,7 +11,6 @@ from starlette.requests import Request
 from starlette.routing import Route
 
 import litellm.proxy.auth.user_api_key_auth as auth_module
-import litellm.proxy.management_endpoints.access_group_endpoints as age
 from litellm.proxy._experimental.mcp_server.management import server as mgmt_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_request_route
@@ -21,7 +20,16 @@ from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlSettings,
     AdmissionControlState,
 )
-from litellm.types.access_group import AccessGroupResponse
+
+
+def _fixture_app() -> FastAPI:
+    app = FastAPI()
+
+    @app.get("/admin/keys", operation_id="list_admin_keys")
+    async def list_admin_keys(request: FastAPIRequest):
+        return {"keys": [], "caller": request.headers.get("x-litellm-api-key") or request.headers.get("authorization")}
+
+    return app
 
 
 def _admin_caller(api_key: str, allowed_routes=None) -> UserAPIKeyAuth:
@@ -36,7 +44,6 @@ def _admin_caller(api_key: str, allowed_routes=None) -> UserAPIKeyAuth:
 @pytest.fixture(autouse=True)
 def _reset_server_state():
     yield
-    # ensure no active server leaks between tests
     mgmt_server._active_server = None
 
 
@@ -61,13 +68,13 @@ async def test_disabled_flag_serves_404():
 
 @pytest.mark.asyncio
 async def test_lifecycle_start_close_twice_creates_fresh_managers():
-    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True})
+    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
     first = mgmt_server._active_server
     assert first is not None
     assert mgmt_server.management_mcp_enabled() is True
     await mgmt_server.shutdown_management_mcp_server()
     assert mgmt_server.management_mcp_enabled() is False
-    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True})
+    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
     second = mgmt_server._active_server
     assert second is not None and second is not first
     assert second.manager is not first.manager
@@ -76,15 +83,15 @@ async def test_lifecycle_start_close_twice_creates_fresh_managers():
 
 @pytest.mark.asyncio
 async def test_start_noop_when_flag_off_or_missing():
-    await mgmt_server.start_management_mcp_server({})
+    await mgmt_server.start_management_mcp_server({}, _fixture_app())
     assert mgmt_server._active_server is None
-    await mgmt_server.start_management_mcp_server({"enable_management_mcp": False})
+    await mgmt_server.start_management_mcp_server({"enable_management_mcp": False}, _fixture_app())
     assert mgmt_server._active_server is None
 
 
 @pytest.mark.asyncio
 async def test_admission_requires_admin_role(monkeypatch):
-    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True})
+    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
 
     async def _auth(request, api_key, **kwargs):
         return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER.value, api_key=api_key)
@@ -112,7 +119,7 @@ async def test_admission_requires_admin_role(monkeypatch):
 @pytest.mark.asyncio
 async def test_allowed_routes_mcp_routes_denied_management_routes_admitted(monkeypatch):
     """Use the real RouteChecks gate to prove the two groups split correctly."""
-    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True})
+    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
 
     async def _auth(request, api_key, **kwargs):
         caller = _admin_caller(api_key, allowed_routes=["mcp_routes"])
@@ -148,11 +155,6 @@ async def test_allowed_routes_mcp_routes_denied_management_routes_admitted(monke
 
     monkeypatch.setattr(auth_module, "user_api_key_auth", _auth_mgmt)
 
-    async def _no_handler(**kwargs):
-        raise RuntimeError("list_access_groups stub")
-
-    monkeypatch.setattr(age, "list_access_groups", _no_handler)
-
     async def _empty_receive():
         return {"type": "http.request", "body": b"", "more_body": False}
 
@@ -174,42 +176,17 @@ async def test_allowed_routes_mcp_routes_denied_management_routes_admitted(monke
     await mgmt_server.shutdown_management_mcp_server()
 
 
-def _access_group(group_id: str, name: str, owner: str) -> AccessGroupResponse:
-    return AccessGroupResponse(
-        access_group_id=group_id,
-        access_group_name=name,
-        access_model_names=[],
-        access_mcp_server_ids=[],
-        access_agent_ids=[],
-        assigned_team_ids=[],
-        assigned_key_ids=[],
-        access_mcp_servers=(),
-        access_agents=(),
-        assigned_teams=(),
-        assigned_keys=(),
-        created_at=datetime.now(timezone.utc),
-        created_by=owner,
-        updated_at=datetime.now(timezone.utc),
-        updated_by=owner,
-    )
-
-
 @pytest.mark.asyncio
 async def test_in_process_mcp_client_end_to_end(monkeypatch):
-    """Drive the real Streamable HTTP transport through an ASGI app behind
-    admission control: initialize, list 10 tools, call list_access_groups, and
-    prove two concurrent callers never see each other's results."""
-    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True})
+    """Drive the real Streamable HTTP transport behind admission control:
+    initialize, list the catalog tools, call one, and prove two concurrent
+    callers reusing one transport only ever see their own credential."""
+    await mgmt_server.start_management_mcp_server({"enable_management_mcp": True}, _fixture_app())
 
     async def _auth(request, api_key, **kwargs):
         return _admin_caller(api_key)
 
-    async def _list_access_groups(**kwargs):
-        caller = kwargs["user_api_key_dict"]
-        return [_access_group("g1", "grp", caller.user_id or "?")]
-
     monkeypatch.setattr(auth_module, "user_api_key_auth", _auth)
-    monkeypatch.setattr(age, "list_access_groups", _list_access_groups)
 
     starlette_app = Starlette(
         routes=[
@@ -241,14 +218,14 @@ async def test_in_process_mcp_client_end_to_end(monkeypatch):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     listed = await session.list_tools()
-                    assert len(listed.tools) == 10
-                    result = await session.call_tool("list_access_groups", {})
+                    assert [tool.name for tool in listed.tools] == ["list_admin_keys"]
+                    result = await session.call_tool("list_admin_keys", {})
                     assert result.is_error is not True, result.content
-                    return result.structured_content
+                    return json.loads(result.content[0].text)
 
     (res_a, res_b) = await asyncio.gather(_call("sk-admin-a"), _call("sk-admin-b"))
-    assert res_a["result"][0]["created_by"] == "user-for-sk-admin-a"
-    assert res_b["result"][0]["created_by"] == "user-for-sk-admin-b"
+    assert res_a["caller"] == "sk-admin-a"
+    assert res_b["caller"] == "sk-admin-b"
 
     await mgmt_server.shutdown_management_mcp_server()
 
@@ -284,6 +261,8 @@ def test_backend_allowlist():
 
 def test_disabled_flag_404_and_dynamic_alias_route_via_fastapi_app():
     from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.management.catalog import build_catalog
     from litellm.proxy.proxy_server import app
 
     mgmt_server._active_server = None
@@ -291,7 +270,7 @@ def test_disabled_flag_404_and_dynamic_alias_route_via_fastapi_app():
     try:
         assert client.post("/litellm-management/mcp", content=b"{}").status_code == 404
 
-        mgmt_server._active_server = mgmt_server.ManagementMCPServer()
+        mgmt_server._active_server = mgmt_server.ManagementMCPServer(build_catalog({}))
         assert client.post("/litellm-management/mcp", content=b"{}").status_code == 403
         assert client.post("/nonexistent-alias/mcp", content=b"{}").status_code == 404
     finally:
