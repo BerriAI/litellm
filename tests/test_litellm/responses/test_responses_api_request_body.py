@@ -8,10 +8,12 @@ import copy
 import json
 from pathlib import Path
 from importlib import import_module
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -222,44 +224,52 @@ async def test_aresponses_drops_stream_options():
 
 
 @pytest.mark.asyncio
-async def test_aresponses_forwards_non_enum_reasoning_effort(monkeypatch):  # test-quality-ok: the wire request body is only observable through the patched HTTP post
+async def test_aresponses_forwards_non_enum_reasoning_effort(monkeypatch, respx_mock: respx.MockRouter):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_effort_int", "gpt-5.4"), 200)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_effort_int", "gpt-5.4"))
+    )
 
-        await litellm.aresponses(model="openai/gpt-5.4", input="hi", reasoning_effort=5)
+    response: Final = await litellm.aresponses(model="openai/gpt-5.4", input="hi", reasoning_effort=5)
 
-        mock_post.assert_called_once()
-        assert mock_post.call_args.kwargs["json"]["reasoning"] == {"effort": 5}
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["reasoning"] == {"effort": 5}
+    assert response.output[0].content[0].text == "Done."
 
 
 @pytest.mark.asyncio
-async def test_acompletion_with_tools_forwards_non_enum_reasoning_effort_over_the_bridge(monkeypatch):  # test-quality-ok: the wire request body is only observable through the patched HTTP post
+async def test_acompletion_with_tools_forwards_non_enum_reasoning_effort_over_the_bridge(
+    monkeypatch, respx_mock: respx.MockRouter
+):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_bridge_int", "gpt-5.4"), 200)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_bridge_int", "gpt-5.4"))
+    )
 
-        await litellm.acompletion(
-            model="openai/gpt-5.4",
-            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
-                }
-            ],
-            reasoning_effort=5,
-        )
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.4",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            }
+        ],
+        reasoning_effort=5,
+    )
 
-        mock_post.assert_called_once()
-        assert mock_post.call_args.kwargs["url"].endswith("/responses")
-        assert mock_post.call_args.kwargs["json"]["reasoning"] == {"effort": 5}
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["reasoning"] == {"effort": 5}
+    assert response.id == "resp_bridge_int"
 
 
 @pytest.mark.asyncio
