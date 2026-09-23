@@ -255,6 +255,27 @@ describe("UserEnvVarsModal", () => {
     expect(screen.getByRole("button", { name: "Clear" })).toBeEnabled();
   });
 
+  it("drops a pending clear confirmation when the modal is closed and reopened", async () => {
+    const user = setup();
+    const { onClose, setOpen } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: true }]));
+
+    await fieldAfterOpen(/^API_KEY/);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await screen.findByRole("alertdialog", { name: "Clear saved credentials" });
+
+    await user.click(screen.getByRole("button", { name: "Close", hidden: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    setOpen(false);
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    setOpen(true);
+    await fieldAfterOpen(/^API_KEY/);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(networking.clearMCPUserEnvVars).not.toHaveBeenCalled();
+  });
+
   it("offers Clear only when a value is stored", async () => {
     renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
 

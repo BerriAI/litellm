@@ -109,6 +109,10 @@ const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, o
 const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, accessToken, onClose, onSaved }) => {
   const queryClient = useQueryClient();
   const [confirmingClear, setConfirmingClear] = React.useState(false);
+  const close = () => {
+    setConfirmingClear(false);
+    onClose();
+  };
   const queryKey = ["mcpUserEnvVars", server?.server_id];
   const {
     data: status,
@@ -126,7 +130,7 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
       queryClient.setQueryData(queryKey, saved);
       toast.success("Credentials saved");
       onSaved?.(saved);
-      onClose();
+      close();
     },
     onError: (err) => {
       toast.fromError(`Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`);
@@ -139,7 +143,7 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
       queryClient.setQueryData(queryKey, cleared);
       toast.success("Credentials cleared");
       onSaved?.(cleared);
-      onClose();
+      close();
     },
     onError: (err) => {
       toast.fromError(`Failed to clear env vars: ${err instanceof Error ? err.message : String(err)}`);
@@ -165,7 +169,7 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
   };
 
   return (
-    <Dialog open={open} onOpenChange={(opened) => !opened && onClose()}>
+    <Dialog open={open} onOpenChange={(opened) => !opened && close()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[520px]">
         <DialogHeader>
           <div className="flex items-center gap-2">
@@ -200,7 +204,7 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
               <UserEnvVarsForm
                 required={required}
                 isSaving={isSaving}
-                onCancel={onClose}
+                onCancel={close}
                 onClear={canClear ? () => setConfirmingClear(true) : undefined}
                 onSubmit={handleSave}
               />
