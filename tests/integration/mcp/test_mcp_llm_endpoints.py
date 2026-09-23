@@ -258,16 +258,6 @@ def _peer_add_calls(peer: McpPeer) -> tuple[dict[str, object], ...]:
     )
 
 
-def _skip_if_bridge_drops_tool_result(
-    rig: Rig, requests: tuple[tuple[str, ...], ...], calls: tuple[object, ...]
-) -> None:
-    if rig.surface == "messages_bridge" and len(calls) > 1 and len(requests) > 2:
-        pytest.skip(
-            "BUG: /v1/messages MCP tool loop over a non-Anthropic model drops the tool_result message, "
-            "so the tool is re-executed until the iteration cap"
-        )
-
-
 @pytest.mark.parametrize("surface", SURFACES)
 def test_auto_approved_gateway_tool_is_listed_executed_once_and_fed_back(gateway: Gateway, surface: Surface) -> None:
     with _rig(gateway, surface) as rig:
@@ -276,7 +266,6 @@ def test_auto_approved_gateway_tool_is_listed_executed_once_and_fed_back(gateway
         assert response.status_code == 200, response.text
         calls: Final = _peer_add_calls(rig.peer)
         requests: Final = rig.upstream_tools()
-        _skip_if_bridge_drops_tool_result(rig, requests, calls)
         assert [call["body"]["params"]["name"] for call in calls] == ["add"], calls
         assert calls[0]["body"]["params"]["arguments"] == ADD, calls
         assert len(requests) == 2, requests

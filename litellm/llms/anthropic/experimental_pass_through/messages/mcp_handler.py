@@ -50,14 +50,14 @@ def _build_tool_result_message(tool_results: Sequence[Mapping[str, object]]) -> 
     """Turn executed tool results into the user message Anthropic expects."""
     return AnthropicMessagesUserMessageParam(
         role="user",
-        content=tuple(
+        content=[
             AnthropicMessagesToolResultParam(
                 type="tool_result",
                 tool_use_id=str(result.get("tool_call_id") or ""),
                 content=str(result.get("result") or ""),
             )
             for result in tool_results
-        ),
+        ],
     )
 
 
