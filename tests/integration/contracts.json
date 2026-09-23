@@ -1794,6 +1794,9 @@
     ],
     "tests/integration/observability/test_callback_delivery.py::test_response_survives_raising_success_deployment_hook[videos]": [
       "other.observability.callbacks.raising_success_deployment_hook_keeps_response"
+    ],
+    "tests/integration/pricing/test_service_tier_pricing.py::test_databricks_priority_request_is_forwarded_and_charged_at_priority_rates": [
+      "quota_management.spend_tracking.service_tier.priority_request_priced_as_priority"
     ]
   },
   "browser": {

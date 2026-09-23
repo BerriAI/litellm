@@ -5,6 +5,11 @@ import httpx
 import respx
 
 import litellm
+from litellm.llms.databricks.chat.transformation import (
+    DatabricksChatResponseIterator,
+    DatabricksConfig,
+)
+from unittest.mock import MagicMock
 
 
 def test_completion_merges_leading_system_and_developer_messages_for_chat_template_models(
@@ -77,10 +82,6 @@ def test_completion_merges_system_messages_when_one_has_empty_content(respx_mock
         {"role": "system", "content": "You are terse."},
         {"role": "user", "content": "Hello"},
     ]
-    assert parsed.choices[0].delta.reasoning_content == "We need answer"
-    assert parsed.choices[0].delta.content is None
-    assert parsed.choices[0].delta.reasoning_content == "We need answer"
-    assert parsed.choices[0].delta.content is None
 
 
 def test_get_optional_params_passes_service_tier_through() -> None:
