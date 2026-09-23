@@ -1222,8 +1222,10 @@ class PersistentMCPSession:
                 self._active = future
                 (outcome,) = await asyncio.gather(operation(session), return_exceptions=True)
                 if not future.done():
-                    if isinstance(outcome, BaseException):
+                    if isinstance(outcome, Exception):
                         future.set_exception(outcome)
+                    elif isinstance(outcome, BaseException):
+                        future.set_exception(RuntimeError("upstream MCP operation was cancelled"))
                     else:
                         future.set_result(outcome)
                 if isinstance(outcome, (ValueError, httpx2.HTTPError, OSError, MCPError)):
@@ -1237,9 +1239,9 @@ class PersistentMCPSession:
         except asyncio.CancelledError:
             self._fail_waiters(None)
             raise
-        self._fail_waiters(ended if isinstance(ended, BaseException) else None)
+        self._fail_waiters(ended if isinstance(ended, Exception) else None)
 
-    def _fail_waiters(self, cause: BaseException | None) -> None:
+    def _fail_waiters(self, cause: Exception | None) -> None:
         pending: Final = (self._ready, self._active, *(future for _, future in self._drained()))
         for future in pending:
             if future is not None and not future.done():

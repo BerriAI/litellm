@@ -3013,3 +3013,24 @@ async def test_closing_persistent_session_mid_operation_fails_the_waiter_instead
         with pytest.raises(RuntimeError, match="upstream MCP session closed"):
             await asyncio.wait_for(waiter, 5)
         await asyncio.wait_for(session.wait_closed(), 5)
+
+
+@pytest.mark.asyncio
+async def test_persistent_session_reports_an_upstream_cancellation_as_a_runtime_error_not_a_cancelled_caller():
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client, session = _client_with_session(app)
+
+        async def cancelled_upstream(_: object) -> str:
+            raise asyncio.CancelledError()
+
+        try:
+            with pytest.raises(RuntimeError, match="cancelled"):
+                await asyncio.wait_for(session.run(cancelled_upstream), 5)
+            selected: Final = await client.call_tool(
+                CallToolRequestParams(name="select_project", arguments={"name": "e"}), persistent_session=session
+            )
+        finally:
+            session.close()
+        assert selected.is_error is False, "an upstream cancellation must not be mistaken for a cancelled caller"
+        await asyncio.wait_for(session.wait_closed(), 5)
