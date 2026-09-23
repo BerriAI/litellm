@@ -46,7 +46,7 @@ def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
 
 
 @contextmanager
-def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path | None = None, remove_environment: tuple[str, ...] = ()) -> Iterator[Gateway]:
+def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path | None = None, num_workers: int = 1, remove_environment: tuple[str, ...] = ()) -> Iterator[Gateway]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port: Final = reserve.getsockname()[1]
@@ -73,7 +73,7 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str],
                 "--port",
                 str(port),
                 "--num_workers",
-                "1",
+                str(num_workers),
                 "--use_prisma_db_push",
                 "--enforce_prisma_migration_check",
             ],

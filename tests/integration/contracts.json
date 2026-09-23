@@ -1767,6 +1767,156 @@
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
       "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_team_exclude_chat_completions_openai_sync": [
+      "other.observability.otel.tenant_internal_spans.h1_team_exclude_chat_completions_openai_sync"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_team_exclude_chat_completions_stream_openai_async": [
+      "other.observability.otel.tenant_internal_spans.h2_team_exclude_chat_completions_stream_async"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_team_exclude_messages_anthropic_sync": [
+      "other.observability.otel.tenant_internal_spans.h3_team_exclude_messages_anthropic_sync"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_team_exclude_messages_stream_anthropic_async": [
+      "other.observability.otel.tenant_internal_spans.h4_team_exclude_messages_stream_anthropic_async"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_team_exclude_responses_api": [
+      "other.observability.otel.tenant_internal_spans.h5_team_exclude_responses_openai_sync"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_team_exclude_responses_stream": [
+      "other.observability.otel.tenant_internal_spans.h6_team_exclude_responses_stream_httpx"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_team_include_explicit_delivers_full_trace": [
+      "other.observability.otel.tenant_internal_spans.h7_team_include_explicit"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_var_absent_defaults_to_include": [
+      "other.observability.otel.tenant_internal_spans.h8_var_absent_defaults_include"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_key_level_exclude_without_team_callbacks": [
+      "other.observability.otel.tenant_internal_spans.h9_key_var_exclude_no_team"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_key_include_wins_over_team_exclude": [
+      "other.observability.otel.tenant_internal_spans.h10_key_include_beats_team_exclude"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_key_exclude_wins_over_team_include": [
+      "other.observability.otel.tenant_internal_spans.h11_key_exclude_beats_team_include"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_langfuse_exclude_arize_include_split": [
+      "other.observability.otel.tenant_internal_spans.h12_two_destinations_independent_filters"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_llm_only_scope_under_exclude_keeps_model_span": [
+      "other.observability.otel.tenant_internal_spans.h13_llm_only_scope_with_exclude"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_additive_mode_operator_full_tenant_excluded": [
+      "other.observability.otel.tenant_internal_spans.h14_additive_mode_exclude"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_operator_sink_keeps_internal_spans_under_exclude": [
+      "other.observability.otel.tenant_internal_spans.h15_operator_sink_untouched"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_guardrail_span_survives_exclude": [
+      "other.observability.otel.tenant_internal_spans.h16_guardrail_span_kept_under_exclude"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_env_exclude_applies_when_var_absent": [
+      "other.observability.otel.tenant_internal_spans.d1_env_exclude_applies"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_var_include_beats_env_exclude": [
+      "other.observability.otel.tenant_internal_spans.d2_var_include_beats_env_exclude"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_litellm_setting_exclude_applies_when_var_absent": [
+      "other.observability.otel.tenant_internal_spans.d3_setting_exclude_applies"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_setting_include_beats_env_exclude": [
+      "other.observability.otel.tenant_internal_spans.d4_setting_include_beats_env_exclude"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_env_exclude_with_whitespace_and_case": [
+      "other.observability.otel.tenant_internal_spans.d5_env_whitespace_case_exclude"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_env_bogus_value_falls_back_to_include": [
+      "other.observability.otel.tenant_internal_spans.d6_env_bogus_falls_back_include"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_empty_setting_falls_through_to_env": [
+      "other.observability.otel.tenant_internal_spans.d7_empty_setting_falls_through_env"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_callback_var_int_rejected": [
+      "other.observability.otel.tenant_internal_spans.s1_int_value_rejected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_callback_var_list_rejected": [
+      "other.observability.otel.tenant_internal_spans.s2_list_value_rejected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_callback_var_empty_string_rejected": [
+      "other.observability.otel.tenant_internal_spans.s3_empty_value_rejected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_callback_var_oversized_string_rejected": [
+      "other.observability.otel.tenant_internal_spans.s4_oversized_value_rejected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_callback_var_case_sensitive_rejected": [
+      "other.observability.otel.tenant_internal_spans.s5_case_sensitive_rejected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_same_internal_spans_value_on_second_entry_accepted": [
+      "other.observability.otel.tenant_internal_spans.s6_same_value_twice_accepted"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_conflicting_internal_spans_value_rejected": [
+      "other.observability.otel.tenant_internal_spans.s7_conflicting_value_rejected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_internal_spans_on_non_otel_callback_rejected": [
+      "other.observability.otel.tenant_internal_spans.s8_non_otel_callback_rejected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_internal_spans_on_newrelic_accepted": [
+      "other.observability.otel.tenant_internal_spans.s9_newrelic_accepts_var"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_unauthenticated_callback_post_rejected": [
+      "other.observability.otel.tenant_internal_spans.s10_unauthenticated_callback_post"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_key_generate_bogus_internal_spans_rejected": [
+      "other.observability.otel.tenant_internal_spans.s11_key_generate_bogus_rejected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_key_update_bogus_internal_spans_rejected": [
+      "other.observability.otel.tenant_internal_spans.s12_key_update_bogus_rejected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_team_update_bogus_internal_spans_drops_destination": [
+      "other.observability.otel.tenant_internal_spans.s13_team_update_unvalidated_drops_destination"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_tenant_sink_403_does_not_break_caller": [
+      "other.observability.otel.tenant_internal_spans.s14_tenant_sink_403_caller_unaffected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_tenant_sink_404_does_not_break_caller": [
+      "other.observability.otel.tenant_internal_spans.s15_tenant_sink_404_caller_unaffected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_upstream_500_under_exclude_keeps_internal_spans_back": [
+      "other.observability.otel.tenant_internal_spans.s16_upstream_500_under_exclude"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_unrelated_key_unaffected_by_tenant_sink_failure": [
+      "other.observability.otel.tenant_internal_spans.s17_unrelated_key_unaffected"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_key_health_with_excluded_team_callback": [
+      "other.observability.otel.tenant_internal_spans.s18_key_health_with_exclude_team"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_callback_var_update_include_to_exclude_takes_effect": [
+      "other.observability.otel.tenant_internal_spans.e1_var_update_takes_effect_within_ttl"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_callback_delete_stops_tenant_export": [
+      "other.observability.otel.tenant_internal_spans.e2_callback_delete_stops_tenant_export"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_identical_requests_export_exactly_once": [
+      "other.observability.otel.tenant_internal_spans.e3_identical_requests_export_once"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_concurrent_requests_all_excluded_once": [
+      "other.observability.otel.tenant_internal_spans.e4_concurrent_requests_excluded_once"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans.py::test_failure_only_callback_entry_anchors_no_destination": [
+      "other.observability.otel.tenant_internal_spans.e5_failure_only_entry_anchors_no_destination"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans_chaos.py::test_frozen_tenant_sink_receives_every_span_after_resume": [
+      "other.observability.otel.tenant_internal_spans.c1_frozen_sink_delivers_after_resume"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans_chaos.py::test_slow_tenant_sink_exports_each_span_once": [
+      "other.observability.otel.tenant_internal_spans.c3_slow_sink_no_duplicates"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans_chaos.py::test_proxy_restart_mid_burst_keeps_serving": [
+      "other.observability.otel.tenant_internal_spans.c4_proxy_restart_keeps_serving"
+    ],
+    "tests/integration/observability/test_otel_tenant_internal_spans_chaos.py::test_killing_one_worker_leaves_serving": [
+      "other.observability.otel.tenant_internal_spans.c5_worker_kill_survivor_serves"
     ]
   },
   "browser": {

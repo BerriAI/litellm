@@ -1,0 +1,1193 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import uuid
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Final
+from urllib.parse import urlparse
+
+import httpx
+import pytest
+import yaml
+from pydantic import JsonValue
+
+from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.database import read_rows
+from integration._support.otlp_sink import (
+    configure_sink,
+    recorded_spans,
+    span_class,
+    spans_for_trace,
+)
+from integration._support.process import owned_proxy
+
+SINK_OPERATOR: Final = os.environ.get("OTEL_AUDIT_OPERATOR_SINK", "http://127.0.0.1:8191")
+SINK_TENANT: Final = os.environ.get("OTEL_AUDIT_TENANT_SINK", "http://127.0.0.1:8192")
+SINK_ARIZE: Final = os.environ.get("OTEL_AUDIT_ARIZE_SINK", "http://127.0.0.1:8193")
+TENANT_HOST: Final = urlparse(SINK_TENANT).netloc
+
+LANGFUSE_VARS: Final[dict[str, str]] = {
+    "langfuse_public_key": "pk-lf-audit",
+    "langfuse_secret_key": "sk-lf-audit",
+    "langfuse_host": SINK_TENANT,
+}
+ARIZE_VARS: Final[dict[str, str]] = {"arize_space_id": "audit-space", "arize_api_key": "audit-arize-key"}
+INTERNAL_SPANS_VAR: Final = "otel_internal_spans"
+
+
+def _nonce() -> str:
+    return f"otelaudit-{uuid.uuid4().hex}"
+
+
+def _add_callback(
+    gateway: Gateway,
+    team_id: str,
+    callback_vars: Mapping[str, str],
+    *,
+    callback_name: str = "langfuse_otel",
+    callback_type: str | None = None,
+    key: str | None = None,
+) -> httpx.Response:
+    body: Final[dict[str, JsonValue]] = {"callback_name": callback_name, "callback_vars": dict(callback_vars)}
+    if callback_type is not None:
+        body["callback_type"] = callback_type
+    return gateway.request("POST", f"/team/{team_id}/callback", body, key=key)
+
+
+def _key_on_team(scenario: object, team_id: str, **fields: JsonValue) -> str:
+    return scenario.key(team_id=team_id, **fields)  # type: ignore[attr-defined]  # Scenario helper
+
+
+def _audit_model(scenario: object, upstream_url: str) -> str:
+    return scenario.model(model="openai/audit-chat", api_base=f"{upstream_url}/v1")  # type: ignore[attr-defined]
+
+
+def _chat(gateway: Gateway, key: str, model: str, nonce: str, *, stream: bool = False) -> httpx.Response:
+    return gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": nonce}], **({"stream": True} if stream else {})},
+        key=key,
+    )
+
+
+def _response_id(body: JsonValue) -> str | None:
+    if isinstance(body, dict):
+        value: Final = body.get("id")
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _call_id(response: httpx.Response) -> str | None:
+    return response.headers.get("x-litellm-call-id")
+
+
+def _trace_id(sink_url: str, *, call_id: str | None = None, response_id: str | None = None, seconds: float = 40) -> str:
+    def look() -> str | None:
+        _, spans = recorded_spans(sink_url)
+        return next(
+            (
+                str(span["trace_id"])
+                for span in spans
+                if (call_id is not None and (span["attributes"] or {}).get("litellm.call_id") == call_id)  # type: ignore[union-attr]
+                or (response_id is not None and (span["attributes"] or {}).get("gen_ai.response.id") == response_id)  # type: ignore[union-attr]
+            ),
+            None,
+        )
+
+    found: Final = eventually(look, lambda value: value is not None, seconds=seconds)
+    assert found is not None
+    return found
+
+
+def _trace_spans(sink_url: str, trace_id: str, seconds: float = 30) -> tuple[dict[str, JsonValue], ...]:
+    def settled() -> tuple[dict[str, JsonValue], ...] | None:
+        _, spans = recorded_spans(sink_url)
+        group: Final = spans_for_trace(spans, trace_id)
+        classes: Final = {span_class(span) for span in group}
+        return group if "root" in classes and "tenant" in classes else None
+
+    group: Final = eventually(settled, lambda value: value is not None, seconds=seconds)
+    assert group is not None
+    return group
+
+
+def _classes(spans: tuple[dict[str, JsonValue], ...]) -> dict[str, int]:
+    return {name: sum(1 for span in spans if span_class(span) == name) for name in ("root", "tenant", "internal")}
+
+
+def _assert_excluded(trace_spans: tuple[dict[str, JsonValue], ...]) -> None:
+    counts: Final = _classes(trace_spans)
+    names: Final = sorted(str(span["name"]) for span in trace_spans)
+    assert counts["root"] == 1 and counts["internal"] == 0 and counts["tenant"] >= 1, (
+        f"expected root + tenant spans only, got {counts} with {names}"
+    )
+
+
+def _assert_full(trace_spans: tuple[dict[str, JsonValue], ...]) -> None:
+    counts: Final = _classes(trace_spans)
+    names: Final = sorted(str(span["name"]) for span in trace_spans)
+    assert counts["root"] == 1 and counts["internal"] >= 1 and counts["tenant"] >= 1, (
+        f"expected a full tree with internal spans, got {counts} with {names}"
+    )
+
+
+def _excluded_flow(
+    gateway: Gateway,
+    upstream_url: str,
+    send,
+    *,
+    internal_spans: str | None = "exclude",
+    callback_vars: Mapping[str, str] | None = None,
+) -> tuple[httpx.Response, str]:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, upstream_url)
+        team_id: Final = scenario.team()
+        vars: Final = dict(LANGFUSE_VARS)
+        if callback_vars:
+            vars.update(callback_vars)
+        if internal_spans is not None:
+            vars[INTERNAL_SPANS_VAR] = internal_spans
+        response: Final = _add_callback(gateway, team_id, vars)
+        assert response.status_code == 200, f"callback setup failed: {response.status_code} {response.text}"
+        key: Final = _key_on_team(scenario, team_id)
+        nonce: Final = _nonce()
+        traffic: Final = send(gateway, key, model, nonce)
+        return traffic, nonce
+
+
+def _assert_trace_split(traffic: httpx.Response) -> None:
+    assert traffic.status_code == 200, traffic.text
+    call_id: Final = _call_id(traffic)
+    response_id: Final = _response_id(traffic.json())
+    operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id, response_id=response_id)
+    _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+    tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id, response_id=response_id)
+    _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+    assert tenant_trace == operator_trace
+
+
+def _assert_upstream_saw(upstream_url: str, nonce: str) -> None:
+    observations: Final = httpx.get(f"{upstream_url}/__observations", trust_env=False, timeout=15).json()["requests"]
+    matching: Final = [
+        entry for entry in observations if nonce in json.dumps(entry.get("body", {}))
+    ]
+    assert len(matching) >= 1, f"upstream never saw nonce {nonce}"
+
+
+def _openai_sync_send(gateway: Gateway, key: str, model: str, nonce: str, *, stream: bool = False) -> httpx.Response:
+    return _chat(gateway, key, model, nonce, stream=stream)
+
+
+def _openai_sdk(gateway: Gateway, key: str, model: str, nonce: str) -> tuple[str | None, str | None]:
+    import openai
+
+    client: Final = openai.OpenAI(base_url=f"{gateway.client.base_url}".rstrip("/"), api_key=key, timeout=30)
+    raw: Final = client.chat.completions.with_raw_response.create(
+        model=model, messages=[{"role": "user", "content": nonce}]
+    )
+    parsed: Final = raw.parse()
+    return parsed.id, raw.headers.get("x-litellm-call-id")
+
+
+def _openai_sdk_async_stream(gateway: Gateway, key: str, model: str, nonce: str) -> tuple[str | None, str | None]:
+    import openai
+
+    async def run() -> tuple[str | None, str | None]:
+        client: Final = openai.AsyncOpenAI(base_url=f"{gateway.client.base_url}".rstrip("/"), api_key=key, timeout=30)
+        raw: Final = await client.chat.completions.with_raw_response.create(
+            model=model, messages=[{"role": "user", "content": nonce}], stream=True
+        )
+        stream: Final = raw.parse()
+        last_id: str | None = None
+        async for chunk in stream:
+            if chunk.id:
+                last_id = chunk.id
+        return last_id, raw.headers.get("x-litellm-call-id")
+
+    return asyncio.run(run())
+
+
+def _anthropic_sdk(gateway: Gateway, key: str, model: str, nonce: str) -> tuple[str | None, str | None]:
+    import anthropic
+
+    client: Final = anthropic.Anthropic(base_url=f"{gateway.client.base_url}".rstrip("/"), api_key=key, timeout=30)
+    raw: Final = client.messages.with_raw_response.create(
+        model=model, max_tokens=16, messages=[{"role": "user", "content": nonce}]
+    )
+    parsed: Final = raw.parse()
+    return parsed.id, raw.headers.get("x-litellm-call-id")
+
+
+def _anthropic_sdk_async_stream(gateway: Gateway, key: str, model: str, nonce: str) -> tuple[str | None, str | None]:
+    import anthropic
+
+    async def run() -> tuple[str | None, str | None]:
+        client: Final = anthropic.AsyncAnthropic(base_url=f"{gateway.client.base_url}".rstrip("/"), api_key=key, timeout=30)
+        last_id: str | None = None
+        async with client.messages.stream(model=model, max_tokens=16, messages=[{"role": "user", "content": nonce}]) as stream:
+            async for event in stream:
+                response_obj: Final = getattr(event, "message", None)
+                if response_obj is not None and getattr(response_obj, "id", None):
+                    last_id = response_obj.id
+        return last_id, None
+
+    return asyncio.run(run())
+
+
+def _responses_httpx(gateway: Gateway, key: str, model: str, nonce: str, *, stream: bool) -> httpx.Response:
+    return gateway.request(
+        "POST",
+        "/v1/responses",
+        {"model": model, "input": nonce, **({"stream": True} if stream else {})},
+        key=key,
+    )
+
+
+def _responses_stream_id(response: httpx.Response) -> str | None:
+    for line in response.text.splitlines():
+        if line.startswith("data:"):
+            try:
+                event: Final = json.loads(line[5:].strip())
+            except json.JSONDecodeError:
+                continue
+            response_obj: Final = event.get("response")
+            if isinstance(response_obj, dict) and isinstance(response_obj.get("id"), str):
+                return response_obj["id"]
+    return None
+
+
+def _send_and_assert_excluded(
+    gateway: Gateway,
+    upstream_url: str,
+    send,
+) -> None:
+    traffic: Final[httpx.Response]
+    nonce: Final[str]
+    traffic, nonce = _excluded_flow(gateway, upstream_url, send)
+    _assert_trace_split(traffic)
+    _assert_upstream_saw(upstream_url, nonce)
+
+
+def _audit_config(tmp_path: Path, litellm_settings: Mapping[str, JsonValue] = {}) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["litellm_settings"] = {
+        **config.get("litellm_settings", {}),
+        "callbacks": ["otel"],
+        "provider_url_destination_allowed_hosts": [TENANT_HOST],
+        **dict(litellm_settings),
+    }
+    config["callback_settings"] = {
+        "otel": {"exporter": "http/json", "endpoint": SINK_OPERATOR, "use_simple_processor": True}
+    }
+    config["general_settings"] = {**config.get("general_settings", {}), "user_api_key_cache_ttl": 2}
+    path: Final = tmp_path / "audit-proxy.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+@contextmanager
+def _candidate(
+    gateway: Gateway, tmp_path: Path, env: Mapping[str, str] = {}, settings: Mapping[str, JsonValue] = {}
+) -> Iterator[Gateway]:
+    overrides: Final = {"LITELLM_OTEL_V2": "1", **dict(env)}
+    with owned_proxy(gateway, tmp_path, overrides, config=_audit_config(tmp_path, settings), num_workers=2) as candidate:
+        yield candidate
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h1_team_exclude_chat_completions_openai_sync")
+def test_team_exclude_chat_completions_openai_sync(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, f"callback setup failed: {callback.status_code} {callback.text}"
+        key: Final = _key_on_team(scenario, team_id)
+        nonce = _nonce()
+        response_id, call_id = _openai_sdk(gateway, key, model, nonce)
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id, response_id=response_id)
+        _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+        operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id, response_id=response_id)
+        _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+        assert tenant_trace == operator_trace
+        _assert_upstream_saw(gateway.upstream_url, nonce)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h2_team_exclude_chat_completions_stream_async")
+def test_team_exclude_chat_completions_stream_openai_async(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        nonce: Final = _nonce()
+        response_id, call_id = _openai_sdk_async_stream(gateway, key, model, nonce)
+        assert response_id is not None, "stream produced no response id"
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id, response_id=response_id)
+        _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+        operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id, response_id=response_id)
+        _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+        _assert_upstream_saw(gateway.upstream_url, nonce)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h3_team_exclude_messages_anthropic_sync")
+def test_team_exclude_messages_anthropic_sync(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        nonce: Final = _nonce()
+        response_id, call_id = _anthropic_sdk(gateway, key, model, nonce)
+        assert call_id is not None, "no x-litellm-call-id header on /v1/messages"
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id)
+        _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+        operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id)
+        _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+        _assert_upstream_saw(gateway.upstream_url, nonce)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h4_team_exclude_messages_stream_anthropic_async")
+def test_team_exclude_messages_stream_anthropic_async(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        nonce: Final = _nonce()
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 16,
+                "stream": True,
+                "messages": [{"role": "user", "content": nonce}],
+            },
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        assert "message_stop" in response.text, response.text
+        call_id: Final = _call_id(response)
+        assert call_id is not None
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id)
+        _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+        operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id)
+        _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+        _assert_upstream_saw(gateway.upstream_url, nonce)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h5_team_exclude_responses_openai_sync")
+def test_team_exclude_responses_api(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        nonce: Final = _nonce()
+        response: Final = _responses_httpx(gateway, key, model, nonce, stream=False)
+        assert response.status_code == 200, response.text
+        call_id: Final = _call_id(response)
+        response_id: Final = _response_id(response.json())
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id, response_id=response_id)
+        _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+        operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id, response_id=response_id)
+        _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+        _assert_upstream_saw(gateway.upstream_url, nonce)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h6_team_exclude_responses_stream_httpx")
+def test_team_exclude_responses_stream(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        nonce: Final = _nonce()
+        response: Final = _responses_httpx(gateway, key, model, nonce, stream=True)
+        assert response.status_code == 200, response.text
+        response_id: Final = _responses_stream_id(response)
+        call_id: Final = _call_id(response)
+        assert response_id is not None or call_id is not None, response.text[:400]
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id, response_id=response_id)
+        _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+        operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id, response_id=response_id)
+        _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+        _assert_upstream_saw(gateway.upstream_url, nonce)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h7_team_include_explicit")
+def test_team_include_explicit_delivers_full_trace(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "include"})
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        call_id: Final = _call_id(response)
+        response_id: Final = _response_id(response.json())
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id, response_id=response_id)
+        _assert_full(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h8_var_absent_defaults_include")
+def test_var_absent_defaults_to_include(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, LANGFUSE_VARS)
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+        _assert_full(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+def _key_logging_entry(callback_vars: Mapping[str, str], callback_name: str = "langfuse_otel") -> list[JsonValue]:
+    return [{"callback_name": callback_name, "callback_vars": dict(callback_vars)}]
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h9_key_var_exclude_no_team")
+def test_key_level_exclude_without_team_callbacks(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        key: Final = scenario.key(
+            metadata={"logging": _key_logging_entry({**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})}
+        )
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        call_id: Final = _call_id(response)
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id)
+        _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+        operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id)
+        _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h10_key_include_beats_team_exclude")
+def test_key_include_wins_over_team_exclude(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, callback.text
+        key: Final = scenario.key(
+            team_id=team_id,
+            metadata={"logging": _key_logging_entry({**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "include"})},
+        )
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+        _assert_full(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h11_key_exclude_beats_team_include")
+def test_key_exclude_wins_over_team_include(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "include"})
+        assert callback.status_code == 200, callback.text
+        key: Final = scenario.key(
+            team_id=team_id,
+            metadata={"logging": _key_logging_entry({**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})},
+        )
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+        _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h12_two_destinations_independent_filters")
+def test_langfuse_exclude_arize_include_split(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        langfuse: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert langfuse.status_code == 200, langfuse.text
+        arize: Final = _add_callback(
+            gateway, team_id, {**ARIZE_VARS, INTERNAL_SPANS_VAR: "include"}, callback_name="arize"
+        )
+        assert arize.status_code == 200, arize.text
+        key: Final = _key_on_team(scenario, team_id)
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        call_id: Final = _call_id(response)
+        langfuse_trace: Final = _trace_id(SINK_TENANT, call_id=call_id)
+        _assert_excluded(_trace_spans(SINK_TENANT, langfuse_trace))
+        arize_trace: Final = _trace_id(SINK_ARIZE, call_id=call_id)
+        arize_spans: Final = _trace_spans(SINK_ARIZE, arize_trace)
+        _assert_full(arize_spans)
+        assert arize_trace == langfuse_trace
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h13_llm_only_scope_with_exclude")
+def test_llm_only_scope_under_exclude_keeps_model_span(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(
+            gateway,
+            team_id,
+            {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude", "langfuse_span_scope": "llm_only"},
+        )
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+
+        def settled() -> tuple[dict[str, JsonValue], ...] | None:
+            _, spans = recorded_spans(SINK_TENANT)
+            group: Final = spans_for_trace(spans, tenant_trace)
+            return group if group else None
+
+        group: Final = eventually(settled, lambda value: value is not None, seconds=30)
+        assert group is not None
+        names: Final = sorted(str(span["name"]) for span in group)
+        assert all("gen_ai.operation.name" in (span["attributes"] or {}) for span in group), names  # type: ignore[union-attr]
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h14_additive_mode_exclude")
+def test_additive_mode_operator_full_tenant_excluded(gateway: Gateway, tmp_path: Path) -> None:
+    with _candidate(gateway, tmp_path, settings={"otel_tenant_destination_mode": "additive"}) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(candidate, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            call_id: Final = _call_id(response)
+            operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id)
+            _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id)
+            _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h15_operator_sink_untouched")
+def test_operator_sink_keeps_internal_spans_under_exclude(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=_call_id(response))
+        operator_spans: Final = _trace_spans(SINK_OPERATOR, operator_trace)
+        _assert_full(operator_spans)
+        internal_names: Final = sorted(
+            str(span["name"]) for span in operator_spans if span_class(span) == "internal"
+        )
+        assert any("auth" in name or "redis" in name or "postgres" in name for name in internal_names), internal_names
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.h16_guardrail_span_kept_under_exclude")
+def test_guardrail_span_survives_exclude(gateway: Gateway, tmp_path: Path) -> None:
+    guardrail_name: Final = f"audit-filter-{uuid.uuid4().hex[:8]}"
+    config: Final = yaml.safe_load(_audit_config(tmp_path).read_text())
+    config["guardrails"] = [
+        {
+            "guardrail_name": guardrail_name,
+            "litellm_params": {
+                "guardrail": "litellm_content_filter",
+                "mode": "pre_call",
+                "default_on": True,
+                "patterns": [
+                    {
+                        "pattern_type": "regex",
+                        "pattern_name": "audit_secret",
+                        "pattern": "TOPSECRET\\d{9}",
+                        "action": "BLOCK",
+                    }
+                ],
+            },
+        }
+    ]
+    path: Final = tmp_path / "audit-guardrail.yaml"
+    path.write_text(yaml.safe_dump(config))
+    with owned_proxy(
+        gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=path, num_workers=2
+    ) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(candidate, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            call_id: Final = _call_id(response)
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id)
+            tenant_spans: Final = _trace_spans(SINK_TENANT, tenant_trace)
+
+            def guardrail_seen() -> tuple[dict[str, JsonValue], ...] | None:
+                _, spans = recorded_spans(SINK_TENANT)
+                group: Final = spans_for_trace(spans, tenant_trace)
+                kept: Final = tuple(
+                    span
+                    for span in group
+                    if "litellm.guardrail.name" in (span["attributes"] or {})  # type: ignore[union-attr]
+                )
+                return kept or None
+
+            kept: Final = eventually(guardrail_seen, lambda value: value is not None, seconds=30)
+            assert kept is not None, f"guardrail span missing at tenant sink: {tenant_spans}"
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d1_env_exclude_applies")
+def test_env_exclude_applies_when_var_absent(gateway: Gateway, tmp_path: Path) -> None:
+    with _candidate(gateway, tmp_path, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": "exclude"}) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(candidate, team_id, LANGFUSE_VARS)
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+            _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d2_var_include_beats_env_exclude")
+def test_var_include_beats_env_exclude(gateway: Gateway, tmp_path: Path) -> None:
+    with _candidate(gateway, tmp_path, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": "exclude"}) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(candidate, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "include"})
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+            _assert_full(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d3_setting_exclude_applies")
+def test_litellm_setting_exclude_applies_when_var_absent(gateway: Gateway, tmp_path: Path) -> None:
+    with _candidate(gateway, tmp_path, settings={"otel_tenant_internal_spans": "exclude"}) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(candidate, team_id, LANGFUSE_VARS)
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+            _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d4_setting_include_beats_env_exclude")
+def test_setting_include_beats_env_exclude(gateway: Gateway, tmp_path: Path) -> None:
+    with _candidate(
+        gateway, tmp_path, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": "exclude"}, settings={"otel_tenant_internal_spans": "include"}
+    ) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(candidate, team_id, LANGFUSE_VARS)
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+            _assert_full(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d5_env_whitespace_case_exclude")
+def test_env_exclude_with_whitespace_and_case(gateway: Gateway, tmp_path: Path) -> None:
+    with _candidate(gateway, tmp_path, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": " EXCLUDE "}) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(candidate, team_id, LANGFUSE_VARS)
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+            _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d6_env_bogus_falls_back_include")
+def test_env_bogus_value_falls_back_to_include(gateway: Gateway, tmp_path: Path) -> None:
+    with _candidate(gateway, tmp_path, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": "bogus"}) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(candidate, team_id, LANGFUSE_VARS)
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+            _assert_full(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.d7_empty_setting_falls_through_env")
+def test_empty_setting_falls_through_to_env(gateway: Gateway, tmp_path: Path) -> None:
+    with _candidate(
+        gateway, tmp_path, env={"LITELLM_OTEL_TENANT_INTERNAL_SPANS": "exclude"}, settings={"otel_tenant_internal_spans": ""}
+    ) as candidate:
+        with candidate.scenario() as scenario:
+            model: Final = _audit_model(scenario, candidate.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(candidate, team_id, LANGFUSE_VARS)
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(candidate, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+            _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+def _bad_var_rejected(response: httpx.Response) -> None:
+    assert response.status_code in (400, 422), f"expected rejection, got {response.status_code}: {response.text}"
+    assert INTERNAL_SPANS_VAR in response.text or "callback" in response.text, response.text
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s1_int_value_rejected")
+def test_callback_var_int_rejected(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        response: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: 1})  # type: ignore[dict-item]  # deliberately malformed input
+        _bad_var_rejected(response)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s2_list_value_rejected")
+def test_callback_var_list_rejected(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        response: Final = _add_callback(
+            gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: ["exclude"]}  # type: ignore[dict-item]  # deliberately malformed input
+        )
+        _bad_var_rejected(response)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s3_empty_value_rejected")
+def test_callback_var_empty_string_rejected(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        response: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: ""})
+        _bad_var_rejected(response)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s4_oversized_value_rejected")
+def test_callback_var_oversized_string_rejected(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        response: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "x" * 5120})
+        _bad_var_rejected(response)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s5_case_sensitive_rejected")
+def test_callback_var_case_sensitive_rejected(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        response: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "Exclude"})
+        _bad_var_rejected(response)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s6_same_value_twice_accepted")
+def test_same_internal_spans_value_on_second_entry_accepted(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        first: Final = _add_callback(
+            gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"}, callback_type="success_and_failure"
+        )
+        assert first.status_code == 200, first.text
+        second: Final = _add_callback(
+            gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"}, callback_type="success"
+        )
+        assert second.status_code == 200, f"identical value rejected: {second.status_code} {second.text}"
+        listed: Final = gateway.get(f"/team/{team_id}/callback")
+        data: Final = object_value(listed["data"])
+        assert "langfuse_otel" in data.get("success_callbacks", []), data
+        assert object_value(data["callback_vars"]).get(INTERNAL_SPANS_VAR) == "exclude", data
+        key: Final = _key_on_team(scenario, team_id)
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        tenant_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(response))
+        _assert_excluded(_trace_spans(SINK_TENANT, tenant_trace))
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s7_conflicting_value_rejected")
+def test_conflicting_internal_spans_value_rejected(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        first: Final = _add_callback(
+            gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"}, callback_type="success_and_failure"
+        )
+        assert first.status_code == 200, first.text
+        second: Final = _add_callback(
+            gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "include"}, callback_type="success"
+        )
+        assert second.status_code == 400, f"expected 400 conflict, got {second.status_code}: {second.text}"
+        assert INTERNAL_SPANS_VAR in second.text, second.text
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s8_non_otel_callback_rejected")
+def test_internal_spans_on_non_otel_callback_rejected(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        response: Final = _add_callback(
+            gateway,
+            team_id,
+            {"langsmith_api_key": "sk-ls-audit", INTERNAL_SPANS_VAR: "exclude"},
+            callback_name="langsmith",
+        )
+        assert response.status_code == 400, f"expected 400, got {response.status_code}: {response.text}"
+        assert "callback" in response.text, response.text
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s9_newrelic_accepts_var")
+def test_internal_spans_on_newrelic_accepted(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        response: Final = _add_callback(
+            gateway,
+            team_id,
+            {"newrelic_api_key": "nr-audit-key", INTERNAL_SPANS_VAR: "exclude"},
+            callback_name="newrelic",
+        )
+        assert response.status_code == 200, f"expected 200, got {response.status_code}: {response.text}"
+        listed: Final = gateway.get(f"/team/{team_id}/callback")
+        data: Final = object_value(listed["data"])
+        assert object_value(data["callback_vars"]).get(INTERNAL_SPANS_VAR) == "exclude", data
+        assert "newrelic" in data.get("success_callbacks", []) or "newrelic" in data.get("failure_callbacks", []), data
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s10_unauthenticated_callback_post")
+def test_unauthenticated_callback_post_rejected(gateway: Gateway) -> None:
+    with httpx.Client(base_url=str(gateway.client.base_url), timeout=15, trust_env=False) as client:
+        response: Final = client.post(
+            "/team/some-team/callback", json={"callback_name": "langfuse_otel", "callback_vars": dict(LANGFUSE_VARS)}
+        )
+    assert response.status_code == 401, f"expected 401, got {response.status_code}: {response.text}"
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s11_key_generate_bogus_rejected")
+def test_key_generate_bogus_internal_spans_rejected(gateway: Gateway) -> None:
+    response: Final = gateway.request(
+        "POST", "/key/generate", {"metadata": {"logging": _key_logging_entry({**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "bogus"})}}
+    )
+    assert response.status_code == 400, f"expected 400, got {response.status_code}: {response.text}"
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s12_key_update_bogus_rejected")
+def test_key_update_bogus_internal_spans_rejected(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        response: Final = gateway.request(
+            "POST",
+            "/key/update",
+            {"key": key, "metadata": {"logging": _key_logging_entry({**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "bogus"})}},
+        )
+        assert response.status_code == 400, f"expected 400, got {response.status_code}: {response.text}"
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s13_team_update_unvalidated_drops_destination")
+def test_team_update_bogus_internal_spans_drops_destination(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        update: Final = gateway.request(
+            "POST",
+            "/team/update",
+            {"team_id": team_id, "metadata": {"logging": _key_logging_entry({**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "bogus"})}},
+        )
+        assert update.status_code == 200, update.text
+        key: Final = _key_on_team(scenario, team_id)
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        call_id: Final = _call_id(response)
+        operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id)
+        _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+        _, observed = recorded_spans(SINK_TENANT, since=0)
+        leaked: Final = tuple(
+            span for span in observed if (span["attributes"] or {}).get("litellm.call_id") == call_id  # type: ignore[union-attr]
+        )
+        assert not leaked, f"bogus metadata.logging still reached the tenant sink: {leaked}"
+
+
+def _sink_status_flow(gateway: Gateway, status: int) -> None:
+    configure_sink(SINK_TENANT, status=status)
+    try:
+        with gateway.scenario() as scenario:
+            model: Final = _audit_model(scenario, gateway.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(gateway, team_id, LANGFUSE_VARS)
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(gateway, key, model, _nonce())
+            assert response.status_code == 200, f"caller broke on sink {status}: {response.status_code} {response.text}"
+            call_id: Final = _call_id(response)
+            operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id)
+            _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+            response_id: Final = _response_id(response.json())
+            rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id IN (%s, %s)',
+                    (str(call_id), str(response_id)),
+                ),
+                lambda values: len(values) >= 1,
+                seconds=70,
+            )
+            assert rows, "no spend row"
+    finally:
+        configure_sink(SINK_TENANT, status=200)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s14_tenant_sink_403_caller_unaffected")
+def test_tenant_sink_403_does_not_break_caller(gateway: Gateway) -> None:
+    _sink_status_flow(gateway, 403)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s15_tenant_sink_404_caller_unaffected")
+def test_tenant_sink_404_does_not_break_caller(gateway: Gateway) -> None:
+    _sink_status_flow(gateway, 404)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s16_upstream_500_under_exclude")
+def test_upstream_500_under_exclude_keeps_internal_spans_back(gateway: Gateway) -> None:
+    upstream_model: Final = "audit-chat"
+    httpx.post(
+        f"{gateway.upstream_url}/__scripts/{upstream_model}", json={"statuses": [500]}, trust_env=False, timeout=15
+    ).raise_for_status()
+    try:
+        with gateway.scenario() as scenario:
+            model: Final = _audit_model(scenario, gateway.upstream_url)
+            team_id: Final = scenario.team()
+            callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+            assert callback.status_code == 200, callback.text
+            key: Final = _key_on_team(scenario, team_id)
+            response: Final = _chat(gateway, key, model, _nonce())
+            assert response.status_code >= 500, f"expected caller 5xx, got {response.status_code}: {response.text}"
+            call_id: Final = _call_id(response)
+
+            def tenant_group() -> tuple[dict[str, JsonValue], ...] | None:
+                _, spans = recorded_spans(SINK_TENANT)
+                group: Final = tuple(
+                    span
+                    for span in spans
+                    if (span["attributes"] or {}).get("litellm.call_id") == call_id  # type: ignore[union-attr]
+                    or span["trace_id"] in {s["trace_id"] for s in spans if (s["attributes"] or {}).get("litellm.call_id") == call_id}  # type: ignore[union-attr]
+                )
+                return group if group else None
+
+            group: Final = eventually(tenant_group, lambda value: value is not None, seconds=40)
+            assert group is not None, "tenant sink never received the failed-request trace"
+            counts: Final = _classes(group)
+            assert counts["internal"] == 0, f"internal spans leaked on error trace: {group}"
+    finally:
+        httpx.delete(f"{gateway.upstream_url}/__scripts/{upstream_model}", trust_env=False, timeout=15)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s17_unrelated_key_unaffected")
+def test_unrelated_key_unaffected_by_tenant_sink_failure(gateway: Gateway) -> None:
+    configure_sink(SINK_TENANT, status=403)
+    try:
+        with gateway.scenario() as scenario:
+            model: Final = _audit_model(scenario, gateway.upstream_url)
+            key: Final = scenario.key()
+            response: Final = _chat(gateway, key, model, _nonce())
+            assert response.status_code == 200, f"unrelated key broke: {response.status_code} {response.text}"
+    finally:
+        configure_sink(SINK_TENANT, status=200)
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.s18_key_health_with_exclude_team")
+def test_key_health_with_excluded_team_callback(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        response: Final = gateway.request("POST", "/key/health", key=key)
+        assert response.status_code == 200, f"/key/health failed: {response.status_code} {response.text}"
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.e1_var_update_takes_effect_within_ttl")
+def test_callback_var_update_include_to_exclude_takes_effect(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        first: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "include"})
+        assert first.status_code == 200, first.text
+        key: Final = _key_on_team(scenario, team_id)
+        warm: Final = _chat(gateway, key, model, _nonce())
+        assert warm.status_code == 200, warm.text
+        warm_trace: Final = _trace_id(SINK_TENANT, call_id=_call_id(warm))
+        _assert_full(_trace_spans(SINK_TENANT, warm_trace))
+        deleted: Final = gateway.request("DELETE", f"/team/{team_id}/callback/langfuse_otel")
+        assert deleted.status_code == 200, deleted.text
+        updated: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert updated.status_code == 200, updated.text
+
+        issued: Final[list[str | None]] = []
+
+        def flipped() -> str | None:
+            response: Final = _chat(gateway, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            issued.append(_call_id(response))
+            _, spans = recorded_spans(SINK_TENANT)
+            group: Final = tuple(
+                span
+                for span in spans
+                if (span["attributes"] or {}).get("litellm.call_id") in issued  # type: ignore[union-attr]
+            )
+            if not group:
+                return None
+            newest: Final = next(
+                (span for span in reversed(group) if (span["attributes"] or {}).get("litellm.call_id") == issued[-1]),  # type: ignore[union-attr]
+                group[-1],
+            )
+            full_group: Final = spans_for_trace(spans, str(newest["trace_id"]))
+            if _classes(full_group)["internal"] == 0:
+                return str(newest["trace_id"])
+            return None
+
+        trace: Final = eventually(flipped, lambda value: value is not None, seconds=70)
+        assert trace is not None, "exclude never took effect within the cache TTL"
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.e2_callback_delete_stops_tenant_export")
+def test_callback_delete_stops_tenant_export(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, LANGFUSE_VARS)
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        warm: Final = _chat(gateway, key, model, _nonce())
+        assert warm.status_code == 200, warm.text
+        _trace_id(SINK_TENANT, call_id=_call_id(warm))
+        deleted: Final = gateway.request("DELETE", f"/team/{team_id}/callback/langfuse_otel")
+        assert deleted.status_code == 200, deleted.text
+
+        def drained() -> str | None:
+            response: Final = _chat(gateway, key, model, _nonce())
+            if response.status_code != 200:
+                return None
+            call_id: Final = _call_id(response)
+            operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id)
+            return call_id if operator_trace else None
+
+        call_id: Final = eventually(drained, lambda value: value is not None, seconds=70)
+        assert call_id is not None
+        _, spans = recorded_spans(SINK_TENANT)
+        leaked: Final = tuple(
+            span for span in spans if (span["attributes"] or {}).get("litellm.call_id") == call_id  # type: ignore[union-attr]
+        )
+        assert not leaked, f"tenant sink still received spans after callback delete: {leaked}"
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.e3_identical_requests_export_once")
+def test_identical_requests_export_exactly_once(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        call_ids: Final = []
+        response_ids: Final = []
+        for _ in range(5):
+            response: Final = _chat(gateway, key, model, _nonce())
+            assert response.status_code == 200, response.text
+            call_ids.append(_call_id(response))
+            response_ids.append(_response_id(response.json()))
+        for call_id, response_id in zip(call_ids, response_ids):
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id, response_id=response_id)
+            _, spans = recorded_spans(SINK_TENANT)
+            matching: Final = tuple(
+                span
+                for span in spans_for_trace(spans, tenant_trace)
+                if "gen_ai.operation.name" in (span["attributes"] or {})  # type: ignore[union-attr]
+            )
+            assert len(matching) == 1, f"model span for {response_id} exported {len(matching)} times"
+            operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id, response_id=response_id)
+            _, operator_spans = recorded_spans(SINK_OPERATOR)
+            operator_matching: Final = tuple(
+                span
+                for span in spans_for_trace(operator_spans, operator_trace)
+                if (span["attributes"] or {}).get("gen_ai.response.id") == response_id  # type: ignore[union-attr]
+            )
+            assert len(operator_matching) == 1, f"operator exported {response_id} {len(operator_matching)} times"
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.e4_concurrent_requests_excluded_once")
+def test_concurrent_requests_all_excluded_once(gateway: Gateway) -> None:
+    import threading
+
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(gateway, team_id, {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"})
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        responses: Final[list[httpx.Response]] = []
+
+        def hit() -> None:
+            responses.append(_chat(gateway, key, model, _nonce()))
+
+        threads: Final = [threading.Thread(target=hit) for _ in range(10)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        assert len(responses) == 10
+        for response in responses:
+            assert response.status_code == 200, response.text
+            call_id: Final = _call_id(response)
+            tenant_trace: Final = _trace_id(SINK_TENANT, call_id=call_id)
+            group: Final = _trace_spans(SINK_TENANT, tenant_trace)
+            _assert_excluded(group)
+            workers: Final = {
+                str((span["resource"] or {}).get("process.pid")) for span in group  # type: ignore[union-attr]
+            }
+            assert workers, "no process attribution on tenant spans"
+
+
+@pytest.mark.covers("other.observability.otel.tenant_internal_spans.e5_failure_only_entry_anchors_no_destination")
+def test_failure_only_callback_entry_anchors_no_destination(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = _audit_model(scenario, gateway.upstream_url)
+        team_id: Final = scenario.team()
+        callback: Final = _add_callback(
+            gateway,
+            team_id,
+            {**LANGFUSE_VARS, INTERNAL_SPANS_VAR: "exclude"},
+            callback_type="failure",
+        )
+        assert callback.status_code == 200, callback.text
+        key: Final = _key_on_team(scenario, team_id)
+        response: Final = _chat(gateway, key, model, _nonce())
+        assert response.status_code == 200, response.text
+        call_id: Final = _call_id(response)
+        operator_trace: Final = _trace_id(SINK_OPERATOR, call_id=call_id)
+        _assert_full(_trace_spans(SINK_OPERATOR, operator_trace))
+        _, spans = recorded_spans(SINK_TENANT)
+        leaked: Final = tuple(
+            span for span in spans if (span["attributes"] or {}).get("litellm.call_id") == call_id  # type: ignore[union-attr]
+        )
+        assert not leaked, f"failure-only entry anchored a tenant destination: {leaked}"
