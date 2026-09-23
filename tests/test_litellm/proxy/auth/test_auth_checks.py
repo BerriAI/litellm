@@ -9314,3 +9314,14 @@ async def test_agent_key_without_an_echoed_caller_keeps_its_own_models():
     await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user)
 
     assert asked == []
+
+
+def test_can_object_call_model_allows_listed_model_for_key():
+    result: Final = _can_object_call_model(
+        model="allowed-model",
+        llm_router=None,
+        models=["allowed-model"],
+        object_type="key",
+    )
+
+    assert result is True
