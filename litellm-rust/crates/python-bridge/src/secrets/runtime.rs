@@ -223,7 +223,7 @@ impl NativeSecretManager {
             true,
         )?;
         run_sync_value(py, async move {
-            litellm_secrets::read_python_provider(&backend, &request, &ProcessEnvironment)
+            super::operations::read_python_provider(&backend, &request, &ProcessEnvironment)
                 .await
                 .map_err(|error| PyValueError::new_err(error.to_string()))
                 .and_then(|value| python_secret_value(value, &request.secret_name))
@@ -249,7 +249,7 @@ impl NativeSecretManager {
             false,
         )?;
         run_async_value(py, async move {
-            litellm_secrets::read_python_provider(&backend, &request, &ProcessEnvironment)
+            super::operations::read_python_provider(&backend, &request, &ProcessEnvironment)
                 .await
                 .map_err(|error| PyValueError::new_err(error.to_string()))
                 .and_then(|value| python_secret_value(value, &request.secret_name))
@@ -300,7 +300,7 @@ impl NativeSecretManager {
             super::vault::ErrorContext::capture(py, self.configuration.system, timeout)?;
         run_async_value(py, async move {
             super::mutation::mutation_value(
-                litellm_secrets::write_python_provider_with_context(
+                super::operations::write_python_provider_with_context(
                     &backend,
                     &secret_name,
                     &litellm_secrets::SecretValue::new(secret_value),
@@ -329,7 +329,7 @@ impl NativeSecretManager {
             super::vault::ErrorContext::capture(py, self.configuration.system, timeout)?;
         run_async_value(py, async move {
             super::mutation::mutation_value(
-                litellm_secrets::delete_python_provider_with_context(
+                super::operations::delete_python_provider_with_context(
                     &backend,
                     &secret_name,
                     &context,
@@ -357,7 +357,7 @@ impl NativeSecretManager {
             super::vault::ErrorContext::capture(py, self.configuration.system, timeout)?;
         run_async_value(py, async move {
             super::mutation::mutation_value(
-                litellm_secrets::rotate_python_provider_with_context(
+                super::operations::rotate_python_provider_with_context(
                     &backend,
                     &current_secret_name,
                     &new_secret_name,

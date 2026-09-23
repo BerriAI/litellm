@@ -1,23 +1,21 @@
-#[cfg(any(feature = "hashicorp", feature = "cyberark"))]
-use crate::Secret;
-use crate::{Error, SecretManager};
 use litellm_core_utils::settings::Lookup;
+use litellm_secrets::Secret;
+use litellm_secrets::{Error, SecretManager};
 use litellm_secrets_types::{PythonSecretRead, SecretOperationContext};
 
-pub struct PythonReadRequest {
+pub(super) struct PythonReadRequest {
     pub secret_name: String,
     pub primary_secret_name: Option<String>,
     pub context: SecretOperationContext,
     pub synchronous: bool,
 }
 
-pub async fn read_python_provider(
+pub(super) async fn read_python_provider(
     manager: &SecretManager,
     request: &PythonReadRequest,
     _environment: &(dyn Lookup + Send + Sync),
 ) -> Result<PythonSecretRead, Error> {
     match (manager, &request.context) {
-        #[cfg(feature = "aws")]
         (SecretManager::AwsSecretsManagerV2(client), SecretOperationContext::Aws(context)) => {
             client
                 .read_provider_payload_for_python(
@@ -30,7 +28,6 @@ pub async fn read_python_provider(
                 .await
                 .map_err(Error::from)
         }
-        #[cfg(feature = "hashicorp")]
         (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(context)) => {
             Ok(PythonSecretRead::Value(
                 client
@@ -40,7 +37,6 @@ pub async fn read_python_provider(
                     .map(Secret::String),
             ))
         }
-        #[cfg(feature = "cyberark")]
         (SecretManager::Cyberark(client), SecretOperationContext::Cyberark(_)) => {
             Ok(PythonSecretRead::Value(
                 client
@@ -50,7 +46,6 @@ pub async fn read_python_provider(
                     .map(Secret::String),
             ))
         }
-        #[cfg(feature = "google")]
         (SecretManager::GoogleSecretManager(client), SecretOperationContext::Google(_)) => client
             .get_secret_for_python(&request.secret_name)
             .await
@@ -61,29 +56,24 @@ pub async fn read_python_provider(
 }
 
 #[derive(Debug)]
-pub enum PythonMutationError {
+pub(super) enum PythonMutationError {
     Unsupported,
-    #[cfg(feature = "hashicorp")]
-    Vault(Box<litellm_secrets_hashicorp::PythonFailure>),
-    #[cfg(feature = "cyberark")]
+    Vault(Box<litellm_secrets::hashicorp::PythonFailure>),
     CyberarkWrite {
         name: String,
-        failure: Box<litellm_secrets_cyberark::PythonWriteFailure>,
+        failure: Box<litellm_secrets::cyberark::PythonWriteFailure>,
     },
     CurrentMissing(String),
     ReplacementMissing(String),
     ReplacementMismatch,
 }
 
-pub async fn write_python_provider(
+pub(super) async fn write_python_provider(
     manager: &SecretManager,
     name: &str,
-    value: &crate::SecretValue,
+    value: &litellm_secrets::SecretValue,
 ) -> Result<serde_json::Value, PythonMutationError> {
-    #[cfg(not(feature = "cyberark"))]
-    let _ = (name, value);
     match manager {
-        #[cfg(feature = "cyberark")]
         SecretManager::Cyberark(client) => {
             client
                 .write_for_python(name, value)
@@ -98,21 +88,18 @@ pub async fn write_python_provider(
     }
 }
 
-pub async fn delete_python_provider(
+pub(super) async fn delete_python_provider(
     manager: &SecretManager,
     name: &str,
 ) -> Result<serde_json::Value, PythonMutationError> {
-    #[cfg(not(feature = "cyberark"))]
-    let _ = name;
     match manager {
-        #[cfg(feature = "cyberark")]
         SecretManager::Cyberark(client) => {
             client
                 .async_delete_secret(name, None)
                 .await
                 .map_err(|failure| PythonMutationError::CyberarkWrite {
                     name: name.to_owned(),
-                    failure: Box::new(litellm_secrets_cyberark::PythonWriteFailure {
+                    failure: Box::new(litellm_secrets::cyberark::PythonWriteFailure {
                         source: failure,
                         request_url: None,
                         authentication: false,
@@ -127,18 +114,15 @@ pub async fn delete_python_provider(
     }
 }
 
-pub async fn rotate_python_provider(
+pub(super) async fn rotate_python_provider(
     manager: &SecretManager,
     current_name: &str,
     new_name: &str,
-    value: &crate::SecretValue,
+    value: &litellm_secrets::SecretValue,
 ) -> Result<serde_json::Value, PythonMutationError> {
-    #[cfg(not(feature = "cyberark"))]
-    let _ = (current_name, new_name, value);
     match manager {
-        #[cfg(feature = "cyberark")]
         SecretManager::Cyberark(client) => {
-            use litellm_secrets_cyberark::PythonRotationFailure;
+            use litellm_secrets::cyberark::PythonRotationFailure;
             client
                 .rotate_for_python(current_name, new_name, value)
                 .await
@@ -162,26 +146,21 @@ pub async fn rotate_python_provider(
         _ => Err(PythonMutationError::Unsupported),
     }
 }
-
-#[cfg(feature = "cyberark")]
 fn write_success(name: &str) -> serde_json::Value {
     serde_json::json!({"status": "success", "message": format!("Secret {name} written successfully")})
 }
 
-pub enum PythonMutationResponse {
+pub(super) enum PythonMutationResponse {
     Value(serde_json::Value),
     Json(Vec<u8>),
 }
 
-pub async fn write_python_provider_with_context(
+pub(super) async fn write_python_provider_with_context(
     manager: &SecretManager,
     name: &str,
-    value: &crate::SecretValue,
+    value: &litellm_secrets::SecretValue,
     context: &litellm_secrets_types::SecretWriteContext,
 ) -> Result<PythonMutationResponse, PythonMutationError> {
-    #[cfg(not(feature = "hashicorp"))]
-    let _ = context;
-    #[cfg(feature = "hashicorp")]
     if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(operation)) =
         (manager, &context.operation)
     {
@@ -204,14 +183,11 @@ pub async fn write_python_provider_with_context(
         .map(PythonMutationResponse::Value)
 }
 
-pub async fn delete_python_provider_with_context(
+pub(super) async fn delete_python_provider_with_context(
     manager: &SecretManager,
     name: &str,
     context: &SecretOperationContext,
 ) -> Result<PythonMutationResponse, PythonMutationError> {
-    #[cfg(not(feature = "hashicorp"))]
-    let _ = context;
-    #[cfg(feature = "hashicorp")]
     if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(context)) =
         (manager, context)
     {
@@ -228,16 +204,13 @@ pub async fn delete_python_provider_with_context(
         .map(PythonMutationResponse::Value)
 }
 
-pub async fn rotate_python_provider_with_context(
+pub(super) async fn rotate_python_provider_with_context(
     manager: &SecretManager,
     current_name: &str,
     new_name: &str,
-    value: &crate::SecretValue,
+    value: &litellm_secrets::SecretValue,
     context: &SecretOperationContext,
 ) -> Result<PythonMutationResponse, PythonMutationError> {
-    #[cfg(not(feature = "hashicorp"))]
-    let _ = context;
-    #[cfg(feature = "hashicorp")]
     if let (SecretManager::HashicorpVault(client), SecretOperationContext::Hashicorp(context)) =
         (manager, context)
     {

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use litellm_secrets::{KeyManagementSystem, PythonReadRequest, SecretValue};
+use super::operations::PythonReadRequest;
+use litellm_secrets::{KeyManagementSystem, SecretValue};
 use litellm_secrets_types::{
     AwsOperationContext, CyberarkOperationContext, GoogleOperationContext,
     HashicorpOperationContext, SecretOperationContext,
