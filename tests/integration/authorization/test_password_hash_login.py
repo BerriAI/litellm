@@ -204,9 +204,7 @@ def test_pbkdf2_row_with_a_higher_iteration_count_signs_in_and_is_kept(proxy: Ga
     try:
         salt: Final = os.urandom(16)
         derived: Final = hashlib.pbkdf2_hmac("sha256", PASSWORD.encode(), salt, 700_000)
-        row: Final = "pbkdf2:sha256:700000:{}:{}".format(
-            base64.b64encode(salt).decode(), base64.b64encode(derived).decode()
-        )
+        row: Final = f"pbkdf2:sha256:700000:{base64.b64encode(salt).decode()}:{base64.b64encode(derived).decode()}"
         _write_stored_password(user_id, row)
         assert _login(proxy, email, WRONG_PASSWORD) == 401
         assert _login(proxy, email, PASSWORD) == 303
@@ -239,9 +237,7 @@ def test_unrelated_routes_keep_serving_during_a_login_burst(proxy: Gateway) -> N
             key: Final = scenario.key(models=[model])
             attempts: Final = tuple(PASSWORD if index % 3 else WRONG_PASSWORD for index in range(BURST_SIZE))
             with ThreadPoolExecutor(max_workers=BURST_SIZE + 2) as pool:
-                login_futures: Final = tuple(
-                    pool.submit(_login, proxy, email, password) for password in attempts
-                )
+                login_futures: Final = tuple(pool.submit(_login, proxy, email, password) for password in attempts)
                 key_future: Final = pool.submit(proxy.request, "POST", "/key/generate", {})
                 chat_future: Final = pool.submit(
                     proxy.request,
