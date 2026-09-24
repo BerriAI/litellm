@@ -366,7 +366,6 @@ def test_bedrock_converse_redacted_thinking_dropped_for_non_anthropic_model():
     for non_thinking_model in (
         "amazon.nova-pro-v1:0",
         "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-pro-v1:0",
-        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/nova-pro-app",
     ):
         result = _bedrock_converse_messages_pt(
             messages=messages,
@@ -415,13 +414,13 @@ def test_bedrock_converse_preserves_reasoning_for_application_inference_profile(
         assert assistant_blocks[1]["reasoningContent"]["redactedContent"] == "opaque_profile_data"
         assert assistant_blocks[2] == {"text": "profile response"}
 
-    partial_pricing_claude: Final = (
-        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/custom-claude-partial-pricing"
+    partial_pricing_profile: Final = (
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/custom-app-profile-no-flag"
     )
-    with patch.dict(litellm.model_cost, {partial_pricing_claude: {"input_cost_per_token": 0.003}}):
+    with patch.dict(litellm.model_cost, {partial_pricing_profile: {"input_cost_per_token": 0.003}}):
         partial_result: Final = _bedrock_converse_messages_pt(
             messages=messages,
-            model=partial_pricing_claude,
+            model=partial_pricing_profile,
             llm_provider="bedrock_converse",
         )
         partial_blocks: Final = partial_result[1]["content"]

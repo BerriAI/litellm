@@ -564,6 +564,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_vision": true,
+        "supports_reasoning": false,
         "supports_tool_choice": true
     },
     "amazon.nova-2-sonic-v1:0": {

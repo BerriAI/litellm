@@ -4709,20 +4709,28 @@ class BedrockConverseMessagesProcessor:
     def _is_bedrock_converse_reasoning_model(model: str | None) -> bool:
         if model is None:
             return True
-        model_lower: Final = model.lower()
-        if any(
-            name in model_lower for name in ("nova", "amazon.nova", "meta.llama", "llama", "mistral", "cohere", "ai21")
-        ):
-            return False
-        if "anthropic" in model_lower or "claude" in model_lower:
-            return True
         import litellm
         from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
         candidates: Final = (model, get_bedrock_base_model(model))
-        entries: Final = tuple(entry for c in candidates if (entry := litellm.model_cost.get(c)) is not None)
-        if any(entry.get("supports_reasoning") is False for entry in entries):
-            return False
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                model_info: Final = litellm.get_model_info(model=candidate, custom_llm_provider="bedrock")
+                supports_reasoning: Final = model_info.get("supports_reasoning")
+                if supports_reasoning is False:
+                    return False
+                if supports_reasoning is True:
+                    return True
+            except Exception:  # noqa: BLE001  # unmapped models raise ModelNotMappedError
+                pass
+            entry: Final = litellm.model_cost.get(candidate)
+            if isinstance(entry, dict):
+                if entry.get("supports_reasoning") is False:
+                    return False
+                if entry.get("supports_reasoning") is True:
+                    return True
         return True
 
     @staticmethod
@@ -4740,26 +4748,24 @@ class BedrockConverseMessagesProcessor:
         Relevant Issue: https://github.com/BerriAI/litellm/issues/9063
         """
         is_anthropic_model: Final = BedrockConverseMessagesProcessor._is_bedrock_converse_reasoning_model(model)
-        filtered_thinking_blocks: Final = []
         for block in thinking_blocks:
             reasoning_content = block.get("reasoningContent", None)
-            if reasoning_content is not None and "redactedContent" in reasoning_content:
-                if not is_anthropic_model:
-                    continue
-                filtered_thinking_blocks.append(block)
-                continue
             reasoning_text = reasoning_content.get("reasoningText", None) if reasoning_content is not None else None
             if reasoning_text and not reasoning_text.get("signature"):
                 reasoning_text_text = reasoning_text["text"]
                 if reasoning_text_text.strip():
                     assistants_part = BedrockContentBlock(text=reasoning_text_text)
                     assistant_parts.append(assistants_part)
-            else:
-                if not is_anthropic_model:
-                    continue
-                filtered_thinking_blocks.append(block)
-        if len(filtered_thinking_blocks) > 0:
-            assistant_parts.extend(filtered_thinking_blocks)
+
+        if is_anthropic_model:
+            valid_thinking: Final = tuple(
+                block
+                for block in thinking_blocks
+                if (rc := block.get("reasoningContent")) is not None
+                and ("redactedContent" in rc or bool(rc.get("reasoningText", {}).get("signature")))
+            )
+            if valid_thinking:
+                assistant_parts.extend(valid_thinking)
         return assistant_parts
 
 
