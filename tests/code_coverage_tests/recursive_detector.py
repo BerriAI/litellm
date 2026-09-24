@@ -58,6 +58,7 @@ IGNORE_FUNCTIONS = [
     "replace_ciphertexts",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); walks stored JSON, which has no cycles, and leaves values below the cap untouched.
     "_iter_fallback_targets",  # max depth set (2 * ROUTER_MAX_FALLBACKS); fails closed by raising ValueError at the cap.
     "_mergeable_branch",  # max depth set (_MAX_SCHEMA_FLATTEN_DEPTH=32) plus a seen_refs cycle guard; passes the schema through untouched at the cap.
+    "_has_reachable_fallback",  # bounded by the visited set: every model group is expanded at most once, so a cycle terminates.
     "json_string_leaves",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); fails closed by raising at the cap so nothing goes unscanned.
     "with_json_string_leaves",  # transitively bounded: only runs on a tree json_string_leaves already walked under the cap.
     "json_unrewritable_labels",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); returns the None sentinel at the cap so the caller blocks.

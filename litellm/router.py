@@ -205,6 +205,7 @@ from litellm.router_utils.fallback_event_handlers import (
     clear_pre_routing_selection,
     fallback_lookup_groups,
     fallbacks_disabled_for_request,
+    get_fallback_model_group,
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
     has_unattempted_fallback_target,
@@ -11603,6 +11604,55 @@ class Router:
     def _is_model_fully_blocked(self, model: str) -> bool:
         deployments: Final = self.get_model_list(model_name=model) or []
         return self._are_all_deployments_blocked(deployments=deployments)
+
+    def _model_group_has_unblocked_deployment(self, model_name: str, team_id: str | None) -> bool:
+        deployments: Final = self.get_model_list(model_name=model_name, team_id=team_id) or []
+        return bool(deployments) and not self._are_all_deployments_blocked(deployments)
+
+    def _has_reachable_fallback(
+        self,
+        model_name: str,
+        fallbacks: Sequence[Mapping[str, Sequence[str]] | str],
+        team_id: str | None = None,
+        visited: frozenset[str] = frozenset(),
+    ) -> bool:
+        """
+        True when `fallbacks` routes `model_name` to a model group with at least one
+        unblocked deployment. `fallbacks` must already reflect the precedence the router
+        applies at call time, so a request-supplied list replaces the router-level chain
+        rather than merging with it. Traversal stops on a repeat group and after
+        `max_fallbacks` hops, matching the runtime limit and bounding recursion so a long
+        client-supplied chain cannot exhaust the stack.
+        """
+        if model_name in visited or len(visited) >= self.max_fallbacks:
+            return False
+        fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group=model_name)
+        if not fallback_model_group:
+            return False
+        next_visited: Final = visited | frozenset((model_name,))
+        return any(
+            self._model_group_has_unblocked_deployment(group, team_id)
+            or self._has_reachable_fallback(group, fallbacks, team_id, next_visited)
+            for group in fallback_model_group
+        )
+
+    def _is_blocked_without_reachable_fallback(
+        self,
+        model_name: str,
+        reachable_fallbacks: Sequence[Mapping[str, Sequence[str]] | str] | None,
+        team_id: str | None,
+    ) -> bool:
+        """
+        True when every deployment of `model_name` is blocked and no reachable fallback
+        can serve the request. `reachable_fallbacks` is the already-resolved chain the
+        caller would attempt, or None when no fallback can run on this path.
+        """
+        deployments: Final = self.get_model_list(model_name=model_name, team_id=team_id) or []
+        if not self._are_all_deployments_blocked(deployments):
+            return False
+        return reachable_fallbacks is None or not self._has_reachable_fallback(
+            model_name=model_name, fallbacks=reachable_fallbacks, team_id=team_id
+        )
 
     async def async_get_fully_unhealthy_model_names(self) -> set[str]:
         """

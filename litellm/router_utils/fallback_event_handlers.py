@@ -430,7 +430,7 @@ def get_fallback_model_group_for_lookup_groups(
     return next((result for result in results if result[0] is not None), (None, None))
 
 
-def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
+def get_fallback_model_group(fallbacks: Sequence[Any], model_group: str) -> tuple[list[str] | None, int | None]:
     """
     Returns:
     - fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
