@@ -177,6 +177,11 @@ def _dims(width: int, height: int) -> ImageDimensions:
             _dims(640, 480),
             id="bmp-v4header",
         ),
+        pytest.param(
+            b"BM" + bytes(12) + struct.pack("<I", 124) + struct.pack("<ii", 640, 480) + bytes(6),
+            _dims(640, 480),
+            id="bmp-v5header",
+        ),
         pytest.param(b"II*\x00" + bytes(28), None, id="unknown-format"),
     ),
 )
