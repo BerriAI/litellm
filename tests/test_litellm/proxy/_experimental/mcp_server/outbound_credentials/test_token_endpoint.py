@@ -13,12 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import jwt
+import litellm
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
-from pydantic import SecretStr
 
-import litellm
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
@@ -35,8 +34,12 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     PrivateKeyJwtAuth,
 )
+from pydantic import SecretStr
 
-_PATCH_TARGET = "litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint.get_async_httpx_client"
+_PATCH_TARGET = (
+    "litellm.proxy._experimental.mcp_server.outbound_credentials."
+    "token_endpoint.get_async_httpx_client"
+)
 
 _ENDPOINT = "https://idp.example.com/oauth2/token"
 _CLIENT_ID = "litellm-client-id"
