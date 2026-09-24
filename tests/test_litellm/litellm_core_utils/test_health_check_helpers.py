@@ -2,6 +2,7 @@
 
 import struct
 import zlib
+from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -482,3 +483,26 @@ async def test_ocr_health_check_sends_the_document_kind_the_provider_config_acce
     document = mock_aocr.call_args.kwargs["document"]
     assert document["type"] == expected_document_type
     assert document[expected_document_type].startswith(expected_uri_prefix)
+
+
+def test_realtime_health_check_azure_ad_params_drop_reserved_keys():
+    from litellm.realtime_api import main as realtime_main
+
+    seen = []
+    with (
+        patch.object(realtime_main, "get_azure_ad_token", lambda params: seen.append(params) or "ad-token"),
+        patch.object(
+            realtime_main.azure_realtime,
+            "get_auth_headers",
+            lambda api_key, azure_ad_token: {"Authorization": f"Bearer {azure_ad_token}"},
+        ),
+    ):
+        headers = realtime_main._realtime_health_check_auth_headers(
+            "azure",
+            None,
+            MappingProxyType({"api_base": "https://x.openai.azure.com", "self": 1, "params": 2, "__class__": 3}),
+        )
+
+    assert headers == {"Authorization": "Bearer ad-token"}
+    assert seen[0].api_base == "https://x.openai.azure.com"
+    assert seen[0].model_extra == {}
