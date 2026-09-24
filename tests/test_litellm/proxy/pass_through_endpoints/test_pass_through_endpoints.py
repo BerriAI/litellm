@@ -7399,6 +7399,19 @@ def test_passthrough_lets_metadata_win_over_litellm_metadata_on_a_shared_key() -
     }
 
 
+def test_passthrough_orders_extracted_litellm_params_by_the_registry_not_the_body() -> None:
+    body: Final = json.dumps({"ttl": 30, "tags": ["team-a"], "num_retries": 2, "contents": []})
+    split: Final = _split_pass_through_body(body)
+
+    assert tuple(split.litellm_params) == (
+        "num_retries",
+        "ttl",
+        "tags",
+        "metadata",
+        "proxy_server_request",
+    )
+
+
 LATE_REGISTERED_BODY: Final = '{"registered_later": 1, "contents": [{"parts": [{"text": "hi"}]}]}'
 
 
