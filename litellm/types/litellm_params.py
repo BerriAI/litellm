@@ -1,28 +1,12 @@
 """The LiteLLM-owned half of a request, declared as typed objects.
 
-Every keyword argument that LiteLLM consumes itself, and therefore must never reach a
-provider request body, is a field on exactly one of the dataclasses below. The fields are
-the registry: `all_litellm_params` in `litellm.types.utils` is derived from them, so
-declaring a field is what registers a name.
-
-Three roots partition the names by the object a value lives on. `ConnectionSettings` is
-how the SDK reaches the provider, `LiteLLMOptions` is what the caller or the deployment
-asks LiteLLM to do around the call, and `InternalState` is what LiteLLM stamps on a call
-in flight and must never accept from an untrusted client. Inside each root the leaf
-objects are cut by the subsystem that reads the field. The fourth object of a request,
-the model request itself, is provider-owned and already typed per endpoint, so it is not
-declared here.
-
-A field's kwarg name is its field name unless the field carries `wire(...)` metadata,
-which is reserved for names that are not clean identifiers or that carry a leading
-underscore to mark them internal. Nothing constructs these objects yet.
-
-Four names in `all_litellm_params` are never placed into `litellm_params` and so get no
-field: `self` and `model_config` arrive when a caller forwards `locals()` or a model's
-attributes as kwargs, and `use_client` and `rust` are module-level switches
-(`litellm.use_client`, `litellm.rust(...)`) that nothing reads from a call's kwargs. They
-stay registered so they keep falling out of provider params, and `KWARG_ARTIFACTS` names
-them.
+Every kwarg LiteLLM consumes itself, and so must never reach a provider request body, is a
+field on exactly one leaf below. The fields are the registry: `all_litellm_params` is
+derived from them. Three roots partition the names by where a value lives: `ConnectionSettings`
+(how the SDK reaches the provider), `LiteLLMOptions` (what the caller or deployment asks
+LiteLLM to do) and `InternalState` (what LiteLLM stamps on a call and never accepts from a
+client). A field's kwarg name is its field name unless it carries `wire(...)` metadata.
+`KWARG_ARTIFACTS` names the four registered kwargs that are not request fields.
 """
 
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
@@ -187,8 +171,6 @@ class SpecializedRouterOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CachingOptions:
-    """Response and prompt caching controls. Read by the caching handler."""
-
     caching: bool | None = None
     cache: "DynamicCacheControl | None" = None
     ttl: int | None = None
@@ -208,7 +190,6 @@ class CostOptions:
     base_model: str | None = None
     max_budget: float | None = None
     budget_duration: str | None = None
-    data_residency: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -236,15 +217,11 @@ class AgenticLoopOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GuardrailOptions:
-    """Guardrails the caller or the key applies to the call."""
-
     guardrails: Sequence[str] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PromptOptions:
-    """Prompt management and message shaping applied before the request is built."""
-
     prompt_id: str | None = None
     prompt_variables: Mapping[str, object] | None = None
     prompt_version: str | None = None
@@ -266,8 +243,6 @@ class PromptOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResponseOptions:
-    """How the response is shaped and streamed back to the caller."""
-
     merge_reasoning_content_in_choices: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
@@ -278,9 +253,7 @@ class ResponseOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MockOptions:
-    """Test doubles for the provider call."""
-
-    mock_response: "str | Exception | Mapping[str, object] | ModelResponse | ModelResponseStream | None" = None
+    mock_response: "str | Exception | Mapping[str, object] | Sequence[float] | ModelResponse | ModelResponseStream | None" = None
     mock_timeout: bool | None = None
 
 
@@ -306,6 +279,7 @@ class CallState:
 
     litellm_call_id: str | None = None
     completion_call_id: str | None = None
+    data_residency: str | None = None
     litellm_logging_obj: "Logging | None" = None
     preset_cache_key: str | None = None
     cache_key: str | None = None
