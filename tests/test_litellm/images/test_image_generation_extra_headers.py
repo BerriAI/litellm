@@ -6,13 +6,10 @@ to the OpenAI SDK on the openai/litellm_proxy/openai_compatible_providers
 code paths.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.images.main import image_generation

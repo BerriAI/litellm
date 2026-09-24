@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.caching.valkey_semantic_cache import ValkeySemanticCache
 
@@ -103,6 +102,17 @@ def test_build_valkey_url_uses_rediss_scheme_when_ssl(monkeypatch):
 def test_init_requires_similarity_threshold():
     with pytest.raises(ValueError, match="similarity_threshold must be provided"):
         ValkeySemanticCache(sync_client=MagicMock(), async_client=AsyncMock())
+
+
+def test_init_stores_embedding_max_input_tokens():
+    cache = ValkeySemanticCache(
+        similarity_threshold=0.8,
+        sync_client=MagicMock(),
+        async_client=AsyncMock(),
+        embedding_max_input_tokens=512,
+    )
+    assert cache.embedding_max_input_tokens == 512
+    assert _make_cache().embedding_max_input_tokens is None
 
 
 def test_init_rejects_cluster_startup_nodes():
@@ -298,6 +308,59 @@ async def test_async_set_and_get_roundtrip():
     )
     assert result == {"content": "Paris"}
     assert metadata["semantic-similarity"] == pytest.approx(0.95)
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_passes_only_metadata_to_get_async_embedding():
+    async_client = AsyncMock()
+    async_client.ft = _async_ft(0.05)
+    cache = _make_cache(async_client=async_client)
+    captured: dict[str, object] = {}
+
+    async def spy_embedding(prompt: str, metadata: dict | None = None) -> list[float]:
+        captured["prompt"] = prompt
+        captured["metadata"] = metadata
+        return [0.1, 0.2, 0.3]
+
+    cache._get_async_embedding = spy_embedding
+
+    await cache.async_set_cache(
+        key="cache-key",
+        value={"content": "Paris"},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        metadata={"user_api_key": "sk-test"},
+        cache_key="abc123",
+        custom_llm_provider="openai",
+    )
+
+    assert captured["metadata"] == {"user_api_key": "sk-test"}
+    async_client.hset.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_passes_only_metadata_to_get_async_embedding():
+    async_client = AsyncMock()
+    async_client.ft = _async_ft(0.05)
+    cache = _make_cache(async_client=async_client)
+    captured: dict[str, object] = {}
+
+    async def spy_embedding(prompt: str, metadata: dict | None = None) -> list[float]:
+        captured["prompt"] = prompt
+        captured["metadata"] = dict(metadata) if metadata is not None else None
+        return [0.1, 0.2, 0.3]
+
+    cache._get_async_embedding = spy_embedding
+
+    result = await cache.async_get_cache(
+        key="cache-key",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        metadata={"user_api_key": "sk-test"},
+        cache_key="abc123",
+        custom_llm_provider="openai",
+    )
+
+    assert result == {"content": "Paris"}
+    assert captured["metadata"] == {"user_api_key": "sk-test"}
 
 
 @pytest.mark.asyncio

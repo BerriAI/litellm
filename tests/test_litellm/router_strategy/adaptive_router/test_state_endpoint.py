@@ -1,7 +1,6 @@
 """Tests for the GET /adaptive_router/state introspection endpoint and the
 underlying `AdaptiveRouter.get_state_snapshot()` helper."""
 
-import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,11 +8,12 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
-from litellm.router_strategy.adaptive_router.bandit import BanditCell, apply_delta
+from litellm.router_strategy.adaptive_router.bandit import apply_delta
 from litellm.types.router import (
     AdaptiveRouterConfig,
     AdaptiveRouterPreferences,
     RequestType,
+    TaggedPreRoutingStrategy,
 )
 
 
@@ -34,6 +34,10 @@ def _make_router(name: str = "r1") -> AdaptiveRouter:
     )
 
 
+def _entry(name: str = "r1") -> list:
+    return [TaggedPreRoutingStrategy(tags=(), strategy=_make_router(name))]
+
+
 # ---- snapshot helper ---------------------------------------------------
 
 
@@ -47,8 +51,6 @@ async def test_get_state_snapshot_returns_cell_per_request_type_per_model():
     assert snap["available_models"] == ["fast", "smart"]
     assert snap["weights"] == {"quality": 0.7, "cost": 0.3}
     assert snap["model_costs"] == {"fast": 0.0001, "smart": 0.001}
-    assert snap["owner_cache_live"] == 0
-    assert snap["skipped_updates_total"] == 0
     assert set(snap["queue"].keys()) == {
         "state_pending",
         "session_pending",
@@ -95,26 +97,6 @@ async def test_get_state_snapshot_quality_mean_matches_alpha_over_total():
     assert cell["quality_mean"] == pytest.approx(expected_mean)
 
 
-@pytest.mark.asyncio
-async def test_get_state_snapshot_counts_only_live_owner_cache_entries():
-    r = _make_router()
-    now = time.time()
-    r._owner_cache["live-1"] = ("fast", now + 3600)
-    r._owner_cache["live-2"] = ("smart", now + 3600)
-    r._owner_cache["expired-1"] = ("fast", now - 1)
-
-    snap = await r.get_state_snapshot()
-    assert snap["owner_cache_live"] == 2
-
-
-@pytest.mark.asyncio
-async def test_get_state_snapshot_exposes_skipped_updates_total():
-    r = _make_router()
-    r._skipped_updates_total = 7
-    snap = await r.get_state_snapshot()
-    assert snap["skipped_updates_total"] == 7
-
-
 # ---- endpoint --------------------------------------------------------
 
 
@@ -150,7 +132,7 @@ async def test_endpoint_rejects_non_admin_role(monkeypatch):
     from litellm.proxy import proxy_server
 
     fake_router = MagicMock()
-    fake_router.adaptive_routers = {"r1": _make_router()}
+    fake_router.adaptive_routers = {"r1": _entry()}
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
     non_admin = UserAPIKeyAuth(
@@ -167,7 +149,7 @@ async def test_endpoint_returns_snapshot_list_for_admin(monkeypatch):
     from litellm.proxy import proxy_server
 
     fake_router = MagicMock()
-    fake_router.adaptive_routers = {"r1": _make_router("r1")}
+    fake_router.adaptive_routers = {"r1": _entry("r1")}
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
     admin = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -187,8 +169,8 @@ async def test_endpoint_returns_one_snapshot_per_router(monkeypatch):
 
     fake_router = MagicMock()
     fake_router.adaptive_routers = {
-        "r1": _make_router("r1"),
-        "r2": _make_router("r2"),
+        "r1": _entry("r1"),
+        "r2": _entry("r2"),
     }
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 

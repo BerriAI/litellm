@@ -4,13 +4,17 @@ arize AI is OTEL compatible
 this file has Arize ai specific helper functions
 """
 
+import math
 import os
+import random
+from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
+from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
-from litellm.integrations.opentelemetry import OpenTelemetry
+from litellm.integrations.opentelemetry import _MAX_DYNAMIC_TRACER_PROVIDERS, OpenTelemetry, OpenTelemetryConfig
 from litellm.types.integrations.arize import ArizeConfig
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -21,10 +25,13 @@ if TYPE_CHECKING:
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Protocol = Any
     Span = Any
+
+_SUCCESS_SAMPLING_RATE_VAR: Final = "arize_success_sampling_rate"
+_ERROR_SAMPLING_RATE_VAR: Final = "arize_error_sampling_rate"
 
 
 class ArizeLogger(OpenTelemetry):
@@ -35,6 +42,26 @@ class ArizeLogger(OpenTelemetry):
     generic ``otel`` callback (or any other OTEL-based integration) without
     fighting over the global ``opentelemetry.trace`` TracerProvider singleton.
     """
+
+    def __init__(
+        self,
+        config: OpenTelemetryConfig | None = None,
+        callback_name: str | None = None,
+        tracer_provider: object | None = None,
+        logger_provider: object | None = None,
+        meter_provider: object | None = None,
+        max_dynamic_tracer_providers: int = _MAX_DYNAMIC_TRACER_PROVIDERS,
+        random_draw: Callable[[], float] | None = None,
+    ) -> None:
+        super().__init__(
+            config=config,
+            callback_name=callback_name,
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            max_dynamic_tracer_providers=max_dynamic_tracer_providers,
+        )
+        self._random_draw: Final[Callable[[], float]] = random_draw if random_draw is not None else random.random
 
     def _init_tracing(self, tracer_provider):
         """
@@ -50,10 +77,76 @@ class ArizeLogger(OpenTelemetry):
             self.span_kind = SpanKind
             return
 
-        provider = TracerProvider(resource=self._get_litellm_resource(self.config))
+        provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
         provider.add_span_processor(self._get_span_processor())
         self.tracer = provider.get_tracer("litellm")
         self.span_kind = SpanKind
+
+    def _handle_success(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        if not self._should_export(kwargs, _SUCCESS_SAMPLING_RATE_VAR):
+            return
+        super()._handle_success(kwargs, response_obj, start_time, end_time)
+
+    def _handle_failure(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        if not self._should_export(kwargs, _ERROR_SAMPLING_RATE_VAR):
+            return
+        super()._handle_failure(kwargs, response_obj, start_time, end_time)
+
+    def _sampling_rate_for_request(self, kwargs: Mapping[str, object], var: str) -> float | None:
+        dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
+        if not isinstance(dynamic_params, Mapping):
+            return None
+        value: Final = dynamic_params.get(var)
+        if value is None or value in ("", "None"):
+            return None
+        try:
+            rate = float(value)
+        except (TypeError, ValueError):
+            verbose_logger.warning(
+                "ArizeLogger: %s value %r is not a number; exporting the request",
+                var,
+                value,
+            )
+            return None
+        if not math.isfinite(rate) or not 0.0 <= rate <= 1.0:
+            verbose_logger.warning(
+                "ArizeLogger: %s value %r is outside 0.0..1.0; exporting the request",
+                var,
+                value,
+            )
+            return None
+        return rate
+
+    def _should_export(self, kwargs: dict[str, object], var: str) -> bool:
+        rate: Final = self._sampling_rate_for_request(kwargs, var)
+        if rate is None:
+            return True
+        otel_internal: Final = self._otel_internal_state(kwargs)
+        key: Final = f"arize_sampled:{var}"
+        cached: Final = otel_internal.get(key)
+        if isinstance(cached, bool):
+            return cached
+        sampled: Final = rate > 0.0 and self._random_draw() <= rate
+        otel_internal[key] = sampled
+        if not sampled:
+            verbose_logger.debug(
+                "ArizeLogger: dropping request, %s rate %r rejected the draw",
+                var,
+                rate,
+            )
+        return sampled
 
     def _init_otel_logger_on_litellm_proxy(self):
         """
@@ -61,16 +154,13 @@ class ArizeLogger(OpenTelemetry):
         ``open_telemetry_logger``.  That attribute is reserved for the
         primary ``otel`` callback which handles proxy-level parent spans.
         """
-        pass
 
-    def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
+    def set_attributes(self, span: Span, kwargs, response_obj: Any | None):
         ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
-        return
 
     @staticmethod
     def set_arize_attributes(span: Span, kwargs, response_obj):
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
-        return
 
     @staticmethod
     def get_arize_config() -> ArizeConfig:
@@ -83,13 +173,13 @@ class ArizeLogger(OpenTelemetry):
         Raises:
             ValueError: If required environment variables are not set.
         """
-        space_id = os.environ.get("ARIZE_SPACE_ID")
-        space_key = os.environ.get("ARIZE_SPACE_KEY")
-        api_key = os.environ.get("ARIZE_API_KEY")
-        project_name = os.environ.get("ARIZE_PROJECT_NAME")
+        space_id: Final = os.environ.get("ARIZE_SPACE_ID")
+        space_key: Final = os.environ.get("ARIZE_SPACE_KEY")
+        api_key: Final = os.environ.get("ARIZE_API_KEY")
+        project_name: Final = os.environ.get("ARIZE_PROJECT_NAME")
 
-        grpc_endpoint = os.environ.get("ARIZE_ENDPOINT")
-        http_endpoint = os.environ.get("ARIZE_HTTP_ENDPOINT")
+        grpc_endpoint: Final = os.environ.get("ARIZE_ENDPOINT")
+        http_endpoint: Final = os.environ.get("ARIZE_HTTP_ENDPOINT")
 
         endpoint = None
         protocol: Protocol = "otlp_grpc"
@@ -116,25 +206,23 @@ class ArizeLogger(OpenTelemetry):
     async def async_service_success_hook(
         self,
         payload: ServiceLoggerPayload,
-        parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[datetime, float]] = None,
-        event_metadata: Optional[dict] = None,
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
+        event_metadata: dict | None = None,
     ):
         """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
-        pass
 
     async def async_service_failure_hook(
         self,
         payload: ServiceLoggerPayload,
-        error: Optional[str] = "",
-        parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[float, datetime]] = None,
-        event_metadata: Optional[dict] = None,
+        error: str | None = "",
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: float | datetime | None = None,
+        event_metadata: dict | None = None,
     ):
         """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
-        pass
 
     # def create_litellm_proxy_request_started_span(
     #     self,
@@ -152,7 +240,7 @@ class ArizeLogger(OpenTelemetry):
             dict: Health check result with status and message
         """
         try:
-            config = self.get_arize_config()
+            config: Final = self.get_arize_config()
 
             if not config.space_id and not config.space_key:
                 return {
@@ -174,12 +262,12 @@ class ArizeLogger(OpenTelemetry):
         except Exception as e:
             return {
                 "status": "unhealthy",
-                "error_message": f"Arize health check failed: {str(e)}",
+                "error_message": f"Arize health check failed: {e}",
             }
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         Construct dynamic Arize headers from standard callback dynamic params
 
@@ -188,7 +276,7 @@ class ArizeLogger(OpenTelemetry):
         Returns:
             dict: A dictionary of dynamic Arize headers
         """
-        dynamic_headers = {}
+        dynamic_headers: Final = {}
 
         #########################################################
         # `arize-space-id` handling

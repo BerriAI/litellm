@@ -4,7 +4,7 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { jwtDecode } from "jwt-decode";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
-import { formatUserRole } from "@/utils/roles";
+import { effectiveSessionRole } from "@/utils/roles";
 import { getUiConfig, setGlobalLitellmHeaderName } from "@/components/networking";
 
 function deleteCookie(name: string, path = "/") {
@@ -24,6 +24,7 @@ type AuthContextValue = {
   premiumUser: boolean;
   disabledPersonalKeyCreation: boolean;
   showSSOBanner: boolean;
+  passwordResetRequired: boolean;
 
   setToken: React.Dispatch<React.SetStateAction<string | null>>;
   setUserID: React.Dispatch<React.SetStateAction<string | null>>;
@@ -46,6 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [premiumUser, setPremiumUser] = useState(false);
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
   const [showSSOBanner, setShowSSOBanner] = useState(true);
+  const [passwordResetRequired, setPasswordResetRequired] = useState(false);
 
   // Load runtime UI config (populates proxyBaseUrl etc.) before clearing
   // authLoading, so any consumer that builds proxy-rooted URLs from authLoading=false
@@ -107,7 +109,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setDisabledPersonalKeyCreation(decoded.disabled_non_admin_personal_key_creation);
 
     if (decoded.user_role) {
-      setUserRole(formatUserRole(decoded.user_role));
+      setUserRole(effectiveSessionRole(decoded.user_role));
     }
     if (decoded.user_email) {
       setUserEmail(decoded.user_email);
@@ -124,6 +126,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (decoded.user_id) {
       setUserID(decoded.user_id);
     }
+    setPasswordResetRequired(decoded.password_reset_required === true);
   }, [token]);
 
   const value: AuthContextValue = {
@@ -136,6 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     premiumUser,
     disabledPersonalKeyCreation,
     showSSOBanner,
+    passwordResetRequired,
     setToken,
     setUserID,
     setUserRole,

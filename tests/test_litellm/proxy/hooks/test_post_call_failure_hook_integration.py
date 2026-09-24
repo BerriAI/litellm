@@ -5,13 +5,10 @@ Tests verify that the failure hook can transform error responses sent to clients
 similar to how async_post_call_success_hook can transform successful responses.
 """
 
-import os
-import sys
 import pytest
 from typing import Optional
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from fastapi import HTTPException
 from litellm.integrations.custom_logger import CustomLogger

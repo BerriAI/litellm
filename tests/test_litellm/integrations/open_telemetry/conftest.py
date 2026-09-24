@@ -11,8 +11,6 @@ emitter in isolation.
 See ``LIT-3193_test_matrix.md`` (same directory) for the cell list.
 """
 
-import os
-import sys
 from datetime import datetime
 from typing import Optional, Tuple
 from unittest.mock import MagicMock
@@ -24,7 +22,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.integrations.opentelemetry import OpenTelemetry

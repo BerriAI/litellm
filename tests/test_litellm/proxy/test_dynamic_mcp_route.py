@@ -540,3 +540,74 @@ async def test_toolset_mcp_route_unexpected_exception_returns_500_without_traceb
     assert exc_info.value.detail == "Internal server error"
     assert "db-host" not in str(exc_info.value.detail)
     assert "traceback" not in str(exc_info.value.detail).lower()
+
+
+# ---------------------------------------------------------------------------
+# 7. Aggregate /mcp without a trailing slash (bare mount prefix)
+# ---------------------------------------------------------------------------
+
+_IS_MCP_AVAILABLE = "litellm.proxy._experimental.mcp_server.utils.is_mcp_available"
+
+
+def _test_client():
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.proxy_server import app
+
+    return TestClient(app, follow_redirects=False)
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "DELETE"])
+def test_aggregate_mcp_route_bare_path_is_served_not_redirected(method):
+    """Bare /mcp must dispatch to the MCP handler with aggregate semantics,
+    never 307-redirect. Driven through the real app router so a lost route
+    registration (not just a broken handler body) fails this test."""
+    captured_scope: dict = {}
+
+    async def capturing_handle(scope, receive, send):
+        captured_scope.update(scope)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    with patch(_HANDLE_HTTP, new=capturing_handle):
+        response = _test_client().request(method, "/mcp")
+
+    assert response.status_code == 200
+    assert captured_scope.get("path") == "/mcp"
+    assert captured_scope.get("_original_path") == "/mcp"
+
+
+def test_aggregate_mcp_route_requires_exact_path():
+    """The bare-path route must match exactly /mcp; a sibling path like /mcpx
+    must not reach the MCP handler through it."""
+    calls = []
+
+    async def marking_handle(scope, receive, send):
+        calls.append(scope.get("path"))
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    with patch(_HANDLE_HTTP, new=marking_handle):
+        response = _test_client().post("/mcpx")
+
+    assert calls == []
+    assert response.status_code != 200
+
+
+def test_aggregate_mcp_route_returns_404_when_mcp_unavailable():
+    """When the mcp package is unavailable the canonical /mcp/ sub-app is a
+    bare FastAPI that 404s, so the bare spelling must 404 identically instead
+    of erroring on the handler import."""
+    handler_calls = []
+
+    async def marking_handle(scope, receive, send):
+        handler_calls.append(scope.get("path"))
+
+    with (
+        patch(_IS_MCP_AVAILABLE, new=MagicMock(return_value=False)),
+        patch(_HANDLE_HTTP, new=marking_handle),
+    ):
+        response = _test_client().post("/mcp")
+
+    assert response.status_code == 404
+    assert handler_calls == []

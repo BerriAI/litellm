@@ -9,12 +9,9 @@ when constructing LiteLLMBatch. This test suite verifies the sanitization
 layer prevents that.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 

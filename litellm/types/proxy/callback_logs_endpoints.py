@@ -5,7 +5,7 @@ External producers (e.g. the litellm-rust gateway) POST finished logging
 payloads here; the proxy replays them through the standard callback fan-out.
 """
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,7 +17,7 @@ class CallbackLogRecord(BaseModel):
 
     status: Literal["success", "failure"]
     standard_logging_payload: dict[str, Any]
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class CallbackLogsRequest(BaseModel):
