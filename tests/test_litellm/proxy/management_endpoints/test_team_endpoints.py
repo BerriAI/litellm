@@ -189,6 +189,7 @@ def _wire_team_delete_tx(prisma_client):
     tx = SimpleNamespace(
         litellm_teamtable=prisma_client.db.litellm_teamtable,
         litellm_teammembership=prisma_client.db.litellm_teammembership,
+        litellm_tagtable=prisma_client.db.litellm_tagtable,
         query_raw=AsyncMock(return_value=[]),
         execute_raw=prisma_client.db.execute_raw,
     )
@@ -8894,6 +8895,54 @@ async def test_delete_team_persists_deleted_teams(
 
 
 @pytest.mark.asyncio
+async def test_delete_team_releases_the_tags_it_owned(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
+    """An owned tag must not stay locked to a team id that no longer exists (or that a new team could reuse)."""
+    from litellm.proxy._types import DeleteTeamRequest
+    from litellm.proxy.auth.auth_checks import tag_cache_key
+
+    mock_prisma_client = AsyncMock()
+    team1 = LiteLLM_TeamTable(
+        team_id="team-1", team_alias="t1", members_with_roles=[], metadata={}, model_max_budget={}, model_spend={}
+    )
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team1)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_tagtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(tag_name="billing-tag", team_id="team-1")]
+    )
+    mock_prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value=1)
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client)
+    evicted = AsyncMock()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    monkeypatch.setattr("litellm.proxy.management_endpoints.team_endpoints.evict_and_broadcast", evicted)
+
+    await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-1"]),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    release_call = mock_prisma_client.db.litellm_tagtable.update_many.await_args
+    assert release_call.kwargs["where"] == {"team_id": {"in": ("team-1",)}}
+    assert dict(release_call.kwargs["data"]) == {"team_id": None}
+    assert (tag_cache_key("billing-tag"),) in [call.kwargs["cache_keys"] for call in evicted.await_args_list]
+
+
+@pytest.mark.asyncio
 async def test_delete_team_sweeps_references_outside_members_with_roles(
     monkeypatch,
     disable_audit_logging_for_mocked_team,
@@ -15267,6 +15316,8 @@ async def test_new_team_and_delete_team_both_drive_the_mirror(
         prisma.delete_data = AsyncMock(return_value=[team_row])
         prisma.db.execute_raw = AsyncMock(return_value=0)
         prisma.db.litellm_teammembership.delete_many = AsyncMock(return_value=0)
+        prisma.db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_tagtable.update_many = AsyncMock(return_value=0)
 
         await delete_team(
             data=DeleteTeamRequest(team_ids=["team-gone"]),

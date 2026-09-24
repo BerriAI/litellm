@@ -2230,7 +2230,23 @@ async def _fetch_uncached_tags(
             where={"tag_name": {"in": list(tags_to_fetch)}},
             include={"litellm_budget_table": True},
         )
-        fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)
+    except Exception as e:  # noqa: BLE001  # fail-safe (fail_open callers): a tag fetch error must yield "no budget objects"
+        if not fail_open:
+            raise
+        verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
+        return ()
+
+    fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)
+    await _cache_fetched_tags(fetched=fetched, user_api_key_cache=user_api_key_cache)
+    return fetched
+
+
+async def _cache_fetched_tags(
+    fetched: Sequence[tuple[str, LiteLLM_TagTable]],
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Best-effort cache fill; the rows are already in hand, so a cache write error is only a lost cache hit."""
+    try:
         for fetched_name, fetched_obj in fetched:
             await user_api_key_cache.async_set_cache(
                 key=tag_cache_key(fetched_name),
@@ -2238,13 +2254,8 @@ async def _fetch_uncached_tags(
                 model_type=LiteLLM_TagTable,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
-    except Exception as e:  # noqa: BLE001  # fail-safe (fail_open callers): a tag fetch error must yield "no budget objects"
-        if not fail_open:
-            raise
-        verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
-        return ()
-    else:
-        return fetched
+    except Exception as e:  # noqa: BLE001  # fail-safe: a cache write error must not fail a request whose rows were read
+        verbose_proxy_logger.debug("Error caching tags fetched from database: %s", e)
 
 
 @log_db_metrics

@@ -2934,6 +2934,36 @@ async def test_get_tag_objects_batch_stays_fail_open_for_budget_only_callers():
     )
 
 
+class _WriteFailingCache(UserApiKeyCache):
+    async def async_set_cache(self, key, value, **kwargs):
+        raise RuntimeError("cache backend down")
+
+
+@pytest.mark.asyncio
+async def test_owner_check_survives_a_cache_write_failure_once_the_rows_are_read():
+    """Only the row read is fail-closed; a failed cache fill after a good read still allows the owning team."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import _tag_owner_and_budget_check
+    from litellm.proxy.utils import ProxyLogging
+
+    async def check(team_id: str) -> None:
+        await _tag_owner_and_budget_check(
+            request_body={"model": "gpt-4o", "metadata": {"tags": ["team-a-tag"]}},
+            team_object=None,
+            prisma_client=_owned_tag_prisma({"team-a-tag": "team-a"}),
+            user_api_key_cache=_WriteFailingCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id=team_id),
+            check_budgets=False,
+        )
+
+    assert await check("team-a") is None
+    with pytest.raises(HTTPException) as exc_info:
+        await check("team-b")
+    assert exc_info.value.status_code == 403
+
+
 @pytest.mark.asyncio
 async def test_get_team_object_raises_404_when_not_found():
     from unittest.mock import AsyncMock, MagicMock

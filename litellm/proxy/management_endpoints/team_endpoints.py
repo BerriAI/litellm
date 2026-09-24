@@ -112,6 +112,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
     invalidate_team_member_spend_state,
+    tag_cache_key,
 )
 from litellm.proxy.auth.auth_utils import (
     enforce_batch_enqueued_token_limit_is_admin_only,
@@ -191,6 +192,7 @@ from litellm.repositories.table_repositories import (
     DeletedTeamRepository,
     ModelTableRepository,
     OrganizationMembershipRepository,
+    TagRepository,
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
@@ -399,12 +401,16 @@ class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
     @property
     def litellm_teammembership(self) -> "TableActions[prisma_models.LiteLLM_TeamMembership]": ...
 
+    @property
+    def litellm_tagtable(self) -> "TableActions[prisma_models.LiteLLM_TagTable]": ...
+
 
 _STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
 UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
 """
 
 _INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
+_RELEASE_TAG_OWNER: Final = MappingProxyType({"team_id": None})
 
 
 def _team_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_TeamTable]":
@@ -453,6 +459,10 @@ def _access_group_db(prisma_client: PrismaClient | None) -> "TableActions[prisma
 
 def _tokens_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
     return VerificationTokenRepository(prisma_client).table
+
+
+def _tags_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_TagTable]":
+    return TagRepository(prisma_client).table
 
 
 def _sanitize_for_log(value: object) -> str:
@@ -4560,6 +4570,7 @@ async def delete_team(
     # or is still waiting on the lock, in which case its own re-read happens after this commits
     # and sees the row gone before it writes anything.
     delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": data.team_ids}}
+    owned_tags: Final = await _tags_db(prisma_client).find_many(where=delete_filter)
     async with prisma_client.tx() as tx:
         for team_id in sorted(data.team_ids):
             await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
@@ -4577,6 +4588,9 @@ async def delete_team(
         teams=team_rows,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+    )
+    await evict_and_broadcast(
+        cache_keys=tuple(tag_cache_key(tag.tag_name) for tag in owned_tags), user_api_key_cache=user_api_key_cache
     )
 
     for deleted_team in team_rows:
@@ -4615,6 +4629,7 @@ async def _sweep_deleted_team_references_tx(team_ids: Sequence[str], tx: _TeamDe
 
     membership_filter: Final[_TeamIdInFilter] = {"team_id": {"in": tuple(team_ids)}}
     _ = await tx.litellm_teammembership.delete_many(where=membership_filter)
+    _ = await tx.litellm_tagtable.update_many(where=membership_filter, data=_RELEASE_TAG_OWNER)
 
 
 async def _invalidate_deleted_key_cache(
