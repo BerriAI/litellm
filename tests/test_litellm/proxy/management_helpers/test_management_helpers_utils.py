@@ -19,6 +19,49 @@ from litellm.proxy._types import (
 from litellm.proxy.management_helpers.utils import add_new_member
 
 
+def test_management_redaction_preserves_context_and_does_not_mutate_input():
+    from pydantic import BaseModel
+
+    from litellm.proxy.management_helpers.utils import redact_management_kwargs
+    from litellm.proxy.utils import hash_token
+
+    class Payload(BaseModel):
+        key: str
+        password: str
+        key_alias: str
+
+    payload = Payload(key="sk-test-private", password="private-password", key_alias="visible-alias")
+    original = {
+        "data": payload,
+        "nested": [{"api_key": "provider-secret", "team_id": "team-1"}],
+        "keys": ["sk-test-other", "non-litellm-secret"],
+        "secret": None,
+        "count": 3,
+    }
+    result = redact_management_kwargs(original)
+    assert result == {
+        "data": {"key": hash_token(payload.key), "password": "***", "key_alias": "visible-alias"},
+        "nested": [{"api_key": "***", "team_id": "team-1"}],
+        "keys": [hash_token("sk-test-other"), "***"],
+        "secret": "***",
+        "count": 3,
+    }
+    assert original["data"] is payload
+    assert payload.password == "private-password"
+    assert original["nested"] == [{"api_key": "provider-secret", "team_id": "team-1"}]
+
+
+def test_management_redaction_bounds_recursive_payloads():
+    from litellm.proxy.management_helpers.utils import redact_management_kwargs
+
+    recursive = {"password": "private-password"}
+    recursive["nested"] = recursive
+    result = redact_management_kwargs({"data": recursive})
+    assert "private-password" not in json.dumps(result)
+    assert "***" in json.dumps(result)
+    assert recursive["password"] == "private-password"
+
+
 @pytest.mark.asyncio
 async def test_management_otel_span_redacts_mcp_global_env_var_secrets(monkeypatch):
     """A decrypted MCP global env var secret must never reach telemetry.
@@ -1385,3 +1428,48 @@ async def test_add_new_member_runs_every_write_on_the_caller_transaction(new_mem
     prisma_client.db.assert_not_called()
     prisma_client.get_data.assert_not_awaited()
     prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True], ids=["success", "failure"])
+async def test_management_otel_redacts_raw_body_nested_results_and_errors(monkeypatch, fails):
+    from starlette.requests import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_helpers import utils as mgmt_utils
+
+    captured = []
+
+    class Logger:
+        async def async_management_endpoint_success_hook(self, logging_payload, parent_otel_span):
+            captured.append(logging_payload)
+
+        async def async_management_endpoint_failure_hook(self, logging_payload, parent_otel_span):
+            captured.append(logging_payload)
+
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", Logger())
+    monkeypatch.setattr(mgmt_utils, "is_otel_v2_enabled", lambda: False)
+    body = {"nested": {"api_key": "private-provider-value"}, "team_id": "team-readable"}
+
+    async def receive():
+        return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+
+    request = Request({"type": "http", "path": "/model/new", "headers": []}, receive)
+    result = {"items": [{"password": "private-result-value", "team_id": "team-readable"}]}
+    from fastapi import HTTPException
+
+    error = HTTPException(status_code=403, detail="private-error-value") if fails else None
+    await mgmt_utils._emit_management_endpoint_otel_span(
+        func=lambda: None, kwargs={"http_request": request}, parent_otel_span=object(),
+        start_time=datetime.now(), end_time=datetime.now(), result=result, exception=error,
+    )
+    assert len(captured) == 1
+    serialized = str(captured[0])
+    assert "private-provider-value" not in serialized
+    assert "private-result-value" not in serialized
+    assert "private-error-value" not in serialized
+    assert captured[0].request_data["team_id"] == "team-readable"
+    if fails:
+        assert captured[0].exception.status_code == 403
+    assert json.loads(await request.body()) == body
+    assert result["items"][0]["password"] == "private-result-value"

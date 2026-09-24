@@ -1,5 +1,6 @@
 general_settings:
   proxy_batch_write_at: 5
+  enable_management_mcp: true
   enable_jwt_auth: true
   litellm_jwtauth:
     user_id_jwt_field: sub

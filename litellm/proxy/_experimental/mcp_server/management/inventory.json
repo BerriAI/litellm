@@ -1,0 +1,2666 @@
+{
+  "DELETE /access_group/{access_group}/budget": {
+    "tool": "delete_access_group_budget_access_group__access_group__budget_delete"
+  },
+  "DELETE /access_group/{access_group}/delete": {
+    "tool": "delete_access_group_access_group__access_group__delete_delete"
+  },
+  "DELETE /anthropic/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /assemblyai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /assistants/{assistant_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /azure/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /azure_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /azure_speech/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /bedrock/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /claude-code/plugins/{plugin_name}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /cloudzero/delete": {
+    "tool": "delete_cloudzero_settings_cloudzero_delete_delete"
+  },
+  "DELETE /cohere/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /config/pass_through_endpoint": {
+    "tool": "delete_pass_through_endpoints_config_pass_through_endpoint_delete"
+  },
+  "DELETE /config_overrides/cyberark": {
+    "tool": "delete_cyberark_config_config_overrides_cyberark_delete"
+  },
+  "DELETE /config_overrides/hashicorp_vault": {
+    "tool": "delete_hashicorp_vault_config_config_overrides_hashicorp_vault_delete"
+  },
+  "DELETE /containers/{container_id}": {
+    "excluded": "tag:containers"
+  },
+  "DELETE /containers/{container_id}/files/{file_id}": {
+    "excluded": "tag:containers"
+  },
+  "DELETE /credentials/{credential_name}": {
+    "tool": "delete_credential_credentials__credential_name__delete"
+  },
+  "DELETE /cursor/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /eu.assemblyai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /fal_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /fallback/{model}": {
+    "tool": "delete_fallback_fallback__model__delete"
+  },
+  "DELETE /files/{file_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /gemini/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /gigachat/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /guardrails/{guardrail_id}": {
+    "tool": "delete_guardrail_guardrails__guardrail_id__delete"
+  },
+  "DELETE /interactions/{interaction_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /langfuse/{endpoint}": {
+    "excluded": "excluded path prefix"
+  },
+  "DELETE /mcp": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /mcp/proxy": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /milvus/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /mistral/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /nvidia_nim/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /openai/v1/responses/{response_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /openai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /openai_passthrough/{endpoint}": {
+    "excluded": "tag:OpenAI Pass-through"
+  },
+  "DELETE /openrouter/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /organization/delete": {
+    "tool": "delete_organization_organization_delete_delete"
+  },
+  "DELETE /organization/member_delete": {
+    "tool": "organization_member_delete_organization_member_delete_delete"
+  },
+  "DELETE /policies/attachments/{attachment_id}": {
+    "tool": "delete_policy_attachment_policies_attachments__attachment_id__delete"
+  },
+  "DELETE /policies/name/{policy_name}/all-versions": {
+    "tool": "delete_all_policy_versions_policies_name__policy_name__all_versions_delete"
+  },
+  "DELETE /policies/{policy_id}": {
+    "tool": "delete_policy_policies__policy_id__delete"
+  },
+  "DELETE /project/delete": {
+    "tool": "delete_project_project_delete_delete"
+  },
+  "DELETE /prompts/{prompt_id}": {
+    "tool": "delete_prompt_prompts__prompt_id__delete"
+  },
+  "DELETE /responses/{response_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /scim/v2/Groups/{group_id}": {
+    "tool": "delete_group_scim_v2_Groups__group_id__delete"
+  },
+  "DELETE /scim/v2/Users/{user_id}": {
+    "tool": "delete_user_scim_v2_Users__user_id__delete"
+  },
+  "DELETE /search_tools/{search_tool_id}": {
+    "tool": "delete_search_tool_search_tools__search_tool_id__delete"
+  },
+  "DELETE /team/{team_id}/callback/{callback_name}": {
+    "tool": "delete_team_callback_team__team_id__callback__callback_name__delete"
+  },
+  "DELETE /toolset/{toolset_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "DELETE /typesafe/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /v1/access_group/{access_group_id}": {
+    "tool": "delete_access_group_v1_access_group__access_group_id__delete"
+  },
+  "DELETE /v1/agents/{agent_id}": {
+    "excluded": "excluded path prefix"
+  },
+  "DELETE /v1/assistants/{assistant_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /v1/containers/{container_id}": {
+    "excluded": "tag:containers"
+  },
+  "DELETE /v1/containers/{container_id}/files/{file_id}": {
+    "excluded": "tag:containers"
+  },
+  "DELETE /v1/evals/{eval_id}": {
+    "excluded": "excluded path prefix"
+  },
+  "DELETE /v1/evals/{eval_id}/runs/{run_id}": {
+    "excluded": "excluded path prefix"
+  },
+  "DELETE /v1/files/{file_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /v1/mcp/server/{server_id}": {
+    "tool": "remove_mcp_server_v1_mcp_server__server_id__delete"
+  },
+  "DELETE /v1/mcp/server/{server_id}/oauth-user-credential": {
+    "tool": "delete_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_delete"
+  },
+  "DELETE /v1/mcp/server/{server_id}/user-credential": {
+    "tool": "delete_mcp_user_credential_v1_mcp_server__server_id__user_credential_delete"
+  },
+  "DELETE /v1/mcp/server/{server_id}/user-env-vars": {
+    "tool": "clear_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_delete"
+  },
+  "DELETE /v1/mcp/sessions": {
+    "tool": "delete_mcp_gateway_sessions_v1_mcp_sessions_delete"
+  },
+  "DELETE /v1/mcp/toolset/{toolset_id}": {
+    "tool": "remove_mcp_toolset_v1_mcp_toolset__toolset_id__delete"
+  },
+  "DELETE /v1/memory/{key}": {
+    "excluded": "excluded path prefix"
+  },
+  "DELETE /v1/responses/{response_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /v1/skills/{skill_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /v1/tool/{tool_name}/overrides": {
+    "tool": "delete_tool_policy_override_v1_tool__tool_name__overrides_delete"
+  },
+  "DELETE /v1/unified_access_group/{access_group_id}": {
+    "tool": "delete_access_group_v1_unified_access_group__access_group_id__delete"
+  },
+  "DELETE /v1/vector_stores/{vector_store_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /v1beta/agents/{name}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /v1beta/interactions/{interaction_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /vantage/delete": {
+    "tool": "delete_vantage_settings_vantage_delete_delete"
+  },
+  "DELETE /vector_stores/{vector_store_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /vector_stores/{vector_store_id}/files/{file_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "DELETE /vertex_ai/discovery/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /vertex_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /vllm/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /watsonx/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "DELETE /{mcp_server_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "DELETE /{provider}/v1/files/{file_id}": {
+    "excluded": "tag:files"
+  },
+  "GET /": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /.well-known/agent-skills/index.json": {
+    "excluded": "tag:public"
+  },
+  "GET /.well-known/jwks.json": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "GET /.well-known/litellm-cli-auth": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "GET /.well-known/litellm-ui-config": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /.well-known/oauth-authorization-server": {
+    "excluded": "tag:mcp_byok_oauth"
+  },
+  "GET /.well-known/oauth-authorization-server/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "GET /.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
+    "excluded": "tag:mcp_byok_oauth"
+  },
+  "GET /.well-known/oauth-authorization-server/{mcp_server_name}": {
+    "excluded": "tag:mcp_byok_oauth"
+  },
+  "GET /.well-known/oauth-authorization-server/{mcp_server_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "GET /.well-known/oauth-protected-resource": {
+    "excluded": "tag:mcp_byok_oauth"
+  },
+  "GET /.well-known/oauth-protected-resource/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "GET /.well-known/oauth-protected-resource/mcp/{mcp_server_name}": {
+    "excluded": "tag:mcp_byok_oauth"
+  },
+  "GET /.well-known/oauth-protected-resource/{mcp_server_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "GET /.well-known/openid-configuration": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "GET /a2a/{agent_id}/.well-known/agent-card.json": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /a2a/{agent_id}/.well-known/agent.json": {
+    "excluded": "tag:a2a"
+  },
+  "GET /access_group/list": {
+    "tool": "list_access_groups_access_group_list_get"
+  },
+  "GET /access_group/{access_group}/budget": {
+    "tool": "get_access_group_budget_access_group__access_group__budget_get"
+  },
+  "GET /access_group/{access_group}/info": {
+    "tool": "get_access_group_info_access_group__access_group__info_get"
+  },
+  "GET /active/callbacks": {
+    "excluded": "tag:health"
+  },
+  "GET /adaptive_router/state": {
+    "tool": "get_adaptive_router_state_adaptive_router_state_get"
+  },
+  "GET /agent/daily/activity": {
+    "tool": "get_agent_daily_activity_agent_daily_activity_get"
+  },
+  "GET /anthropic/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /api/plugins": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /api/plugins/auth-token": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /assemblyai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /assistants": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /audit": {
+    "tool": "get_audit_logs_audit_get"
+  },
+  "GET /audit/{id}": {
+    "tool": "get_audit_log_by_id_audit__id__get"
+  },
+  "GET /authorize": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "GET /authorize/flow": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "GET /authorize/mcp-session": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "GET /auto_router/benchmarks": {
+    "tool": "get_auto_router_benchmarks_auto_router_benchmarks_get"
+  },
+  "GET /auto_router/classifier/default_prompt": {
+    "tool": "get_auto_router_classifier_default_prompt_auto_router_classifier_default_prompt_get"
+  },
+  "GET /auto_router/session": {
+    "tool": "get_auto_router_session_auto_router_session_get"
+  },
+  "GET /auto_router/shadow_eval": {
+    "tool": "list_shadow_eval_jobs_auto_router_shadow_eval_get"
+  },
+  "GET /auto_router/shadow_eval/{job_id}": {
+    "tool": "get_shadow_eval_job_auto_router_shadow_eval__job_id__get"
+  },
+  "GET /azure/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /azure_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /azure_speech/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /batches": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /batches/{batch_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /bedrock/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /budget/list": {
+    "tool": "list_budget_budget_list_get"
+  },
+  "GET /budget/settings": {
+    "tool": "budget_settings_budget_settings_get"
+  },
+  "GET /cache/ping": {
+    "tool": "cache_ping_cache_ping_get"
+  },
+  "GET /cache/redis/info": {
+    "tool": "cache_redis_info_cache_redis_info_get"
+  },
+  "GET /cache/settings": {
+    "tool": "get_cache_settings_cache_settings_get"
+  },
+  "GET /callback": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "GET /callbacks/configs": {
+    "tool": "get_callback_configs_callbacks_configs_get"
+  },
+  "GET /callbacks/list": {
+    "tool": "list_callbacks_callbacks_list_get"
+  },
+  "GET /claude-code/marketplace.json": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /claude-code/plugins": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /claude-code/plugins/{plugin_name}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /cloudzero/settings": {
+    "tool": "get_cloudzero_settings_cloudzero_settings_get"
+  },
+  "GET /cohere/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /config/block_requests_for_models_without_pricing": {
+    "tool": "get_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_get"
+  },
+  "GET /config/cost_discount_config": {
+    "tool": "get_cost_discount_config_config_cost_discount_config_get"
+  },
+  "GET /config/cost_margin_config": {
+    "tool": "get_cost_margin_config_config_cost_margin_config_get"
+  },
+  "GET /config/pass_through_endpoint": {
+    "tool": "get_pass_through_endpoints_config_pass_through_endpoint_get"
+  },
+  "GET /config/pass_through_endpoint/team/{team_id}": {
+    "tool": "get_pass_through_endpoints_config_pass_through_endpoint_team__team_id__get"
+  },
+  "GET /config_overrides/cyberark": {
+    "tool": "get_cyberark_config_config_overrides_cyberark_get"
+  },
+  "GET /config_overrides/hashicorp_vault": {
+    "tool": "get_hashicorp_vault_config_config_overrides_hashicorp_vault_get"
+  },
+  "GET /containers": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /containers/{container_id}": {
+    "excluded": "tag:containers"
+  },
+  "GET /containers/{container_id}/files": {
+    "excluded": "tag:containers"
+  },
+  "GET /containers/{container_id}/files/{file_id}": {
+    "excluded": "tag:containers"
+  },
+  "GET /containers/{container_id}/files/{file_id}/content": {
+    "excluded": "tag:containers"
+  },
+  "GET /coordination_redis/settings": {
+    "tool": "get_coordination_redis_settings_coordination_redis_settings_get"
+  },
+  "GET /cost_optimization/prompt_caching/requests": {
+    "tool": "get_prompt_caching_requests_cost_optimization_prompt_caching_requests_get"
+  },
+  "GET /credentials": {
+    "tool": "get_credentials_credentials_get"
+  },
+  "GET /credentials/by_model/{model_id}": {
+    "tool": "get_credential_by_model_credentials_by_model__model_id__get"
+  },
+  "GET /credentials/by_name/{credential_name}": {
+    "tool": "get_credential_by_name_credentials_by_name__credential_name__get"
+  },
+  "GET /credentials/migrate-encryption/check": {
+    "tool": "check_encryption_endpoint_credentials_migrate_encryption_check_get"
+  },
+  "GET /cursor/models": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /cursor/v1/models": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /cursor/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /customer/daily/activity": {
+    "tool": "get_customer_daily_activity_customer_daily_activity_get"
+  },
+  "GET /customer/info": {
+    "tool": "end_user_info_customer_info_get"
+  },
+  "GET /customer/list": {
+    "tool": "list_end_user_customer_list_get"
+  },
+  "GET /debug/asyncio-tasks": {
+    "tool": "get_active_tasks_stats_debug_asyncio_tasks_get"
+  },
+  "GET /email/event_settings": {
+    "tool": "get_email_event_settings_email_event_settings_get"
+  },
+  "GET /eu.assemblyai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /fal_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /fallback/{model}": {
+    "tool": "get_fallback_fallback__model__get"
+  },
+  "GET /files": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /files/{file_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /files/{file_id}/content": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /fine_tuning/jobs": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /fine_tuning/jobs/{fine_tuning_job_id}": {
+    "excluded": "tag:fine-tuning"
+  },
+  "GET /gateway/daily/activity": {
+    "tool": "get_gateway_daily_activity_gateway_daily_activity_get"
+  },
+  "GET /gemini/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /get/default_team_settings": {
+    "tool": "get_default_team_settings_get_default_team_settings_get"
+  },
+  "GET /get/internal_user_settings": {
+    "tool": "get_internal_user_settings_get_internal_user_settings_get"
+  },
+  "GET /get/latest_release_info": {
+    "tool": "latest_release_info_get_latest_release_info_get"
+  },
+  "GET /get/mcp_semantic_filter_settings": {
+    "tool": "get_mcp_semantic_filter_settings_get_mcp_semantic_filter_settings_get"
+  },
+  "GET /get/mcp_tool_search_settings": {
+    "tool": "get_mcp_tool_search_settings_get_mcp_tool_search_settings_get"
+  },
+  "GET /get/sso_settings": {
+    "tool": "get_sso_settings_get_sso_settings_get"
+  },
+  "GET /get/ui_settings": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /get/ui_theme_settings": {
+    "tool": "get_ui_theme_settings_get_ui_theme_settings_get"
+  },
+  "GET /get/user_banner": {
+    "tool": "get_user_banner_get_user_banner_get"
+  },
+  "GET /get/websearch_interception_settings": {
+    "tool": "get_websearch_interception_settings_get_websearch_interception_settings_get"
+  },
+  "GET /gigachat/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /global/spend/report": {
+    "tool": "get_global_spend_report_global_spend_report_get"
+  },
+  "GET /global/spend/tags": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /guardrails/list": {
+    "tool": "list_guardrails_guardrails_list_get"
+  },
+  "GET /guardrails/submissions": {
+    "tool": "list_guardrail_submissions_guardrails_submissions_get"
+  },
+  "GET /guardrails/submissions/{guardrail_id}": {
+    "tool": "get_guardrail_submission_guardrails_submissions__guardrail_id__get"
+  },
+  "GET /guardrails/ui/add_guardrail_settings": {
+    "tool": "get_guardrail_ui_settings_guardrails_ui_add_guardrail_settings_get"
+  },
+  "GET /guardrails/ui/category_yaml/{category_name}": {
+    "tool": "get_category_yaml_guardrails_ui_category_yaml__category_name__get"
+  },
+  "GET /guardrails/ui/major_airlines": {
+    "tool": "get_major_airlines_guardrails_ui_major_airlines_get"
+  },
+  "GET /guardrails/ui/provider_specific_params": {
+    "tool": "get_provider_specific_params_guardrails_ui_provider_specific_params_get"
+  },
+  "GET /guardrails/usage/detail/{guardrail_id}": {
+    "tool": "guardrails_usage_detail_guardrails_usage_detail__guardrail_id__get"
+  },
+  "GET /guardrails/usage/logs": {
+    "tool": "guardrails_usage_logs_guardrails_usage_logs_get"
+  },
+  "GET /guardrails/usage/overview": {
+    "tool": "guardrails_usage_overview_guardrails_usage_overview_get"
+  },
+  "GET /guardrails/{guardrail_id}": {
+    "tool": "get_guardrail_info_guardrails__guardrail_id__get"
+  },
+  "GET /guardrails/{guardrail_id}/info": {
+    "tool": "get_guardrail_info_guardrails__guardrail_id__info_get"
+  },
+  "GET /health": {
+    "excluded": "tag:health"
+  },
+  "GET /health/backlog": {
+    "excluded": "tag:health"
+  },
+  "GET /health/drain": {
+    "excluded": "tag:health"
+  },
+  "GET /health/history": {
+    "excluded": "tag:health"
+  },
+  "GET /health/latest": {
+    "excluded": "tag:health"
+  },
+  "GET /health/license": {
+    "excluded": "tag:health"
+  },
+  "GET /health/liveliness": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /health/liveness": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /health/readiness": {
+    "excluded": "tag:health"
+  },
+  "GET /health/readiness/details": {
+    "excluded": "tag:health"
+  },
+  "GET /health/services": {
+    "excluded": "tag:health"
+  },
+  "GET /health/shared-status": {
+    "excluded": "tag:health"
+  },
+  "GET /interactions/{interaction_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /jwt/key/mapping/info": {
+    "tool": "info_jwt_key_mapping_jwt_key_mapping_info_get"
+  },
+  "GET /jwt/key/mapping/list": {
+    "tool": "list_jwt_key_mappings_jwt_key_mapping_list_get"
+  },
+  "GET /key/aliases": {
+    "tool": "key_aliases_key_aliases_get"
+  },
+  "GET /key/info": {
+    "tool": "info_key_fn_key_info_get"
+  },
+  "GET /key/list": {
+    "tool": "list_keys_key_list_get"
+  },
+  "GET /key/spend/report": {
+    "tool": "get_key_spend_report_key_spend_report_get"
+  },
+  "GET /langfuse/{endpoint}": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /litellm/.well-known/litellm-ui-config": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /management/v1/budgets": {
+    "tool": "list_budgets_management_v1_budgets_get"
+  },
+  "GET /management/v1/spend_logs/end_users": {
+    "tool": "list_spend_log_end_users_management_v1_spend_logs_end_users_get"
+  },
+  "GET /management/v1/spend_logs/users": {
+    "tool": "list_spend_log_users_management_v1_spend_logs_users_get"
+  },
+  "GET /mcp": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /mcp-rest/tools/list": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /mcp/proxy": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /milvus/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /mistral/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /model/deprecations": {
+    "tool": "model_deprecations_model_deprecations_get"
+  },
+  "GET /model/info": {
+    "tool": "model_info_v1_model_info_get"
+  },
+  "GET /model_group/info": {
+    "tool": "model_group_info_model_group_info_get"
+  },
+  "GET /models": {
+    "tool": "model_list_models_get"
+  },
+  "GET /models/{model_id}": {
+    "tool": "model_info_models__model_id__get"
+  },
+  "GET /nvidia_nim/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /openai/v1/realtime": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /openai/v1/responses/{response_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /openai/v1/responses/{response_id}/input_items": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /openai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /openai_passthrough/{endpoint}": {
+    "excluded": "tag:OpenAI Pass-through"
+  },
+  "GET /openrouter/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /organization/daily/activity": {
+    "tool": "get_organization_daily_activity_organization_daily_activity_get"
+  },
+  "GET /organization/info": {
+    "tool": "info_organization_organization_info_get"
+  },
+  "GET /organization/list": {
+    "tool": "list_organization_organization_list_get"
+  },
+  "GET /organization/spend/report": {
+    "tool": "get_organization_spend_report_organization_spend_report_get"
+  },
+  "GET /policies/attachments/list": {
+    "tool": "list_policy_attachments_policies_attachments_list_get"
+  },
+  "GET /policies/attachments/{attachment_id}": {
+    "tool": "get_policy_attachment_policies_attachments__attachment_id__get"
+  },
+  "GET /policies/compare": {
+    "tool": "compare_policy_versions_policies_compare_get"
+  },
+  "GET /policies/list": {
+    "tool": "list_policies_policies_list_get"
+  },
+  "GET /policies/name/{policy_name}/versions": {
+    "tool": "list_policy_versions_policies_name__policy_name__versions_get"
+  },
+  "GET /policies/usage/overview": {
+    "tool": "policies_usage_overview_policies_usage_overview_get"
+  },
+  "GET /policies/{policy_id}": {
+    "tool": "get_policy_policies__policy_id__get"
+  },
+  "GET /policies/{policy_id}/resolved-guardrails": {
+    "tool": "get_resolved_guardrails_policies__policy_id__resolved_guardrails_get"
+  },
+  "GET /policy/info/{policy_name}": {
+    "tool": "get_policy_info_policy_info__policy_name__get"
+  },
+  "GET /policy/list": {
+    "tool": "list_policies_policy_list_get"
+  },
+  "GET /policy/templates": {
+    "tool": "get_policy_templates_policy_templates_get"
+  },
+  "GET /project/info": {
+    "tool": "project_info_project_info_get"
+  },
+  "GET /project/list": {
+    "tool": "list_projects_project_list_get"
+  },
+  "GET /prompts/list": {
+    "tool": "list_prompts_prompts_list_get"
+  },
+  "GET /prompts/{prompt_id}": {
+    "tool": "get_prompt_info_prompts__prompt_id__get"
+  },
+  "GET /prompts/{prompt_id}/info": {
+    "tool": "get_prompt_info_prompts__prompt_id__info_get"
+  },
+  "GET /prompts/{prompt_id}/versions": {
+    "tool": "get_prompt_versions_prompts__prompt_id__versions_get"
+  },
+  "GET /provider/budgets": {
+    "tool": "provider_budgets_provider_budgets_get"
+  },
+  "GET /public/agent_hub": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /public/agents/fields": {
+    "excluded": "tag:public"
+  },
+  "GET /public/autorouter_presets": {
+    "excluded": "tag:public"
+  },
+  "GET /public/complexity_router/fuse_presets": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /public/complexity_router/scorer_defaults": {
+    "excluded": "tag:public"
+  },
+  "GET /public/endpoints": {
+    "excluded": "tag:public"
+  },
+  "GET /public/litellm_blog_posts": {
+    "excluded": "tag:public"
+  },
+  "GET /public/litellm_model_cost_map": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /public/mcp_hub": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /public/model_hub": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /public/model_hub/info": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /public/providers": {
+    "excluded": "tag:public"
+  },
+  "GET /public/providers/fields": {
+    "excluded": "tag:public"
+  },
+  "GET /public/skill_hub": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /public/v1/model_hub": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /public/v1/model_hub/{facet}": {
+    "excluded": "tag:public"
+  },
+  "GET /realtime": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /responses": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /responses/{response_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /responses/{response_id}/input_items": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /robots.txt": {
+    "tool": "get_robots_robots_txt_get"
+  },
+  "GET /router/fields": {
+    "tool": "get_router_fields_router_fields_get"
+  },
+  "GET /router/settings": {
+    "tool": "get_router_settings_router_settings_get"
+  },
+  "GET /routes": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /scim/v2": {
+    "tool": "get_scim_base_scim_v2_get"
+  },
+  "GET /scim/v2/Groups": {
+    "tool": "get_groups_scim_v2_Groups_get"
+  },
+  "GET /scim/v2/Groups/{group_id}": {
+    "tool": "get_group_scim_v2_Groups__group_id__get"
+  },
+  "GET /scim/v2/ResourceTypes": {
+    "tool": "get_resource_types_scim_v2_ResourceTypes_get"
+  },
+  "GET /scim/v2/ResourceTypes/{resource_type_id}": {
+    "tool": "get_resource_type_scim_v2_ResourceTypes__resource_type_id__get"
+  },
+  "GET /scim/v2/Schemas": {
+    "tool": "get_schemas_scim_v2_Schemas_get"
+  },
+  "GET /scim/v2/Schemas/{schema_id}": {
+    "tool": "get_schema_scim_v2_Schemas__schema_id__get"
+  },
+  "GET /scim/v2/ServiceProviderConfig": {
+    "tool": "get_service_provider_config_scim_v2_ServiceProviderConfig_get"
+  },
+  "GET /scim/v2/Users": {
+    "tool": "get_users_scim_v2_Users_get"
+  },
+  "GET /scim/v2/Users/{user_id}": {
+    "tool": "get_user_scim_v2_Users__user_id__get"
+  },
+  "GET /scim/v2/placeholders": {
+    "tool": "list_placeholders_scim_v2_placeholders_get"
+  },
+  "GET /search/tools": {
+    "excluded": "tag:search"
+  },
+  "GET /search_tools/list": {
+    "tool": "list_search_tools_search_tools_list_get"
+  },
+  "GET /search_tools/ui/available_providers": {
+    "tool": "get_available_search_providers_search_tools_ui_available_providers_get"
+  },
+  "GET /search_tools/{search_tool_id}": {
+    "tool": "get_search_tool_info_search_tools__search_tool_id__get"
+  },
+  "GET /settings": {
+    "excluded": "tag:health"
+  },
+  "GET /spend/logs": {
+    "tool": "view_spend_logs_spend_logs_get"
+  },
+  "GET /spend/logs/v2": {
+    "tool": "ui_view_spend_logs_spend_logs_v2_get"
+  },
+  "GET /spend/tags": {
+    "tool": "view_spend_tags_spend_tags_get"
+  },
+  "GET /sso/readiness": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /tag/daily/activity": {
+    "tool": "get_tag_daily_activity_tag_daily_activity_get"
+  },
+  "GET /tag/dau": {
+    "tool": "get_daily_active_users_tag_dau_get"
+  },
+  "GET /tag/distinct": {
+    "tool": "get_distinct_user_agent_tags_tag_distinct_get"
+  },
+  "GET /tag/list": {
+    "tool": "list_tags_tag_list_get"
+  },
+  "GET /tag/mau": {
+    "tool": "get_monthly_active_users_tag_mau_get"
+  },
+  "GET /tag/summary": {
+    "tool": "get_tag_summary_tag_summary_get"
+  },
+  "GET /tag/user-agent/per-user-analytics": {
+    "tool": "get_per_user_analytics_tag_user_agent_per_user_analytics_get"
+  },
+  "GET /tag/wau": {
+    "tool": "get_weekly_active_users_tag_wau_get"
+  },
+  "GET /team/available": {
+    "tool": "list_available_teams_team_available_get"
+  },
+  "GET /team/daily/activity": {
+    "tool": "get_team_daily_activity_team_daily_activity_get"
+  },
+  "GET /team/daily/activity/aggregated": {
+    "tool": "get_team_daily_activity_aggregated_team_daily_activity_aggregated_get"
+  },
+  "GET /team/info": {
+    "tool": "team_info_team_info_get"
+  },
+  "GET /team/list": {
+    "tool": "list_team_team_list_get"
+  },
+  "GET /team/metadata_schema": {
+    "tool": "get_team_metadata_schema_team_metadata_schema_get"
+  },
+  "GET /team/permissions_list": {
+    "tool": "team_member_permissions_team_permissions_list_get"
+  },
+  "GET /team/spend/by_user": {
+    "tool": "get_team_spend_by_user_team_spend_by_user_get"
+  },
+  "GET /team/spend/report": {
+    "tool": "get_team_spend_report_team_spend_report_get"
+  },
+  "GET /team/{team_id}/callback": {
+    "tool": "get_team_callbacks_team__team_id__callback_get"
+  },
+  "GET /team/{team_id}/members/me": {
+    "tool": "team_member_me_team__team_id__members_me_get"
+  },
+  "GET /test": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /threads/{thread_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /threads/{thread_id}/messages": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /tinyfish/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /toolset/{toolset_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "GET /typesafe/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /user/available_users": {
+    "tool": "available_enterprise_users_user_available_users_get"
+  },
+  "GET /user/daily/activity": {
+    "tool": "get_user_daily_activity_user_daily_activity_get"
+  },
+  "GET /user/daily/activity/aggregated": {
+    "tool": "get_user_daily_activity_aggregated_user_daily_activity_aggregated_get"
+  },
+  "GET /user/info": {
+    "tool": "user_info_user_info_get"
+  },
+  "GET /user/list": {
+    "tool": "get_users_user_list_get"
+  },
+  "GET /user/spend/report": {
+    "tool": "get_user_spend_report_user_spend_report_get"
+  },
+  "GET /utils/model_info": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /utils/supported_openai_params": {
+    "excluded": "tag:llm utils"
+  },
+  "GET /v1/access_group": {
+    "tool": "list_access_groups_v1_access_group_get"
+  },
+  "GET /v1/access_group/{access_group_id}": {
+    "tool": "get_access_group_v1_access_group__access_group_id__get"
+  },
+  "GET /v1/agents": {
+    "tool": "get_agents_v1_agents_get"
+  },
+  "GET /v1/agents/{agent_id}": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /v1/assistants": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/batches": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/batches/{batch_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/containers": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/containers/{container_id}": {
+    "excluded": "tag:containers"
+  },
+  "GET /v1/containers/{container_id}/files": {
+    "excluded": "tag:containers"
+  },
+  "GET /v1/containers/{container_id}/files/{file_id}": {
+    "excluded": "tag:containers"
+  },
+  "GET /v1/containers/{container_id}/files/{file_id}/content": {
+    "excluded": "tag:containers"
+  },
+  "GET /v1/evals": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /v1/evals/{eval_id}": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /v1/evals/{eval_id}/runs": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /v1/evals/{eval_id}/runs/{run_id}": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /v1/files": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/files/{file_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/files/{file_id}/content": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/fine_tuning/jobs": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/fine_tuning/jobs/{fine_tuning_job_id}": {
+    "excluded": "tag:fine-tuning"
+  },
+  "GET /v1/indexes": {
+    "excluded": "tag:vector_stores"
+  },
+  "GET /v1/mcp/access_groups": {
+    "tool": "get_mcp_access_groups_v1_mcp_access_groups_get"
+  },
+  "GET /v1/mcp/discover": {
+    "tool": "discover_mcp_servers_v1_mcp_discover_get"
+  },
+  "GET /v1/mcp/network/client-ip": {
+    "tool": "get_client_ip_v1_mcp_network_client_ip_get"
+  },
+  "GET /v1/mcp/openapi-registry": {
+    "tool": "get_openapi_registry_v1_mcp_openapi_registry_get"
+  },
+  "GET /v1/mcp/registry.json": {
+    "tool": "get_mcp_registry_v1_mcp_registry_json_get"
+  },
+  "GET /v1/mcp/server": {
+    "tool": "fetch_all_mcp_servers_v1_mcp_server_get"
+  },
+  "GET /v1/mcp/server/health": {
+    "tool": "health_check_servers_v1_mcp_server_health_get"
+  },
+  "GET /v1/mcp/server/submissions": {
+    "tool": "get_mcp_server_submissions_v1_mcp_server_submissions_get"
+  },
+  "GET /v1/mcp/server/{server_id}": {
+    "tool": "fetch_mcp_server_v1_mcp_server__server_id__get"
+  },
+  "GET /v1/mcp/server/{server_id}/oauth-user-credential/status": {
+    "tool": "get_mcp_oauth_user_credential_status_v1_mcp_server__server_id__oauth_user_credential_status_get"
+  },
+  "GET /v1/mcp/server/{server_id}/user-credentials": {
+    "tool": "list_mcp_server_user_credentials_v1_mcp_server__server_id__user_credentials_get"
+  },
+  "GET /v1/mcp/server/{server_id}/user-env-vars": {
+    "tool": "get_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_get"
+  },
+  "GET /v1/mcp/sessions": {
+    "tool": "get_mcp_gateway_sessions_v1_mcp_sessions_get"
+  },
+  "GET /v1/mcp/tools": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/mcp/toolset": {
+    "tool": "fetch_mcp_toolsets_v1_mcp_toolset_get"
+  },
+  "GET /v1/mcp/toolset/{toolset_id}": {
+    "tool": "fetch_mcp_toolset_v1_mcp_toolset__toolset_id__get"
+  },
+  "GET /v1/mcp/user-credentials": {
+    "tool": "list_mcp_user_credentials_v1_mcp_user_credentials_get"
+  },
+  "GET /v1/mcp/user-env-vars/status": {
+    "tool": "list_mcp_user_env_var_status_v1_mcp_user_env_vars_status_get"
+  },
+  "GET /v1/memory": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /v1/memory/{key}": {
+    "excluded": "excluded path prefix"
+  },
+  "GET /v1/model/deprecations": {
+    "tool": "model_deprecations_v1_model_deprecations_get"
+  },
+  "GET /v1/model/info": {
+    "tool": "model_info_v1_v1_model_info_get"
+  },
+  "GET /v1/models": {
+    "tool": "model_list_v1_models_get"
+  },
+  "GET /v1/models/{model_id}": {
+    "tool": "model_info_v1_models__model_id__get"
+  },
+  "GET /v1/realtime": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/responses": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/responses/{response_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/responses/{response_id}/input_items": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/search/tools": {
+    "excluded": "tag:search"
+  },
+  "GET /v1/skills": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/skills/{skill_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/skills/{skill_id}/archive": {
+    "excluded": "tag:public"
+  },
+  "GET /v1/threads/{thread_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/threads/{thread_id}/messages": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/tool/list": {
+    "tool": "list_tools_v1_tool_list_get"
+  },
+  "GET /v1/tool/policy/options": {
+    "tool": "get_tool_policy_options_v1_tool_policy_options_get"
+  },
+  "GET /v1/tool/spend": {
+    "tool": "get_tool_spend_v1_tool_spend_get"
+  },
+  "GET /v1/tool/{tool_name}": {
+    "tool": "get_tool_v1_tool__tool_name__get"
+  },
+  "GET /v1/tool/{tool_name}/detail": {
+    "tool": "get_tool_detail_v1_tool__tool_name__detail_get"
+  },
+  "GET /v1/tool/{tool_name}/logs": {
+    "tool": "get_tool_usage_logs_v1_tool__tool_name__logs_get"
+  },
+  "GET /v1/unified_access_group": {
+    "tool": "list_access_groups_v1_unified_access_group_get"
+  },
+  "GET /v1/unified_access_group/{access_group_id}": {
+    "tool": "get_access_group_v1_unified_access_group__access_group_id__get"
+  },
+  "GET /v1/vector_store/list": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/vector_stores": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/vector_stores/{vector_store_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/vector_stores/{vector_store_id}/files": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/vector_stores/{vector_store_id}/files/{file_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/vector_stores/{vector_store_id}/files/{file_id}/content": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/videos": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/videos/characters/{character_id}": {
+    "excluded": "tag:videos"
+  },
+  "GET /v1/videos/{video_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/videos/{video_id}/content": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1/workflows/runs": {
+    "tool": "list_workflow_runs_v1_workflows_runs_get"
+  },
+  "GET /v1/workflows/runs/{run_id}": {
+    "tool": "get_workflow_run_v1_workflows_runs__run_id__get"
+  },
+  "GET /v1/workflows/runs/{run_id}/events": {
+    "tool": "list_workflow_events_v1_workflows_runs__run_id__events_get"
+  },
+  "GET /v1/workflows/runs/{run_id}/messages": {
+    "tool": "list_workflow_messages_v1_workflows_runs__run_id__messages_get"
+  },
+  "GET /v1beta/agents": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1beta/agents/{name}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1beta/agents/{name}/versions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v1beta/interactions/{interaction_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /v2/guardrails/list": {
+    "tool": "list_guardrails_v2_v2_guardrails_list_get"
+  },
+  "GET /v2/model/info": {
+    "tool": "model_info_v2_v2_model_info_get"
+  },
+  "GET /v2/team/list": {
+    "tool": "list_team_v2_v2_team_list_get"
+  },
+  "GET /v2/user/info": {
+    "tool": "user_info_v2_v2_user_info_get"
+  },
+  "GET /vantage/settings": {
+    "tool": "get_vantage_settings_vantage_settings_get"
+  },
+  "GET /vector_store/list": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /vector_stores": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /vector_stores/{vector_store_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /vector_stores/{vector_store_id}/files": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /vector_stores/{vector_store_id}/files/{file_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /vector_stores/{vector_store_id}/files/{file_id}/content": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /vertex_ai/discovery/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /vertex_ai/live": {
+    "excluded": "tag:WebSocket"
+  },
+  "GET /vertex_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /videos": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /videos/characters/{character_id}": {
+    "excluded": "tag:videos"
+  },
+  "GET /videos/{video_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /videos/{video_id}/content": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "GET /vllm/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /watsonx/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "GET /{mcp_server_name}/authorize": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "GET /{mcp_server_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "GET /{provider}/v1/batches": {
+    "excluded": "tag:batch"
+  },
+  "GET /{provider}/v1/batches/{batch_id}": {
+    "excluded": "tag:batch"
+  },
+  "GET /{provider}/v1/files": {
+    "excluded": "tag:files"
+  },
+  "GET /{provider}/v1/files/{file_id}": {
+    "excluded": "tag:files"
+  },
+  "GET /{provider}/v1/files/{file_id}/content": {
+    "excluded": "tag:files"
+  },
+  "PATCH /anthropic/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /assemblyai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /azure/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /azure_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /azure_speech/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /bedrock/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /cohere/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /config/block_requests_for_models_without_pricing": {
+    "tool": "update_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_patch"
+  },
+  "PATCH /config/cost_discount_config": {
+    "tool": "update_cost_discount_config_config_cost_discount_config_patch"
+  },
+  "PATCH /config/cost_margin_config": {
+    "tool": "update_cost_margin_config_config_cost_margin_config_patch"
+  },
+  "PATCH /credentials/{credential_name}": {
+    "tool": "update_credential_credentials__credential_name__patch"
+  },
+  "PATCH /cursor/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /email/event_settings": {
+    "tool": "update_event_settings_email_event_settings_patch"
+  },
+  "PATCH /eu.assemblyai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /fal_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /gemini/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /gigachat/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /guardrails/{guardrail_id}": {
+    "tool": "patch_guardrail_guardrails__guardrail_id__patch"
+  },
+  "PATCH /langfuse/{endpoint}": {
+    "excluded": "excluded path prefix"
+  },
+  "PATCH /mcp": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "PATCH /mcp/proxy": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "PATCH /milvus/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /mistral/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /model/{model_id}/update": {
+    "tool": "patch_model_model__model_id__update_patch"
+  },
+  "PATCH /nvidia_nim/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /openai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /openai_passthrough/{endpoint}": {
+    "excluded": "tag:OpenAI Pass-through"
+  },
+  "PATCH /openrouter/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /organization/member_update": {
+    "tool": "organization_member_update_organization_member_update_patch"
+  },
+  "PATCH /organization/update": {
+    "excluded": "undeclared request body"
+  },
+  "PATCH /prompts/{prompt_id}": {
+    "tool": "patch_prompt_prompts__prompt_id__patch"
+  },
+  "PATCH /scim/v2/Groups/{group_id}": {
+    "tool": "patch_group_scim_v2_Groups__group_id__patch"
+  },
+  "PATCH /scim/v2/Users/{user_id}": {
+    "tool": "patch_user_scim_v2_Users__user_id__patch"
+  },
+  "PATCH /team/{team_id}": {
+    "tool": "patch_team_team__team_id__patch"
+  },
+  "PATCH /toolset/{toolset_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "PATCH /typesafe/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /update/default_team_settings": {
+    "tool": "update_default_team_settings_update_default_team_settings_patch"
+  },
+  "PATCH /update/internal_user_settings": {
+    "tool": "update_internal_user_settings_update_internal_user_settings_patch"
+  },
+  "PATCH /update/mcp_semantic_filter_settings": {
+    "tool": "update_mcp_semantic_filter_settings_update_mcp_semantic_filter_settings_patch"
+  },
+  "PATCH /update/mcp_tool_search_settings": {
+    "tool": "update_mcp_tool_search_settings_update_mcp_tool_search_settings_patch"
+  },
+  "PATCH /update/sso_settings": {
+    "tool": "update_sso_settings_update_sso_settings_patch"
+  },
+  "PATCH /update/ui_settings": {
+    "tool": "update_ui_settings_update_ui_settings_patch"
+  },
+  "PATCH /update/ui_theme_settings": {
+    "tool": "update_ui_theme_settings_update_ui_theme_settings_patch"
+  },
+  "PATCH /update/user_banner": {
+    "tool": "update_user_banner_update_user_banner_patch"
+  },
+  "PATCH /update/websearch_interception_settings": {
+    "tool": "update_websearch_interception_settings_update_websearch_interception_settings_patch"
+  },
+  "PATCH /v1/agents/{agent_id}": {
+    "excluded": "excluded path prefix"
+  },
+  "PATCH /v1/workflows/runs/{run_id}": {
+    "tool": "update_workflow_run_v1_workflows_runs__run_id__patch"
+  },
+  "PATCH /v2/organization/{organization_id}": {
+    "tool": "update_organization_v2_v2_organization__organization_id__patch"
+  },
+  "PATCH /vertex_ai/discovery/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /vertex_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /vllm/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /watsonx/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PATCH /{mcp_server_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "POST /a2a/{agent_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /a2a/{agent_id}/message/send": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /access_group/new": {
+    "tool": "create_model_group_access_group_new_post"
+  },
+  "POST /add/allowed_ip": {
+    "tool": "add_allowed_ip_add_allowed_ip_post"
+  },
+  "POST /anthropic/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /api/event_logging/batch": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /apply_guardrail": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /assemblyai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /assistants": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /audio/speech": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /audio/transcriptions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /authorize/complete": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "POST /auto_router/availability": {
+    "tool": "get_auto_router_availability_auto_router_availability_post"
+  },
+  "POST /auto_router/classifier/default_prompt": {
+    "tool": "preview_auto_router_classifier_prompt_auto_router_classifier_default_prompt_post"
+  },
+  "POST /auto_router/shadow_eval/start": {
+    "tool": "start_shadow_eval_auto_router_shadow_eval_start_post"
+  },
+  "POST /auto_router/shadow_eval/{job_id}/stop": {
+    "excluded": "undeclared request body"
+  },
+  "POST /auto_router/test_routing": {
+    "tool": "preview_auto_router_routing_auto_router_test_routing_post"
+  },
+  "POST /auto_router/validate_complexity_router_config": {
+    "tool": "validate_complexity_router_config_auto_router_validate_complexity_router_config_post"
+  },
+  "POST /azure/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /azure_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /azure_speech/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /batches": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /batches/{batch_id}/cancel": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /bedrock/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /budget/delete": {
+    "tool": "delete_budget_budget_delete_post"
+  },
+  "POST /budget/info": {
+    "tool": "info_budget_budget_info_post"
+  },
+  "POST /budget/new": {
+    "tool": "new_budget_budget_new_post"
+  },
+  "POST /budget/update": {
+    "tool": "update_budget_budget_update_post"
+  },
+  "POST /cache/delete": {
+    "excluded": "undeclared request body"
+  },
+  "POST /cache/flushall": {
+    "excluded": "undeclared request body"
+  },
+  "POST /cache/settings": {
+    "tool": "update_cache_settings_cache_settings_post"
+  },
+  "POST /cache/settings/test": {
+    "tool": "test_cache_connection_cache_settings_test_post"
+  },
+  "POST /chat/completions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /claude-code/plugins": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /claude-code/plugins/{plugin_name}/disable": {
+    "excluded": "tag:claude_code_marketplace"
+  },
+  "POST /claude-code/plugins/{plugin_name}/enable": {
+    "excluded": "tag:claude_code_marketplace"
+  },
+  "POST /cloudzero/dry-run": {
+    "tool": "cloudzero_dry_run_export_cloudzero_dry_run_post"
+  },
+  "POST /cloudzero/export": {
+    "tool": "cloudzero_export_cloudzero_export_post"
+  },
+  "POST /cloudzero/init": {
+    "tool": "init_cloudzero_settings_cloudzero_init_post"
+  },
+  "POST /cohere/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /completions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /compliance/eu-ai-act": {
+    "tool": "check_eu_ai_act_compliance_compliance_eu_ai_act_post"
+  },
+  "POST /compliance/gdpr": {
+    "tool": "check_gdpr_compliance_compliance_gdpr_post"
+  },
+  "POST /comprehendmedical": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /comprehendmedical/{operation}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /config/pass_through_endpoint": {
+    "tool": "create_pass_through_endpoints_config_pass_through_endpoint_post"
+  },
+  "POST /config/pass_through_endpoint/{endpoint_id}": {
+    "tool": "update_pass_through_endpoints_config_pass_through_endpoint__endpoint_id__post"
+  },
+  "POST /config_overrides/cyberark": {
+    "tool": "update_cyberark_config_config_overrides_cyberark_post"
+  },
+  "POST /config_overrides/cyberark/test_connection": {
+    "excluded": "undeclared request body"
+  },
+  "POST /config_overrides/hashicorp_vault": {
+    "tool": "update_hashicorp_vault_config_config_overrides_hashicorp_vault_post"
+  },
+  "POST /config_overrides/hashicorp_vault/test_connection": {
+    "excluded": "undeclared request body"
+  },
+  "POST /containers": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /containers/{container_id}/files": {
+    "excluded": "tag:containers"
+  },
+  "POST /coordination_redis/settings": {
+    "tool": "update_coordination_redis_settings_coordination_redis_settings_post"
+  },
+  "POST /coordination_redis/settings/test": {
+    "tool": "check_coordination_redis_connection_coordination_redis_settings_test_post"
+  },
+  "POST /cost/estimate": {
+    "tool": "estimate_cost_cost_estimate_post"
+  },
+  "POST /cost/predict-cache": {
+    "tool": "predict_cache_cost_cost_predict_cache_post"
+  },
+  "POST /credentials": {
+    "tool": "create_credential_credentials_post"
+  },
+  "POST /credentials/migrate-encryption": {
+    "excluded": "undeclared request body"
+  },
+  "POST /cursor/chat/completions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /cursor/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /customer/block": {
+    "tool": "block_user_customer_block_post"
+  },
+  "POST /customer/delete": {
+    "tool": "delete_end_user_customer_delete_post"
+  },
+  "POST /customer/new": {
+    "tool": "new_end_user_customer_new_post"
+  },
+  "POST /customer/unblock": {
+    "tool": "unblock_user_customer_unblock_post"
+  },
+  "POST /customer/update": {
+    "tool": "update_end_user_customer_update_post"
+  },
+  "POST /delete/allowed_ip": {
+    "tool": "delete_allowed_ip_delete_allowed_ip_post"
+  },
+  "POST /email/event_settings/reset": {
+    "excluded": "undeclared request body"
+  },
+  "POST /embeddings": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /engines/{model}/chat/completions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /engines/{model}/completions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /engines/{model}/embeddings": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /eu.assemblyai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /fal_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /fallback": {
+    "tool": "create_fallback_fallback_post"
+  },
+  "POST /files": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /fine_tuning/jobs": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /fine_tuning/jobs/{fine_tuning_job_id}/cancel": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /gemini/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /gigachat/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /global/spend/reset": {
+    "excluded": "undeclared request body"
+  },
+  "POST /guardrails": {
+    "tool": "create_guardrail_guardrails_post"
+  },
+  "POST /guardrails/apply_guardrail": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /guardrails/register": {
+    "tool": "register_guardrail_guardrails_register_post"
+  },
+  "POST /guardrails/submissions/{guardrail_id}/approve": {
+    "excluded": "undeclared request body"
+  },
+  "POST /guardrails/submissions/{guardrail_id}/reject": {
+    "excluded": "undeclared request body"
+  },
+  "POST /guardrails/test_custom_code": {
+    "tool": "test_custom_code_guardrail_guardrails_test_custom_code_post"
+  },
+  "POST /guardrails/validate_blocked_words_file": {
+    "tool": "validate_blocked_words_file_guardrails_validate_blocked_words_file_post"
+  },
+  "POST /health/test_connection": {
+    "excluded": "tag:health"
+  },
+  "POST /images/edits": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /images/generations": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /interactions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /interactions/{interaction_id}/cancel": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /introspect": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /jwt/key/mapping/delete": {
+    "tool": "delete_jwt_key_mapping_jwt_key_mapping_delete_post"
+  },
+  "POST /jwt/key/mapping/new": {
+    "tool": "create_jwt_key_mapping_jwt_key_mapping_new_post"
+  },
+  "POST /jwt/key/mapping/update": {
+    "tool": "update_jwt_key_mapping_jwt_key_mapping_update_post"
+  },
+  "POST /key/block": {
+    "tool": "block_key_key_block_post"
+  },
+  "POST /key/bulk_update": {
+    "tool": "bulk_update_keys_key_bulk_update_post"
+  },
+  "POST /key/delete": {
+    "tool": "delete_key_fn_key_delete_post"
+  },
+  "POST /key/generate": {
+    "tool": "generate_key_fn_key_generate_post"
+  },
+  "POST /key/health": {
+    "excluded": "undeclared request body"
+  },
+  "POST /key/regenerate": {
+    "tool": "regenerate_key_fn_key_regenerate_post"
+  },
+  "POST /key/service-account/generate": {
+    "tool": "generate_service_account_key_fn_key_service_account_generate_post"
+  },
+  "POST /key/unblock": {
+    "tool": "unblock_key_key_unblock_post"
+  },
+  "POST /key/update": {
+    "tool": "update_key_fn_key_update_post"
+  },
+  "POST /key/{key}/regenerate": {
+    "tool": "regenerate_key_fn_key__key__regenerate_post"
+  },
+  "POST /key/{key}/reset_spend": {
+    "tool": "reset_key_spend_fn_key__key__reset_spend_post"
+  },
+  "POST /langfuse/{endpoint}": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /management/v1/teams/{team_id}/members/bulk_delete": {
+    "tool": "bulk_delete_team_members_action_management_v1_teams__team_id__members_bulk_delete_post"
+  },
+  "POST /management/v1/teams/{team_id}/members/bulk_update": {
+    "tool": "bulk_update_team_member_budgets_action_management_v1_teams__team_id__members_bulk_update_post"
+  },
+  "POST /management/v1/users/bulk": {
+    "tool": "bulk_create_users_route_management_v1_users_bulk_post"
+  },
+  "POST /management/v1/users/bulk_delete": {
+    "tool": "bulk_delete_users_action_management_v1_users_bulk_delete_post"
+  },
+  "POST /mcp": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /mcp-rest/test/connection": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /mcp-rest/test/tools/list": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /mcp-rest/tools/call": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /mcp/proxy": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /milvus/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /mistral/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /model/block": {
+    "tool": "block_model_model_block_post"
+  },
+  "POST /model/delete": {
+    "tool": "delete_model_model_delete_post"
+  },
+  "POST /model/new": {
+    "tool": "add_new_model_model_new_post"
+  },
+  "POST /model/unblock": {
+    "tool": "unblock_model_model_unblock_post"
+  },
+  "POST /model/update": {
+    "tool": "update_model_model_update_post"
+  },
+  "POST /model_group/make_public": {
+    "tool": "update_public_model_groups_model_group_make_public_post"
+  },
+  "POST /model_hub/update_useful_links": {
+    "tool": "update_useful_links_model_hub_update_useful_links_post"
+  },
+  "POST /models/{model_name}:countTokens": {
+    "excluded": "tag:google genai endpoints"
+  },
+  "POST /models/{model_name}:generateContent": {
+    "excluded": "tag:google genai endpoints"
+  },
+  "POST /models/{model_name}:streamGenerateContent": {
+    "excluded": "tag:google genai endpoints"
+  },
+  "POST /moderations": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /nvidia_nim/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /ocr": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /openai/deployments/{model}/chat/completions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /openai/deployments/{model}/completions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /openai/deployments/{model}/embeddings": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /openai/deployments/{model}/images/edits": {
+    "excluded": "tag:images"
+  },
+  "POST /openai/deployments/{model}/images/generations": {
+    "excluded": "tag:images"
+  },
+  "POST /openai/v1/realtime/calls": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /openai/v1/realtime/client_secrets": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /openai/v1/realtime/transcription_sessions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /openai/v1/responses": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /openai/v1/responses/compact": {
+    "excluded": "tag:responses"
+  },
+  "POST /openai/v1/responses/input_tokens": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /openai/v1/responses/{response_id}/cancel": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /openai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /openai_passthrough/{endpoint}": {
+    "excluded": "tag:OpenAI Pass-through"
+  },
+  "POST /openrouter/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /organization/info": {
+    "tool": "deprecated_info_organization_organization_info_post"
+  },
+  "POST /organization/member_add": {
+    "tool": "organization_member_add_organization_member_add_post"
+  },
+  "POST /organization/new": {
+    "tool": "new_organization_organization_new_post"
+  },
+  "POST /policies": {
+    "tool": "create_policy_policies_post"
+  },
+  "POST /policies/attachments": {
+    "tool": "create_policy_attachment_policies_attachments_post"
+  },
+  "POST /policies/attachments/estimate-impact": {
+    "tool": "estimate_attachment_impact_policies_attachments_estimate_impact_post"
+  },
+  "POST /policies/name/{policy_name}/versions": {
+    "tool": "create_policy_version_policies_name__policy_name__versions_post"
+  },
+  "POST /policies/resolve": {
+    "tool": "resolve_policies_for_context_policies_resolve_post"
+  },
+  "POST /policies/test-pipeline": {
+    "tool": "test_pipeline_policies_test_pipeline_post"
+  },
+  "POST /policy/templates/enrich": {
+    "tool": "enrich_policy_template_policy_templates_enrich_post"
+  },
+  "POST /policy/templates/enrich/stream": {
+    "excluded": "streaming endpoint"
+  },
+  "POST /policy/templates/suggest": {
+    "tool": "suggest_policy_templates_policy_templates_suggest_post"
+  },
+  "POST /policy/templates/test": {
+    "tool": "test_policy_template_policy_templates_test_post"
+  },
+  "POST /policy/test": {
+    "tool": "test_policy_matching_policy_test_post"
+  },
+  "POST /policy/validate": {
+    "tool": "validate_policy_policy_validate_post"
+  },
+  "POST /project/new": {
+    "tool": "new_project_project_new_post"
+  },
+  "POST /project/update": {
+    "tool": "update_project_project_update_post"
+  },
+  "POST /prompts": {
+    "tool": "create_prompt_prompts_post"
+  },
+  "POST /prompts/test": {
+    "tool": "test_prompt_prompts_test_post"
+  },
+  "POST /rag/ingest": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /rag/query": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /realtime/calls": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /realtime/client_secrets": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /realtime/transcription_sessions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /register": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "POST /rerank": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /responses": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /responses/compact": {
+    "excluded": "tag:responses"
+  },
+  "POST /responses/input_tokens": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /responses/{response_id}/cancel": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /revoke": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "POST /scim/v2/Groups": {
+    "tool": "create_group_scim_v2_Groups_post"
+  },
+  "POST /scim/v2/Users": {
+    "tool": "create_user_scim_v2_Users_post"
+  },
+  "POST /scim/v2/placeholders/{user_id}/merge": {
+    "excluded": "undeclared request body"
+  },
+  "POST /search": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /search/{search_tool_name}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /search_tools": {
+    "tool": "create_search_tool_search_tools_post"
+  },
+  "POST /search_tools/test_connection": {
+    "tool": "test_search_tool_connection_search_tools_test_connection_post"
+  },
+  "POST /session/logout": {
+    "excluded": "undeclared request body"
+  },
+  "POST /spend/calculate": {
+    "tool": "calculate_spend_spend_calculate_post"
+  },
+  "POST /tag/delete": {
+    "tool": "delete_tag_tag_delete_post"
+  },
+  "POST /tag/info": {
+    "tool": "info_tag_tag_info_post"
+  },
+  "POST /tag/new": {
+    "tool": "new_tag_tag_new_post"
+  },
+  "POST /tag/update": {
+    "tool": "update_tag_tag_update_post"
+  },
+  "POST /team/block": {
+    "tool": "block_team_team_block_post"
+  },
+  "POST /team/bulk_member_add": {
+    "tool": "bulk_team_member_add_team_bulk_member_add_post"
+  },
+  "POST /team/delete": {
+    "tool": "delete_team_team_delete_post"
+  },
+  "POST /team/key/bulk_update": {
+    "tool": "bulk_update_team_keys_team_key_bulk_update_post"
+  },
+  "POST /team/member_add": {
+    "tool": "team_member_add_team_member_add_post"
+  },
+  "POST /team/member_delete": {
+    "tool": "team_member_delete_team_member_delete_post"
+  },
+  "POST /team/member_update": {
+    "tool": "team_member_update_team_member_update_post"
+  },
+  "POST /team/model/add": {
+    "tool": "team_model_add_team_model_add_post"
+  },
+  "POST /team/model/delete": {
+    "tool": "team_model_delete_team_model_delete_post"
+  },
+  "POST /team/new": {
+    "tool": "new_team_team_new_post"
+  },
+  "POST /team/permissions_bulk_update": {
+    "tool": "bulk_update_team_member_permissions_team_permissions_bulk_update_post"
+  },
+  "POST /team/permissions_update": {
+    "tool": "update_team_member_permissions_team_permissions_update_post"
+  },
+  "POST /team/unblock": {
+    "tool": "unblock_team_team_unblock_post"
+  },
+  "POST /team/update": {
+    "tool": "update_team_team_update_post"
+  },
+  "POST /team/{team_id}/callback": {
+    "tool": "add_team_callbacks_team__team_id__callback_post"
+  },
+  "POST /team/{team_id}/disable_logging": {
+    "excluded": "undeclared request body"
+  },
+  "POST /team/{team_id}/member/{user_id}/reset_budget": {
+    "excluded": "undeclared request body"
+  },
+  "POST /team/{team_id}/member/{user_id}/reset_spend": {
+    "tool": "reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post"
+  },
+  "POST /threads": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /threads/{thread_id}/messages": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /threads/{thread_id}/runs": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /tinyfish/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /token": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /toolset/{toolset_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "POST /transcribe": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /transcribe/{operation}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /typesafe/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /upload/logo": {
+    "excluded": "non-JSON request body"
+  },
+  "POST /usage/ai/chat": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /user/bulk_update": {
+    "tool": "bulk_user_update_user_bulk_update_post"
+  },
+  "POST /user/delete": {
+    "tool": "delete_user_user_delete_post"
+  },
+  "POST /user/new": {
+    "tool": "new_user_user_new_post"
+  },
+  "POST /user/password/change": {
+    "tool": "change_password_user_password_change_post"
+  },
+  "POST /user/update": {
+    "tool": "user_update_user_update_post"
+  },
+  "POST /utils/dotprompt_json_converter": {
+    "excluded": "non-JSON request body"
+  },
+  "POST /utils/test_policies_and_guardrails": {
+    "tool": "test_policies_and_guardrails_utils_test_policies_and_guardrails_post"
+  },
+  "POST /utils/token_counter": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /utils/transform_request": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/a2a/discover": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /v1/a2a/{agent_id}/message/send": {
+    "excluded": "tag:a2a"
+  },
+  "POST /v1/access_group": {
+    "tool": "create_access_group_v1_access_group_post"
+  },
+  "POST /v1/agents": {
+    "tool": "create_agent_v1_agents_post"
+  },
+  "POST /v1/agents/make_public": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /v1/agents/{agent_id}/make_public": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /v1/assistants": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/audio/speech": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/audio/transcriptions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/batches": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/batches/{batch_id}/cancel": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/chat/completions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/completions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/containers": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/containers/{container_id}/files": {
+    "excluded": "tag:containers"
+  },
+  "POST /v1/embeddings": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/evals": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /v1/evals/{eval_id}": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /v1/evals/{eval_id}/cancel": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /v1/evals/{eval_id}/runs": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /v1/evals/{eval_id}/runs/{run_id}": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /v1/files": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/fine_tuning/jobs": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/images/edits": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/images/generations": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/indexes": {
+    "excluded": "tag:vector_stores"
+  },
+  "POST /v1/mcp/make_public": {
+    "tool": "make_mcp_servers_public_v1_mcp_make_public_post"
+  },
+  "POST /v1/mcp/server": {
+    "tool": "add_mcp_server_v1_mcp_server_post"
+  },
+  "POST /v1/mcp/server/import": {
+    "tool": "import_mcp_servers_v1_mcp_server_import_post"
+  },
+  "POST /v1/mcp/server/oauth/session": {
+    "tool": "add_session_mcp_server_v1_mcp_server_oauth_session_post"
+  },
+  "POST /v1/mcp/server/register": {
+    "tool": "register_mcp_server_v1_mcp_server_register_post"
+  },
+  "POST /v1/mcp/server/{server_id}/oauth-user-credential": {
+    "tool": "store_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_post"
+  },
+  "POST /v1/mcp/server/{server_id}/user-credential": {
+    "tool": "store_mcp_user_credential_v1_mcp_server__server_id__user_credential_post"
+  },
+  "POST /v1/mcp/server/{server_id}/user-env-vars": {
+    "tool": "store_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_post"
+  },
+  "POST /v1/mcp/toolset": {
+    "tool": "add_mcp_toolset_v1_mcp_toolset_post"
+  },
+  "POST /v1/memory": {
+    "excluded": "excluded path prefix"
+  },
+  "POST /v1/messages": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/messages/count_tokens": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/moderations": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/ocr": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/rag/ingest": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/rag/query": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/realtime/calls": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/realtime/client_secrets": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/realtime/transcription_sessions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/rerank": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/responses": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/responses/compact": {
+    "excluded": "tag:responses"
+  },
+  "POST /v1/responses/input_tokens": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/responses/{response_id}/cancel": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/rust_control_plane/logs": {
+    "tool": "ingest_callback_logs_v1_rust_control_plane_logs_post"
+  },
+  "POST /v1/search": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/search/{search_tool_name}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/skills": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/threads": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/threads/{thread_id}/messages": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/threads/{thread_id}/runs": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/tool/policy": {
+    "tool": "update_tool_policy_v1_tool_policy_post"
+  },
+  "POST /v1/unified_access_group": {
+    "tool": "create_access_group_v1_unified_access_group_post"
+  },
+  "POST /v1/vector_stores": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/vector_stores/{vector_store_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/vector_stores/{vector_store_id}/files": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/vector_stores/{vector_store_id}/files/{file_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/vector_stores/{vector_store_id}/search": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/videos": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/videos/characters": {
+    "excluded": "tag:videos"
+  },
+  "POST /v1/videos/edits": {
+    "excluded": "tag:videos"
+  },
+  "POST /v1/videos/extensions": {
+    "excluded": "tag:videos"
+  },
+  "POST /v1/videos/{video_id}/remix": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1/workflows/runs": {
+    "tool": "create_workflow_run_v1_workflows_runs_post"
+  },
+  "POST /v1/workflows/runs/{run_id}/events": {
+    "tool": "append_workflow_event_v1_workflows_runs__run_id__events_post"
+  },
+  "POST /v1/workflows/runs/{run_id}/messages": {
+    "tool": "append_workflow_message_v1_workflows_runs__run_id__messages_post"
+  },
+  "POST /v1beta/agents": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1beta/interactions": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1beta/interactions/{interaction_id}/cancel": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /v1beta/models/{model_name}:countTokens": {
+    "excluded": "tag:google genai endpoints"
+  },
+  "POST /v1beta/models/{model_name}:generateContent": {
+    "excluded": "tag:google genai endpoints"
+  },
+  "POST /v1beta/models/{model_name}:streamGenerateContent": {
+    "excluded": "tag:google genai endpoints"
+  },
+  "POST /v2/rerank": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /vantage/dry-run": {
+    "tool": "vantage_dry_run_export_vantage_dry_run_post"
+  },
+  "POST /vantage/export": {
+    "tool": "vantage_export_vantage_export_post"
+  },
+  "POST /vantage/init": {
+    "tool": "init_vantage_settings_vantage_init_post"
+  },
+  "POST /vector_store/delete": {
+    "tool": "delete_vector_store_vector_store_delete_post"
+  },
+  "POST /vector_store/info": {
+    "tool": "get_vector_store_info_vector_store_info_post"
+  },
+  "POST /vector_store/new": {
+    "tool": "new_vector_store_vector_store_new_post"
+  },
+  "POST /vector_store/update": {
+    "tool": "update_vector_store_vector_store_update_post"
+  },
+  "POST /vector_stores": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /vector_stores/{vector_store_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /vector_stores/{vector_store_id}/files": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /vector_stores/{vector_store_id}/files/{file_id}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /vector_stores/{vector_store_id}/search": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /vertex_ai/discovery/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /vertex_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /videos": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /videos/characters": {
+    "excluded": "tag:videos"
+  },
+  "POST /videos/edits": {
+    "excluded": "tag:videos"
+  },
+  "POST /videos/extensions": {
+    "excluded": "tag:videos"
+  },
+  "POST /videos/{video_id}/remix": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "POST /vllm/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /watsonx/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "POST /{mcp_server_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "POST /{mcp_server_name}/register": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "POST /{mcp_server_name}/token": {
+    "excluded": "tag:mcp_discoverable"
+  },
+  "POST /{provider}/v1/batches": {
+    "excluded": "tag:batch"
+  },
+  "POST /{provider}/v1/batches/{batch_id}/cancel": {
+    "excluded": "tag:batch"
+  },
+  "POST /{provider}/v1/files": {
+    "excluded": "tag:files"
+  },
+  "PUT /access_group/{access_group}/budget": {
+    "tool": "set_access_group_budget_access_group__access_group__budget_put"
+  },
+  "PUT /access_group/{access_group}/update": {
+    "tool": "update_access_group_access_group__access_group__update_put"
+  },
+  "PUT /anthropic/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /assemblyai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /azure/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /azure_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /azure_speech/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /bedrock/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /claude-code/plugins/{plugin_name}": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "PUT /cloudzero/settings": {
+    "tool": "update_cloudzero_settings_cloudzero_settings_put"
+  },
+  "PUT /cohere/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /cursor/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /eu.assemblyai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /fal_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /gemini/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /gigachat/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /guardrails/{guardrail_id}": {
+    "tool": "update_guardrail_guardrails__guardrail_id__put"
+  },
+  "PUT /langfuse/{endpoint}": {
+    "excluded": "excluded path prefix"
+  },
+  "PUT /mcp": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "PUT /mcp/proxy": {
+    "excluded": "data plane, public or ui route group"
+  },
+  "PUT /milvus/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /mistral/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /nvidia_nim/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /openai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /openai_passthrough/{endpoint}": {
+    "excluded": "tag:OpenAI Pass-through"
+  },
+  "PUT /openrouter/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /policies/{policy_id}": {
+    "tool": "update_policy_policies__policy_id__put"
+  },
+  "PUT /policies/{policy_id}/status": {
+    "tool": "update_policy_version_status_policies__policy_id__status_put"
+  },
+  "PUT /prompts/{prompt_id}": {
+    "tool": "update_prompt_prompts__prompt_id__put"
+  },
+  "PUT /scim/v2/Groups/{group_id}": {
+    "tool": "update_group_scim_v2_Groups__group_id__put"
+  },
+  "PUT /scim/v2/Users/{user_id}": {
+    "tool": "update_user_scim_v2_Users__user_id__put"
+  },
+  "PUT /search_tools/{search_tool_id}": {
+    "tool": "update_search_tool_search_tools__search_tool_id__put"
+  },
+  "PUT /toolset/{toolset_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  },
+  "PUT /typesafe/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /v1/access_group/{access_group_id}": {
+    "tool": "update_access_group_v1_access_group__access_group_id__put"
+  },
+  "PUT /v1/agents/{agent_id}": {
+    "excluded": "excluded path prefix"
+  },
+  "PUT /v1/mcp/server": {
+    "tool": "edit_mcp_server_v1_mcp_server_put"
+  },
+  "PUT /v1/mcp/server/{server_id}/approve": {
+    "excluded": "undeclared request body"
+  },
+  "PUT /v1/mcp/server/{server_id}/reject": {
+    "tool": "reject_mcp_server_submission_v1_mcp_server__server_id__reject_put"
+  },
+  "PUT /v1/mcp/toolset": {
+    "tool": "edit_mcp_toolset_v1_mcp_toolset_put"
+  },
+  "PUT /v1/memory/{key}": {
+    "excluded": "excluded path prefix"
+  },
+  "PUT /v1/unified_access_group/{access_group_id}": {
+    "tool": "update_access_group_v1_unified_access_group__access_group_id__put"
+  },
+  "PUT /vantage/settings": {
+    "tool": "update_vantage_settings_vantage_settings_put"
+  },
+  "PUT /vertex_ai/discovery/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /vertex_ai/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /vllm/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /watsonx/{endpoint}": {
+    "excluded": "tag:llm_passthrough"
+  },
+  "PUT /{mcp_server_name}/mcp": {
+    "excluded": "MCP transport endpoint"
+  }
+}

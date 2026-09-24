@@ -150,6 +150,8 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
         "/redoc",
         "/fallback/login",
         "/mcp",  # bare spelling of the aggregate MCP endpoint; /mcp/ prefix covers the rest
+        "/litellm-management/mcp",
+        "/litellm-management/mcp/",
     }
 )
 

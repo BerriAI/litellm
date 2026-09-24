@@ -52,6 +52,10 @@ LITELLM_MCP_SERVER_NAME: Final = os.environ.get("LITELLM_MCP_SERVER_NAME", "lite
 LITELLM_MCP_SERVER_VERSION: Final = "1.0.0"
 LITELLM_MCP_SERVER_DESCRIPTION: Final = os.environ.get("LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM")
 MCP_TOOL_PREFIX_SEPARATOR: Final = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
+
+# Alias of the built-in management MCP endpoint; a registered server using it
+# would shadow (or be shadowed by) the reserved route.
+RESERVED_MANAGEMENT_MCP_SERVER_NAME: Final = "litellm-management"
 MCP_TOOL_PREFIX_FORMAT: Final = "{server_name}{separator}{tool_name}"
 
 # ---------------------------------------------------------------------------
@@ -518,15 +522,28 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
     Raises:
         Exception or HTTPException: If server name contains 'MCP_TOOL_PREFIX_SEPARATOR'
     """
-    if server_name and MCP_TOOL_PREFIX_SEPARATOR in server_name:
-        error_message = f"Server name cannot contain '{MCP_TOOL_PREFIX_SEPARATOR}'. Use an alternative character instead Found: {server_name}"
-        if raise_http_exception:
-            from fastapi import HTTPException
-            from starlette import status
+    error_message: Final[str | None] = (
+        f"Server name cannot contain '{MCP_TOOL_PREFIX_SEPARATOR}'. Use an alternative character instead Found: {server_name}"
+        if server_name and MCP_TOOL_PREFIX_SEPARATOR in server_name
+        else (
+            f"Server name '{server_name}' is reserved for the built-in management MCP endpoint "
+            "(/litellm-management/mcp). Use a different name or alias."
+            if server_name and server_name.lower() == RESERVED_MANAGEMENT_MCP_SERVER_NAME
+            else None
+        )
+    )
+    if error_message is None:
+        return
+    if raise_http_exception:
+        from fastapi import HTTPException
+        from starlette import status
 
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message})
-        else:
-            raise Exception(error_message)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": error_message},  # mutable-ok: FastAPI error payload
+        )
+    else:
+        raise Exception(error_message)
 
 
 def extract_mcp_tool_result_error_message(result: object) -> str | None:

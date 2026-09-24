@@ -559,6 +559,14 @@ class LiteLLMRoutes(enum.Enum):
     # allowed_routes=["mcp_routes"], which should cover both halves.
     mcp_routes = mcp_inference_routes + mcp_management_routes
 
+    # Built-in management MCP endpoint, control-plane only. Gated by
+    # DISABLE_ADMIN_ENDPOINTS through management_routes; deliberately not part
+    # of mcp_routes so keys allowed for MCP tool calls cannot manage keys.
+    management_mcp_routes = [  # mutable-ok: sibling route-group lists are plain lists consumed by RouteChecks
+        "/litellm-management/mcp",
+        "/litellm-management/mcp/",
+    ]
+
     # A2A agent invocation / discovery routes — data-plane. Gated by DISABLE_LLM_API_ENDPOINTS.
     agent_inference_routes = (
         "/agents",
@@ -732,6 +740,7 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + key_management_routes
         + mcp_management_routes
+        + management_mcp_routes
         + list(agent_management_routes)
     )
 
@@ -2970,6 +2979,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     maximum_spend_logs_cleanup_batch_timeout: str | None = Field(
         None,
         description="Postgres statement_timeout and lock_timeout applied to each spend log cleanup delete batch (e.g. '30s'), so cleanup cannot hold row locks or a connection indefinitely. Defaults to '30s'.",
+    )
+    enable_management_mcp: bool | None = Field(
+        None,
+        description="If True, the proxy serves OpenAPI-generated management tools at /litellm-management/mcp using the caller's existing REST permissions. Disabled by default.",
     )
     mcp_internal_ip_ranges: list[str] | None = Field(
         None,

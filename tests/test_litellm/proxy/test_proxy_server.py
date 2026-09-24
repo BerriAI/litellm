@@ -15143,3 +15143,26 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
 
     assert declared["team_id_jwt_field"] == "os.environ/JWT_TEAM_FIELD"
     assert proxy_server_module.jwt_handler.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
+
+
+@pytest.mark.asyncio
+async def test_management_mcp_shutdown_waits_for_request_drain(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server.management import server as mgmt_server
+    from litellm.proxy.proxy_server import GracefulShutdownManager, proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    drained = asyncio.Event()
+
+    async def wait_for_drain():
+        drained.set()
+
+    async def close_management():
+        assert drained.is_set(), "management client closed before in-flight request drain"
+
+    monkeypatch.setattr(GracefulShutdownManager, "wait_for_drain", wait_for_drain)
+    monkeypatch.setattr(mgmt_server, "shutdown_management_mcp_server", close_management)
+    async with proxy_startup_event(FastAPI()):
+        assert not drained.is_set()
+    assert drained.is_set()

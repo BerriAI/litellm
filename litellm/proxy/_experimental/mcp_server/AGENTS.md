@@ -44,6 +44,10 @@ litellm/proxy/_experimental/mcp_server/
   tool_search.py             # opt-in virtual tools (mcp_tool_search + mcp_tool_call) for large catalogs
   guardrail_translation/
     handler.py               # MCP guardrail result translation
+  management/                # opt-in built-in management MCP endpoint (/litellm-management/mcp)
+    catalog.py               # OpenAPI-generated management tools, schemas, exclusions, annotations
+    dispatcher.py            # in-process ASGI dispatch through existing REST routes
+    server.py                # lifecycle, admission auth, HTTP route entry point
   sse_transport.py           # SSE transport implementation
   mcp_context.py             # contextvars for MCP request/session metadata
   mcp_debug.py               # debug helpers
