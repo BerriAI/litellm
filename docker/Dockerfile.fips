@@ -36,6 +36,35 @@ RUN curl -fsSL -o pgbouncer.tar.gz "https://www.pgbouncer.org/downloads/files/${
     make -j"$(nproc)" pgbouncer && \
     install -m 0755 pgbouncer /usr/local/bin/pgbouncer
 
+# grpcio's PyPI wheel statically bundles BoringSSL, which is not the validated
+# module. Rebuild it from source against the FIPS system OpenSSL instead
+# (GRPC_PYTHON_BUILD_SYSTEM_OPENSSL), so cygrpc links libcrypto.so.3 like
+# every other consumer in the image. The version is read from uv.lock through
+# its own tiny stage so this long compile is cached until grpcio itself moves.
+FROM $LITELLM_BUILD_IMAGE AS grpcio-version
+COPY uv.lock /uv.lock
+RUN awk '/^name = "grpcio"$/ { found = 1 } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' /uv.lock \
+    > /grpcio-version && test -s /grpcio-version
+
+FROM $LITELLM_BUILD_IMAGE AS grpcio-builder
+USER root
+RUN --mount=type=secret,id=cgr-token \
+    HTTP_AUTH="basic:virtualapk.cgr.dev:user:$(cat /run/secrets/cgr-token)" \
+    apk add --no-cache build-base python-3.13 python-3.13-dev openssl-dev zlib-dev binutils
+COPY --from=uvbin /uv /usr/local/bin/uv
+COPY --from=grpcio-version /grpcio-version /grpcio-version
+ENV UV_PYTHON_DOWNLOADS=0
+RUN uv venv --seed --python python3.13 /grpcio-venv && \
+    GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1 \
+    GRPC_PYTHON_BUILD_SYSTEM_ZLIB=1 \
+    GRPC_PYTHON_BUILD_EXT_COMPILER_JOBS="$(nproc)" \
+    /grpcio-venv/bin/python -m pip wheel --no-binary grpcio --no-deps --no-cache-dir \
+        --wheel-dir /wheels "grpcio==$(cat /grpcio-version)" && \
+    /grpcio-venv/bin/python -m zipfile -e /wheels/grpcio-*.whl /wheels/check && \
+    objdump -p /wheels/check/grpc/_cython/cygrpc*.so | grep -q 'NEEDED.*libcrypto\.so\.3' && \
+    ! grep -aq BoringSSL /wheels/check/grpc/_cython/cygrpc*.so && \
+    rm -rf /wheels/check
+
 FROM --platform=$BUILDPLATFORM $UI_BUILD_IMAGE AS ui-builder
 
 ENV NEXT_TELEMETRY_DISABLED=1 \
@@ -62,6 +91,7 @@ RUN --mount=type=secret,id=cgr-token \
     HTTP_AUTH="basic:virtualapk.cgr.dev:user:$(cat /run/secrets/cgr-token)" \
     apk add --no-cache \
     bash \
+    binutils \
     gcc \
     python-3.13 \
     python-3.13-dev \
@@ -106,6 +136,11 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra saml \
     --extra bedrock-realtime \
     --python python3.13
+
+COPY --from=grpcio-builder /wheels /wheels
+RUN uv pip install --python /app/.venv/bin/python --no-deps --reinstall --no-cache /wheels/grpcio-*.whl && \
+    strip --strip-unneeded /app/.venv/lib/python3.13/site-packages/grpc/_cython/cygrpc*.so && \
+    rm -rf /wheels
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
@@ -155,6 +190,8 @@ RUN --mount=type=secret,id=cgr-token \
     HTTP_AUTH="basic:virtualapk.cgr.dev:user:$(cat /run/secrets/cgr-token)" \
     apk add --no-cache binutils
 RUN openssl-fips-test
+RUN python -c "import grpc._cython.cygrpc" && \
+    objdump -p /app/.venv/lib/python3.13/site-packages/grpc/_cython/cygrpc*.so | grep -q 'NEEDED.*libcrypto\.so\.3'
 RUN chmod +x docker/scan_bundled_crypto.sh && \
     docker/scan_bundled_crypto.sh /app/.venv /opt/prisma /usr/local/bin
 
