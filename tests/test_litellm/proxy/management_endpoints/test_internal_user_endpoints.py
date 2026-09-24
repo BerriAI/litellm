@@ -2709,6 +2709,7 @@ async def test_search_user_daily_activity_keys_passes_matched_tokens_to_aggregat
         {"key_alias": {"contains": "gamma", "mode": "insensitive"}},
         {"user_id": {"contains": "gamma", "mode": "insensitive"}},
     )
+    assert "user_id" not in find_many_kwargs["where"]
 
     mock_get_daily_agg.assert_called_once_with(
         prisma_client=mock_prisma_client,
@@ -2806,6 +2807,8 @@ async def test_search_user_daily_activity_keys_non_admin_scoped_to_caller(monkey
 
     assert result is mock_response
     assert mock_get_daily_agg.call_args.kwargs["entity_id"] == "user-1"
+    find_many_kwargs = mock_prisma_client.db.litellm_verificationtoken.find_many.call_args.kwargs
+    assert find_many_kwargs["where"]["user_id"] == "user-1"
 
     with pytest.raises(HTTPException) as exc_info:
         await search_user_daily_activity_keys(

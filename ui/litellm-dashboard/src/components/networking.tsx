@@ -2562,9 +2562,6 @@ export const userDailyActivityKeySearchCall = async (
   endTime: Date,
   ...options: [search: string, userId?: string | null]
 ) => {
-  /**
-   * Search keys beyond the top-spend subset the aggregated endpoint loads
-   */
   const [search, userId = null] = options;
   try {
     const formatDate = (date: Date) => {

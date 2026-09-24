@@ -12,14 +12,16 @@ interface KeyActivityPanelProps {
   keyMetrics: Record<string, ModelActivityData>;
   hidePromptCachingMetrics?: boolean;
   apiKeyTruncation?: ApiKeyTruncation;
-  searchKeys?: (query: string) => Promise<Record<string, ModelActivityData>>;
+  searchKeys?: SearchKeys;
 }
+
+type SearchKeys = (query: string) => Promise<Record<string, ModelActivityData>>;
 
 type RemoteSearch =
   | { status: "idle" }
-  | { status: "loading"; query: string }
-  | { status: "done"; query: string; keys: Record<string, ModelActivityData> }
-  | { status: "error"; query: string };
+  | { status: "loading"; query: string; searchKeys: SearchKeys }
+  | { status: "done"; query: string; searchKeys: SearchKeys; keys: Record<string, ModelActivityData> }
+  | { status: "error"; query: string; searchKeys: SearchKeys };
 
 const REMOTE_SEARCH_DEBOUNCE_MS = 300;
 
@@ -39,13 +41,13 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
     if (!remoteEnabled) return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      setRemote({ status: "loading", query: trimmedQuery });
+      setRemote({ status: "loading", query: trimmedQuery, searchKeys });
       searchKeys(trimmedQuery)
         .then((keys) => {
-          if (!cancelled) setRemote({ status: "done", query: trimmedQuery, keys });
+          if (!cancelled) setRemote({ status: "done", query: trimmedQuery, searchKeys, keys });
         })
         .catch(() => {
-          if (!cancelled) setRemote({ status: "error", query: trimmedQuery });
+          if (!cancelled) setRemote({ status: "error", query: trimmedQuery, searchKeys });
         });
     }, REMOTE_SEARCH_DEBOUNCE_MS);
     return () => {
@@ -54,8 +56,10 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
     };
   }, [remoteEnabled, trimmedQuery, searchKeys]);
 
-  const remoteCurrent = remoteEnabled && "query" in remote && remote.query === trimmedQuery;
-  const remoteLoading = remoteEnabled && !remoteCurrent;
+  const remoteMatchesSearch =
+    "searchKeys" in remote && remote.searchKeys === searchKeys && remote.query === trimmedQuery;
+  const remoteCurrent = remoteEnabled && remoteMatchesSearch;
+  const remoteLoading = remoteEnabled && (remote.status === "loading" || !remoteCurrent);
   const remoteFailed = remoteCurrent && remote.status === "error";
 
   const extraRemoteKeys = useMemo(() => {

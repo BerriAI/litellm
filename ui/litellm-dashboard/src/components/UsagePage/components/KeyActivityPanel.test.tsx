@@ -107,6 +107,28 @@ describe("KeyActivityPanel", () => {
     expect(searchKeys).not.toHaveBeenCalled();
   });
 
+  it("drops stale server results as soon as the search callback is rebuilt", async () => {
+    const searchKeysA = vi
+      .fn<(query: string) => Promise<Record<string, ModelActivityData>>>()
+      .mockResolvedValue({ "hash-gamma": activity("gamma-low-key", "gamma@example.com", "user-gamma") });
+    const searchKeysB = vi
+      .fn<(query: string) => Promise<Record<string, ModelActivityData>>>()
+      .mockReturnValue(new Promise(() => {}));
+    const { rerender } = render(
+      <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3 }} searchKeys={searchKeysA} />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "gamma" } });
+    expect(await screen.findByText("hash-gamma")).toBeInTheDocument();
+
+    rerender(
+      <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3 }} searchKeys={searchKeysB} />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Searching all keys");
+    expect(screen.queryByText("hash-gamma")).not.toBeInTheDocument();
+  });
+
   it("reports a failed server search but keeps the local matches", async () => {
     const searchKeys = vi
       .fn<(query: string) => Promise<Record<string, ModelActivityData>>>()
