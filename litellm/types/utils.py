@@ -1361,9 +1361,7 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: di
 class Message(SafeAttributeModel, OpenAIObject):
     content: str | None
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: (
-        list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
-    )  # mutable-ok: public pydantic response field; only the union member is new
+    tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
     function_call: FunctionCall | None
     audio: ChatCompletionAudioResponse | None = None
     images: list[ImageURLListItem] | None = None
@@ -1486,9 +1484,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         content: str | None
         role: str | None
         function_call: FunctionCall | None
-        tool_calls: (
-            list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
-        )  # mutable-ok: public pydantic response field; only the union member is new
+        tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
         audio: ChatCompletionAudioResponse | None
         images: list[ImageURLListItem] | None
         annotations: list[ChatCompletionAnnotation] | None

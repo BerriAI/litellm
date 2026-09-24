@@ -97,11 +97,7 @@ def _normalize_tool_dialect(
     tools: Final = data.get("tools")
     tool_choice: Final = data.get("tool_choice")
     normalized_tools: Final = (
-        [
-            _convert_tool_envelope(tool, to_chat=to_chat) for tool in tools
-        ]  # mutable-ok: body's tools stays a plain JSON list
-        if isinstance(tools, list)
-        else tools
+        [_convert_tool_envelope(tool, to_chat=to_chat) for tool in tools] if isinstance(tools, list) else tools
     )
     normalized_choice: Final = _convert_tool_envelope(tool_choice, to_chat=to_chat)
     if normalized_tools == tools and normalized_choice == tool_choice:

@@ -764,4 +764,4 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
         **(additional_headers if isinstance(additional_headers, Mapping) else _NO_HEADERS),
         RESPONSE_COST_HEADER: cost,
     }
-    hidden_params["additional_headers"] = merged  # rebind-ok: the caller's record is the point
+    hidden_params["additional_headers"] = merged

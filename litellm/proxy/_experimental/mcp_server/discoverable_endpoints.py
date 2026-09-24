@@ -1570,6 +1570,7 @@ async def _persist_dcr_client_registration(
     }
 
     from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # avoids circular import
+        McpIdentifierConflict,
         update_mcp_server,
         upsert_mcp_server_oauth_client_credentials,
     )
@@ -1601,7 +1602,7 @@ async def _persist_dcr_client_registration(
             ),
             touched_by="mcp_oauth_dcr",
         )
-        if updated_row is not None:
+        if updated_row is not None and not isinstance(updated_row, McpIdentifierConflict):
             await global_mcp_server_manager.update_server(updated_row)
             return "persisted"
         if global_mcp_server_manager.is_config_declared_server(mcp_server.server_id):

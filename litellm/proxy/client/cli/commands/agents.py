@@ -241,9 +241,7 @@ def prepare_codex(
 
 _Preparer: TypeAlias = Callable[[str, str, Mapping[str, str]], Sequence[str]]
 
-_PREPARERS: Final[Mapping[str, _Preparer]] = MappingProxyType(
-    {"pi": prepare_pi, "codex": prepare_codex}  # mutable-ok: MappingProxyType freezes the provider registry
-)
+_PREPARERS: Final[Mapping[str, _Preparer]] = MappingProxyType({"pi": prepare_pi, "codex": prepare_codex})
 
 
 def agent_launch_args(command: str, base_url: str) -> list[str]:
