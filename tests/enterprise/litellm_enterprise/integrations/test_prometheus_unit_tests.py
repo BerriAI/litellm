@@ -13,7 +13,6 @@ import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 from unittest.mock import MagicMock
 
@@ -165,9 +164,9 @@ async def test_prometheus_metric_tracking():
                 "model_name": "gpt-5-mini",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_AI_API_KEY"),
-                    "api_version": os.getenv("AZURE_AI_API_VERSION"),
-                    "api_base": os.getenv("AZURE_AI_API_BASE"),
+                    "api_key": "sk-azure-unit-test",
+                    "api_version": "2025-01-01-preview",
+                    "api_base": "https://unit-test.openai.azure.com",
                 },
                 "model_info": {"id": "azure-model-id"},
             },
@@ -180,9 +179,6 @@ async def test_prometheus_metric_tracking():
             },
         ],
         provider_budget_config=provider_budget_config,
-        redis_host=os.getenv("REDIS_HOST"),
-        redis_port=int(os.getenv("REDIS_PORT", 6379)),
-        redis_password=os.getenv("REDIS_PASSWORD"),
     )
 
     try:

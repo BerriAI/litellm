@@ -438,7 +438,7 @@ def test_is_request_body_safe_global_enabled(
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "api_key": "sk-openai-unit-test",
                 },
             }
         ]
@@ -475,7 +475,7 @@ def test_is_request_body_safe_model_enabled(
                 "model_name": "fireworks_ai/*",
                 "litellm_params": {
                     "model": "fireworks_ai/*",
-                    "api_key": os.getenv("FIREWORKS_API_KEY"),
+                    "api_key": "sk-fireworks-unit-test",
                     "configurable_clientside_auth_params": (
                         ["api_base"] if allow_client_side_credentials else []
                     ),

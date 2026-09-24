@@ -2065,59 +2065,6 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
         assert new_data["failure_callback"] == expected_failure_callbacks
 
 
-@pytest.mark.skipif(
-    not os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_API_KEY"),
-    reason="Requires GEMINI_API_KEY or GOOGLE_API_KEY.",
-)
-@pytest.mark.asyncio
-async def test_gemini_pass_through_endpoint():
-    from starlette.datastructures import URL
-
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-        Request,
-        Response,
-        gemini_proxy_route,
-    )
-
-    body = b"""
-        {
-            "contents": [{
-                "parts":[{
-                "text": "The quick brown fox jumps over the lazy dog."
-                }]
-                }]
-        }
-        """
-
-    # Construct the scope dictionary
-    scope = {
-        "type": "http",
-        "method": "POST",
-        "path": "/gemini/v1beta/models/gemini-2.5-flash:countTokens",
-        "query_string": b"key=sk-1234",
-        "headers": [
-            (b"content-type", b"application/json"),
-        ],
-    }
-
-    # Create a new Request object
-    async def async_receive():
-        return {"type": "http.request", "body": body, "more_body": False}
-
-    request = Request(
-        scope=scope,
-        receive=async_receive,
-    )
-
-    resp = await gemini_proxy_route(
-        endpoint="v1beta/models/gemini-2.5-flash:countTokens?key=sk-1234",
-        request=request,
-        fastapi_response=Response(),
-    )
-
-    print(resp.body)
-
-
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
 async def test_model_info_alias_without_prisma(hidden):
