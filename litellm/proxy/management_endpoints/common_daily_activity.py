@@ -1032,7 +1032,7 @@ def _build_export_sql_query(
         ORDER BY {group_by}
     """
 
-    return sql_query, [*where_params, *sentinel_params]
+    return sql_query, (*where_params, *sentinel_params)
 
 
 class _ExportRow(_RollupMetricsRow):
@@ -1160,12 +1160,12 @@ def _fold_export_users(
     """Fold (date, team, api_key) rows into (date, team, user) rows."""
     sums: Final[dict[tuple[str, str, str], _ExportMetrics]] = {}  # mutable-ok: local fold accumulator
     emails: Final[dict[tuple[str, str, str], str | None]] = {}  # mutable-ok: local fold accumulator
-    key_sets: Final[dict[tuple[str, str, str], set[str]]] = {}  # mutable-ok: distinct-key counts
+    key_sets: Final[dict[tuple[str, str, str], frozenset[str]]] = {}  # mutable-ok: distinct-key counts
     for record in records:
         entity_id = record.entity_id or "Unassigned"
         metadata = _key_metadata(api_key_metadata, record.api_key or "")
         bucket_key = (record.date, entity_id, metadata.user_id or "Unassigned")
-        key_sets.setdefault(bucket_key, set()).add(record.api_key or "")
+        key_sets[bucket_key] = key_sets.get(bucket_key, frozenset()) | frozenset((record.api_key or "",))
         sums[bucket_key] = sums.get(bucket_key, _ExportMetrics.zero()) + _ExportMetrics.from_record(record)
         emails.setdefault(bucket_key, metadata.user_email)
         if emails[bucket_key] is None and metadata.user_email is not None:

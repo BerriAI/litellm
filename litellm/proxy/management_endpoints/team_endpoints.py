@@ -6851,7 +6851,7 @@ def _export_csv_headers(export_type: TeamDailyActivityExportType) -> tuple[str, 
 
 
 def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:
-    return {
+    return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
         "Date": row.date,
         "Team": row.team_alias or "-",
         "Team ID": row.team_id,
@@ -6878,7 +6878,7 @@ def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:
 def _team_export_csv(export_type: TeamDailyActivityExportType, rows: Sequence[TeamDailyActivityExportRow]) -> str:
     headers: Final = _export_csv_headers(export_type)
     buffer: Final = io.StringIO()
-    writer: Final = csv.DictWriter(buffer, fieldnames=list(headers), extrasaction="ignore")
+    writer: Final = csv.DictWriter(buffer, fieldnames=headers, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(_export_csv_record(row) for row in rows)
     return buffer.getvalue()
@@ -6888,7 +6888,7 @@ def _team_export_csv(export_type: TeamDailyActivityExportType, rows: Sequence[Te
     "/team/daily/activity/export",
     response_model=TeamDailyActivityExportResponse,
     responses={200: {"content": {"text/csv": {}, "application/json": {}}}},  # mutable-ok: OpenAPI content map
-    tags=["team management"],
+    tags=["team management"],  # mutable-ok: fastapi's decorator signature types tags as a list
 )
 async def get_team_daily_activity_export(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
@@ -6962,12 +6962,14 @@ async def get_team_daily_activity_export(
 
     if format == "json":
         return JSONResponse(
-            content=TeamDailyActivityExportResponse(metadata=metadata, data=list(rows)).model_dump(mode="json")
+            content=TeamDailyActivityExportResponse(metadata=metadata, data=list(rows)).model_dump(
+                mode="json"
+            )  # mutable-ok: response model field type
         )
     return Response(
         content=_team_export_csv(export_type, rows),
         media_type="text/csv; charset=utf-8",
-        headers={
+        headers={  # mutable-ok: starlette Response headers is a dict
             "Content-Disposition": f'attachment; filename="team_usage_{export_type}_{now.date().isoformat()}.csv"'
         },
     )
