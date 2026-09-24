@@ -194,7 +194,7 @@ def one_served_genai_span(trace: JaegerTrace, genai_span: str) -> JaegerSpan:
     return served[0]
 
 
-def _assert_real_ttft(hits: list[JaegerTrace], *, genai_span: str) -> None:
+def _assert_real_ttft(hits: tuple[JaegerTrace, ...], *, genai_span: str) -> None:
     """The enforced behavior: the gen-AI span for the attempt that served the
     stream records a TTFT that is a real measurement - present, numeric,
     positive, and strictly less than that span's own total duration. A TTFT of

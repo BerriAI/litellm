@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from typing import Final
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
@@ -93,6 +94,8 @@ class _TracesQuery(BaseModel):
     operation: str | None = None
     limit: int = 20
     lookback: str = "1h"
+    start: int | None = None
+    end: int | None = None
 
 
 def _settled(trace: JaegerTrace, names: set[str], prefixes: set[str]) -> bool:
@@ -117,8 +120,19 @@ def _follows(trace: JaegerTrace, parent_trace_id: str, parent_span_id: str) -> b
 
 @dataclass(frozen=True, slots=True)
 class CallTraces:
-    hits: list[JaegerTrace]
-    linked: list[JaegerTrace]
+    hits: tuple[JaegerTrace, ...]
+    linked: tuple[JaegerTrace, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Observation:
+    traces: CallTraces
+    missing: tuple[str, ...]
+    unreachable: NetworkError | None
+
+    def settled(self, names: set[str], prefixes: set[str]) -> bool:
+        hits: Final = self.traces.hits
+        return self.unreachable is None and len(hits) == 1 and not self.missing and _settled(hits[0], names, prefixes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,29 +158,37 @@ class OtelReader:
             case failure:
                 pytest.fail(f"Jaeger query API at {self.query_url} failed: {failure}")
 
-    def _query_operation(self, operation: str) -> Result[JaegerTracesPage]:
+    def _query_operation(self, operation: str, *, start: int) -> Result[JaegerTracesPage]:
         return get(
             URL(f"{self.query_url}/api/traces"),
             headers=NoBody(),
-            params=_TracesQuery(service=JAEGER_SERVICE, operation=operation, limit=200),
+            params=_TracesQuery(
+                service=JAEGER_SERVICE,
+                operation=operation,
+                limit=200,
+                start=start,
+                end=int(time.time() * 1_000_000),
+            ),
             response_type=JaegerTracesPage,
             timeout=30.0,
         )
 
-    def linked_traces(self, *, operation: str, parent: JaegerTrace) -> list[JaegerTrace]:
+    def linked_traces(self, *, operation: str, parent: JaegerTrace) -> tuple[JaegerTrace, ...] | NetworkError:
         """Traces whose root span references the parent trace's root span.
         Detached post-response work lands as the root of its own trace with a
         link back to the request span instead of the call-id tag, so it is
-        found by operation name and matched on that link. A NetworkError reads
-        as "not arrived yet" so the polling caller can retry."""
-        parent_root = root_span(parent)
+        found by operation name, windowed to start at the parent root's start
+        time (the detached span always starts after it), and matched on that
+        link. A NetworkError is handed back so the polling caller can tell an
+        unreachable read-back endpoint from a span that never arrived."""
+        parent_root: Final = root_span(parent)
         if parent_root is None:
-            return []
-        match self._query_operation(operation):
+            return ()
+        match self._query_operation(operation, start=parent_root.start_time):
             case Success(data=page):
-                return [t for t in page.data if _follows(t, parent.trace_id, parent_root.span_id)]
-            case NetworkError():
-                return []
+                return tuple(t for t in page.data if _follows(t, parent.trace_id, parent_root.span_id))
+            case NetworkError() as failure:
+                return failure
             case failure:
                 pytest.fail(f"Jaeger query API at {self.query_url} failed: {failure}")
 
@@ -185,38 +207,49 @@ class OtelReader:
         root (post-response work detaches per #42826). At the deadline the
         last observed state is returned as-is so the caller's assertions
         report the real final state - on a split trace this never settles and
-        the orphan comes back."""
-        deadline = time.monotonic() + POLL_TIMEOUT
-        hits: list[JaegerTrace] = []
-        linked: list[JaegerTrace] = []
-        unreachable: NetworkError | None = None
-        while time.monotonic() < deadline:
-            match self._query_traces(call_id):
-                case Success(data=page):
-                    unreachable = None
-                    hits = page.data
-                    linked = []
-                    if len(hits) == 1:
-                        present = set(hits[0].span_names())
-                        found = [
-                            self.linked_traces(operation=name, parent=hits[0])
-                            for name in linked_names
-                            if name not in present
-                        ]
-                        linked = [t for traces in found for t in traces]
-                        if _settled(hits[0], settled_names, settled_prefixes) and all(found):
-                            return CallTraces(hits=hits, linked=linked)
-                case NetworkError() as failure:
-                    unreachable = failure
-                case failure:
-                    pytest.fail(f"Jaeger query API at {self.query_url} failed: {failure}")
-            time.sleep(POLL_INTERVAL)
-        if unreachable is not None:
+        the orphan comes back. A read-back endpoint still failing at the
+        deadline (either query) is a hard failure, not a missing span."""
+        deadline: Final = time.monotonic() + POLL_TIMEOUT
+        last: Final = self._poll(call_id, settled_names, settled_prefixes, linked_names, deadline)
+        if last.unreachable is not None:
             pytest.fail(
                 f"Jaeger query API at {self.query_url} stayed unreachable until the "
-                f"{POLL_TIMEOUT}s poll deadline: {unreachable}"
+                f"{POLL_TIMEOUT}s poll deadline: {last.unreachable}"
             )
-        return CallTraces(hits=hits, linked=linked)
+        return last.traces
+
+    def _observe(self, call_id: str, linked_names: frozenset[str]) -> _Observation:
+        match self._query_traces(call_id):
+            case NetworkError() as failure:
+                return _Observation(CallTraces((), ()), tuple(linked_names), failure)
+            case Success(data=page):
+                if len(page.data) != 1:
+                    return _Observation(CallTraces(tuple(page.data), ()), tuple(linked_names), None)
+                hit: Final = page.data[0]
+                present: Final = frozenset(hit.span_names())
+                results: Final = {
+                    name: self.linked_traces(operation=name, parent=hit) for name in linked_names if name not in present
+                }
+                unreachable: Final = next((r for r in results.values() if isinstance(r, NetworkError)), None)
+                linked: Final = tuple(t for r in results.values() if not isinstance(r, NetworkError) for t in r)
+                missing: Final = tuple(name for name, r in results.items() if isinstance(r, NetworkError) or not r)
+                return _Observation(CallTraces((hit,), linked), missing, unreachable)
+            case failure:
+                pytest.fail(f"Jaeger query API at {self.query_url} failed: {failure}")
+
+    def _poll(
+        self,
+        call_id: str,
+        names: set[str],
+        prefixes: set[str],
+        linked_names: frozenset[str],
+        deadline: float,
+    ) -> _Observation:
+        observed: Final = self._observe(call_id, linked_names)
+        if observed.settled(names, prefixes) or time.monotonic() >= deadline:
+            return observed
+        time.sleep(POLL_INTERVAL)
+        return self._poll(call_id, names, prefixes, linked_names, deadline)
 
 
 def build_otel_reader() -> OtelReader:
