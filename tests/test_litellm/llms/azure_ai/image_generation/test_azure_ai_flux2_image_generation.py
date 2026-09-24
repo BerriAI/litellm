@@ -520,3 +520,21 @@ def test_flux2_cost_optional_params_dimensions_beat_response_size() -> None:
 def test_flux2_cost_rejects_non_image_response() -> None:
     with pytest.raises(TypeError, match="must be of type ImageResponse"):
         cost_calculator(model="FLUX.2-flex", image_response=object())
+
+
+def test_flux2_pro_edit_bills_references_on_the_pro_ref_meter() -> None:
+    pro_pixel_rate: Final = litellm.model_cost["azure_ai/flux.2-pro"]["input_cost_per_pixel"]
+    assert pro_pixel_rate * _ONE_MEGAPIXEL == pytest.approx(0.015), (
+        "Azure Retail Prices API, product 'Azure BFL Flux Models', meter 'Flux 2 Ref MP Megapixel' is $0.015 "
+        "per MP, checked 2026-09-24"
+    )
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="flux.2-pro",
+        completion_response=_edit_response(),
+        custom_llm_provider="azure_ai",
+        size="1024x1024",
+        call_type="image_edit",
+    )
+
+    assert cost == pytest.approx(litellm.model_cost["azure_ai/flux.2-pro"]["output_cost_per_image"] + 0.015 * 2)
