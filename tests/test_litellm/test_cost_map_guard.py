@@ -98,6 +98,20 @@ def test_schema_out_of_sync_is_reported() -> None:
     assert [failure for failure in _failures(head, bot=False) if failure.startswith(guard.SCHEMA_PATH)]
 
 
+def test_changing_the_generator_skips_the_schema_checks_but_keeps_the_backup_check() -> None:
+    """A PR that edits the generator makes the base branch's copy stale, so the schema sync
+    and validation checks do not run; the backup drift check still does."""
+    out_of_sync: Final = _snapshot({**BASE_MAP, "openrouter/c": _entry(supports_audio_input=True)}, schema=BASE.schema)
+    with_generator: Final = (*MAP_FILES, guard.GENERATOR_PATH)
+    assert _failures(out_of_sync, changed_files=with_generator, bot=False) == ()
+    assert [failure for failure in _failures(out_of_sync, bot=False) if failure.startswith(guard.SCHEMA_PATH)]
+    drifted: Final = guard.Snapshot(
+        cost_map=out_of_sync.cost_map, backup="{drifted", schema=out_of_sync.schema
+    )
+    (failure,) = _failures(drifted, changed_files=with_generator, bot=False)
+    assert failure.startswith(guard.BACKUP_PATH)
+
+
 def test_schema_validation_errors_are_reported() -> None:
     head = _snapshot({**BASE_MAP, "openrouter/c": _entry(-1e-06)})
     prefix = f"{guard.COST_MAP_PATH} does not validate against its schema: openrouter/c."
