@@ -1,8 +1,8 @@
 """LiteLLM-owned request kwargs declared as typed fields; types/utils.py splices these with the callback and pricing
 models and KWARG_ARTIFACTS into all_litellm_params."""
 
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass, field, fields
+from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass, field, fields, is_dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
@@ -35,6 +35,9 @@ if TYPE_CHECKING:
     MockResponse: TypeAlias = (
         str | Exception | Mapping[str, object] | Sequence[float] | ModelResponse | ModelResponseStream
     )
+
+RetryStrategy: TypeAlias = Literal["constant_retry", "exponential_backoff_retry"]
+AgenticSurface: TypeAlias = Literal["chat_completions", "responses"]
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
@@ -75,6 +78,7 @@ class ProviderConnection:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BedrockBatchConnection:
+    # Bedrock rejects these names in request bodies, so register them as LiteLLM-owned
     aws_batch_role_arn: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
@@ -105,12 +109,20 @@ class DispatchOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RoutingOptions:
-    fallbacks: Sequence[str | Mapping[str, Sequence[str]]] | None = None
+    fallbacks: Sequence[str | Mapping[str, object]] | None = None
     context_window_fallback_dict: Mapping[str, str] | None = None
     num_retries: int | None = None
     retry_policy: "RetryPolicy | Mapping[str, object] | None" = None
-    retry_strategy: Literal["constant_retry", "exponential_backoff_retry"] | None = None
-    routing_strategy: str | None = None
+    retry_strategy: RetryStrategy | None = None
+    routing_strategy: (
+        Literal[
+            "simple-shuffle",
+            "least-busy",
+            "usage-based-routing",
+            "latency-based-routing",
+        ]
+        | None
+    ) = None
     cooldown_time: float | None = None
     allowed_model_region: str | None = None
     enable_tag_filtering: bool | None = None
@@ -295,7 +307,7 @@ class RouterState:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class ProxyState:
+class ProxyRequestState:
     proxy_server_request: Mapping[str, object] | None = None
     secret_fields: "SecretFields | None" = None
     trusted_callback_vars: Mapping[str, str] | None = field(default=None, metadata=wire(TRUSTED_CALLBACK_VARS_FIELD))
@@ -321,7 +333,7 @@ class InternalState:
     call: CallState
     agentic_loop: AgenticLoopState
     router: RouterState
-    proxy: ProxyState
+    proxy: ProxyRequestState
     entrypoint: EntrypointState
 
 
@@ -335,11 +347,13 @@ def wire_names(owner: type) -> tuple[str, ...]:
 
 
 def owned_wire_names(root: type) -> tuple[str, ...]:
-    return tuple(
-        name
-        for leaf in fields(root)
-        for name in wire_names(leaf.type)  # pyright: ignore[reportArgumentType]  # Field.type admits str
-    )
+    def names() -> Iterator[str]:
+        for leaf in fields(root):
+            if not is_dataclass(leaf.type):
+                raise TypeError(f"{root.__name__}.{leaf.name} is not a dataclass leaf")
+            yield from wire_names(leaf.type)  # pyright: ignore[reportArgumentType]  # Field.type admits str
+
+    return tuple(names())
 
 
 OWNED_KWARG_NAMES: Final = tuple(name for root in LITELLM_OWNED_ROOTS for name in owned_wire_names(root))
