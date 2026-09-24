@@ -931,7 +931,7 @@ class _PendingAutoRegister(NamedTuple):
 
 
 async def _latest_active_key_hash_for_user(prisma_client: PrismaClient, user_id: str) -> str | None:
-    row: Final = await VerificationTokenRepository(prisma_client).find_latest_active_row_by_user_id(user_id)
+    row: Final = await VerificationTokenRepository(prisma_client).find_latest_llm_api_row_by_user_id(user_id)
     return None if row is None else row.token
 
 

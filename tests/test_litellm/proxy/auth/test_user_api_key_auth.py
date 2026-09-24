@@ -2200,6 +2200,43 @@ async def test_auto_register_map_existing_key_reuses_users_latest_key():
 
 
 @pytest.mark.asyncio
+async def test_auto_register_map_existing_key_skips_keys_that_cannot_call_llm_routes():
+    from typing import Final
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=SimpleNamespace(token="existing-hash")
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches(plaintext_key=None)
+    with generate_patch, resolve_patch:
+        await _auto_register_jwt_mapping(**_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler))
+
+    where = prisma_client.db.litellm_verificationtoken.find_first.await_args.kwargs["where"]
+    team_or: Final = next(entry["OR"] for entry in where["AND"] if any("team_id" in e for e in entry["OR"]))
+    assert {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}} in team_or, f"UI session keys must be excluded: {where}"
+    assert {"team_id": None} in team_or, f"keys without a team must stay eligible: {where}"
+    routes_or: Final = next(entry["OR"] for entry in where["AND"] if any("allowed_routes" in e for e in entry["OR"]))
+    assert routes_or == [
+        {"allowed_routes": {"is_empty": True}},
+        {"allowed_routes": {"has": "llm_api_routes"}},
+    ], f"only unrestricted or llm_api_routes keys may be reused: {where}"
+
+
+@pytest.mark.asyncio
 async def test_auto_register_map_existing_key_mints_when_user_has_no_key():
     """The flag must not leave a keyless user unmapped: with no existing key it
     falls back to the mint path and maps the claim to the new key's hash."""

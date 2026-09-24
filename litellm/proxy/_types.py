@@ -5303,8 +5303,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         description=(
             "Only used with unregistered_jwt_client_behavior='auto_register'. When True, the JWT claim is "
             "mapped to a virtual key the resolved internal user already owns instead of minting a new one. "
-            "If the user owns several, the most recently created non-expired key is chosen. A new key is "
-            "only minted when the user has none."
+            "If the user owns several, the most recently created key that can call LLM routes is chosen: "
+            "not blocked, not expired, not an Admin UI session key, and with no route restriction other than "
+            "llm_api_routes. A new key is only minted when the user has no such key."
         ),
     )
     routing_overrides: list[JWTRoutingOverride] | None = Field(
