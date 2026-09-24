@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
-import MCPToolPermissions from "./MCPToolPermissions";
+import MCPToolPermissions, { McpToolPermissionWrite } from "./MCPToolPermissions";
 import * as networking from "../networking";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import type { MCPToolset } from "../mcp_tools/types";
@@ -75,11 +75,12 @@ describe("MCPToolPermissions", () => {
 
     await userEvent.click(screen.getByRole("checkbox", { name: "read_wiki_structure" }));
 
-    // Verify onChange was called with read_wiki_structure removed
-    const expectedToolPermissions = {
-      [mockServerId]: ["read_wiki_contents", "ask_question"],
-    };
-    expect(mockOnChange).toHaveBeenCalledWith(expectedToolPermissions);
+    // Unchecking clears the legacy allowlist key and writes the tool as denied instead,
+    // so a tool the upstream adds later stays allowed
+    expect(mockOnChange).toHaveBeenCalledWith({
+      toolPermissions: {},
+      deniedTools: { [mockServerId]: ["read_wiki_structure"] },
+    });
 
     // Verify API calls
     // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
@@ -133,9 +134,11 @@ describe("MCPToolPermissions", () => {
     const selectAllButton = screen.getByRole("button", { name: "Select All" });
     await userEvent.click(selectAllButton);
 
-    // Verify onChange was called with all tools selected
+    // Everything checked means nothing denied: the maps stay empty so a tool the
+    // upstream adds later is still allowed
     expect(mockOnChange).toHaveBeenCalledWith({
-      [mockServerId]: ["read_wiki_structure", "read_wiki_contents", "ask_question"],
+      toolPermissions: {},
+      deniedTools: {},
     });
   });
 
@@ -184,9 +187,11 @@ describe("MCPToolPermissions", () => {
     const deselectAllButton = screen.getByRole("button", { name: "Deselect All" });
     await userEvent.click(deselectAllButton);
 
-    // Verify onChange was called with no tools selected
+    // Nothing checked writes every fetched tool as denied; a later upstream tool
+    // would then be allowed, which is the requested semantics
     expect(mockOnChange).toHaveBeenCalledWith({
-      [mockServerId]: [],
+      toolPermissions: {},
+      deniedTools: { [mockServerId]: ["read_wiki_structure", "read_wiki_contents", "ask_question"] },
     });
   });
 
@@ -248,7 +253,10 @@ describe("MCPToolPermissions", () => {
       expect(deleteIssue).toBeChecked();
 
       await userEvent.click(listIssues);
-      expect(mockOnChange).toHaveBeenCalledWith({ [groupServer.server_id]: ["delete_issue"] });
+      expect(mockOnChange).toHaveBeenCalledWith({
+        toolPermissions: {},
+        deniedTools: { [groupServer.server_id]: ["list_issues"] },
+      });
     });
 
     it("marks an access-group server as inherited and leaves a directly selected one unmarked", async () => {
@@ -335,7 +343,7 @@ describe("MCPToolPermissions", () => {
       const [listIssues, deleteIssue] = screen.getAllByRole("checkbox");
       expect(listIssues).toBeChecked();
       expect(listIssues).toBeDisabled();
-      expect(deleteIssue).not.toBeChecked();
+      expect(deleteIssue).toBeChecked();
 
       await userEvent.click(listIssues);
       expect(mockOnChange).not.toHaveBeenCalled();
@@ -397,7 +405,11 @@ describe("MCPToolPermissions", () => {
       // First checkbox is the header toggle of the group holding list_issues.
       await userEvent.click(screen.getAllByRole("checkbox")[0]);
 
-      expect(mockOnChange).toHaveBeenCalledWith({ [toolsetServer.server_id]: ["list_issues"] });
+      // list_issues stays allowed through the toolset; the group's other fetched tool becomes denied
+      expect(mockOnChange).toHaveBeenCalledWith({
+        toolPermissions: {},
+        deniedTools: { [toolsetServer.server_id]: ["delete_issue"] },
+      });
     });
 
     // Copying the toolset's tools into the entry would outlive the toolset, so a write keeps only
@@ -428,7 +440,7 @@ describe("MCPToolPermissions", () => {
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
       await userEvent.click(screen.getByText("Select All"));
 
-      expect(mockOnChange).toHaveBeenCalledWith({ [toolsetServer.server_id]: ["delete_issue"] });
+      expect(mockOnChange).toHaveBeenCalledWith({ toolPermissions: {}, deniedTools: {} });
     });
 
     // The default narrows an unrestricted server; against a toolset-restricted one it would widen
@@ -522,10 +534,8 @@ describe("MCPToolPermissions", () => {
 
       expect(await screen.findByText("Payments")).toBeInTheDocument();
       expect(screen.queryByText("srv-collide")).not.toBeInTheDocument();
-      await waitFor(() => {
-        expect(mockOnChange).toHaveBeenCalledWith({ "srv-collide": ["list_issues"] });
-      });
-      expect(mockOnChange.mock.calls.every(([written]) => !Object.hasOwn(written, "srv-twin"))).toBe(true);
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      expect(mockOnChange).not.toHaveBeenCalled();
       expect(networking.listMCPTools).not.toHaveBeenCalledWith(mockAccessToken, "srv-twin");
     });
 
@@ -549,7 +559,7 @@ describe("MCPToolPermissions", () => {
       expect(mockOnChange).not.toHaveBeenCalled();
     });
 
-    it("keeps blocking delete tools by default for a directly selected server", async () => {
+    it("writes nothing when a directly selected server's tools load", async () => {
       const directServer = { server_id: "srv-direct-1", server_name: "Direct Server", alias: "Direct Server" };
       vi.mocked(networking.fetchMCPServers).mockResolvedValue([directServer]);
       vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
@@ -565,9 +575,15 @@ describe("MCPToolPermissions", () => {
         />,
       );
 
-      await waitFor(() => {
-        expect(mockOnChange).toHaveBeenCalledWith({ [directServer.server_id]: ["list_issues"] });
-      });
+      // The old enumerated-allowlist write is gone: an unchecked box is the only signal, so the
+      // fetch itself emits nothing and every fetched tool renders checked
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      expect(mockOnChange).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByText("Flat List"));
+      const [listIssues, deleteIssue] = screen.getAllByRole("checkbox");
+      expect(listIssues).toBeChecked();
+      expect(deleteIssue).toBeChecked();
     });
 
     it("shows a server that only a stale tool-permission entry still entitles", async () => {
@@ -730,7 +746,10 @@ describe("MCPToolPermissions", () => {
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: "Deselect All" }));
 
-      expect(mockOnChange).toHaveBeenCalledWith({ github_mcp: [] });
+      expect(mockOnChange).toHaveBeenCalledWith({
+        toolPermissions: {},
+        deniedTools: { github_mcp: ["list_issues", "delete_issue"] },
+      });
     });
   });
 
@@ -786,10 +805,16 @@ describe("MCPToolPermissions", () => {
       await userEvent.click(screen.getByText("Flat List"));
       await userEvent.click(screen.getAllByRole("checkbox")[0]);
 
-      const written = mockOnChange.mock.calls.at(-1)?.[0] as Record<string, string[]>;
-      expect(Object.keys(written)).toEqual([namedServer.server_id]);
-      expect(written[namedServer.server_id]).not.toContain("list_issues");
-      expect(written[namedServer.server_id]).toContain("create_issue");
+      const written = mockOnChange.mock.calls.at(-1)?.[0] as {
+        toolPermissions: Record<string, string[]>;
+        deniedTools: Record<string, string[]>;
+      };
+      // The unchecked tool lands in the denylist under the server's own key while every
+      // equivalent allowlist key for the server is cleared
+      expect(Object.keys(written.toolPermissions)).toEqual([]);
+      expect(written.deniedTools[namedServer.server_id]).toContain("list_issues");
+      expect(written.deniedTools[namedServer.server_id]).toContain("delete_issue");
+      expect(written.deniedTools[namedServer.server_id]).not.toContain("create_issue");
     });
 
     // Both catalog orders, because a name resolves to two servers here and a first-match
@@ -847,9 +872,13 @@ describe("MCPToolPermissions", () => {
       expect(await screen.findAllByText("list_issues")).toHaveLength(2);
       await userEvent.click(screen.getAllByText("Select All")[0]);
 
-      const written = mockOnChange.mock.calls.at(-1)?.[0] as Record<string, string[]>;
-      expect(written["github_mcp"]).toEqual(["list_issues"]);
-      expect(written[twin.server_id]).toEqual(["list_issues", "create_issue", "delete_issue"]);
+      const written = mockOnChange.mock.calls.at(-1)?.[0] as {
+        toolPermissions: Record<string, string[]>;
+        deniedTools: Record<string, string[]>;
+      };
+      // The shared key is ambiguous, so it survives; Select All writes no denylist entry at all
+      expect(written.toolPermissions["github_mcp"]).toEqual(["list_issues"]);
+      expect(written.deniedTools).toEqual({});
     });
 
     it("says nothing about shared names when every key names one server", async () => {
@@ -910,7 +939,10 @@ describe("MCPToolPermissions", () => {
 
       await userEvent.click(readGroupToggle);
 
-      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["delete_document"] });
+      expect(mockOnChange).toHaveBeenCalledWith({
+        toolPermissions: {},
+        deniedTools: { [mockServerId]: ["list_documents", "get_document"] },
+      });
     });
 
     it("adds the rest of a partially-allowed risk group when its mixed toggle is clicked", async () => {
@@ -922,7 +954,10 @@ describe("MCPToolPermissions", () => {
 
       await userEvent.click(readGroupToggle);
 
-      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] });
+      expect(mockOnChange).toHaveBeenCalledWith({
+        toolPermissions: {},
+        deniedTools: { [mockServerId]: ["delete_document"] },
+      });
     });
 
     it("toggles a single tool exactly once when its checkbox is clicked inside the clickable row", async () => {
@@ -932,7 +967,10 @@ describe("MCPToolPermissions", () => {
       await userEvent.click(await screen.findByRole("checkbox", { name: "delete_document" }));
 
       expect(mockOnChange).toHaveBeenCalledTimes(1);
-      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] });
+      expect(mockOnChange).toHaveBeenCalledWith({
+        toolPermissions: {},
+        deniedTools: { [mockServerId]: ["delete_document"] },
+      });
     });
 
     it("toggles a single tool when the row around its checkbox is clicked", async () => {
@@ -942,23 +980,25 @@ describe("MCPToolPermissions", () => {
       await userEvent.click(await screen.findByText("Destroy a document"));
 
       expect(mockOnChange).toHaveBeenCalledTimes(1);
-      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] });
+      expect(mockOnChange).toHaveBeenCalledWith({
+        toolPermissions: {},
+        deniedTools: { [mockServerId]: ["delete_document"] },
+      });
     });
 
-    it("re-renders each checkbox from the permissions it emitted", async () => {
+    it("re-renders each checkbox from the denylist it emitted", async () => {
       const Harness = () => {
-        const [permissions, setPermissions] = useState<Record<string, string[]>>({
-          [mockServerId]: allCrudToolNames,
-        });
+        const [write, setWrite] = useState<McpToolPermissionWrite>({ toolPermissions: {}, deniedTools: {} });
         return (
           <>
             <MCPToolPermissions
               accessToken={mockAccessToken}
               selectedServers={[mockServerId]}
-              toolPermissions={permissions}
-              onChange={setPermissions}
+              toolPermissions={write.toolPermissions}
+              deniedTools={write.deniedTools}
+              onChange={setWrite}
             />
-            <output>{(permissions[mockServerId] ?? []).join(",")}</output>
+            <output>{(write.deniedTools[mockServerId] ?? []).join(",")}</output>
           </>
         );
       };
@@ -976,15 +1016,15 @@ describe("MCPToolPermissions", () => {
 
       await userEvent.click(deleteTool);
       expect(deleteTool).not.toBeChecked();
-      expect(screen.getByRole("status")).toHaveTextContent("list_documents,get_document");
+      expect(screen.getByRole("status")).toHaveTextContent("delete_document");
 
       await userEvent.click(screen.getByRole("checkbox", { name: "get_document" }));
       expect(readGroupToggle).toBePartiallyChecked();
-      expect(screen.getByRole("status")).toHaveTextContent("list_documents");
+      expect(screen.getByRole("status")).toHaveTextContent("get_document,delete_document");
 
       await userEvent.click(readGroupToggle);
       expect(readGroupToggle).toBeChecked();
-      expect(screen.getByRole("status")).toHaveTextContent("list_documents,get_document");
+      expect(screen.getByRole("status")).toHaveTextContent("delete_document");
       expect(screen.getByRole("checkbox", { name: "delete_document" })).not.toBeChecked();
     });
   });

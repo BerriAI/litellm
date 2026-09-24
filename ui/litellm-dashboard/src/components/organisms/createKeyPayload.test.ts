@@ -285,6 +285,29 @@ describe("object_permission", () => {
     expect(payloadOf(build({ key_alias: "my-key", mcp_tool_permissions: {} }))).toStrictEqual(aliasOnly());
   });
 
+  it("nests configured MCP denied tools next to the allowlist", () => {
+    expect(
+      payloadOf(
+        build({
+          key_alias: "my-key",
+          mcp_tool_permissions: { "s-1": ["read"] },
+          mcp_tool_denied_tools: { "s-1": ["delete"] },
+        }),
+      ),
+    ).toStrictEqual(
+      aliasOnly({
+        object_permission: {
+          mcp_tool_permissions: { "s-1": ["read"] },
+          mcp_tool_denied_tools: { "s-1": ["delete"] },
+        },
+      }),
+    );
+  });
+
+  it("always strips mcp_tool_denied_tools from the top level, even when empty", () => {
+    expect(payloadOf(build({ key_alias: "my-key", mcp_tool_denied_tools: {} }))).toStrictEqual(aliasOnly());
+  });
+
   it("lets a standalone access group list win over the one from the MCP selection", () => {
     expect(
       payloadOf(

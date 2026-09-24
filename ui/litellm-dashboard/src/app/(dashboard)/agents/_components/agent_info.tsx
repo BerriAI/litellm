@@ -163,6 +163,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   const watchedFormValues = useWatch({ control: form.control });
   const mcpSelection = useWatch({ control: form.control, name: "allowed_mcp_servers_and_groups" });
   const mcpToolPermissions = useWatch({ control: form.control, name: "mcp_tool_permissions" });
+  const mcpToolDeniedTools = useWatch({ control: form.control, name: "mcp_tool_denied_tools" });
   const { data: mcpServers = [] } = useMCPServers();
   const { data: accessGroups = [] } = useAccessGroups();
 
@@ -390,7 +391,9 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                 agent.object_permission.mcp_access_groups?.length ||
                 agent.object_permission.mcp_toolsets?.length ||
                 (agent.object_permission.mcp_tool_permissions &&
-                  Object.keys(agent.object_permission.mcp_tool_permissions).length > 0)) && (
+                  Object.keys(agent.object_permission.mcp_tool_permissions).length > 0) ||
+                (agent.object_permission.mcp_tool_denied_tools &&
+                  Object.keys(agent.object_permission.mcp_tool_denied_tools).length > 0)) && (
                 <div style={{ marginTop: 24 }}>
                   <h3 className="text-lg font-medium">MCP Tool Permissions</h3>
                   <DetailList className="mt-4">
@@ -422,6 +425,21 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                                 {Array.isArray(tools) ? tools.join(", ") : String(tools)}
                               </div>
                             ))}
+                          </div>
+                        </DetailItem>
+                      )}
+                    {agent.object_permission.mcp_tool_denied_tools &&
+                      Object.keys(agent.object_permission.mcp_tool_denied_tools).length > 0 && (
+                        <DetailItem label="Denied tools per server">
+                          <div className="space-y-1">
+                            {Object.entries(agent.object_permission.mcp_tool_denied_tools).map(
+                              ([serverId, tools]) => (
+                                <div key={serverId}>
+                                  <span className="font-medium">{mcpServerLabel(serverId)}:</span>{" "}
+                                  {Array.isArray(tools) ? tools.join(", ") : String(tools)}
+                                </div>
+                              ),
+                            )}
                           </div>
                         </DetailItem>
                       )}
@@ -567,9 +585,11 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                             accessToken={accessToken ?? ""}
                             selectedServers={mcpSelection?.servers ?? []}
                             toolPermissions={mcpToolPermissions ?? {}}
-                            onChange={(toolPerms: Record<string, string[]>) =>
-                              form.setValue("mcp_tool_permissions", toolPerms)
-                            }
+                            deniedTools={mcpToolDeniedTools ?? {}}
+                            onChange={({ toolPermissions: nextPermissions, deniedTools: nextDenied }) => {
+                              form.setValue("mcp_tool_permissions", nextPermissions);
+                              form.setValue("mcp_tool_denied_tools", nextDenied);
+                            }}
                           />
                         </div>
 

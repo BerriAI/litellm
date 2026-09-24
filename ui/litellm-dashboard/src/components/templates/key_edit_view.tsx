@@ -42,6 +42,7 @@ import {
 import {
   KeyEditFormValues,
   keyEditFormSchema,
+  writeMcpToolPermissionFields,
   McpServersAndGroups,
   toKeyEditFormValues,
   toSubmittedValues,
@@ -149,7 +150,7 @@ export function KeyEditView({
   const mcpSelection = form.watch("mcp_servers_and_groups") as
     | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
     | undefined;
-  const mcpToolPermissions = form.watch("mcp_tool_permissions");
+  const [mcpToolPermissions, mcpToolDeniedTools] = form.watch(["mcp_tool_permissions", "mcp_tool_denied_tools"]);
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -763,7 +764,8 @@ export function KeyEditView({
               selectedAccessGroups={mcpSelection?.accessGroups || []}
               selectedToolsets={mcpSelection?.toolsets || []}
               toolPermissions={(mcpToolPermissions as Record<string, string[]> | undefined) || {}}
-              onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+              deniedTools={(mcpToolDeniedTools as Record<string, string[]> | undefined) || {}}
+              onChange={(next) => writeMcpToolPermissionFields(form.setValue, next)}
             />
           </div>
 

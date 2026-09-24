@@ -6,6 +6,7 @@ export interface McpEntitlementUpdate {
   mcp_access_groups: string[];
   mcp_toolsets: string[];
   mcp_tool_permissions: Record<string, string[]>;
+  mcp_tool_denied_tools: Record<string, string[]>;
 }
 
 const asStringArray = (value: unknown): string[] =>
@@ -84,6 +85,11 @@ export const extractMcpEntitlement = (
     mcp_toolsets: mcpToolsets,
     mcp_tool_permissions: Object.fromEntries(
       Object.entries(asToolPermissions(formValues.mcp_tool_permissions)).filter(
+        ([permissionKey]) => grantsEveryServer || grantsServerNamedBy(permissionKey),
+      ),
+    ),
+    mcp_tool_denied_tools: Object.fromEntries(
+      Object.entries(asToolPermissions(formValues.mcp_tool_denied_tools)).filter(
         ([permissionKey]) => grantsEveryServer || grantsServerNamedBy(permissionKey),
       ),
     ),

@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
 import {
+  applyToolDenyWrite,
   applyToolPermissionWrite,
+  EffectiveMcpServer,
   emptyMcpAccessGroups,
   mcpAllowedToolsFor,
   mcpServersForIdentifier,
@@ -30,6 +32,7 @@ const emptyInput = {
   selectedToolsets: [] as readonly string[],
   toolsets: [] as readonly MCPToolset[],
   toolPermissions: {} as Readonly<Record<string, readonly string[]>>,
+  deniedTools: {} as Readonly<Record<string, readonly string[]>>,
 };
 
 describe("mcpServersForIdentifier", () => {
@@ -544,5 +547,141 @@ describe("tools a selected toolset grants", () => {
 
     expect(untouched.toolsetTools).toBeUndefined();
     expect(untouched.allowedTools).toBeUndefined();
+  });
+});
+
+// The denylist write replaces the legacy allowlist write: an unchecked fetched tool lands under
+// the server's key in mcp_tool_denied_tools, and selecting everything removes the entry entirely so
+// a tool the upstream adds later is still allowed.
+describe("applyToolDenyWrite", () => {
+  const named = server({ server_id: "uuid-1", server_name: "github_mcp", alias: "GitHub" });
+  const other = server({ server_id: "uuid-2", server_name: "other_mcp" });
+  const fetched = ["list_issues", "create_issue", "delete_issue"];
+
+  const entryFor = (
+    toolPermissions: Readonly<Record<string, readonly string[]>>,
+    deniedTools: Readonly<Record<string, readonly string[]>> = {},
+  ) => {
+    const input = {
+      ...emptyInput,
+      allServers: [named, other],
+      selectedServers: ["uuid-1"],
+      toolPermissions,
+      deniedTools,
+    };
+    return resolveEffectiveMcpServers(input)[0];
+  };
+
+  const writeInput = (
+    entry: EffectiveMcpServer,
+    checked: readonly string[],
+    over: {
+      toolPermissions?: Readonly<Record<string, readonly string[]>>;
+      deniedTools?: Readonly<Record<string, readonly string[]>>;
+      allServers?: readonly MCPServer[];
+    } = {},
+  ) => ({
+    toolPermissions: over.toolPermissions ?? {},
+    deniedTools: over.deniedTools ?? {},
+    entry,
+    allServers: over.allServers ?? [named, other],
+    fetchedTools: fetched,
+    checked,
+  });
+
+  it("writes the unchecked fetched tools as denied and clears the server's allowlist keys", () => {
+    const toolPermissions = { "uuid-1": ["list_issues"], github_mcp: ["create_issue"], "uuid-2": ["ping"] };
+    const entry = entryFor(toolPermissions);
+    const input = writeInput(entry, ["list_issues"], { toolPermissions });
+
+    expect(applyToolDenyWrite(input)).toEqual({
+      toolPermissions: { "uuid-2": ["ping"] },
+      deniedTools: { "uuid-1": ["create_issue", "delete_issue"] },
+    });
+  });
+
+  it("removes the denylist entry entirely when everything is checked", () => {
+    const deniedTools = { "uuid-1": ["delete_issue"], "uuid-2": ["other_tool"] };
+    const entry = entryFor({}, deniedTools);
+    const input = writeInput(entry, fetched, { deniedTools });
+
+    expect(applyToolDenyWrite(input)).toEqual({ toolPermissions: {}, deniedTools: { "uuid-2": ["other_tool"] } });
+  });
+
+  it("denies every fetched tool when nothing is checked", () => {
+    const entry = entryFor({}, {});
+    const input = writeInput(entry, []);
+
+    expect(applyToolDenyWrite(input)).toEqual({ toolPermissions: {}, deniedTools: { "uuid-1": fetched } });
+  });
+
+  it("keeps toolset-granted tools out of the denied write", () => {
+    const support = toolset({
+      toolset_id: "ts-1",
+      toolset_name: "Support",
+      tools: [{ server_id: "uuid-1", tool_name: "list_issues" }],
+    });
+    const toolsetResolve = {
+      ...emptyInput,
+      allServers: [named],
+      selectedToolsets: ["ts-1"],
+      toolsets: [support],
+    };
+    const [entry] = resolveEffectiveMcpServers(toolsetResolve);
+    const input = writeInput(entry, [], { allServers: [named] });
+
+    expect(applyToolDenyWrite(input)).toEqual({
+      toolPermissions: {},
+      deniedTools: { "uuid-1": ["create_issue", "delete_issue"] },
+    });
+  });
+
+  it("drops a denylist key under an equivalent alias when the server is edited", () => {
+    const deniedTools = { github_mcp: ["delete_issue"], "uuid-2": ["other_tool"] };
+    const entry = entryFor({}, deniedTools);
+    const input = writeInput(entry, ["list_issues", "create_issue"], { deniedTools });
+
+    expect(applyToolDenyWrite(input)).toEqual({
+      toolPermissions: {},
+      deniedTools: { "uuid-2": ["other_tool"], "uuid-1": ["delete_issue"] },
+    });
+  });
+
+  it("leaves a denylist key that also names another server untouched", () => {
+    const shared = server({ server_id: "uuid-9", server_name: "github_mcp" });
+    const deniedTools = { github_mcp: ["delete_issue"] };
+    const entry = entryFor({}, deniedTools);
+
+    const written = applyToolDenyWrite(
+      writeInput(entry, ["list_issues", "create_issue"], { deniedTools, allServers: [named, shared] }),
+    );
+    expect(written.deniedTools["github_mcp"]).toEqual(["delete_issue"]);
+    expect(written.deniedTools["uuid-1"]).toEqual(["delete_issue"]);
+  });
+});
+
+describe("resolveEffectiveMcpServers denylist", () => {
+  const named = server({ server_id: "uuid-1", server_name: "github_mcp", alias: "GitHub" });
+
+  it("unions denied tools across equivalent keys", () => {
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      selectedServers: ["uuid-1"],
+      deniedTools: { "uuid-1": ["a"], github_mcp: ["b"] },
+    };
+    const [entry] = resolveEffectiveMcpServers(input);
+
+    expect(entry.deniedTools).toEqual(["a", "b"]);
+  });
+
+  it("reports no denylist as undefined", () => {
+    const [entry] = resolveEffectiveMcpServers({
+      ...emptyInput,
+      allServers: [named],
+      selectedServers: ["uuid-1"],
+    });
+
+    expect(entry.deniedTools).toBeUndefined();
   });
 });

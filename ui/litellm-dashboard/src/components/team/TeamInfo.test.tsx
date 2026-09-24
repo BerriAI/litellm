@@ -2187,6 +2187,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     mcp_servers: [],
     mcp_access_groups: [],
     mcp_tool_permissions: {},
+    mcp_tool_denied_tools: {},
     mcp_toolsets: [],
     agents: [],
     agent_access_groups: [],
@@ -2548,6 +2549,7 @@ describe("TeamInfo MCP permission retention", () => {
       keyedTools: undefined,
       toolsetTools: undefined,
       allowedTools: undefined,
+      deniedTools: undefined,
       source: kind === "accessGroup" ? { kind, name: "ops_readonly" } : { kind },
     }) as EffectiveMcpServer;
 
@@ -2915,6 +2917,54 @@ describe("TeamInfo MCP permission retention", () => {
       "direct-server": ["create_issue"],
       "perm-only-server": ["list_issues"],
     });
+  });
+
+  it("retains a stored tool denylist on an unrelated team save", async () => {
+    const user = userEvent.setup({ delay: null });
+    const catalog = [server("direct-server", "deploy_tracker")];
+    mockUseMCPServers.mockReturnValue({ data: catalog, isLoading: false, isError: false } as any);
+    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false, isError: false } as any);
+    mockUseAccessGroups.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+    } as any);
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        access_group_ids: [],
+        object_permission: {
+          mcp_servers: ["direct-server"],
+          mcp_access_groups: [],
+          mcp_toolsets: [],
+          mcp_tool_denied_tools: { "direct-server": ["delete_issue"] },
+        },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(
+      <TeamInfoView
+        teamId="123"
+        onUpdate={vi.fn()}
+        onClose={vi.fn()}
+        accessToken="test-token"
+        is_team_admin
+        is_proxy_admin
+        userModels={["gpt-4"]}
+        editTeam={false}
+      />,
+    );
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.clear(screen.getByLabelText("Team Name"));
+    await user.type(screen.getByLabelText("Team Name"), "Renamed Team");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    const [, payload] = vi.mocked(networking.teamUpdateCall).mock.calls[0];
+    expect(payload.object_permission.mcp_tool_denied_tools).toEqual({ "direct-server": ["delete_issue"] });
   });
 
   it("refuses a save with MCP permissions while the server inventory is unavailable", async () => {

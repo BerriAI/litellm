@@ -475,6 +475,7 @@ describe("UserEditView", () => {
         "budget_duration",
         "max_budget",
         "mcp_servers_and_groups",
+        "mcp_tool_denied_tools",
         "mcp_tool_permissions",
         "metadata",
         "models",
@@ -494,6 +495,7 @@ describe("UserEditView", () => {
         metadata: { key1: "value1", key2: "value2" },
         mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
         mcp_tool_permissions: {},
+        mcp_tool_denied_tools: {},
       });
       expect(typeof payload.max_budget).toBe("number");
     });

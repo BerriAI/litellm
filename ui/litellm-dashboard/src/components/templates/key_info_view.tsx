@@ -256,7 +256,11 @@ export default function KeyInfoView({
           mcpEntitlement.mcp_toolsets.some(
             (toolsetId) => !(allMcpToolsets ?? []).some((toolset) => toolset.toolset_id === toolsetId),
           );
-        if (unresolvableSelection && Object.keys(mcpEntitlement.mcp_tool_permissions).length > 0) {
+        if (
+          unresolvableSelection &&
+          (Object.keys(mcpEntitlement.mcp_tool_permissions).length > 0 ||
+            Object.keys(mcpEntitlement.mcp_tool_denied_tools).length > 0)
+        ) {
           toast.error("MCP server or toolset list is unavailable, so MCP permissions cannot be saved yet. Retry.");
           return;
         }
@@ -267,6 +271,7 @@ export default function KeyInfoView({
       }
       delete formValues.mcp_servers_and_groups;
       delete formValues.mcp_tool_permissions;
+      delete formValues.mcp_tool_denied_tools;
 
       // Handle agent permissions
       if (formValues.agents_and_groups !== undefined) {

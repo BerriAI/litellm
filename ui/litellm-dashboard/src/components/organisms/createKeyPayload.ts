@@ -110,6 +110,7 @@ interface PermissionSources {
   readonly vectorStores: unknown[] | undefined;
   readonly mcp: McpSelection | undefined;
   readonly toolPermissions: unknown | undefined;
+  readonly deniedTools: unknown | undefined;
   readonly extraMcpAccessGroups: unknown[] | undefined;
   readonly agents: AgentSelection | undefined;
   readonly skills: unknown[] | undefined;
@@ -119,6 +120,7 @@ const readPermissionSources = (values: Record<string, unknown>): PermissionSourc
   vectorStores: nonEmptyList(values.allowed_vector_store_ids),
   mcp: readMcpSelection(values.allowed_mcp_servers_and_groups),
   toolPermissions: readToolPermissions(values.mcp_tool_permissions),
+  deniedTools: readToolPermissions(values.mcp_tool_denied_tools),
   extraMcpAccessGroups: nonEmptyList(values.allowed_mcp_access_groups),
   agents: readAgentSelection(values.allowed_agents_and_groups),
   skills: nonEmptyList(values.allowed_skills),
@@ -128,6 +130,7 @@ const buildObjectPermission = ({
   vectorStores,
   mcp,
   toolPermissions,
+  deniedTools,
   extraMcpAccessGroups,
   agents,
   skills,
@@ -138,6 +141,7 @@ const buildObjectPermission = ({
     ...(mcp?.accessGroups && { mcp_access_groups: mcp.accessGroups }),
     ...(mcp?.toolsets && { mcp_toolsets: mcp.toolsets }),
     ...(toolPermissions !== undefined && { mcp_tool_permissions: toolPermissions }),
+    ...(deniedTools !== undefined && { mcp_tool_denied_tools: deniedTools }),
     ...(extraMcpAccessGroups && { mcp_access_groups: extraMcpAccessGroups }),
     ...(agents?.agents && { agents: agents.agents }),
     ...(agents?.accessGroups && { agent_access_groups: agents.accessGroups }),
@@ -152,6 +156,7 @@ const consumedSourceKeys = (
 ): ReadonlySet<string> =>
   new Set<string>([
     "mcp_tool_permissions",
+    "mcp_tool_denied_tools",
     "allowed_skills",
     ...(values.disable_global_guardrails ? [] : ["disable_global_guardrails"]),
     ...(vectorStores ? ["allowed_vector_store_ids"] : []),

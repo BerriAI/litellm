@@ -100,6 +100,7 @@ const teamCreateFieldsSchema = z.object({
     })
     .optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+  mcp_tool_denied_tools: z.record(z.string(), z.array(z.string())).optional(),
   allowed_agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
   object_permission_skills: z.array(z.string()).optional(),
@@ -131,6 +132,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   allowed_passthrough_routes: undefined,
   allowed_mcp_servers_and_groups: undefined,
   mcp_tool_permissions: {},
+  mcp_tool_denied_tools: {},
   allowed_agents_and_groups: undefined,
   object_permission_search_tools: undefined,
   object_permission_skills: undefined,
@@ -150,7 +152,11 @@ const ADDITIONAL_SETTINGS_FIELDS = [
   "allowed_vector_store_ids",
   "allowed_passthrough_routes",
 ] as const;
-const MCP_SETTINGS_FIELDS = ["allowed_mcp_servers_and_groups", "mcp_tool_permissions"] as const;
+const MCP_SETTINGS_FIELDS = [
+  "allowed_mcp_servers_and_groups",
+  "mcp_tool_permissions",
+  "mcp_tool_denied_tools",
+] as const;
 const AGENT_SETTINGS_FIELDS = ["allowed_agents_and_groups"] as const;
 const SEARCH_TOOL_SETTINGS_FIELDS = ["object_permission_search_tools"] as const;
 const SKILL_SETTINGS_FIELDS = ["object_permission_skills"] as const;
@@ -256,6 +262,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const watchedOrganizationId = form.watch("organization_id");
   const watchedMcpSelection = form.watch("allowed_mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
+  const watchedDeniedTools = form.watch("mcp_tool_denied_tools");
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useQueryState("team", parseAsString.withOptions({ history: "push" }));
@@ -479,8 +486,12 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
           if (formValues.mcp_tool_permissions && Object.keys(formValues.mcp_tool_permissions).length > 0) {
             formValues.object_permission.mcp_tool_permissions = formValues.mcp_tool_permissions;
-            delete formValues.mcp_tool_permissions;
           }
+          delete formValues.mcp_tool_permissions;
+          if (formValues.mcp_tool_denied_tools && Object.keys(formValues.mcp_tool_denied_tools).length > 0) {
+            formValues.object_permission.mcp_tool_denied_tools = formValues.mcp_tool_denied_tools;
+          }
+          delete formValues.mcp_tool_denied_tools;
         }
 
         // Transform allowed_mcp_access_groups into object_permission
@@ -1136,7 +1147,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           selectedAccessGroups={watchedMcpSelection?.accessGroups || []}
                           selectedToolsets={watchedMcpSelection?.toolsets || []}
                           toolPermissions={watchedToolPermissions || {}}
-                          onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+                          deniedTools={watchedDeniedTools || {}}
+                          onChange={({ toolPermissions: nextPermissions, deniedTools: nextDenied }) => {
+                            form.setValue("mcp_tool_permissions", nextPermissions);
+                            form.setValue("mcp_tool_denied_tools", nextDenied);
+                          }}
                         />
                       </div>
                     </CollapsibleContent>

@@ -5,6 +5,7 @@ import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import { estimateChecks, estimateFields } from "./estimatedOutputTokens";
 import { canonicalBudgetDuration } from "./keyEditFieldNormalizers";
+import type { McpToolPermissionWrite } from "../mcp_server_management/MCPToolPermissions";
 
 export interface McpServersAndGroups {
   servers: string[];
@@ -46,6 +47,7 @@ export interface KeyEditFormValues {
   vector_stores?: string[];
   mcp_servers_and_groups?: McpServersAndGroups;
   mcp_tool_permissions?: Record<string, string[]>;
+  mcp_tool_denied_tools?: Record<string, string[]>;
   agents_and_groups?: AgentsAndGroups;
   skills?: string[];
   organization_id?: string | null;
@@ -102,6 +104,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
     toolsets: keyData.object_permission?.mcp_toolsets || [],
   },
   mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
+  mcp_tool_denied_tools: keyData.object_permission?.mcp_tool_denied_tools || {},
   agents_and_groups: {
     agents: keyData.object_permission?.agents || [],
     accessGroups: keyData.object_permission?.agent_access_groups || [],
@@ -154,6 +157,7 @@ export const keyEditFormSchema = z.object({
   vector_stores: z.custom<string[] | undefined>(),
   mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>(),
   mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>(),
+  mcp_tool_denied_tools: z.custom<Record<string, string[]> | undefined>(),
   agents_and_groups: z.custom<AgentsAndGroups | undefined>(),
   skills: z.custom<string[] | undefined>(),
   organization_id: z.custom<string | null | undefined>(),
@@ -205,6 +209,7 @@ export const toSubmittedValues = (
   vector_stores: values.vector_stores,
   mcp_servers_and_groups: values.mcp_servers_and_groups,
   mcp_tool_permissions: values.mcp_tool_permissions,
+  mcp_tool_denied_tools: values.mcp_tool_denied_tools,
   agents_and_groups: values.agents_and_groups,
   skills: values.skills,
   organization_id: values.organization_id,
@@ -217,3 +222,14 @@ export const toSubmittedValues = (
   auto_rotate: values.auto_rotate,
   rotation_interval: values.rotation_interval,
 });
+
+export const writeMcpToolPermissionFields = (
+  setValue: (
+    name: "mcp_tool_permissions" | "mcp_tool_denied_tools",
+    value: Record<string, string[]>,
+  ) => void,
+  { toolPermissions, deniedTools }: McpToolPermissionWrite,
+): void => {
+  setValue("mcp_tool_permissions", toolPermissions);
+  setValue("mcp_tool_denied_tools", deniedTools);
+};

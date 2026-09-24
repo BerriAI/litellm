@@ -330,6 +330,7 @@ describe("UserInfoView", () => {
         mcp_access_groups: ["dev-group"],
         mcp_toolsets: [],
         mcp_tool_permissions: { "srv-1": ["list_issues"] },
+        mcp_tool_denied_tools: {},
       };
       expect(payload.object_permission).toEqual(expectedObjectPermission);
       expect(payload).not.toHaveProperty("mcp_servers_and_groups");
@@ -357,7 +358,8 @@ describe("UserInfoView", () => {
       });
 
       const [, payload] = mockUserUpdateUserCall.mock.calls[0];
-      expect(payload.object_permission.mcp_tool_permissions).toEqual({ "srv-1": [] });
+      expect(payload.object_permission.mcp_tool_permissions).toEqual({});
+      expect(payload.object_permission.mcp_tool_denied_tools).toEqual({ "srv-1": ["list_issues"] });
     });
 
     it("should preserve every tool allowlist when the granted servers are unchanged", async () => {
@@ -418,6 +420,7 @@ describe("extractMcpEntitlement", () => {
   const form = (
     selection: { servers?: string[]; accessGroups?: string[]; toolsets?: string[] },
     toolPermissions: Record<string, string[]>,
+    deniedTools: Record<string, string[]> = {},
   ) => ({
     mcp_servers_and_groups: {
       servers: selection.servers ?? [],
@@ -425,6 +428,7 @@ describe("extractMcpEntitlement", () => {
       toolsets: selection.toolsets ?? [],
     },
     mcp_tool_permissions: toolPermissions,
+    mcp_tool_denied_tools: deniedTools,
   });
 
   it("drops the tool allowlist of a server the admin just deselected", () => {
@@ -456,6 +460,14 @@ describe("extractMcpEntitlement", () => {
   it("drops a name-keyed allowlist once its server is deselected", () => {
     const result = extractMcpEntitlement(form({ servers: ["srv-2"] }, { deploy_tracker: ["create_issue"] }), CATALOG);
     expect(result?.mcp_tool_permissions).toEqual({});
+  });
+
+  it("carries the denylist through with the same reachability rule as the allowlist", () => {
+    const result = extractMcpEntitlement(
+      form({ servers: ["srv-1"] }, {}, { "srv-1": ["delete"], "srv-2": ["read"] }),
+      CATALOG,
+    );
+    expect(result?.mcp_tool_denied_tools).toEqual({ "srv-1": ["delete"] });
   });
 
   it("prunes nothing when the server catalog has not loaded", () => {

@@ -4104,6 +4104,7 @@ export interface paths {
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
          *         * mcp_access_groups: List[str] - List of MCP access group names
          *         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names (e.g., {"server_1": ["tool_a", "tool_b"]})
+         *         * mcp_tool_denied_tools: Dict[str, List[str]] - Map of server ID to denied tool names; a denied tool is blocked even when an allowlist or a new upstream tool would grant it
          *         * vector_stores: List[str] - List of allowed vector store IDs
          *         * agents: List[str] - List of allowed agent IDs
          *         * agent_access_groups: List[str] - List of agent access group names
@@ -4204,6 +4205,7 @@ export interface paths {
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
          *         * mcp_access_groups: List[str] - List of MCP access group names
          *         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
+         *         * mcp_tool_denied_tools: Dict[str, List[str]] - Map of server ID to denied tool names; a denied tool is blocked even when an allowlist or a new upstream tool would grant it
          *         * vector_stores: List[str] - List of allowed vector store IDs
          *         * agents: List[str] - List of allowed agent IDs
          *         * agent_access_groups: List[str] - List of agent access group names
@@ -4664,6 +4666,7 @@ export interface paths {
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
          *         * mcp_access_groups: List[str] - List of MCP access group names
          *         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names (e.g., {"server_1": ["tool_a", "tool_b"]})
+         *         * mcp_tool_denied_tools: Dict[str, List[str]] - Map of server ID to denied tool names; a denied tool is blocked even when an allowlist or a new upstream tool would grant it
          *         * vector_stores: List[str] - List of allowed vector store IDs
          *         * agents: List[str] - List of allowed agent IDs
          *         * agent_access_groups: List[str] - List of agent access group names
@@ -4764,6 +4767,7 @@ export interface paths {
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
          *         * mcp_access_groups: List[str] - List of MCP access group names
          *         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
+         *         * mcp_tool_denied_tools: Dict[str, List[str]] - Map of server ID to denied tool names; a denied tool is blocked even when an allowlist or a new upstream tool would grant it
          *         * vector_stores: List[str] - List of allowed vector store IDs
          *         * agents: List[str] - List of allowed agent IDs
          *         * agent_access_groups: List[str] - List of agent access group names
@@ -17514,7 +17518,7 @@ export interface paths {
          *     - duration: Optional[str] - Duration for the key auto-created on `/user/new`. Default is None.
          *     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
          *     - sso_user_id: Optional[str] - The id of the user in the SSO provider.
-         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
+         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}, "mcp_tool_denied_tools": {"github": ["delete_repo"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -17652,7 +17656,7 @@ export interface paths {
          *         - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None.
          *         - duration: Optional[str] - [NOT IMPLEMENTED].
          *         - key_alias: Optional[str] - [NOT IMPLEMENTED].
-         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
+         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1"], "mcp_servers": ["github"], "mcp_tool_permissions": {"github": ["list_issues"]}, "mcp_tool_denied_tools": {"github": ["delete_repo"]}}. The MCP grants act as a ceiling on every key this user holds. IF null or {} then no object permission.
          *         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
          */
@@ -23939,6 +23943,10 @@ export interface components {
             mcp_access_groups?: string[] | null;
             /** Mcp Servers */
             mcp_servers?: string[] | null;
+            /** Mcp Tool Denied Tools */
+            mcp_tool_denied_tools?: {
+                [key: string]: string[];
+            } | null;
             /** Mcp Tool Permissions */
             mcp_tool_permissions?: {
                 [key: string]: string[];
@@ -31055,6 +31063,10 @@ export interface components {
             mcp_access_groups?: string[] | null;
             /** Mcp Servers */
             mcp_servers?: string[] | null;
+            /** Mcp Tool Denied Tools */
+            mcp_tool_denied_tools?: {
+                [key: string]: string[];
+            } | null;
             /** Mcp Tool Permissions */
             mcp_tool_permissions?: {
                 [key: string]: string[];
@@ -31102,6 +31114,10 @@ export interface components {
              * @default []
              */
             mcp_servers: string[] | null;
+            /** Mcp Tool Denied Tools */
+            mcp_tool_denied_tools?: {
+                [key: string]: string[];
+            } | null;
             /** Mcp Tool Permissions */
             mcp_tool_permissions?: {
                 [key: string]: string[];

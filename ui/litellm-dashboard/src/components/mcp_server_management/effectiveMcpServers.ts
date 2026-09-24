@@ -32,6 +32,10 @@ export interface EffectiveMcpServer {
   // What this level actually allows on the server, which is what the backend enforces: the keyed
   // union widened by the toolset grant. `undefined` means nothing restricts the server from here.
   readonly allowedTools: readonly string[] | undefined;
+  // The union of every mcp_tool_denied_tools key naming this server: bare tool names the backend
+  // blocks even when an allowlist (or a newly added upstream tool) would grant them. `undefined`
+  // means no denylist entry exists, so nothing is denied from here.
+  readonly deniedTools: readonly string[] | undefined;
   readonly source: McpGrantSource;
 }
 
@@ -42,6 +46,7 @@ interface ResolveInput {
   readonly selectedToolsets: readonly string[];
   readonly toolsets: readonly MCPToolset[];
   readonly toolPermissions: Readonly<Record<string, readonly string[]>>;
+  readonly deniedTools: Readonly<Record<string, readonly string[]>>;
 }
 
 // Access groups come back as plain names, but older records carry `{ name }` objects.
@@ -167,6 +172,47 @@ export const applyToolPermissionWrite = ({
   return Object.fromEntries(withWrite);
 };
 
+// The deny write: whatever the entry previously granted (its own key plus equivalent superseded
+// keys, ambiguous keys untouched) is cleared from the allowlist map, and the unchecked fetched
+// tools land under the entry's key in the denylist map. Toolset tools are never denied — the
+// toolset grants them regardless, so writing them would deny other keys' subjects too without
+// protecting this one. An empty denied list removes the entry entirely: nothing denied means
+// every tool the upstream exposes, now and later, is allowed.
+export const applyToolDenyWrite = ({
+  toolPermissions,
+  deniedTools,
+  entry,
+  allServers,
+  fetchedTools,
+  checked,
+}: {
+  readonly toolPermissions: Readonly<Record<string, readonly string[]>>;
+  readonly deniedTools: Readonly<Record<string, readonly string[]>>;
+  readonly entry: EffectiveMcpServer;
+  readonly allServers: readonly MCPServer[];
+  readonly fetchedTools: readonly string[];
+  readonly checked: readonly string[];
+}): { toolPermissions: Record<string, string[]>; deniedTools: Record<string, string[]> } => {
+  const nextPermissions = Object.fromEntries(
+    Object.entries(toolPermissions).filter(
+      ([key]) => key !== entry.permissionKey && !entry.supersededKeys.includes(key),
+    ),
+  );
+  const deniedKeys = mcpToolPermissionKeysFor(entry.server, deniedTools, allServers).filter((key) =>
+    mcpKeyNamesOneServerOnly(allServers, key),
+  );
+  const denied = fetchedTools.filter(
+    (tool) => !checked.includes(tool) && !(entry.toolsetTools ?? []).includes(tool),
+  );
+  const kept = Object.fromEntries(Object.entries(deniedTools).filter(([key]) => !deniedKeys.includes(key)));
+  const nextDenied =
+    denied.length === 0 ? kept : { ...kept, [entry.permissionKey]: denied };
+  return {
+    toolPermissions: nextPermissions as Record<string, string[]>,
+    deniedTools: nextDenied as Record<string, string[]>,
+  };
+};
+
 export const resolveEffectiveMcpServers = ({
   allServers,
   selectedServers,
@@ -174,6 +220,7 @@ export const resolveEffectiveMcpServers = ({
   selectedToolsets,
   toolsets,
   toolPermissions,
+  deniedTools,
 }: ResolveInput): readonly EffectiveMcpServer[] => {
   const entry = (server: MCPServer, source: McpGrantSource): EffectiveMcpServer => {
     const keys = mcpToolPermissionKeysFor(server, toolPermissions, allServers);
@@ -192,6 +239,7 @@ export const resolveEffectiveMcpServers = ({
         keyedTools === undefined && toolsetTools === undefined
           ? undefined
           : [...new Set([...(keyedTools ?? []), ...(toolsetTools ?? [])])],
+      deniedTools: mcpAllowedToolsFor(server, deniedTools, allServers),
       source,
     };
   };

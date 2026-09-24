@@ -26,6 +26,7 @@ export function ObjectPermissionsView({
   const mcpServers = objectPermission?.mcp_servers || [];
   const mcpAccessGroups = objectPermission?.mcp_access_groups || [];
   const mcpToolPermissions = objectPermission?.mcp_tool_permissions || {};
+  const mcpToolDeniedTools = objectPermission?.mcp_tool_denied_tools || {};
   const mcpToolsets = objectPermission?.mcp_toolsets || [];
   const agents = objectPermission?.agents || [];
   const agentAccessGroups = objectPermission?.agent_access_groups || [];
@@ -39,6 +40,7 @@ export function ObjectPermissionsView({
         mcpServers={mcpServers}
         mcpAccessGroups={mcpAccessGroups}
         mcpToolPermissions={mcpToolPermissions}
+        mcpToolDeniedTools={mcpToolDeniedTools}
         mcpToolsets={mcpToolsets}
         inheritedMcpServers={inheritedMcpServers}
         accessToken={accessToken}

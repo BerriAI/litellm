@@ -12,6 +12,7 @@ interface MCPServerPermissionsProps {
   mcpServers: string[];
   mcpAccessGroups?: string[];
   mcpToolPermissions?: Record<string, string[]>;
+  mcpToolDeniedTools?: Record<string, string[]>;
   mcpToolsets?: string[];
   inheritedMcpServers?: InheritedGrant[];
   accessToken?: string | null;
@@ -21,6 +22,7 @@ export function MCPServerPermissions({
   mcpServers,
   mcpAccessGroups = [],
   mcpToolPermissions = {},
+  mcpToolDeniedTools = {},
   mcpToolsets = [],
   inheritedMcpServers = [],
   accessToken,
@@ -117,6 +119,16 @@ export function MCPServerPermissions({
     return mcpAllowedToolsFor(serverDetail, mcpToolPermissions, mcpServerDetails);
   };
 
+  // The denylist follows the same equivalent-key resolution as the allowlist; a tool named here
+  // is blocked even where an allowlist or a new upstream tool would grant it.
+  const getDeniedToolsFor = (serverIdentifier: string): readonly string[] => {
+    const [serverDetail] = mcpServersForIdentifier(mcpServerDetails, serverIdentifier);
+    if (!serverDetail) {
+      return mcpToolDeniedTools[serverIdentifier] ?? [];
+    }
+    return mcpAllowedToolsFor(serverDetail, mcpToolDeniedTools, mcpServerDetails) ?? [];
+  };
+
   const blocksAllMcpServers = mcpServers.includes(NO_MCP_SERVERS_SENTINEL);
   const grantsAllProxyMcpServers = mcpServers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
 
@@ -157,7 +169,8 @@ export function MCPServerPermissions({
         <div className="max-h-[400px] overflow-y-auto space-y-2 pr-1">
           {mergedItems.map((item, index) => {
             const toolsForServer = item.type === "server" ? getToolPermissionsFor(item.value) : undefined;
-            const hasToolRestrictions = toolsForServer && toolsForServer.length > 0;
+            const deniedForServer = item.type === "server" ? getDeniedToolsFor(item.value) : [];
+            const hasToolRestrictions = (toolsForServer && toolsForServer.length > 0) || deniedForServer.length > 0;
             const isExpanded = expandedServers.has(item.value);
 
             return (
@@ -192,9 +205,13 @@ export function MCPServerPermissions({
 
                   {hasToolRestrictions && (
                     <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
-                      <span className="text-xs font-medium text-muted-foreground">{toolsForServer.length}</span>
+                      <span className="text-xs font-medium text-muted-foreground">
+                        {toolsForServer === undefined || toolsForServer.length === 0
+                          ? deniedForServer.length
+                          : toolsForServer.length}
+                      </span>
                       <span className="text-xs text-muted-foreground">
-                        {toolsForServer.length === 1 ? "tool" : "tools"}
+                        {deniedForServer.length > 0 ? "denied" : "tools"}
                       </span>
                       {isExpanded ? (
                         <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
@@ -208,8 +225,15 @@ export function MCPServerPermissions({
                 {/* Show tool permissions if expanded */}
                 {hasToolRestrictions && isExpanded && (
                   <div className="ml-4 pl-4 border-l-2 border-info/20 pb-1">
+                    {deniedForServer.length > 0 && (
+                      <p className="text-xs text-muted-foreground mb-1.5">
+                        {toolsForServer && toolsForServer.length > 0
+                          ? `Denied: ${deniedForServer.join(", ")}`
+                          : `All tools except: ${deniedForServer.join(", ")}`}
+                      </p>
+                    )}
                     <div className="flex flex-wrap gap-1.5">
-                      {toolsForServer.map((tool, toolIndex) => (
+                      {(toolsForServer ?? []).map((tool, toolIndex) => (
                         <span
                           key={toolIndex}
                           className="inline-flex items-center px-2.5 py-1 rounded-lg bg-info/10 border border-info/20 text-info text-xs font-medium"

@@ -55,6 +55,7 @@ const userEditShape = {
   metadata: z.string().nullish(),
   mcp_servers_and_groups: MCP_SELECTION_SHAPE.optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+  mcp_tool_denied_tools: z.record(z.string(), z.array(z.string())).optional(),
 };
 
 const budgetSchema = (unlimitedBudget: boolean) =>
@@ -78,6 +79,7 @@ const buildMcpFieldValues = (objectPermission: ObjectPermission | null | undefin
     toolsets: objectPermission?.mcp_toolsets ?? [],
   },
   mcp_tool_permissions: objectPermission?.mcp_tool_permissions ?? {},
+  mcp_tool_denied_tools: objectPermission?.mcp_tool_denied_tools ?? {},
 });
 
 // antd only reported the fields that were actually mounted, so the identity and
@@ -339,7 +341,11 @@ export function UserEditView({
                 selectedAccessGroups={form.watch("mcp_servers_and_groups")?.accessGroups || []}
                 selectedToolsets={form.watch("mcp_servers_and_groups")?.toolsets || []}
                 toolPermissions={form.watch("mcp_tool_permissions") || {}}
-                onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+                deniedTools={form.watch("mcp_tool_denied_tools") || {}}
+                onChange={({ toolPermissions: nextPermissions, deniedTools: nextDenied }) => {
+                  form.setValue("mcp_tool_permissions", nextPermissions);
+                  form.setValue("mcp_tool_denied_tools", nextDenied);
+                }}
               />
             </>
           )}

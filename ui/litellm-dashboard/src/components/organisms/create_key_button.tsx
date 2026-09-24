@@ -124,6 +124,7 @@ const McpToolPermissionsField: React.FC<McpToolPermissionsFieldProps> = ({ acces
     | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
     | undefined;
   const toolPermissions = useWatch({ control, name: "mcp_tool_permissions" }) as Record<string, string[]> | undefined;
+  const deniedTools = useWatch({ control, name: "mcp_tool_denied_tools" }) as Record<string, string[]> | undefined;
 
   return (
     <div className="mt-6">
@@ -133,7 +134,11 @@ const McpToolPermissionsField: React.FC<McpToolPermissionsFieldProps> = ({ acces
         selectedAccessGroups={selection?.accessGroups || []}
         selectedToolsets={selection?.toolsets || []}
         toolPermissions={toolPermissions || {}}
-        onChange={(toolPerms) => setValue("mcp_tool_permissions", toolPerms)}
+        deniedTools={deniedTools || {}}
+        onChange={({ toolPermissions: nextPermissions, deniedTools: nextDenied }) => {
+          setValue("mcp_tool_permissions", nextPermissions);
+          setValue("mcp_tool_denied_tools", nextDenied);
+        }}
       />
     </div>
   );
@@ -235,6 +240,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     tpm_limit_type: null,
     rpm_limit_type: null,
     mcp_tool_permissions: {},
+    mcp_tool_denied_tools: {},
     duration: "",
   }));
   const form = useForm<MountedFormValues>({
@@ -1566,8 +1572,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             )}
                           </MountedFormField>
 
-                          {/* Hidden field to register mcp_tool_permissions with the form */}
+                          {/* Hidden fields to register the MCP tool maps with the form */}
                           <MountedFormField name="mcp_tool_permissions" bare>
+                            {(control) => <input type="hidden" id={control.id} name={control.name} />}
+                          </MountedFormField>
+                          <MountedFormField name="mcp_tool_denied_tools" bare>
                             {(control) => <input type="hidden" id={control.id} name={control.name} />}
                           </MountedFormField>
 

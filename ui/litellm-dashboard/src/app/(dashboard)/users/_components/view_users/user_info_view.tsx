@@ -324,7 +324,10 @@ export default function UserInfoView({
       const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers, allMcpToolsets);
       const userFields = Object.fromEntries(
         Object.entries(formValues).filter(
-          ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions",
+          ([field]) =>
+            field !== "mcp_servers_and_groups" &&
+            field !== "mcp_tool_permissions" &&
+            field !== "mcp_tool_denied_tools",
         ),
       );
 
@@ -699,6 +702,7 @@ export default function UserInfoView({
                     mcpServers={userData.object_permission?.mcp_servers || []}
                     mcpAccessGroups={userData.object_permission?.mcp_access_groups || []}
                     mcpToolPermissions={userData.object_permission?.mcp_tool_permissions || {}}
+                    mcpToolDeniedTools={userData.object_permission?.mcp_tool_denied_tools || {}}
                     mcpToolsets={userData.object_permission?.mcp_toolsets || []}
                     accessToken={accessToken}
                   />

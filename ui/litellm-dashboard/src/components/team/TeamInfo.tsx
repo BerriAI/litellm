@@ -398,6 +398,7 @@ const teamUpdateFieldsSchema = z.object({
     })
     .optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+  mcp_tool_denied_tools: z.record(z.string(), z.array(z.string())).optional(),
   agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
   object_permission_skills: z.array(z.string()).optional(),
@@ -448,6 +449,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   allowed_passthrough_routes: [],
   mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
   mcp_tool_permissions: {},
+  mcp_tool_denied_tools: {},
   agents_and_groups: { agents: [], accessGroups: [] },
   object_permission_search_tools: [],
   object_permission_skills: [],
@@ -513,6 +515,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     toolsets: info.object_permission?.mcp_toolsets || [],
   },
   mcp_tool_permissions: info.object_permission?.mcp_tool_permissions || {},
+  mcp_tool_denied_tools: info.object_permission?.mcp_tool_denied_tools || {},
   agents_and_groups: {
     agents: info.object_permission?.agents || [],
     accessGroups: info.object_permission?.agent_access_groups || [],
@@ -604,6 +607,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const killSwitchOn = form.watch("disable_global_guardrails");
   const watchedMcpSelection = form.watch("mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
+  const watchedDeniedTools = form.watch("mcp_tool_denied_tools");
   const mcpLookupFailure =
     (
       [
@@ -1025,6 +1029,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         toolsets: [],
       };
       const submittedToolPermissions: Record<string, string[]> = values.mcp_tool_permissions || {};
+      const submittedDeniedTools: Record<string, string[]> = values.mcp_tool_denied_tools || {};
       const effectiveMcpInput = {
         allServers: allMcpServers,
         selectedServers: servers || [],
@@ -1032,6 +1037,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         selectedToolsets: toolsets || [],
         toolsets: allMcpToolsets,
         toolPermissions: submittedToolPermissions,
+        deniedTools: submittedDeniedTools,
       };
       const loadedObjectPermission = info.object_permission ?? {};
       const loadedMcpInput = {
@@ -1041,6 +1047,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         selectedToolsets: loadedObjectPermission.mcp_toolsets ?? [],
         toolsets: allMcpToolsets,
         toolPermissions: loadedObjectPermission.mcp_tool_permissions ?? {},
+        deniedTools: loadedObjectPermission.mcp_tool_denied_tools ?? {},
       };
       const loadedEffectiveMcpServers = resolveEffectiveMcpServers(loadedMcpInput);
       const standingServerIds = standingToolPermissionServerIds(
@@ -1066,7 +1073,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         mcpLookupFailure !== null
           ? { kind: "unresolvable", reason: mcpLookupFailure }
           : await grantedMcpServerIds(mcpGrantInput);
-      if (mcpResolution.kind === "unresolvable" && Object.keys(submittedToolPermissions).length > 0) {
+      if (
+        mcpResolution.kind === "unresolvable" &&
+        (Object.keys(submittedToolPermissions).length > 0 || Object.keys(submittedDeniedTools).length > 0)
+      ) {
         toast.fromError(mcpUnresolvableSaveError(mcpResolution.reason));
         return;
       }
@@ -1074,6 +1084,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         mcpResolution.kind === "resolved"
           ? retainedMcpToolPermissions(submittedToolPermissions, mcpResolution.serverIds, allMcpServers)
           : submittedToolPermissions;
+      const mcpToolDeniedTools =
+        mcpResolution.kind === "resolved"
+          ? retainedMcpToolPermissions(submittedDeniedTools, mcpResolution.serverIds, allMcpServers)
+          : submittedDeniedTools;
 
       updateData.object_permission = {};
       if (servers) {
@@ -1085,11 +1099,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (mcpToolPermissions) {
         updateData.object_permission.mcp_tool_permissions = mcpToolPermissions;
       }
+      updateData.object_permission.mcp_tool_denied_tools = mcpToolDeniedTools;
       if (toolsets) {
         updateData.object_permission.mcp_toolsets = toolsets;
       }
       delete values.mcp_servers_and_groups;
       delete values.mcp_tool_permissions;
+      delete values.mcp_tool_denied_tools;
 
       // Handle agent permissions
       const { agents, accessGroups: agentAccessGroups } = values.agents_and_groups || {
@@ -1902,7 +1918,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       selectedAccessGroups={watchedMcpSelection?.accessGroups || []}
                       selectedToolsets={watchedMcpSelection?.toolsets || []}
                       toolPermissions={watchedToolPermissions || {}}
-                      onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+                      deniedTools={watchedDeniedTools || {}}
+                      onChange={({ toolPermissions: nextPermissions, deniedTools: nextDenied }) => {
+                        form.setValue("mcp_tool_permissions", nextPermissions);
+                        form.setValue("mcp_tool_denied_tools", nextDenied);
+                      }}
                     />
                   </div>
 

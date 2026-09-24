@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
 import { MCPTool } from "../mcp_tools/types";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -7,16 +7,19 @@ import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServ
 import { useMCPAccessGroups } from "../../app/(dashboard)/hooks/mcpServers/useMCPAccessGroups";
 import { useMCPToolsets } from "../../app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import McpCrudPermissionPanel from "../mcp_tools/McpCrudPermissionPanel";
-import { classifyToolOp } from "../../utils/mcpToolCrudClassification";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import {
   EffectiveMcpServer,
   McpGrantSource,
-  applyToolPermissionWrite,
+  applyToolDenyWrite,
   emptyMcpAccessGroups,
-  mcpAllowedToolsFor,
   resolveEffectiveMcpServers,
 } from "./effectiveMcpServers";
+
+export interface McpToolPermissionWrite {
+  toolPermissions: Record<string, string[]>;
+  deniedTools: Record<string, string[]>;
+}
 
 interface MCPToolPermissionsProps {
   accessToken: string;
@@ -24,11 +27,13 @@ interface MCPToolPermissionsProps {
   selectedAccessGroups?: readonly string[];
   selectedToolsets?: readonly string[];
   toolPermissions: Record<string, string[]>;
-  onChange: (toolPermissions: Record<string, string[]>) => void;
+  deniedTools?: Record<string, string[]>;
+  onChange: (next: McpToolPermissionWrite) => void;
   disabled?: boolean;
 }
 
 const NO_SELECTION: readonly string[] = [];
+const NO_TOOL_MAP: Record<string, string[]> = {};
 
 interface InheritedBadge {
   readonly label: string;
@@ -54,6 +59,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   selectedAccessGroups = NO_SELECTION,
   selectedToolsets = NO_SELECTION,
   toolPermissions,
+  deniedTools = NO_TOOL_MAP,
   onChange,
   disabled = false,
 }) => {
@@ -70,16 +76,8 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
   const [viewModes, setViewModes] = useState<Record<string, "crud" | "flat">>({});
 
-  // Keep a ref to the latest toolPermissions so async fetch callbacks always
-  // read the current value and do not overwrite sibling servers' results when
-  // multiple fetches complete out-of-order (stale-closure race condition).
-  const toolPermissionsRef = useRef(toolPermissions);
-  useEffect(() => {
-    toolPermissionsRef.current = toolPermissions;
-  }, [toolPermissions]);
-
   // Every server this permission level reaches, not just the directly selected ones: a server
-  // reached through an access group or a toolset needs its allowlist visible and editable too.
+  // reached through an access group or a toolset needs its denylist visible and editable too.
   const effectiveMcpInput = {
     allServers,
     selectedServers,
@@ -87,14 +85,16 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     selectedToolsets,
     toolsets,
     toolPermissions,
+    deniedTools,
   };
   const servers = useMemo(
     () => resolveEffectiveMcpServers(effectiveMcpInput),
-    [allServers, selectedServers, selectedAccessGroups, selectedToolsets, toolsets, toolPermissions],
+    [allServers, selectedServers, selectedAccessGroups, selectedToolsets, toolsets, toolPermissions, deniedTools],
   );
 
-  // Fetch tools for a specific server; applies delete-blocked-by-default for new servers.
-  // `token` is passed explicitly so the closure never captures a stale accessToken.
+  // Fetch tools for a specific server. `token` is passed explicitly so the closure never captures a
+  // stale accessToken. Nothing is written on attach: an unchecked box already means denied, and a
+  // tool the upstream adds later renders checked only because nothing names it.
   const fetchToolsForServer = async (entry: EffectiveMcpServer, token: string) => {
     const serverId = entry.server.server_id;
     setLoadingTools((prev) => ({ ...prev, [serverId]: true }));
@@ -109,20 +109,6 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
       } else {
         const fetchedTools: MCPTool[] = response.tools || [];
         setServerTools((prev) => ({ ...prev, [serverId]: fetchedTools }));
-
-        // Default only unrestricted direct servers to non-delete tools.
-        // Read latest permissions from the ref to avoid clobbering concurrent results.
-        const latestPermissions = toolPermissionsRef.current;
-        const isDirect = entry.source.kind === "direct";
-        const unrestricted =
-          mcpAllowedToolsFor(entry.server, latestPermissions, allServers) === undefined &&
-          entry.toolsetTools === undefined;
-        if (isDirect && unrestricted && (selectedToolsets.length === 0 || !toolsetsFailed) && fetchedTools.length > 0) {
-          const nonDeleteTools = fetchedTools
-            .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
-            .map((t) => t.name);
-          onChange(applyToolPermissionWrite({ toolPermissions: latestPermissions, entry, allowed: nonDeleteTools }));
-        }
       }
     } catch (err) {
       console.error(`Error fetching tools for server ${serverId}:`, err);
@@ -148,14 +134,17 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   }, [servers, accessToken, toolsetsLoading]);
 
   // Every write goes through here so an edit is authoritative for the SERVER, not for one of the
-  // equivalent keys that may name it.
-  const writeAllowedTools = (entry: EffectiveMcpServer, allowed: string[]) => {
-    onChange(applyToolPermissionWrite({ toolPermissions, entry, allowed }));
+  // equivalent keys that may name it. `checked` is the set of tools that should stay allowed; the
+  // rest of the fetched tools become the denied entry for the server.
+  const writeCheckedTools = (entry: EffectiveMcpServer, checked: readonly string[]) => {
+    const fetchedTools = (serverTools[entry.server.server_id] || []).map((tool) => tool.name);
+    const denyWrite = { toolPermissions, deniedTools, entry, allServers, fetchedTools, checked };
+    onChange(applyToolDenyWrite(denyWrite));
   };
 
   const handleSelectAll = (entry: EffectiveMcpServer) => {
     const tools = serverTools[entry.server.server_id] || [];
-    writeAllowedTools(
+    writeCheckedTools(
       entry,
       tools.map((t) => t.name),
     );
@@ -172,6 +161,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     selectedAccessGroups.length,
     selectedToolsets.length,
     Object.keys(toolPermissions).length,
+    Object.keys(deniedTools).length,
   ];
   if (!selectionSizes.some((size) => size > 0)) {
     return null;
@@ -222,14 +212,21 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const serverId = server.server_id;
         const serverName = server.server_name || server.alias || serverId;
         const tools = serverTools[serverId] || [];
-        const selectedTools = entry.allowedTools ?? tools.map((t) => t.name);
         const isLoading = loadingTools[serverId];
         const error = toolErrors[serverId];
         const viewMode = viewModes[serverId] ?? "crud";
         const inherited = inheritedBadgeFor(entry.source);
-        // The backend adds a toolset's tools to whatever this map allows, so these stay on however
+        // The backend adds a toolset's tools to whatever this level allows, so these stay on however
         // the boxes are ticked. Locking them is what keeps the matrix an honest picture of the grant.
         const toolsetTools = entry.toolsetTools ?? [];
+        // A stored allowlist still narrows the server, so it decides the checked set when present;
+        // otherwise every fetched tool is allowed unless the denylist names it. Either way a name
+        // the denylist carries renders unchecked.
+        const denied = new Set(entry.deniedTools ?? []);
+        const checkedPool = [
+          ...new Set([...(entry.keyedTools ?? tools.map((t) => t.name)), ...toolsetTools]),
+        ];
+        const selectedTools = checkedPool.filter((name) => !denied.has(name));
 
         return (
           <div key={serverId} className={`border rounded-lg bg-muted ${inherited ? "border-dashed" : ""}`}>
@@ -290,7 +287,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                     <button
                       type="button"
                       className="text-sm text-info hover:text-info/80 font-medium"
-                      onClick={() => writeAllowedTools(entry, [])}
+                      onClick={() => writeCheckedTools(entry, [])}
                       disabled={isLoading}
                     >
                       Deselect All
@@ -322,9 +319,9 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {!isLoading && !error && tools.length > 0 && viewMode === "crud" && (
                 <McpCrudPermissionPanel
                   tools={tools}
-                  value={entry.allowedTools === undefined ? undefined : [...selectedTools]}
+                  value={[...selectedTools]}
                   lockedTools={toolsetTools}
-                  onChange={(allowed) => writeAllowedTools(entry, allowed)}
+                  onChange={(allowed) => writeCheckedTools(entry, allowed)}
                   readOnly={disabled}
                 />
               )}
@@ -346,7 +343,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                             const next = isSelected
                               ? selectedTools.filter((n) => n !== tool.name)
                               : [...selectedTools, tool.name];
-                            writeAllowedTools(entry, next);
+                            writeCheckedTools(entry, next);
                           }}
                           disabled={disabled || isLocked}
                           className="mt-0.5"

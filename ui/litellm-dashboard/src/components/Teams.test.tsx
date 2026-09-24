@@ -1359,6 +1359,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       allowed_passthrough_routes: undefined,
       allowed_mcp_servers_and_groups: undefined,
       mcp_tool_permissions: {},
+      mcp_tool_denied_tools: {},
       allowed_agents_and_groups: undefined,
       object_permission_search_tools: undefined,
     });
@@ -1367,6 +1368,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       organization_id: null,
       models: ["no-default-models"],
       mcp_tool_permissions: {},
+      mcp_tool_denied_tools: {},
     });
   });
 
