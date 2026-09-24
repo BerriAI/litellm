@@ -58,7 +58,7 @@ from litellm.types.mcp import MCPServerCostInfo
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
-from .litellm_params_registry import (  # noqa: F401  re-exported for backward compat
+from .litellm_params_registry import (  # noqa: F401  # importers read both FIELD constants from litellm.types.utils
     ADDRESSED_RESPONSE_ID_FIELD,
     LITELLM_PARAMS,
     TRUSTED_CALLBACK_VARS_FIELD,
@@ -3908,15 +3908,17 @@ def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
     )
 
 
-agentic_loop_internal_litellm_params: Final = list(names_in(ParamGroup.AGENTIC_LOOP_STATE))
+agentic_loop_internal_litellm_params: Final = list(  # mutable-ok: public contract is a list callers concatenate
+    names_in(ParamGroup.AGENTIC_LOOP_STATE)
+)
 
 bedrock_batch_litellm_params: Final = names_in(ParamGroup.BEDROCK_BATCH_CONFIG)
 
-all_litellm_params = (
-    [param.name for param in LITELLM_PARAMS]
-    + list(StandardCallbackDynamicParams.__annotations__.keys())
-    + list(CustomPricingLiteLLMParams.model_fields.keys())
-)
+all_litellm_params = [  # rebind-ok: litellm/__init__.py star imports rebind it  # mutable-ok: callers concat lists
+    *(param.name for param in LITELLM_PARAMS),
+    *StandardCallbackDynamicParams.__annotations__,
+    *CustomPricingLiteLLMParams.model_fields,
+]
 
 
 class KeyGenerationConfig(TypedDict, total=False):
