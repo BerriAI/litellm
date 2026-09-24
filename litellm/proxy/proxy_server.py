@@ -859,7 +859,7 @@ from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     ModelDeprecationResponse,
 )
-from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
+from litellm.types.proxy.spend_capture_rate import SpendCaptureProvider, SpendCaptureRateCheckSettings
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     ClassifierPlugin,
@@ -10846,7 +10846,7 @@ class ProxyStartupEvent:
         prisma_client: PrismaClient,
         read_general_settings: Callable[[], Mapping[str, object]],
     ) -> None:
-        """The job always runs; each run re-reads ``spend_capture_rate_check`` so a config reload applies to the next one."""
+        """The job always runs and re-reads ``spend_capture_rate_check`` each run; an absent setting clears the gauge."""
         cls._spend_capture_rate_check_settings(read_general_settings())
 
         async def alert(message: str) -> None:
@@ -10866,6 +10866,8 @@ class ProxyStartupEvent:
         async def check() -> None:
             settings: Final = cls._spend_capture_rate_check_settings(read_general_settings())
             if settings is None:
+                for provider in get_args(SpendCaptureProvider):
+                    publish(provider, None)
                 return
             await run_scheduled_spend_capture_rate_check(
                 prisma_client,

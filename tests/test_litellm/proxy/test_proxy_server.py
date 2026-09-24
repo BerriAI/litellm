@@ -15287,3 +15287,41 @@ async def test_spend_capture_rate_check_job_publishes_to_prometheus_and_alerts(m
     proxy_logging.alerting_handler.assert_awaited_once()
     assert proxy_logging.alerting_handler.await_args.kwargs["message"] == "under the threshold"
     assert proxy_logging.alerting_handler.await_args.kwargs["level"] == "High"
+
+
+@pytest.mark.asyncio
+async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is_removed(monkeypatch):
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    scheduler = MagicMock()
+    general_settings: dict[str, object] = {"spend_capture_rate_check": {}}
+    prometheus = MagicMock(spec=PrometheusLogger)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager, "get_custom_loggers_for_type", lambda callback_type: [prometheus]
+    )
+    scheduled_checks = []
+
+    async def fake_scheduled_check(prisma_client, settings, *, pod_lock_manager, alert, publish):
+        scheduled_checks.append(settings)
+        publish("openai", 0.97)
+        return ()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.run_scheduled_spend_capture_rate_check", fake_scheduled_check)
+    ProxyStartupEvent._initialize_spend_capture_rate_check_job(
+        scheduler=scheduler,
+        proxy_logging_obj=MagicMock(),
+        prisma_client=MagicMock(),
+        read_general_settings=lambda: general_settings,
+    )
+    check = scheduler.add_job.call_args.args[0]
+
+    await check()
+    del general_settings["spend_capture_rate_check"]
+    await check()
+
+    assert len(scheduled_checks) == 1
+    assert prometheus.set_spend_capture_rate.call_args_list == [
+        call(api_provider="openai", capture_rate=0.97),
+        call(api_provider="openai", capture_rate=None),
+    ]
