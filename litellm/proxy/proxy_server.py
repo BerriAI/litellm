@@ -8027,6 +8027,13 @@ class ProxyConfig:
         )
 
         try:
+            if self.litellm_settings.owned_by_config("websearch_interception_params"):
+                verbose_proxy_logger.debug(
+                    "Web search interception: websearch_interception_params is declared in the config file, so stored "
+                    "settings cannot change it on this pod."
+                )
+                return
+
             config_record: Final = await get_config_param(prisma_client, "litellm_settings")
 
             if config_record is None or config_record.param_value is None:
