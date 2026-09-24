@@ -9302,6 +9302,10 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
             return BedrockBatchesConfig()
+        elif LlmProviders.ANTHROPIC == provider:
+            from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
+
+            return AnthropicBatchesConfig()
         elif LlmProviders.MISTRAL == provider:
             from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
 

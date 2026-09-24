@@ -4166,3 +4166,229 @@ async def test_chat_completion_agentic_followup_does_not_repeat_request_params_f
     assert followup_calls[0]["temperature"] == 0.2
     assert followup_calls[0]["api_base"] == "https://a"
     assert followup_calls[0]["model"] == "openai/gpt-5"
+# =========================================================================== #
+# batches: list / cancel through BaseBatchesConfig (Anthropic)
+# =========================================================================== #
+
+
+from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
+from litellm.types.utils import LiteLLMBatch
+
+
+def _async_anthropic_client(response: httpx.Response) -> Mock:
+    client = Mock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(return_value=response)
+    client.post = AsyncMock(return_value=response)
+    return client
+
+
+def _anthropic_list_response() -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        json={
+            "data": [{"id": "msgbatch_1", "processing_status": "ended", "request_counts": {"succeeded": 1}}],
+            "has_more": False,
+            "first_id": "msgbatch_1",
+            "last_id": "msgbatch_1",
+        },
+        request=httpx.Request("GET", "https://api.anthropic.com/v1/messages/batches"),
+    )
+
+
+def _anthropic_cancel_response() -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        json={
+            "id": "msgbatch_abc",
+            "processing_status": "canceling",
+            "created_at": "2024-09-24T10:00:00Z",
+            "cancel_initiated_at": "2024-09-24T10:30:00Z",
+            "request_counts": {},
+        },
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages/batches/msgbatch_abc/cancel"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_batches_anthropic_gets_paginated_url_and_headers():
+    client = _async_anthropic_client(_anthropic_list_response())
+    result = await BaseLLMHTTPHandler().list_batches(
+        litellm_params={},
+        provider_config=AnthropicBatchesConfig(),
+        headers={},
+        api_base="https://api.anthropic.com",
+        api_key="sk-ant-test",
+        logging_obj=None,
+        after="msgbatch_cursor",
+        limit=10,
+        _is_async=True,
+        client=client,
+        timeout=60.0,
+        model="",
+    )
+
+    client.get.assert_awaited_once()
+    _, call_kwargs = client.get.call_args
+    url = httpx.URL(call_kwargs["url"])
+    assert url.path == "/v1/messages/batches"
+    assert url.params["limit"] == "10"
+    assert url.params["after_id"] == "msgbatch_cursor"
+    headers = call_kwargs["headers"]
+    assert headers["x-api-key"] == "sk-ant-test"
+    assert headers["anthropic-beta"] == "message-batches-2024-09-24"
+    assert call_kwargs["timeout"] == 60.0
+
+    assert result["object"] == "list"
+    assert result["has_more"] is False
+    assert [b.id for b in result["data"]] == ["msgbatch_1"]
+
+
+def test_list_batches_anthropic_sync_gets_url_and_headers():
+    client = Mock(spec=HTTPHandler)
+    client.get = Mock(return_value=_anthropic_list_response())
+    result = BaseLLMHTTPHandler().list_batches(
+        litellm_params={},
+        provider_config=AnthropicBatchesConfig(),
+        headers={},
+        api_base="https://api.anthropic.com",
+        api_key="sk-ant-test",
+        logging_obj=None,
+        after=None,
+        limit=5,
+        _is_async=False,
+        client=client,
+        timeout=60.0,
+        model="",
+    )
+
+    client.get.assert_called_once()
+    _, call_kwargs = client.get.call_args
+    url = httpx.URL(call_kwargs["url"])
+    assert url.path == "/v1/messages/batches"
+    assert url.params["limit"] == "5"
+    assert call_kwargs["headers"]["x-api-key"] == "sk-ant-test"
+    assert call_kwargs["timeout"] == 60.0
+    assert result["object"] == "list"
+
+
+@pytest.mark.asyncio
+async def test_cancel_batch_anthropic_posts_to_cancel_url_and_maps_response():
+    client = _async_anthropic_client(_anthropic_cancel_response())
+    batch = await BaseLLMHTTPHandler().cancel_batch(
+        batch_id="msgbatch_abc",
+        litellm_params={},
+        provider_config=AnthropicBatchesConfig(),
+        headers={},
+        api_base="https://api.anthropic.com",
+        api_key="sk-ant-test",
+        logging_obj=None,
+        _is_async=True,
+        client=client,
+        timeout=60.0,
+        model="",
+    )
+
+    client.post.assert_awaited_once()
+    _, call_kwargs = client.post.call_args
+    assert call_kwargs["url"] == "https://api.anthropic.com/v1/messages/batches/msgbatch_abc/cancel"
+    assert call_kwargs["headers"]["x-api-key"] == "sk-ant-test"
+    assert call_kwargs["headers"]["anthropic-beta"] == "message-batches-2024-09-24"
+    assert call_kwargs["timeout"] == 60.0
+
+    assert isinstance(batch, LiteLLMBatch)
+    assert batch.id == "msgbatch_abc"
+    assert batch.status == "cancelling"
+
+
+@pytest.mark.asyncio
+async def test_list_batches_anthropic_4xx_raises_anthropic_error():
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    client = _async_anthropic_client(
+        httpx.Response(
+            status_code=401,
+            json={"error": {"type": "authentication_error", "message": "bad key"}},
+            request=httpx.Request("GET", "https://api.anthropic.com/v1/messages/batches"),
+        )
+    )
+    with pytest.raises(AnthropicError) as exc_info:
+        await BaseLLMHTTPHandler().list_batches(
+            litellm_params={},
+            provider_config=AnthropicBatchesConfig(),
+            headers={},
+            api_base="https://api.anthropic.com",
+            api_key="sk-ant-test",
+            logging_obj=None,
+            _is_async=True,
+            client=client,
+            timeout=60.0,
+            model="",
+        )
+    assert exc_info.value.status_code == 401
+
+
+def test_list_batches_passes_api_base_to_validate_environment():
+    provider_config = Mock(spec=AnthropicBatchesConfig)
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_list_batches_url.return_value = "https://custom.example/anthropic/v1/messages/batches?limit=1"
+    client = Mock(spec=HTTPHandler)
+    client.get = Mock(return_value=_anthropic_list_response())
+
+    BaseLLMHTTPHandler().list_batches(
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base="https://custom.example/anthropic",
+        api_key="sk-ant-test",
+        logging_obj=None,
+        after=None,
+        limit=1,
+        _is_async=False,
+        client=client,
+        timeout=60.0,
+        model="",
+    )
+
+    provider_config.validate_environment.assert_called_once_with(
+        api_key="sk-ant-test",
+        api_base="https://custom.example/anthropic",
+        headers={},
+        model="",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+    )
+
+
+def test_cancel_batch_passes_api_base_to_validate_environment():
+    provider_config = Mock(spec=AnthropicBatchesConfig)
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_cancel_batch_url.return_value = (
+        "https://custom.example/anthropic/v1/messages/batches/msgbatch_abc/cancel"
+    )
+    client = Mock(spec=HTTPHandler)
+    client.post = Mock(return_value=_anthropic_cancel_response())
+
+    BaseLLMHTTPHandler().cancel_batch(
+        batch_id="msgbatch_abc",
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base="https://custom.example/anthropic",
+        api_key="sk-ant-test",
+        logging_obj=None,
+        _is_async=False,
+        client=client,
+        timeout=60.0,
+        model="",
+    )
+
+    provider_config.validate_environment.assert_called_once_with(
+        api_key="sk-ant-test",
+        api_base="https://custom.example/anthropic",
+        headers={},
+        model="",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+    )

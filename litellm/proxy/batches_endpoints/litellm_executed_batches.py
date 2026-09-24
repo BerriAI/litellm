@@ -33,7 +33,13 @@ from litellm.proxy.openai_files_endpoints.storage_backend_service import Storage
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.managed_batch_repository import ManagedBatchRepository
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest, OpenAIFileObject, OpenAIFilesPurpose
-from litellm.types.utils import LITELLM_EXECUTED_BATCH_PROVIDERS, ExtractedFileData, LiteLLMBatch, LlmProviders
+from litellm.types.utils import (
+    LITELLM_EXECUTED_BATCH_PROVIDERS,
+    LITELLM_STORED_BATCH_INPUT_PROVIDERS,
+    ExtractedFileData,
+    LiteLLMBatch,
+    LlmProviders,
+)
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -190,12 +196,19 @@ class _RouterCall(Protocol):
     def __call__(self, **params: object) -> Awaitable[object]: ...  # kwargs-ok: the request body is passed as keywords
 
 
-def litellm_executed_provider_of(credentials: Mapping[str, object]) -> str | None:
+def _credential_provider(credentials: Mapping[str, object]) -> str | None:
     explicit_provider: Final = credentials.get("custom_llm_provider")
-    provider: Final = (
-        explicit_provider if isinstance(explicit_provider, str) else _provider_of(credentials.get("model"))
-    )
+    return explicit_provider if isinstance(explicit_provider, str) else _provider_of(credentials.get("model"))
+
+
+def litellm_executed_provider_of(credentials: Mapping[str, object]) -> str | None:
+    provider: Final = _credential_provider(credentials)
     return provider if provider in LITELLM_EXECUTED_BATCH_PROVIDERS else None
+
+
+def litellm_stored_batch_input_provider_of(credentials: Mapping[str, object]) -> str | None:
+    provider: Final = _credential_provider(credentials)
+    return provider if provider in LITELLM_STORED_BATCH_INPUT_PROVIDERS else None
 
 
 class _HttpGetter(Protocol):
@@ -547,20 +560,13 @@ class LiteLLMExecutedBatchRunner:
         return reject
 
     async def _download_input(self, unified_input_file_id: str, user_api_key_dict: UserAPIKeyAuth) -> bytes:
-        stored: Final = await self.managed_files.get_unified_file_id(
-            unified_input_file_id, litellm_parent_otel_span=user_api_key_dict.parent_otel_span
+        return await download_stored_batch_input(
+            self.managed_files,
+            self.storage_backend_factory,
+            self.prisma_client,
+            unified_input_file_id,
+            user_api_key_dict,
         )
-        if stored is None or not stored.storage_backend or not stored.storage_url:
-            raise batch_error(
-                400,
-                f"LiteLLM does not hold the content of input file {unified_input_file_id}: "
-                f"{LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE}",
-            )
-        try:
-            backend: Final = self.storage_backend_factory(stored.storage_backend, prisma_client=self.prisma_client)
-            return await backend.download_file(stored.storage_url)
-        except ValueError as e:
-            raise batch_error(400, str(e))
 
     async def _run(self, run: _BatchRun) -> None:
         heartbeat: Final = asyncio.create_task(self._heartbeat(run))
@@ -701,6 +707,29 @@ class LiteLLMExecutedBatchRunner:
         if await self.batches.compare_and_set(updated, unchanged, run.user_api_key_dict.user_id):
             return status
         return await self._advance(run, requested, fields)
+
+
+async def download_stored_batch_input(
+    managed_files: ManagedBatchStore,
+    storage_backend_factory: _StorageBackendFactory,
+    prisma_client: PrismaClient | None,
+    unified_input_file_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bytes:
+    stored: Final = await managed_files.get_unified_file_id(
+        unified_input_file_id, litellm_parent_otel_span=user_api_key_dict.parent_otel_span
+    )
+    if stored is None or not stored.storage_backend or not stored.storage_url:
+        raise batch_error(
+            400,
+            f"LiteLLM does not hold the content of input file {unified_input_file_id}: "
+            f"{LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE}",
+        )
+    try:
+        backend: Final = storage_backend_factory(stored.storage_backend, prisma_client=prisma_client)
+        return await backend.download_file(stored.storage_url)
+    except ValueError as e:
+        raise batch_error(400, str(e))
 
 
 def _record_batch_created(model: str, provider: str, user_api_key_dict: UserAPIKeyAuth) -> None:

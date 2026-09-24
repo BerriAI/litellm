@@ -29,6 +29,7 @@ from typing import Any, Dict
 from types import MappingProxyType
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 
@@ -178,6 +179,43 @@ def test_create__provider_config_routes_to_base_http_handler(seams):
     _assert_only(seams.base_http.create_batch, seams, "create_batch")
 
 
+def test_create__anthropic_posts_requests_inline():
+    """Anthropic has no batch input file: extra_body.requests is posted inline to
+    /v1/messages/batches through the provider-config path, no model required."""
+    import litellm.llms.custom_httpx.llm_http_handler as http_handler
+
+    fake_client = MagicMock(name="sync_httpx_client")
+    fake_client.post.return_value = httpx.Response(
+        status_code=200,
+        json={"id": "msgbatch_new", "processing_status": "in_progress", "request_counts": {"processing": 1}},
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages/batches"),
+    )
+    requests = [
+        {
+            "custom_id": "req-1",
+            "params": {
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 10,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        }
+    ]
+    with patch.object(http_handler, "_get_httpx_client", return_value=fake_client):
+        result = bm.create_batch(
+            **{**CREATE_KW, "input_file_id": "none"},
+            custom_llm_provider="anthropic",
+            api_key="sk-ant-test",
+            extra_body={"requests": requests},
+        )
+
+    fake_client.post.assert_called_once()
+    _, post_kwargs = fake_client.post.call_args
+    assert post_kwargs["url"] == "https://api.anthropic.com/v1/messages/batches"
+    assert post_kwargs["json"]["requests"] == requests
+    assert result.id == "msgbatch_new"
+    assert result.status == "in_progress"
+
+
 def test_create__unsupported_provider_raises_badrequest(seams):
     with pytest.raises(litellm.exceptions.BadRequestError):
         bm.create_batch(**CREATE_KW, custom_llm_provider="cohere")  # type: ignore[arg-type]
@@ -240,6 +278,17 @@ def test_retrieve__vertex_ai_dispatch(seams):
 def test_retrieve__anthropic_dispatch(seams):
     """anthropic is retrieve-capable (not in create's provider set)."""
     result = bm.retrieve_batch(batch_id="batch-1", custom_llm_provider="anthropic")
+
+    assert result is seams.anthropic.retrieve_batch.return_value
+    _assert_only(seams.anthropic.retrieve_batch, seams, "retrieve_batch")
+
+
+def test_retrieve__anthropic_with_model_still_uses_anthropic_instance(seams):
+    result = bm.retrieve_batch(
+        batch_id="msgbatch_1",
+        custom_llm_provider="anthropic",
+        model="anthropic/claude-sonnet-4-5",
+    )
 
     assert result is seams.anthropic.retrieve_batch.return_value
     _assert_only(seams.anthropic.retrieve_batch, seams, "retrieve_batch")
@@ -327,10 +376,21 @@ def test_list__vertex_ai_dispatch(seams):
     _assert_only(seams.vertex.list_batches, seams, "list_batches")
 
 
+def test_list__anthropic_dispatch(seams):
+    result = bm.list_batches(custom_llm_provider="anthropic", after="cur", limit=5)
+
+    assert result is seams.base_http.list_batches.return_value
+    _assert_only(seams.base_http.list_batches, seams, "list_batches")
+
+    kw = seams.base_http.list_batches.call_args.kwargs
+    assert kw["after"] == "cur"
+    assert kw["limit"] == 5
+    assert kw["_is_async"] is False
+
+
 def test_list__unsupported_provider_raises_badrequest(seams):
-    # anthropic supports retrieve but NOT list - good negative case.
     with pytest.raises(litellm.exceptions.BadRequestError):
-        bm.list_batches(custom_llm_provider="anthropic")  # type: ignore[arg-type]
+        bm.list_batches(custom_llm_provider="cohere")  # type: ignore[arg-type]
 
     for m in _all_seam_methods(seams, "list_batches"):
         m.assert_not_called()
@@ -368,6 +428,17 @@ def test_cancel__vertex_ai_dispatch(seams):
 
     assert result is seams.vertex.cancel_batch.return_value
     _assert_only(seams.vertex.cancel_batch, seams, "cancel_batch")
+
+
+def test_cancel__anthropic_dispatch(seams):
+    result = bm.cancel_batch(batch_id="msgbatch_1", custom_llm_provider="anthropic")
+
+    assert result is seams.base_http.cancel_batch.return_value
+    _assert_only(seams.base_http.cancel_batch, seams, "cancel_batch")
+
+    kw = seams.base_http.cancel_batch.call_args.kwargs
+    assert kw["batch_id"] == "msgbatch_1"
+    assert kw["_is_async"] is False
 
 
 def test_cancel__unsupported_provider_raises_badrequest(seams):

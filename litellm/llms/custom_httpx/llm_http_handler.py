@@ -4313,6 +4313,255 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
+    def list_batches(
+        self,
+        litellm_params: dict,
+        provider_config: "BaseBatchesConfig",
+        headers: dict,
+        api_base: str | None,
+        api_key: str | None,
+        logging_obj: "LiteLLMLoggingObj | None",
+        after: str | None = None,
+        limit: int | None = None,
+        _is_async: bool = False,
+        client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        model: str = "",
+    ) -> dict | Coroutine[object, object, dict]:
+        """
+        List batches using provider-specific configuration.
+        """
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            model=model,
+            messages=[],  # mutable-ok: validate_environment signature declares list[AllMessageValues]
+            optional_params=litellm_params,
+            litellm_params=litellm_params,
+        )
+
+        list_url: Final = provider_config.get_list_batches_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=litellm_params,
+            litellm_params=litellm_params,
+            after=after,
+            limit=limit,
+        )
+
+        if _is_async:
+            return self.async_list_batches(
+                list_url=list_url,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=headers,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+                model=model,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        try:
+            batch_response = sync_httpx_client.get(
+                url=list_url,
+                headers=headers,
+                timeout=timeout,
+            )
+        except httpx.HTTPError as e:
+            verbose_logger.exception("Error listing batches: %s", e)
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_list_batches_response(
+            model=model,
+            raw_response=batch_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    async def async_list_batches(
+        self,
+        list_url: str,
+        litellm_params: dict,
+        provider_config: "BaseBatchesConfig",
+        headers: dict,
+        logging_obj: "LiteLLMLoggingObj | None",
+        client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        model: str = "",
+    ) -> dict:
+        """
+        Async version of list_batches
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(llm_provider=provider_config.custom_llm_provider)
+        else:
+            async_httpx_client = client
+
+        if logging_obj is not None:
+            logging_obj.pre_call(
+                input="",
+                api_key="",
+                additional_args={  # mutable-ok: pre_call logging contract takes a plain dict
+                    "api_base": list_url,
+                    "headers": headers,
+                },
+            )
+
+        try:
+            batch_response = await async_httpx_client.get(
+                url=list_url,
+                headers=headers,
+                timeout=timeout,
+            )
+        except httpx.HTTPError as e:
+            verbose_logger.exception("Error listing batches: %s", e)
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_list_batches_response(
+            model=model,
+            raw_response=batch_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    def cancel_batch(
+        self,
+        batch_id: str,
+        litellm_params: dict,
+        provider_config: "BaseBatchesConfig",
+        headers: dict,
+        api_base: str | None,
+        api_key: str | None,
+        logging_obj: "LiteLLMLoggingObj | None",
+        _is_async: bool = False,
+        client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        model: str = "",
+    ) -> Union["LiteLLMBatch", Coroutine[object, object, "LiteLLMBatch"]]:
+        """
+        Cancel a batch using provider-specific configuration.
+        """
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            model=model,
+            messages=[],  # mutable-ok: validate_environment signature declares list[AllMessageValues]
+            optional_params=litellm_params,
+            litellm_params=litellm_params,
+        )
+
+        cancel_url: Final = provider_config.get_cancel_batch_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            batch_id=batch_id,
+            optional_params=litellm_params,
+            litellm_params=litellm_params,
+        )
+
+        if _is_async:
+            return self.async_cancel_batch(
+                cancel_url=cancel_url,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=headers,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+                batch_id=batch_id,
+                model=model,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        try:
+            batch_response = sync_httpx_client.post(
+                url=cancel_url,
+                headers=headers,
+                timeout=timeout,
+            )
+        except httpx.HTTPError as e:
+            verbose_logger.exception("Error cancelling batch: %s", e)
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_cancel_batch_response(
+            model=model,
+            raw_response=batch_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    async def async_cancel_batch(
+        self,
+        cancel_url: str,
+        litellm_params: dict,
+        provider_config: "BaseBatchesConfig",
+        headers: dict,
+        logging_obj: "LiteLLMLoggingObj | None",
+        client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        batch_id: str | None = None,
+        model: str = "",
+    ) -> "LiteLLMBatch":
+        """
+        Async version of cancel_batch
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(llm_provider=provider_config.custom_llm_provider)
+        else:
+            async_httpx_client = client
+
+        if logging_obj is not None:
+            logging_obj.pre_call(
+                input=batch_id or "",
+                api_key="",
+                additional_args={  # mutable-ok: pre_call logging contract takes a plain dict
+                    "api_base": cancel_url,
+                    "headers": headers,
+                    "batch_id": batch_id,
+                },
+            )
+
+        try:
+            batch_response = await async_httpx_client.post(
+                url=cancel_url,
+                headers=headers,
+                timeout=timeout,
+            )
+        except httpx.HTTPError as e:
+            verbose_logger.exception("Error cancelling batch: %s", e)
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_cancel_batch_response(
+            model=model,
+            raw_response=batch_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
     def cancel_response_api_handler(
         self,
         response_id: str,

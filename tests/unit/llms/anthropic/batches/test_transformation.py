@@ -250,28 +250,41 @@ def test_transform_retrieve_batch_request_returns_empty_dict(config):
 
 
 # =========================================================================== #
-# Unimplemented create-batch methods raise NotImplementedError
+# transform_create_batch_request / transform_create_batch_response
 # =========================================================================== #
 
 
-def test_transform_create_batch_request_not_implemented(config):
-    with pytest.raises(NotImplementedError, match="not yet implemented"):
+def test_transform_create_batch_request_requires_inline_requests(config):
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    with pytest.raises(AnthropicError) as exc_info:
         config.transform_create_batch_request(
             model="claude-3",
-            create_batch_data={},  # type: ignore[arg-type]
+            create_batch_data={"input_file_id": "file-abc"},  # type: ignore[typeddict-item]
             optional_params={},
             litellm_params={},
         )
+    assert exc_info.value.status_code == 400
 
 
-def test_transform_create_batch_response_not_implemented(config):
-    with pytest.raises(NotImplementedError, match="not yet implemented"):
-        config.transform_create_batch_response(
-            model="claude-3",
-            raw_response=_response({}),
-            logging_obj=MagicMock(),
-            litellm_params={},
-        )
+def test_transform_create_batch_response_maps_message_batch(config):
+    raw = _response(
+        {
+            "id": "msgbatch_new",
+            "processing_status": "in_progress",
+            "created_at": "2024-09-24T10:00:00Z",
+            "request_counts": {"processing": 1},
+        }
+    )
+    batch = config.transform_create_batch_response(
+        model="claude-3",
+        raw_response=raw,
+        logging_obj=MagicMock(),
+        litellm_params={},
+    )
+    assert batch.id == "msgbatch_new"
+    assert batch.status == "in_progress"
+    assert batch.output_file_id == "msgbatch_new"
 
 
 # =========================================================================== #
@@ -363,8 +376,8 @@ def test_transform_retrieve_response_canceling_maps_to_cancelling(config):
     # "canceling" -> OpenAI "cancelling".
     assert batch.status == "cancelling"
     assert batch.cancelling_at == 1727173800
-    # cancelled_at = ended_at when canceling and ended_at present.
-    assert batch.cancelled_at == 1727174700
+    # cancelled_at stays unset while the batch is still cancelling
+    assert batch.cancelled_at is None
     assert batch.completed_at is None
 
 
@@ -630,7 +643,7 @@ class TestAnthropicBatchesContract(BatchesConfigContractTests):
         return AnthropicBatchesConfig()
 
     expected_provider = LlmProviders.ANTHROPIC
-    supports_create = False  # anthropic raises NotImplementedError on create
+    supports_create = True
     supports_retrieve_response = True
 
     def sample_retrieve_response_body(self) -> dict:

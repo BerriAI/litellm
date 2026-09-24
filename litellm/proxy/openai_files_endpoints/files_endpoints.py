@@ -39,6 +39,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     litellm_executed_provider_of,
+    litellm_stored_batch_input_provider_of,
     resolve_litellm_executed_provider,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -108,7 +109,24 @@ router: Final = APIRouter()
 
 def _names_a_litellm_executed_provider(llm_router: Router, candidate: str, team_id: str | None) -> bool:
     credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=candidate, team_id=team_id)
-    return credentials is not None and litellm_executed_provider_of(credentials) is not None
+    return credentials is not None and (
+        litellm_executed_provider_of(credentials) is not None
+        or litellm_stored_batch_input_provider_of(credentials) is not None
+    )
+
+
+async def _batch_input_provider_for(
+    llm_router: Router, candidate: str, team_id: str | None, include_stored_input: bool
+) -> str | None:
+    executed: Final = await resolve_litellm_executed_provider(llm_router, candidate, team_id)
+    if executed is not None:
+        return executed
+    if not include_stored_input:
+        return None
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=candidate, team_id=team_id)
+    if credentials is None:
+        return None
+    return litellm_stored_batch_input_provider_of(credentials)
 
 
 async def _litellm_executed_batch_input_model(
@@ -133,7 +151,10 @@ async def _litellm_executed_batch_input_model(
     if explicit_storage is not None:
         return None
     providers: Final = await asyncio.gather(
-        *(resolve_litellm_executed_provider(llm_router, candidate, team_id) for candidate in candidates)
+        *(
+            _batch_input_provider_for(llm_router, candidate, team_id, include_stored_input=purpose == "batch")
+            for candidate in candidates
+        )
     )
     executed: Final = tuple(
         candidate for candidate, provider in zip(candidates, providers, strict=True) if provider is not None

@@ -13,7 +13,10 @@ Anthropic Files API endpoints:
 """
 
 import calendar
+import json
 import time
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, cast
 
 import httpx
@@ -269,7 +272,28 @@ class AnthropicFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
-        return HttpxBinaryResponseContent(response=raw_response)
+        try:
+            request = raw_response.request
+        except RuntimeError:
+            return HttpxBinaryResponseContent(response=raw_response)
+        if not isinstance(request, httpx.Request) or not request.url.path.endswith("/results"):
+            return HttpxBinaryResponseContent(response=raw_response)
+
+        from ..batches.transformation import transform_anthropic_batch_result_line
+
+        translated_lines: Final = tuple(
+            json.dumps(transform_anthropic_batch_result_line(parsed, raw_response))
+            for parsed in (json.loads(line) for line in raw_response.text.splitlines() if line.strip())
+            if isinstance(parsed, Mapping)
+        )
+        return HttpxBinaryResponseContent(
+            response=httpx.Response(
+                status_code=200,
+                content=("\n".join(translated_lines) + "\n" if translated_lines else "").encode("utf-8"),
+                headers=MappingProxyType({"content-type": "application/jsonl"}),
+                request=request,
+            )
+        )
 
     @staticmethod
     def _parse_anthropic_file(file_data: dict) -> OpenAIFileObject:

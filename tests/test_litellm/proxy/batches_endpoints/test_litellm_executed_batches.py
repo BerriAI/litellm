@@ -25,6 +25,7 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     executed_batch_runner_lost,
     litellm_executed_provider_for,
     litellm_executed_provider_of,
+    litellm_stored_batch_input_provider_of,
     parse_batch_input,
     resolve_litellm_executed_provider,
     upstream_lacks_files_api,
@@ -514,6 +515,25 @@ def test_executed_batch_runner_lost_only_for_a_stale_non_terminal_batch(
 )
 def test_litellm_executed_provider_of(credentials: Mapping[str, object], expected: str | None) -> None:
     assert litellm_executed_provider_of(credentials) == expected
+
+
+@pytest.mark.parametrize(
+    ("credentials", "expected"),
+    [
+        ({"custom_llm_provider": "anthropic", "model": "claude-sonnet-4-5"}, "anthropic"),
+        ({"model": "anthropic/claude-sonnet-4-5"}, "anthropic"),
+        ({"custom_llm_provider": "openai", "model": "gpt-4o"}, None),
+        ({"custom_llm_provider": "hosted_vllm", "model": "hosted_vllm/qwen"}, None),
+        ({"model": "gpt-4o"}, None),
+    ],
+    ids=["explicit anthropic", "model prefix", "explicit openai", "executed-only provider", "openai model"],
+)
+def test_litellm_stored_batch_input_provider_of(credentials: Mapping[str, object], expected: str | None) -> None:
+    assert litellm_stored_batch_input_provider_of(credentials) == expected
+
+
+def test_litellm_stored_batch_input_provider_of_never_probes_the_upstream() -> None:
+    assert litellm_stored_batch_input_provider_of({"model": "anthropic/claude-sonnet-4-5"}) == "anthropic"
 
 
 VLLM_CREDENTIALS: Final[Mapping[str, object]] = {

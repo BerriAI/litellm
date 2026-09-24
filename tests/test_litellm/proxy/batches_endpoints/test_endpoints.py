@@ -933,6 +933,155 @@ async def test_create__raw_file_with_executed_model_is_forwarded_unless_the_serv
     assert forwarded["api_base"] == CREDS["my-vllm"]["api_base"]
 
 
+ANTHROPIC_JSONL = (
+    b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", '
+    b'"body": {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8}}\n'
+    b'{"custom_id": "req-2", "method": "POST", "url": "/v1/chat/completions", '
+    b'"body": {"model": "claude-sonnet-4-5", "messages": [{"role": "system", "content": "be brief"}, {"role": "user", "content": "yo"}]}}\n'
+)
+
+
+def _anthropic_seams(monkeypatch: pytest.MonkeyPatch, download_content: bytes = ANTHROPIC_JSONL):
+    router = MagicMock(spec=Router)
+    router.acreate_batch = AsyncMock(return_value=make_batch())
+    download = AsyncMock(return_value=download_content)
+    runner_factory = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(endpoints, "_litellm_executed_batch_runner", runner_factory)
+    monkeypatch.setattr(endpoints, "download_stored_batch_input", download)
+    return router, download
+
+
+@pytest.mark.asyncio
+async def test_create_anthropic_batch_for_managed_file_sends_requests_inline(monkeypatch):
+    router, download = _anthropic_seams(monkeypatch)
+    response = await endpoints._create_stored_input_batch_for_managed_file(
+        llm_router=router,
+        create_batch_data={
+            "endpoint": "/v1/chat/completions",
+            "input_file_id": "unified-input",
+            "completion_window": "24h",
+            "model_file_id_mapping": {"unified-input": {"my-claude": "litellm_db://stored"}},
+        },
+        input_file_id="unified-input",
+        unified_file_id="unified-file-1",
+        model="my-claude",
+        provider="anthropic",
+        credentials={"custom_llm_provider": "anthropic", "model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant"},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        proxy_logging_obj=MagicMock(spec=ProxyLogging),
+    )
+
+    download.assert_awaited_once()
+    assert download.call_args.args[3] == "unified-input"
+    kwargs = router.acreate_batch.call_args.kwargs
+    assert kwargs["model"] == "my-claude"
+    assert kwargs["input_file_id"] == "unified-input"
+    assert kwargs["disable_fallbacks"] is True
+    assert "model_file_id_mapping" not in kwargs
+    requests = kwargs["extra_body"]["requests"]
+    assert [request["custom_id"] for request in requests] == ["req-1", "req-2"]
+    assert requests[0]["params"]["model"] == "claude-sonnet-4-5"
+    assert requests[0]["params"]["max_tokens"] == 8
+    assert requests[1]["params"]["model"] == "claude-sonnet-4-5"
+    assert requests[1]["params"]["max_tokens"] is not None
+    assert requests[1]["params"]["system"] == [{"type": "text", "text": "be brief"}]
+    assert response.input_file_id == "unified-input"
+    assert response._hidden_params["unified_file_id"] == "unified-file-1"
+
+
+@pytest.mark.asyncio
+async def test_create_stored_input_batch_for_managed_file_rejects_non_chat_endpoint(monkeypatch):
+    embeddings_jsonl = (
+        b'{"custom_id": "req-1", "method": "POST", "url": "/v1/embeddings", '
+        b'"body": {"model": "text-embedding-3", "input": "hi"}}\n'
+    )
+    router, download = _anthropic_seams(monkeypatch, download_content=embeddings_jsonl)
+    with pytest.raises(ProxyException) as exc:
+        await endpoints._create_stored_input_batch_for_managed_file(
+            llm_router=router,
+            create_batch_data={"endpoint": "/v1/embeddings", "input_file_id": "unified-input"},
+            input_file_id="unified-input",
+            unified_file_id="unified-file-1",
+            model="my-claude",
+            provider="anthropic",
+            credentials={"custom_llm_provider": "anthropic", "model": "anthropic/claude-sonnet-4-5"},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        )
+
+    assert exc.value.code == "400"
+    assert "/v1/chat/completions" in exc.value.message
+    download.assert_awaited_once()
+    router.acreate_batch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_anthropic_batch_for_managed_file_rejects_invalid_jsonl(monkeypatch):
+    router, download = _anthropic_seams(monkeypatch, download_content=b'{"custom_id": "req-1"}\n')
+    with pytest.raises(ProxyException) as exc:
+        await endpoints._create_stored_input_batch_for_managed_file(
+            llm_router=router,
+            create_batch_data={"endpoint": "/v1/chat/completions", "input_file_id": "unified-input"},
+            input_file_id="unified-input",
+            unified_file_id="unified-file-1",
+            model="my-claude",
+            provider="anthropic",
+            credentials={"custom_llm_provider": "anthropic", "model": "anthropic/claude-sonnet-4-5"},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        )
+
+    assert exc.value.code == "400"
+    router.acreate_batch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__unified_anthropic_stored_input_dispatches_inline_batch(harness, monkeypatch):
+    monkeypatch.setitem(
+        CREDS,
+        "my-claude",
+        {"custom_llm_provider": "anthropic", "model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant"},
+    )
+    download = AsyncMock(return_value=ANTHROPIC_JSONL)
+    monkeypatch.setattr(endpoints, "download_stored_batch_input", download)
+    monkeypatch.setattr(endpoints, "_litellm_executed_batch_runner", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(endpoints, "litellm_executed_provider_for", AsyncMock(return_value=None))
+    set_body(
+        harness,
+        {
+            "input_file_id": _managed_input_file_id("my-claude"),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    resp = await call_create(harness)
+
+    harness.litellm_acreate.assert_not_called()
+    kwargs = harness.router_kwargs()
+    assert kwargs["model"] == "my-claude"
+    assert [request["custom_id"] for request in kwargs["extra_body"]["requests"]] == ["req-1", "req-2"]
+    download.assert_awaited_once()
+    assert resp.input_file_id == _managed_input_file_id("my-claude")
+
+
+@pytest.mark.asyncio
+async def test_create__unified_openai_file_never_takes_the_anthropic_path(harness, monkeypatch):
+    download = AsyncMock(return_value=ANTHROPIC_JSONL)
+    monkeypatch.setattr(endpoints, "download_stored_batch_input", download)
+    set_body(
+        harness,
+        {
+            "input_file_id": _managed_input_file_id("azure/gpt-4o"),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    await call_create(harness)
+
+    download.assert_not_awaited()
+    assert "extra_body" not in harness.router_kwargs()
+
+
 @pytest.mark.asyncio
 async def test_create__model_encoded_beats_unified(harness):
     """Precedence row: a file id that is BOTH model-encoded and (pretend) unified
