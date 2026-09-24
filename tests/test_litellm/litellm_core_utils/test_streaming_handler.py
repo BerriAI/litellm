@@ -2859,6 +2859,32 @@ def test_dispatch_text_completion_openai_with_usage(
     assert model_response.usage.total_tokens == 8
 
 
+def test_text_completion_openai_usage_chunk_keeps_litellm_usage(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    from openai.types.completion import Completion
+    from openai.types.completion_usage import CompletionUsage
+
+    initialized_custom_stream_wrapper.custom_llm_provider = "text-completion-openai"
+    initialized_custom_stream_wrapper.model = "gpt-3.5-turbo-instruct"
+    initialized_custom_stream_wrapper.send_stream_usage = True
+    initialized_custom_stream_wrapper.received_finish_reason = "length"
+    chunk: Final = Completion.model_construct(
+        id="cmpl-usage",
+        choices=[],
+        created=1,
+        model="gpt-3.5-turbo-instruct",
+        object="text_completion",
+        usage=CompletionUsage.model_construct(prompt_tokens=7, completion_tokens=4, total_tokens=11),
+    )
+
+    returned: Final = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    assert isinstance(returned.usage, Usage)
+    assert (returned.usage.prompt_tokens, returned.usage.completion_tokens, returned.usage.total_tokens) == (7, 4, 11)
+    assert returned.model_dump()["usage"]["total_tokens"] == 11
+
+
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_anext_does_not_block_event_loop_for_sync_iterators(
     logging_obj: Logging,
