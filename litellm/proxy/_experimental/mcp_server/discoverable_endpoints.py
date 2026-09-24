@@ -11,7 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -1002,10 +1002,13 @@ def _token_credential_source(mcp_server: MCPServer) -> CredentialSource:
 
 _NO_ACCESS_TOKEN_NOTE: Final = "the upstream token response has no usable access_token"
 _SENSITIVE_KEY_PARTS: Final = ("token", "secret", "password", "key")
+_TOKEN_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 def _missing_access_token_fault(server_id: str, token_response: object) -> UpstreamProtocolFault:
-    if not isinstance(token_response, dict):
+    try:
+        body: Final = _TOKEN_BODY_ADAPTER.validate_python(token_response, strict=True)
+    except ValidationError:
         verbose_logger.warning(
             "exchange_token_with_server: non-object token response from IdP for server=%s (first %s chars): %s",
             server_id,
@@ -1015,8 +1018,8 @@ def _missing_access_token_fault(server_id: str, token_response: object) -> Upstr
         return UpstreamProtocolFault(note=_NO_ACCESS_TOKEN_NOTE)
 
     redacted: Final = {
-        key: "***" if any(part in str(key).lower() for part in _SENSITIVE_KEY_PARTS) else value
-        for key, value in token_response.items()
+        key: "***" if any(part in key.lower() for part in _SENSITIVE_KEY_PARTS) else value
+        for key, value in body.items()
     }
     verbose_logger.warning(
         "exchange_token_with_server: token response from IdP for server=%s has no usable access_token "
@@ -1028,8 +1031,8 @@ def _missing_access_token_fault(server_id: str, token_response: object) -> Upstr
     upstream_detail: Final = " - ".join(
         field
         for field in (
-            token_response.get("error"),
-            token_response.get("error_description") or token_response.get("message"),
+            body.get("error"),
+            body.get("error_description") or body.get("message"),
         )
         if isinstance(field, str) and field
     )[:MAX_WIRE_FIELD_CHARS]
