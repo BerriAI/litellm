@@ -29,6 +29,7 @@ from httpx._types import FileContent, RequestFiles
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.types.videos.utils import (
@@ -128,6 +129,15 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         if "Content-Type" not in headers:
             headers["Content-Type"] = "application/json"
         return headers
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: BaseVideoConfig passes headers as a dict
+    ) -> BedrockError:
+        """BedrockError synthesizes a response that keeps provider headers like x-amzn-RequestId."""
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def get_complete_url(
         self,
