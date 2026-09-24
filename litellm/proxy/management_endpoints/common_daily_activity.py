@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import itertools
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
@@ -203,7 +204,7 @@ class _AggregatedQueryKwargs(TypedDict):
     include_current_utc_day: ReadOnly[bool]
 
 
-_SqlQuery = tuple[str, list[str]]
+_SqlQuery = tuple[str, Sequence[str]]
 
 
 async def _query_raw_optional(
@@ -990,7 +991,7 @@ def _build_export_sql_query(
     exclude_entity_ids: list[str] | None,  # mutable-ok: filter union shared with the paginated path
     timezone_offset_minutes: int | None,
     export_type: TeamDailyActivityExportType,
-) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
+) -> tuple[str, tuple[str, ...]]:
     """One unbounded rollup for the export route, on the aggregated path's WHERE clause.
 
     No LIMIT anywhere: the export exists so a caller can reach keys past
@@ -1159,14 +1160,25 @@ def _fold_export_users(
     api_key_metadata: Mapping[str, _KeyMetadataDict],
 ) -> tuple[TeamDailyActivityExportRow, ...]:
     """Fold (date, team, api_key) rows into (date, team, user) rows."""
+
+    def bucket_of(record: _ExportRow) -> tuple[str, str, str]:
+        return (
+            record.date,
+            record.entity_id or "Unassigned",
+            _key_metadata(api_key_metadata, record.api_key or "").user_id or "Unassigned",
+        )
+
+    key_sets: Final = MappingProxyType(
+        {
+            bucket: frozenset(record.api_key or "" for record in group)
+            for bucket, group in itertools.groupby(sorted(records, key=bucket_of), key=bucket_of)
+        }
+    )
     sums: Final[dict[tuple[str, str, str], _ExportMetrics]] = {}  # mutable-ok: local fold accumulator
     emails: Final[dict[tuple[str, str, str], str | None]] = {}  # mutable-ok: local fold accumulator
-    key_sets: Final[dict[tuple[str, str, str], frozenset[str]]] = {}  # mutable-ok: distinct-key counts
     for record in records:
-        entity_id = record.entity_id or "Unassigned"
         metadata = _key_metadata(api_key_metadata, record.api_key or "")
-        bucket_key = (record.date, entity_id, metadata.user_id or "Unassigned")
-        key_sets[bucket_key] = key_sets.get(bucket_key, frozenset()) | frozenset((record.api_key or "",))
+        bucket_key = bucket_of(record)
         sums[bucket_key] = sums.get(bucket_key, _ExportMetrics.zero()) + _ExportMetrics.from_record(record)
         emails.setdefault(bucket_key, metadata.user_email)
         if emails[bucket_key] is None and metadata.user_email is not None:
