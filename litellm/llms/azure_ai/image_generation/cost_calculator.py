@@ -38,7 +38,7 @@ def cost_calculator(
     Azure AI image generation cost calculator
     """
     if not isinstance(image_response, ImageResponse):
-        raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")
+        raise TypeError(f"image_response must be of type ImageResponse got type={type(image_response)}")
 
     resolved: Final = resolve_image_model_info(
         model=model,

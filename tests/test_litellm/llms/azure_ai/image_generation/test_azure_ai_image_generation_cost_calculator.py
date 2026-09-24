@@ -161,5 +161,5 @@ def test_unlisted_model_bills_deployment_rates() -> None:
 
 
 def test_non_image_response_raises() -> None:
-    with pytest.raises(ValueError, match="must be of type ImageResponse"):
+    with pytest.raises(TypeError, match="must be of type ImageResponse"):
         cost_calculator(model="FLUX.2-flex", image_response=object())
