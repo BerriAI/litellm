@@ -107,3 +107,28 @@ fn calculate_generic_cost_from_model_info_with_region_scales_both_sides() {
         "generic totals exclude the provider-specific geo multiplier; only the anthropic wrapper applies it"
     );
 }
+
+#[rstest]
+#[case::padded_string(json!(" 1.5 "), 1.5)]
+#[case::boolean_false(json!(false), 0.0)]
+#[case::boolean_true(json!(true), 1.0)]
+#[case::null(json!(null), 1.0)]
+#[case::unparseable(json!("high"), 1.0)]
+#[case::object(json!({"x": 2}), 1.0)]
+fn uplift_multipliers_are_coerced_like_python_float(
+    #[case] raw: serde_json::Value,
+    #[case] expected: f64,
+) {
+    let model_info = json!({
+        "regional_processing_uplift_multiplier_eu": raw,
+        "regional_endpoint_uplift_multiplier": raw
+    });
+    assert_eq!(
+        get_regional_uplift_multiplier(&model_info, Some("eu")),
+        expected
+    );
+    assert_eq!(
+        get_vertex_regional_endpoint_uplift(&model_info, Some("us-east5")),
+        expected
+    );
+}

@@ -59,7 +59,7 @@ pub fn calculate_input_cost(
     .unwrap_or(rates.cache_read);
     let audio_rate_key = tier_key("input_cost_per_audio_token", service_tier);
     let audio_cost = if details.audio_tokens > 0
-        && !(details.audio_length_seconds > 0.0
+        && !(details.audio_length_seconds != 0.0
             && model_info
                 .get("input_cost_per_audio_per_second")
                 .is_some_and(|value| !value.is_null()))
@@ -87,7 +87,7 @@ pub fn calculate_input_cost(
         0.0
     };
     let video_cost = if details.video_tokens > 0
-        && !(details.video_length_seconds > 0.0
+        && !(details.video_length_seconds != 0.0
             && model_info
                 .get("input_cost_per_video_per_second")
                 .is_some_and(|value| !value.is_null()))

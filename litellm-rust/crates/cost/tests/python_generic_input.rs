@@ -124,3 +124,24 @@ fn calculate_input_cost_uses_count_and_duration_instead_of_duplicate_token_charg
     let actual = calculate_input_cost(&details, &model_info, rates(), None);
     assert!((actual - expected).abs() < 1e-12);
 }
+
+#[rstest]
+#[case::positive_seconds(3.0, 3.0 * 0.01)]
+#[case::negative_seconds_still_replace_tokens(-1.0, 0.0)]
+#[case::zero_seconds_bill_tokens(0.0, 300.0 * 1e-6)]
+fn calculate_input_cost_treats_any_nonzero_audio_duration_as_reported(
+    #[case] seconds: f64,
+    #[case] expected: f64,
+) {
+    let details = ParsedPromptDetails {
+        audio_tokens: 300,
+        audio_length_seconds: seconds,
+        ..ParsedPromptDetails::default()
+    };
+    let model_info = json!({
+        "input_cost_per_audio_token": 1e-6,
+        "input_cost_per_audio_per_second": 0.01
+    });
+    let actual = calculate_input_cost(&details, &model_info, rates(), None);
+    assert!((actual - expected).abs() < 1e-12);
+}

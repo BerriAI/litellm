@@ -1,11 +1,12 @@
 use serde_json::Value;
 
+use crate::wire::py_float;
+
 fn multiplier(value: Option<&Value>) -> f64 {
-    match value {
-        Some(Value::Number(value)) => value.as_f64().unwrap_or(1.0),
-        Some(Value::String(value)) => value.parse().unwrap_or(1.0),
-        _ => 1.0,
-    }
+    value
+        .filter(|value| !value.is_null())
+        .and_then(py_float)
+        .unwrap_or(1.0)
 }
 
 pub fn get_regional_uplift_multiplier(model_info: &Value, data_residency: Option<&str>) -> f64 {

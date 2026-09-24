@@ -89,6 +89,9 @@ fn open_off_peak_block_requires_mapping_and_matching_window() {
 #[case(json!(0), Some(0.0))]
 #[case(json!(true), None)]
 #[case(json!("bad"), None)]
+#[case(json!(" 5e-7 "), Some(5e-7))]
+#[case(json!(null), None)]
+#[case(json!([1]), None)]
 fn parse_off_peak_rate_accepts_numeric_strings_and_rejects_bools(
     #[case] raw: Value,
     #[case] expected: Option<f64>,
