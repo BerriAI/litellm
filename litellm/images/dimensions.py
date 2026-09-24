@@ -11,6 +11,13 @@ from litellm.types.llms.openai import FileTypes
 
 _HEADER_READ_SIZE: Final = 32
 
+_JPEG_SOF_MARKERS: Final = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+_JPEG_MAX_SEGMENTS: Final = 1024
+_JPEG_MAX_HEADER_OFFSET: Final = 16 * 1024 * 1024
+_JPEG_FIRST_SEGMENT_OFFSET: Final = 2
+_JPEG_SOF_PAYLOAD_SIZE: Final = 5
+_JPEG_FILL_CHUNK: Final = 64 * 1024
+
 
 @dataclass(frozen=True, slots=True)
 class ImageDimensions:
@@ -115,14 +122,6 @@ def _webp_dimensions(head: bytes) -> ImageDimensions | None:
             bits: Final = int.from_bytes(head[21:25], "little")
             return ImageDimensions(width=(bits & 0x3FFF) + 1, height=((bits >> 14) & 0x3FFF) + 1)
     return None
-
-
-_JPEG_SOF_MARKERS: Final = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
-_JPEG_MAX_SEGMENTS: Final = 1024
-_JPEG_MAX_HEADER_OFFSET: Final = 16 * 1024 * 1024
-_JPEG_FIRST_SEGMENT_OFFSET: Final = 2
-_JPEG_SOF_PAYLOAD_SIZE: Final = 5
-_JPEG_FILL_CHUNK: Final = 64 * 1024
 
 
 def _jpeg_fill_run(stream: IO[bytes], start: int, offset: int) -> int:
