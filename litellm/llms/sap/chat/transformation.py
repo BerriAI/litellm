@@ -201,8 +201,10 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     ) -> dict:  # mutable-ok: mirrors base class signature
         supported = self.get_supported_openai_params(model)
         optional_params.update(
-            {p: v for p, v in non_default_params.items() if p in supported}
-        )  # mutable-ok: extending caller-provided dict
+            {  # mutable-ok: comprehension passed directly to update, never stored separately
+                p: v for p, v in non_default_params.items() if p in supported
+            }
+        )
         return optional_params
 
     def get_supported_openai_params(self, model):
