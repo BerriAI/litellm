@@ -57314,6 +57314,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/responses"
@@ -57349,6 +57350,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/responses"
@@ -57384,6 +57386,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/responses"
@@ -57419,6 +57422,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/responses"
@@ -57454,6 +57458,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.openai.gpt-6-sol": {
@@ -57486,6 +57491,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/responses"
@@ -57521,6 +57527,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.openai.gpt-6-luna": {
@@ -57553,6 +57560,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/responses"

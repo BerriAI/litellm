@@ -7693,12 +7693,17 @@ _WEATHER_TOOL: Final = {
 @pytest.mark.parametrize(
     "model",
     (
-        pytest.param("converse/us.openai.gpt-99-unmapped", id="unmapped-us"),
-        pytest.param("converse/global.openai.gpt-99-unmapped", id="unmapped-global"),
-        pytest.param("us.openai.gpt-6-astra", id="mapped-without-sampling-flag"),
+        "us.openai.gpt-6-sol",
+        "global.openai.gpt-6-sol",
+        "openai.gpt-6-sol",
+        "us.openai.gpt-6-luna",
+        "global.openai.gpt-6-luna",
+        "openai.gpt-6-luna",
+        "us.openai.gpt-6-astra",
+        "global.openai.gpt-6-astra",
     ),
 )
-def test_openai_gpt_model_without_cost_map_flags_maps_params_like_gpt_5_6(
+def test_openai_gpt_6_converse_maps_params_like_gpt_5_6(
     model: str, request_params: dict[str, object], local_model_cost_map: None
 ) -> None:
     def converse_params(target: str) -> dict[str, object]:
@@ -7706,14 +7711,4 @@ def test_openai_gpt_model_without_cost_map_flags_maps_params_like_gpt_5_6(
             model=target, custom_llm_provider="bedrock", drop_params=True, **request_params
         )
 
-    assert converse_params(model) == converse_params("converse/us.openai.gpt-5.6-sol")
-
-
-def test_supports_sampling_params_flag_still_wins_for_openai_gpt_models(
-    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
-) -> None:
-    monkeypatch.setitem(litellm.model_cost, "us.openai.gpt-99-sampling", {"supports_sampling_params": True})
-
-    assert AmazonConverseConfig._supports_sampling_params("us.openai.gpt-99-sampling") is True
-    assert AmazonConverseConfig._supports_sampling_params("us.openai.gpt-99-unmapped") is False
-    assert AmazonConverseConfig._supports_sampling_params("openai.gpt-oss-120b-1:0") is True
+    assert converse_params(f"converse/{model}") == converse_params("converse/us.openai.gpt-5.6-sol")

@@ -644,7 +644,7 @@ class AmazonConverseConfig(BaseConfig):
                 )
             ) is not None:
                 return flag
-        return not cls._is_openai_gpt_reasoning_model(base_model)
+        return True
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         from litellm.utils import supports_function_calling
@@ -687,7 +687,6 @@ class AmazonConverseConfig(BaseConfig):
             or base_model.startswith("meta.llama3-3")
             or base_model.startswith("meta.llama4")
             or base_model.startswith("amazon.nova")
-            or self._is_openai_gpt_reasoning_model(base_model)
             or supports_function_calling(model=model, custom_llm_provider=self.custom_llm_provider)
         ):
             supported_params.append("tools")
@@ -696,11 +695,9 @@ class AmazonConverseConfig(BaseConfig):
         if base_model.startswith("amazon.nova"):
             supported_params.append("web_search_options")
 
-        if (
-            self._is_openai_gpt_reasoning_model(base_model)
-            or litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
-            or litellm.utils.supports_tool_choice(model=base_model, custom_llm_provider=self.custom_llm_provider)
-        ):
+        if litellm.utils.supports_tool_choice(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        ) or litellm.utils.supports_tool_choice(model=base_model, custom_llm_provider=self.custom_llm_provider):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
@@ -1243,10 +1240,7 @@ class AmazonConverseConfig(BaseConfig):
             optional_params = self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
 
             if (
-                (
-                    self._is_openai_gpt_reasoning_model(model)
-                    or litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
-                )
+                litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
                 and not is_thinking_enabled
                 and not AnthropicModelInfo.forced_tool_use_unsupported(model)
             ):
