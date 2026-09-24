@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use crate::wire::lax_count;
+
 use crate::anthropic_usage::{is_anthropic_usage_object, transform_anthropic_usage_to_chat_usage};
 use crate::interactions_usage::{
     is_interactions_usage_object, transform_interactions_usage_object,
@@ -15,13 +17,6 @@ use crate::transcription_usage::{
     is_transcription_usage_object, transform_transcription_usage_object,
 };
 
-fn lenient_count(value: &Value) -> Option<u64> {
-    value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
-        .or_else(|| value.as_bool().map(u64::from))
-}
-
 fn int_count(value: &Value) -> Option<u64> {
     value.as_u64().or_else(|| value.as_bool().map(u64::from))
 }
@@ -33,7 +28,7 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, CostError> {
             .get(name)
             .filter(|value| !value.is_null())
             .map_or(Ok(0), |value| {
-                lenient_count(value).ok_or(CostError::InvalidUsage)
+                lax_count(value).ok_or(CostError::InvalidUsage)
             })
     };
     let prompt_tokens = count("prompt_tokens")?;
@@ -59,8 +54,7 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, CostError> {
         (details, read, creation) => {
             let details = details.unwrap_or_default();
             let cache_write_tokens = creation
-                .filter(|tokens| *tokens > 0)
-                .or(details.cache_write_tokens.filter(|tokens| *tokens > 0))
+                .or(details.cache_write_tokens)
                 .or(details.cache_creation_tokens)
                 .or(details.cache_creation_input_tokens);
             Some(PromptTokenDetails {
@@ -76,7 +70,7 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, CostError> {
         .filter(|value| value.as_object().is_some_and(|details| !details.is_empty()))
         .map(|value| serde_json::from_value(value.clone()).map_err(|_| CostError::InvalidUsage))
         .transpose()?;
-    let reasoning = object.get("reasoning_tokens").and_then(lenient_count);
+    let reasoning = object.get("reasoning_tokens").and_then(lax_count);
     let completion_tokens_details = match (completion_tokens_details, reasoning) {
         (None, None | Some(0)) => None,
         (details, reasoning) => {

@@ -52,8 +52,8 @@ fn parse_prompt_tokens_details_subtracts_each_cached_modality_once() {
 
 #[rstest]
 #[case(30, 20, 30)]
-#[case(0, 20, 20)]
-fn parse_prompt_tokens_details_prefers_positive_cache_write_alias(
+#[case(0, 20, 0)]
+fn parse_prompt_tokens_details_prefers_the_cache_write_alias_even_at_zero(
     #[case] write: u64,
     #[case] creation: u64,
     #[case] expected: u64,

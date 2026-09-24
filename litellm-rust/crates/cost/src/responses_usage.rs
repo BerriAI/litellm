@@ -4,47 +4,71 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::wire::{deserialize_lax_count, deserialize_lax_count_option, lax_count};
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct CachedTokenDetails {
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub text_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub audio_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub image_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct CacheCreationTokenDetails {
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub ephemeral_5m_input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub ephemeral_1h_input_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct PromptTokenDetails {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_lax_count")]
     pub cached_tokens: u64,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub audio_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub text_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub image_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub video_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub cache_write_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub cache_creation_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub cache_creation_input_tokens: Option<u64>,
     pub cache_creation_token_details: Option<CacheCreationTokenDetails>,
     pub cached_tokens_details: Option<CachedTokenDetails>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub web_search_requests: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub google_maps_grounding_requests: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub character_count: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub image_count: Option<u64>,
     pub video_length_seconds: Option<f64>,
     pub audio_length_seconds: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub query_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct CompletionTokenDetails {
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub reasoning_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub text_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub image_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub audio_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_lax_count_option")]
     pub video_tokens: Option<u64>,
 }
 
@@ -61,8 +85,10 @@ pub struct ChatUsage {
 
 #[derive(Deserialize)]
 struct RawResponseUsage {
-    input_tokens: u64,
-    output_tokens: u64,
+    input_tokens: Value,
+    output_tokens: Value,
+    #[serde(default)]
+    total_tokens: Option<Value>,
     #[serde(default)]
     input_tokens_details: Option<PromptTokenDetails>,
     #[serde(default)]
@@ -103,31 +129,41 @@ pub fn transform_response_api_usage_to_chat_usage(usage: &Value) -> Result<ChatU
     }
     let raw: RawResponseUsage =
         serde_json::from_value(usage.clone()).map_err(|_| CostError::InvalidUsage)?;
-    let total_tokens = raw
-        .input_tokens
-        .checked_add(raw.output_tokens)
+    let is_python_int = |value: &Value| value.is_i64() || value.is_u64() || value.is_boolean();
+    let total_is_derivable = is_python_int(&raw.input_tokens) && is_python_int(&raw.output_tokens);
+    if raw.total_tokens.as_ref().is_none_or(Value::is_null) && !total_is_derivable {
+        return Err(CostError::InvalidUsage);
+    }
+    let input_tokens = lax_count(&raw.input_tokens).ok_or(CostError::InvalidUsage)?;
+    let output_tokens = lax_count(&raw.output_tokens).ok_or(CostError::InvalidUsage)?;
+    let total_tokens = input_tokens
+        .checked_add(output_tokens)
         .ok_or(CostError::TokenCountOverflow)?;
     let prompt_tokens_details =
         raw.input_tokens_details
             .or(raw.input_token_details)
-            .map(|details| {
-                let creation = details
-                    .cache_write_tokens
-                    .or(details.cache_creation_tokens)
-                    .or(details.cache_creation_input_tokens);
-                PromptTokenDetails {
-                    cache_write_tokens: creation,
-                    cache_creation_tokens: creation,
-                    ..details
-                }
+            .map(|details| PromptTokenDetails {
+                cached_tokens: details.cached_tokens,
+                audio_tokens: details.audio_tokens,
+                text_tokens: details.text_tokens,
+                image_tokens: details.image_tokens,
+                cached_tokens_details: details.cached_tokens_details,
+                video_tokens: details.video_tokens,
+                cache_write_tokens: details.cache_write_tokens,
+                cache_creation_tokens: details.cache_write_tokens,
+                web_search_requests: details.web_search_requests,
+                google_maps_grounding_requests: details.google_maps_grounding_requests,
+                ..PromptTokenDetails::default()
             });
     let completion_tokens_details =
         raw.output_tokens_details
             .or(raw.output_token_details)
-            .map(|details| {
-                let text_tokens = details.text_tokens.map(|text| {
+            .map(|details| CompletionTokenDetails {
+                reasoning_tokens: details.reasoning_tokens,
+                image_tokens: details.image_tokens,
+                text_tokens: details.text_tokens.map(|text| {
                     text_tokens_without_nested_reasoning(
-                        raw.output_tokens,
+                        output_tokens,
                         text,
                         details.reasoning_tokens.unwrap_or(0),
                         details
@@ -135,11 +171,9 @@ pub fn transform_response_api_usage_to_chat_usage(usage: &Value) -> Result<ChatU
                             .unwrap_or(0)
                             .saturating_add(details.image_tokens.unwrap_or(0)),
                     )
-                });
-                CompletionTokenDetails {
-                    text_tokens,
-                    ..details
-                }
+                }),
+                audio_tokens: details.audio_tokens,
+                video_tokens: None,
             });
     let extra = raw
         .extra
@@ -156,8 +190,8 @@ pub fn transform_response_api_usage_to_chat_usage(usage: &Value) -> Result<ChatU
         })
         .collect();
     Ok(ChatUsage {
-        prompt_tokens: raw.input_tokens,
-        completion_tokens: raw.output_tokens,
+        prompt_tokens: input_tokens,
+        completion_tokens: output_tokens,
         total_tokens,
         prompt_tokens_details,
         completion_tokens_details,

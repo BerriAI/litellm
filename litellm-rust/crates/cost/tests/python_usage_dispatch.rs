@@ -2,7 +2,8 @@
 
 // mirrors: test_litellm/litellm_core_utils/llm_cost_calc/test_usage_object_transformation.py
 
-use litellm_cost::usage_dispatch::get_usage_object;
+use litellm_cost::error::CostError;
+use litellm_cost::usage_dispatch::{chat_usage, get_usage_object};
 use rstest::rstest;
 use serde_json::{Value, json};
 
@@ -159,4 +160,41 @@ fn chat_usage_reasoning_string_parses_where_python_raises() {
 fn chat_usage_still_rejects_uncoercible_counts() {
     assert!(get_usage_object(&json!({"usage": {"prompt_tokens": "not-a-number"}})).is_err());
     assert!(get_usage_object(&json!({"usage": {"prompt_tokens": 12.5}})).is_err());
+}
+
+#[rstest]
+#[case::top_level_zero_overrides_details(json!({"cache_creation_input_tokens": 0, "prompt_tokens_details": {"cache_write_tokens": 7}}), Some(0))]
+#[case::top_level_count_overrides_details(json!({"cache_creation_input_tokens": 3, "prompt_tokens_details": {"cache_write_tokens": 7}}), Some(3))]
+#[case::details_write_zero_beats_creation(json!({"prompt_tokens_details": {"cache_write_tokens": 0, "cache_creation_tokens": 5}}), Some(0))]
+#[case::details_creation_alias(json!({"prompt_tokens_details": {"cache_creation_tokens": 5}}), Some(5))]
+#[case::float_top_level_is_not_an_int(json!({"cache_creation_input_tokens": 3.0, "prompt_tokens_details": {"cache_write_tokens": 7}}), Some(7))]
+fn chat_usage_takes_cache_writes_in_python_usage_init_order(
+    #[case] fields: Value,
+    #[case] expected: Option<u64>,
+) {
+    let raw = json!({"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110})
+        .as_object()
+        .unwrap()
+        .clone()
+        .into_iter()
+        .chain(fields.as_object().unwrap().clone())
+        .collect::<serde_json::Map<_, _>>();
+    let usage = chat_usage(&Value::Object(raw)).unwrap();
+    let details = usage.prompt_tokens_details.unwrap();
+    assert_eq!(details.cache_write_tokens, expected);
+    assert_eq!(details.cache_creation_tokens, expected);
+}
+
+#[rstest]
+#[case::integral_float(json!(5.0), Ok(5))]
+#[case::numeric_string(json!(" 5 "), Ok(5))]
+#[case::boolean(json!(true), Ok(1))]
+#[case::fractional_float(json!(5.5), Err(CostError::InvalidUsage))]
+#[case::negative(json!(-1), Err(CostError::InvalidUsage))]
+fn chat_usage_reads_token_counts_as_pydantic_ints(
+    #[case] prompt_tokens: Value,
+    #[case] expected: Result<u64, CostError>,
+) {
+    let usage = chat_usage(&json!({"prompt_tokens": prompt_tokens, "completion_tokens": 1}));
+    assert_eq!(usage.map(|usage| usage.prompt_tokens), expected);
 }

@@ -57,11 +57,13 @@ fn transform_response_api_usage_to_chat_usage_preserves_modalities() {
 }
 
 #[rstest]
-#[case("cache_write_tokens", 10059)]
-#[case("cache_creation_tokens", 500)]
-fn transform_response_api_usage_to_chat_usage_mirrors_cache_write_aliases(
+#[case("cache_write_tokens", 10059, Some(10059))]
+#[case("cache_creation_tokens", 500, None)]
+#[case("cache_creation_input_tokens", 500, None)]
+fn transform_response_api_usage_to_chat_usage_keeps_only_cache_write_tokens(
     #[case] key: &str,
     #[case] tokens: u64,
+    #[case] expected: Option<u64>,
 ) {
     let raw = json!({
         "input_tokens": 10062,
@@ -70,8 +72,8 @@ fn transform_response_api_usage_to_chat_usage_mirrors_cache_write_aliases(
     });
     let usage = transform_response_api_usage_to_chat_usage(&raw).unwrap();
     let prompt = usage.prompt_tokens_details.unwrap();
-    assert_eq!(prompt.cache_write_tokens, Some(tokens));
-    assert_eq!(prompt.cache_creation_tokens, Some(tokens));
+    assert_eq!(prompt.cache_write_tokens, expected);
+    assert_eq!(prompt.cache_creation_tokens, expected);
     assert_eq!(prompt.cached_tokens, 0);
 }
 
@@ -198,4 +200,51 @@ fn transformed_responses_usage_reaches_cache_aware_token_calculation() {
     );
     assert!((input - (700.0 * 1e-6 + 200.0 * 0.2e-6 + 100.0 * 1.25e-6)).abs() < 1e-12);
     assert!((output - 100.0 * 2e-6).abs() < 1e-12);
+}
+
+#[rstest]
+fn transform_response_api_usage_to_chat_usage_drops_fields_python_does_not_copy() {
+    let raw = json!({
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "input_tokens_details": {
+            "cached_tokens": 3,
+            "web_search_requests": 2,
+            "character_count": 5,
+            "image_count": 1,
+            "query_count": 4,
+            "audio_length_seconds": 1.5,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 3}
+        },
+        "output_tokens_details": {"reasoning_tokens": 4, "video_tokens": 11}
+    });
+    let usage = transform_response_api_usage_to_chat_usage(&raw).unwrap();
+    let prompt = usage.prompt_tokens_details.unwrap();
+    assert_eq!(prompt.cached_tokens, 3);
+    assert_eq!(prompt.web_search_requests, Some(2));
+    assert_eq!(prompt.character_count, None);
+    assert_eq!(prompt.image_count, None);
+    assert_eq!(prompt.query_count, None);
+    assert_eq!(prompt.audio_length_seconds, None);
+    assert_eq!(prompt.cache_creation_token_details, None);
+    let completion = usage.completion_tokens_details.unwrap();
+    assert_eq!(completion.reasoning_tokens, Some(4));
+    assert_eq!(completion.video_tokens, None);
+}
+
+#[rstest]
+#[case::integral_float_with_total(json!({"input_tokens": 10.0, "output_tokens": 5, "total_tokens": 15}), Ok(10))]
+#[case::numeric_string_with_total(json!({"input_tokens": "10", "output_tokens": 5, "total_tokens": 15}), Ok(10))]
+#[case::boolean_without_total(json!({"input_tokens": true, "output_tokens": 5}), Ok(1))]
+#[case::float_needs_a_total(json!({"input_tokens": 10.0, "output_tokens": 5}), Err(CostError::InvalidUsage))]
+#[case::string_needs_a_total(json!({"input_tokens": "10", "output_tokens": 5}), Err(CostError::InvalidUsage))]
+#[case::fractional_float(json!({"input_tokens": 10.5, "output_tokens": 5, "total_tokens": 15}), Err(CostError::InvalidUsage))]
+fn transform_response_api_usage_to_chat_usage_validates_counts_like_response_api_usage(
+    #[case] raw: Value,
+    #[case] expected: Result<u64, CostError>,
+) {
+    assert_eq!(
+        transform_response_api_usage_to_chat_usage(&raw).map(|usage| usage.prompt_tokens),
+        expected
+    );
 }

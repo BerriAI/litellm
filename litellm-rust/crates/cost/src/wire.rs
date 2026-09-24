@@ -132,6 +132,30 @@ pub fn lax_int(value: &Value) -> Option<i64> {
     }
 }
 
+pub fn lax_count(value: &Value) -> Option<u64> {
+    lax_int(value).and_then(|count| u64::try_from(count).ok())
+}
+
+pub fn deserialize_lax_count<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    lax_count(&value).ok_or_else(|| serde::de::Error::custom("invalid token count"))
+}
+
+pub fn deserialize_lax_count_option<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Option::<Value>::deserialize(deserializer)? {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => lax_count(&value)
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::custom("invalid token count")),
+    }
+}
+
 pub fn rate(value: Option<&Value>) -> Rate {
     match value {
         None => Rate::Missing,
