@@ -385,7 +385,8 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
 
 def _with_reference_pixels(response: ImageResponse, reference_pixels: int | None) -> ImageResponse:
     if reference_pixels is not None:
-        response._reference_pixels = reference_pixels  # mutable-ok: stamp the measured reference pixels
+        # mutable-ok: handler stamps this billing field
+        response._reference_pixels = reference_pixels  # pyright: ignore[reportPrivateUsage]  # billing stamp
     return response
 
 
