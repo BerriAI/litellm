@@ -106,7 +106,7 @@ except ImportError:
     raise ImportError("backoff is not installed. Please install it via 'pip install backoff'")
 
 from fastapi import HTTPException, status
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 import litellm.litellm_core_utils
@@ -1148,6 +1148,9 @@ def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
 
 
+_LISTED_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
+
+
 async def _names_kept_by_listing_callbacks(
     callbacks: Sequence[CustomLogger],
     user_api_key_dict: UserAPIKeyAuth,
@@ -1155,7 +1158,13 @@ async def _names_kept_by_listing_callbacks(
 ) -> tuple[str, ...]:
     if not callbacks or not model_names:
         return model_names
-    kept: Final = frozenset(await callbacks[0].async_filter_listed_models(user_api_key_dict, model_names))
+    returned: Final = await callbacks[0].async_filter_listed_models(user_api_key_dict, model_names)
+    try:
+        kept: Final = frozenset(_LISTED_MODEL_NAMES.validate_python(returned))
+    except ValidationError as error:
+        raise TypeError(
+            f"{type(callbacks[0]).__name__}.async_filter_listed_models must return a sequence of model names"
+        ) from error
     return await _names_kept_by_listing_callbacks(
         callbacks[1:], user_api_key_dict, tuple(name for name in model_names if name in kept)
     )

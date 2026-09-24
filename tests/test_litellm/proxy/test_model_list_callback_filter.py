@@ -50,6 +50,18 @@ class _RaisingGate(CustomLogger):
         raise HTTPException(status_code=503, detail="entitlement service down")
 
 
+class _ReversingGate(CustomLogger):
+    async def async_filter_listed_models(
+        self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
+    ) -> Sequence[str]:
+        return list(reversed(model_names))
+
+
+class _StringReturningGate(CustomLogger):
+    async def async_filter_listed_models(self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]) -> str:
+        return "open-model"
+
+
 def _deployment(model_name: str, model: str = "openai/gpt-4o", **model_info):
     return {
         "model_name": model_name,
@@ -58,8 +70,8 @@ def _deployment(model_name: str, model: str = "openai/gpt-4o", **model_info):
     }
 
 
-def _install_router(monkeypatch, *deployments) -> Router:
-    router = Router(model_list=list(deployments))
+def _install_router(monkeypatch, *deployments, **router_kwargs) -> Router:
+    router = Router(model_list=list(deployments), **router_kwargs)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
@@ -236,6 +248,66 @@ async def test_callback_sees_and_filters_team_models_by_their_public_name(team_r
 
 
 @pytest.mark.asyncio
+async def test_callback_sees_public_team_names_on_every_listing_route(team_router, monkeypatch):
+    gate: _Gate = _Gate(hidden=frozenset({"team-gpt"}))
+    _register(monkeypatch, gate)
+
+    assert await _v1_models(_team_member()) == ["team-chat"]
+    assert await _v1_model_info_names(_team_member()) == ["team-chat"]
+    assert await _model_groups(_team_member()) == ["model_name_team1_def"]
+    assert await _model_by_id_status("team-gpt", _team_member()) == 404
+    assert len(gate.seen) == 4
+    assert all(sorted(seen) == ["team-chat", "team-gpt"] for seen in gate.seen)
+
+
+@pytest.mark.asyncio
+async def test_router_alias_follows_its_hidden_target(monkeypatch):
+    _install_router(
+        monkeypatch,
+        _deployment("open-model"),
+        _deployment("restricted-model"),
+        model_group_alias={"mini": "restricted-model", "wide": "open-model"},
+    )
+    _register(monkeypatch, _Gate(hidden=frozenset({"restricted-model"})))
+
+    assert sorted(await _v1_models(_non_admin())) == ["open-model", "wide"]
+    assert sorted(await _v1_model_info_names(_non_admin())) == ["open-model", "wide"]
+    assert sorted(await _model_groups(_non_admin())) == ["open-model", "wide"]
+
+    _register(monkeypatch, _Gate(hidden=frozenset({"mini"})))
+
+    assert sorted(await _v1_models(_non_admin())) == ["open-model", "restricted-model", "wide"]
+
+
+@pytest.mark.asyncio
+async def test_v1_model_info_offers_only_the_rows_the_caller_would_see(monkeypatch):
+    _install_router(monkeypatch, _deployment("open-model"), _deployment("hidden-model", discoverable=False))
+    gate: _Gate = _Gate()
+    _register(monkeypatch, gate)
+
+    assert await _v1_model_info_names(_non_admin()) == ["open-model"]
+    assert await _v1_model_info_names(_admin()) == ["open-model", "hidden-model"]
+    assert gate.seen == [("open-model",), ("open-model", "hidden-model")]
+
+
+@pytest.mark.asyncio
+async def test_listing_keeps_its_order_whatever_order_the_callback_returns(monkeypatch):
+    _install_router(monkeypatch, _deployment("a"), _deployment("b"), _deployment("c"))
+    _register(monkeypatch, _ReversingGate())
+
+    assert await _v1_models(_non_admin()) == ["a", "b", "c"]
+    assert await _v1_model_info_names(_non_admin()) == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_a_callback_returning_a_string_is_an_error_not_an_empty_listing(two_model_router, monkeypatch):
+    _register(monkeypatch, _StringReturningGate())
+
+    with pytest.raises(TypeError, match=r"_StringReturningGate\.async_filter_listed_models"):
+        await _v1_models(_non_admin())
+
+
+@pytest.mark.asyncio
 async def test_alias_of_a_hidden_model_is_not_listed(two_model_router, monkeypatch):
     _register(monkeypatch, _Gate(hidden=frozenset({"restricted-model"})))
     caller = _non_admin(aliases={"mini": "restricted-model", "wide": "open-model"})
@@ -263,3 +335,55 @@ async def test_hidden_model_still_routes_for_direct_requests(two_model_router, m
         model="restricted-model", messages=[{"role": "user", "content": "hi"}]
     )
     assert deployment["model_name"] == "restricted-model"
+
+
+@pytest.mark.asyncio
+async def test_model_group_info_offers_a2a_agent_groups_to_the_callback(two_model_router, monkeypatch):
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.types.agents import AgentResponse
+
+    monkeypatch.setattr(
+        global_agent_registry,
+        "agent_list",
+        [AgentResponse(agent_id="agent-1", agent_name="helper", agent_card_params={})],
+    )
+    caller = _non_admin(object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="p1", agents=["agent-1"]))
+    gate: _Gate = _Gate()
+    _register(monkeypatch, gate)
+
+    assert await _model_groups(caller) == ["open-model", "restricted-model", "a2a/helper"]
+    assert gate.seen == [("open-model", "restricted-model", "a2a/helper")]
+
+    _register(monkeypatch, _Gate(hidden=frozenset({"a2a/helper", "restricted-model"})))
+
+    assert await _model_groups(caller) == ["open-model"]
+
+
+async def _v1_model_info_by_deployment_id(deployment_id: str, user_api_key_dict: UserAPIKeyAuth) -> int | list[str]:
+    try:
+        response = await proxy_server.model_info_v1(user_api_key_dict=user_api_key_dict, litellm_model_id=deployment_id)
+    except HTTPException as error:
+        return error.status_code
+    return [row["model_name"] for row in json.loads(response.body)["data"]]
+
+
+@pytest.mark.asyncio
+async def test_v1_model_info_by_deployment_id_answers_like_an_unknown_id_for_a_hidden_model(
+    two_model_router, monkeypatch
+):
+    _register(monkeypatch, _Gate(hidden=frozenset({"restricted-model"})))
+
+    assert await _v1_model_info_by_deployment_id("restricted-model-id", _non_admin()) == 400
+    assert await _v1_model_info_by_deployment_id("no-such-id", _non_admin()) == 400
+    assert await _v1_model_info_by_deployment_id("open-model-id", _non_admin()) == ["open-model"]
+
+
+@pytest.mark.asyncio
+async def test_v1_model_info_by_deployment_id_offers_the_public_team_name(team_router, monkeypatch):
+    gate: _Gate = _Gate(hidden=frozenset({"team-gpt"}))
+    _register(monkeypatch, gate)
+
+    assert await _v1_model_info_by_deployment_id("model_name_team1_abc-id", _team_member()) == 400
+    assert await _v1_model_info_by_deployment_id("model_name_team1_def-id", _team_member()) == ["team-chat"]
+    assert gate.seen == [("team-gpt",), ("team-chat",)]
