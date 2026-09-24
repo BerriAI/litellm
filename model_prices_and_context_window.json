@@ -24588,6 +24588,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro-0813": {
         "cache_read_input_token_cost": 4.4e-08,
         "cache_read_input_token_cost_priority": 5.5e-08,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 1.32e-06,
         "input_cost_per_token_priority": 1.65e-06,
         "litellm_provider": "fireworks_ai",
@@ -24607,6 +24608,7 @@
     "fireworks_ai/deepseek-v4-pro-0813": {
         "cache_read_input_token_cost": 4.4e-08,
         "cache_read_input_token_cost_priority": 5.5e-08,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 1.32e-06,
         "input_cost_per_token_priority": 1.65e-06,
         "litellm_provider": "fireworks_ai",
@@ -24712,6 +24714,7 @@
     "fireworks_ai/accounts/fireworks/models/glm-5p2": {
         "cache_read_input_token_cost": 1.4e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 1.4e-06,
         "input_cost_per_token_priority": 1.75e-06,
         "litellm_provider": "fireworks_ai",
@@ -24820,6 +24823,7 @@
     "fireworks_ai/accounts/fireworks/models/kimi-k2p6": {
         "cache_read_input_token_cost": 1.6e-07,
         "cache_read_input_token_cost_priority": 2.2e-07,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 9.5e-07,
         "input_cost_per_token_priority": 1.5e-06,
         "litellm_provider": "fireworks_ai",
@@ -24839,6 +24843,7 @@
     "fireworks_ai/accounts/fireworks/models/kimi-k2p7-code": {
         "cache_read_input_token_cost": 1.9e-07,
         "cache_read_input_token_cost_priority": 2.85e-07,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 9.5e-07,
         "input_cost_per_token_priority": 1.425e-06,
         "litellm_provider": "fireworks_ai",
@@ -25109,6 +25114,7 @@
     "fireworks_ai/glm-5p2": {
         "cache_read_input_token_cost": 1.4e-07,
         "cache_read_input_token_cost_priority": 1.75e-07,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 1.4e-06,
         "input_cost_per_token_priority": 1.75e-06,
         "litellm_provider": "fireworks_ai",
@@ -25177,6 +25183,7 @@
     "fireworks_ai/kimi-k2p6": {
         "cache_read_input_token_cost": 1.6e-07,
         "cache_read_input_token_cost_priority": 2.2e-07,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 9.5e-07,
         "input_cost_per_token_priority": 1.5e-06,
         "litellm_provider": "fireworks_ai",
@@ -25213,6 +25220,7 @@
     "fireworks_ai/kimi-k2p7-code": {
         "cache_read_input_token_cost": 1.9e-07,
         "cache_read_input_token_cost_priority": 2.85e-07,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 9.5e-07,
         "input_cost_per_token_priority": 1.425e-06,
         "litellm_provider": "fireworks_ai",
@@ -59357,6 +59365,7 @@
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731": {
         "cache_read_input_token_cost": 7e-09,
         "cache_read_input_token_cost_priority": 8.75e-09,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_priority": 2.75e-07,
         "litellm_provider": "fireworks_ai",
@@ -59395,6 +59404,7 @@
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-vision-exp": {
         "cache_read_input_token_cost": 7e-09,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 2.2e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -59434,6 +59444,7 @@
     "fireworks_ai/deepseek-v4-flash-0731": {
         "cache_read_input_token_cost": 7e-09,
         "cache_read_input_token_cost_priority": 8.75e-09,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_priority": 2.75e-07,
         "litellm_provider": "fireworks_ai",
@@ -59472,6 +59483,7 @@
     },
     "fireworks_ai/deepseek-v4-flash-vision-exp": {
         "cache_read_input_token_cost": 7e-09,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 2.2e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -59603,6 +59615,7 @@
     },
     "fireworks_ai/muse-glimmer-30b": {
         "cache_read_input_token_cost": 4e-08,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 3.5e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 131072,
@@ -59651,6 +59664,7 @@
     },
     "fireworks_ai/accounts/fireworks/models/muse-glimmer-30b": {
         "cache_read_input_token_cost": 4e-08,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 3.5e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 131072,
