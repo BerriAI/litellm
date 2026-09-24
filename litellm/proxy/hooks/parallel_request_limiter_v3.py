@@ -3210,7 +3210,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             filtered_content = [  # mutable-ok: token_counter requires list content blocks
                 block for block in content if not (isinstance(block, dict) and block.get("type") == "input_audio")
             ]
-            sanitized.append(  # mutable-ok: token_counter requires mutable message dicts
+            sanitized.append(
                 {**message, "content": filtered_content}  # mutable-ok: token_counter requires message dicts
             )
         return sanitized
@@ -3572,7 +3572,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 try:
                     await asyncio.shield(cleanup)
                 except asyncio.CancelledError as exc:
-                    cancellation = exc  # rebind-ok: retain the latest cancellation without interrupting slot release
+                    cancellation = exc
             cleanup.result()
             if cancellation is not None:
                 raise cancellation

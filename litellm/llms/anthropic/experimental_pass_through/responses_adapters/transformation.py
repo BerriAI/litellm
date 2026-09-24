@@ -148,13 +148,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if isinstance(content, str):
             return (
                 [{"type": "input_text", "text": content}] if content else []  # mutable-ok: API message payload
-            )  # mutable-ok: API message payload
+            )
         if not isinstance(content, list):
             return []  # mutable-ok: API message payload
         return [  # mutable-ok: API message payload
-            with_prompt_cache_breakpoint(
-                {"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint")
-            )  # mutable-ok: API message payload
+            with_prompt_cache_breakpoint({"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint"))
             for block in content
             if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
         ]
@@ -171,7 +169,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         cls,
         summary: Iterable[object],
         encrypted_content: object,
-    ) -> dict[str, Any] | None:  # mutable-ok: API message payload
+    ) -> dict[str, object] | None:  # mutable-ok: API message payload
         """The one Anthropic block for a Responses reasoning item.
 
         The item's encrypted reasoning rides the block's opaque field (`signature`, or
@@ -200,7 +198,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @classmethod
     def _assistant_group_to_input_items(
         cls, group: tuple[Mapping[str, object], ...]
-    ) -> tuple[dict[str, Any], ...]:  # mutable-ok: API message payload
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: API message payload
         first: Final = group[0]
         btype: Final = first.get("type")
         if btype in ("thinking", "redacted_thinking"):

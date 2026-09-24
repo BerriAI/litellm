@@ -4633,3 +4633,67 @@ def test_gemini_live_native_audio_limits_and_capabilities_match_vendor_model_car
     assert info["supports_response_schema"] is False
     assert info["supports_url_context"] is False
     assert info["supports_pdf_input"] is False
+
+
+def test_baseten_glm_5_3_fast_is_priced_from_registry(_local_model_cost_map: None) -> None:
+    model: Final = "baseten/zai-org/GLM-5.3-Fast"
+    prompt_tokens: Final = 1000
+    completion_tokens: Final = 500
+
+    prompt_usd, completion_usd = litellm.cost_per_token(
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+    entry: Final = litellm.model_cost[model]
+    assert prompt_usd == pytest.approx(prompt_tokens * entry["input_cost_per_token"])
+    assert completion_usd == pytest.approx(completion_tokens * entry["output_cost_per_token"])
+    assert prompt_usd > 0
+    assert completion_usd > 0
+
+
+def test_completion_cost_charges_explicit_per_token_rates_over_registered_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "smoke-priced-model",
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "openai", "mode": "chat"},
+    )
+    response: Final = ModelResponse(
+        model="smoke-priced-model",
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="smoke-priced-model",
+        custom_llm_provider="openai",
+        custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+    )
+
+    assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
+
+
+def test_completion_cost_is_zero_when_explicit_rates_are_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "smoke-priced-model",
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "openai", "mode": "chat"},
+    )
+    response: Final = ModelResponse(
+        model="smoke-priced-model",
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="smoke-priced-model",
+        custom_llm_provider="openai",
+        custom_cost_per_token={"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+    )
+
+    assert cost == 0.0

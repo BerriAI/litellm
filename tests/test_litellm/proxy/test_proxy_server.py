@@ -5787,12 +5787,9 @@ async def test_model_info_v1_oci_secrets_not_leaked():
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import model_info_v1
 
-    # Mock user authentication
-    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
-    mock_user_api_key_dict.user_id = "test-user"
-    mock_user_api_key_dict.api_key = "test-key"
-    mock_user_api_key_dict.team_models = []
-    mock_user_api_key_dict.models = ["oci-grok-test"]
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user", api_key="test-key", team_models=[], models=["oci-grok-test"]
+    )
 
     # Mock model data with OCI sensitive information
     mock_model_data = {
@@ -11169,6 +11166,49 @@ class TestTransformRequestBannedParams:
         assert response.status_code == 400, (
             f"Expected 400 for banned param '{banned}', got {response.status_code}: {response.json()}"
         )
+
+
+class TestTransformRequestOffEventLoop:
+    @pytest.fixture
+    def client(self):
+        mock_auth = UserAPIKeyAuth(user_id="test-internal", user_role=LitellmUserRoles.INTERNAL_USER)
+        original = app.dependency_overrides.copy()
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides = original
+
+    def test_transform_request_runs_return_raw_request_off_the_event_loop(self, client, monkeypatch):
+        import litellm.utils
+        from litellm.types.utils import RawRequestTypedDict
+
+        seen: dict[str, bool] = {}
+
+        def fake_return_raw_request(endpoint, kwargs):
+            try:
+                asyncio.get_running_loop()
+                seen["on_event_loop"] = True
+            except RuntimeError:
+                seen["on_event_loop"] = False
+            return RawRequestTypedDict(
+                raw_request_api_base="https://api.openai.com/v1/",
+                raw_request_body=kwargs,
+                raw_request_headers={},
+                error=None,
+            )
+
+        monkeypatch.setattr(litellm.utils, "return_raw_request", fake_return_raw_request)
+        response = client.post(
+            "/utils/transform_request",
+            json={
+                "call_type": "completion",
+                "request_body": {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hi"}]},
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["raw_request_body"]["model"] == "gpt-5.6-sol"
+        assert seen == {"on_event_loop": False}, "return_raw_request ran on the event loop thread"
 
 
 class TestSortModelsByDisplayName:

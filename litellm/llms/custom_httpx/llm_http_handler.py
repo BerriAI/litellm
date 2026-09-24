@@ -12,6 +12,7 @@ from typing import (
     Literal,
     NamedTuple,
     Optional,
+    Protocol,
     TypedDict,
     TypeVar,
     Union,
@@ -24,6 +25,7 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
+from typing_extensions import ReadOnly
 
 import litellm
 import litellm.litellm_core_utils
@@ -43,6 +45,7 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
+from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import (
@@ -206,6 +209,7 @@ if TYPE_CHECKING:
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
         CancelRunResponse,
@@ -221,6 +225,21 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+
+class _RealtimeClientWebSocket(Protocol):
+    async def send_text(self, data: str) -> None: ...
+
+    async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
+
+
+class _ResponsesClientWebSocket(Protocol):
+    async def send_text(self, data: str) -> None: ...
+
+    async def receive_text(self) -> str: ...
+
+    async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
+
+
 _ResponseT = TypeVar("_ResponseT")
 
 
@@ -235,6 +254,17 @@ class _MediaUploadKwargs(TypedDict, total=False):
     headers: dict[str, str]
     content: Iterator[bytes] | AsyncIterator[bytes]
     timeout: float | httpx.Timeout
+
+
+class _SignedBodyKwargs(TypedDict, total=False):
+    data: ReadOnly[bytes]
+    json: ReadOnly[dict[str, object]]
+
+
+def _signed_body_kwargs(*, signed_body: bytes | None, data: dict[str, object]) -> _SignedBodyKwargs:
+    if signed_body is not None:
+        return {"data": signed_body}
+    return {"json": data}
 
 
 def _google_genai_streaming_hidden_params(
@@ -318,7 +348,9 @@ def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> 
     }
 
 
-def _aws_signing_overrides(optional_params: Mapping[str, Any], litellm_params: Mapping[str, Any]) -> Mapping[str, Any]:
+def _aws_signing_overrides(
+    optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
     return MappingProxyType(
         {
             key: litellm_params[key]
@@ -1430,6 +1462,7 @@ class BaseLLMHTTPHandler:
         transformed: Final = provider_config.transform_audio_transcription_response(
             raw_response=response,
         )
+        set_provider_response_headers_in_hidden_params(transformed, response.headers)
         if not provider_config.supports_subtitle_synthesis:
             return transformed
         requested_format: Final = optional_params.get("response_format")
@@ -2739,7 +2772,7 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
-        body_kwargs: Final[dict[str, Any]] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: Final = _signed_body_kwargs(signed_body=signed_body, data=data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2881,7 +2914,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data = responses_api_provider_config.transform_responses_api_request(
+        data = await responses_api_provider_config.async_transform_responses_api_request(
             model=model,
             input=input,
             response_api_optional_request_params=response_api_optional_request_params,
@@ -2926,7 +2959,7 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
-        body_kwargs: Final[dict[str, Any]] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: Final = _signed_body_kwargs(signed_body=signed_body, data=data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4540,7 +4573,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             model=model,
         )
-        body_kwargs: Final[dict[str, Any]] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: Final = _signed_body_kwargs(signed_body=signed_body, data=data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -4634,7 +4667,7 @@ class BaseLLMHTTPHandler:
             api_key=litellm_params.api_key,
             model=model,
         )
-        body_kwargs: Final[dict[str, Any]] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: Final = _signed_body_kwargs(signed_body=signed_body, data=data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -6186,6 +6219,7 @@ class BaseLLMHTTPHandler:
             "BasePassthroughConfig",
             "BaseContainerConfig",
             BaseEvalsAPIConfig,
+            BaseRealtimeHTTPConfig,
         ],
     ):
         received_status_code: Final = (
@@ -6300,7 +6334,7 @@ class BaseLLMHTTPHandler:
     async def async_realtime(
         self,
         model: str,
-        websocket: Any,
+        websocket: _RealtimeClientWebSocket,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseRealtimeConfig,
         headers: dict,
@@ -6308,7 +6342,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None = None,
         client: Any | None = None,
         timeout: float | None = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: object | None = None,
         litellm_metadata: dict[str, object] | None = None,
         query_params: RealtimeQueryParams | None = None,
     ):
@@ -6483,7 +6517,7 @@ class BaseLLMHTTPHandler:
         request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -6555,7 +6589,7 @@ class BaseLLMHTTPHandler:
         sdp_body: bytes,
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         session_config: dict[str, object] | None = None,
         extra_headers: dict[str, object] | None = None,
@@ -6633,13 +6667,13 @@ class BaseLLMHTTPHandler:
     async def async_responses_websocket(
         self,
         model: str,
-        websocket: Any,
+        websocket: _ResponsesClientWebSocket,
         logging_obj: LiteLLMLoggingObj,
         responses_api_provider_config: BaseResponsesAPIConfig | None,
         api_base: str | None = None,
         api_key: str | None = None,
         timeout: float | None = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         litellm_metadata: dict[str, object] | None = None,
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
@@ -6928,11 +6962,13 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return image_edit_provider_config.transform_image_edit_response(
+        image_edit_response: Final = image_edit_provider_config.transform_image_edit_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
+        return image_edit_response
 
     async def async_image_edit_handler(
         self,
@@ -7027,11 +7063,13 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return image_edit_provider_config.transform_image_edit_response(
+        image_edit_response: Final = image_edit_provider_config.transform_image_edit_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
+        return image_edit_response
 
     def image_generation_handler(
         self,
@@ -7154,6 +7192,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
             encoding=None,
         )
+        set_provider_response_headers_in_hidden_params(model_response, response.headers)
 
         return model_response
 
@@ -7261,6 +7300,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
             encoding=None,
         )
+        set_provider_response_headers_in_hidden_params(model_response, response.headers)
 
         return model_response
 
@@ -7850,7 +7890,7 @@ class BaseLLMHTTPHandler:
     def video_create_character_handler(
         self,
         name: str,
-        video: Any,
+        video: FileTypes,
         video_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -7934,7 +7974,7 @@ class BaseLLMHTTPHandler:
     async def async_video_create_character_handler(
         self,
         name: str,
-        video: Any,
+        video: FileTypes,
         video_provider_config: BaseVideoConfig,
         custom_llm_provider: str,
         litellm_params,
@@ -12045,11 +12085,13 @@ class BaseLLMHTTPHandler:
                 provider_config=text_to_speech_provider_config,
             )
 
-        return text_to_speech_provider_config.transform_text_to_speech_response(
+        speech_response: Final = text_to_speech_provider_config.transform_text_to_speech_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(speech_response, response.headers)
+        return speech_response
 
     async def async_text_to_speech_handler(
         self,
@@ -12144,11 +12186,13 @@ class BaseLLMHTTPHandler:
                 provider_config=text_to_speech_provider_config,
             )
 
-        return text_to_speech_provider_config.transform_text_to_speech_response(
+        speech_response: Final = text_to_speech_provider_config.transform_text_to_speech_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(speech_response, response.headers)
+        return speech_response
 
     #########################################################
     ########## SKILLS API HANDLERS ##########################

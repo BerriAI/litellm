@@ -640,7 +640,7 @@ async def test_calculate_vertex_disable_transform_path(monkeypatch):
     monkeypatch.setattr(
         bu,
         "calculate_vertex_ai_batch_cost_and_usage",
-        lambda content, model: bu.BatchCostUsageResult(
+        lambda content, model, model_info=None: bu.BatchCostUsageResult(
             cost=9.9,
             usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
             models=["gemini-2.0-flash-001"],
@@ -671,7 +671,7 @@ async def test_calculate_vertex_disable_transform_needs_model_name(monkeypatch):
     monkeypatch.setattr(
         bu,
         "calculate_vertex_ai_batch_cost_and_usage",
-        lambda content, model: pytest.fail("raw vertex path should not run"),
+        lambda content, model, model_info=None: pytest.fail("raw vertex path should not run"),
     )
 
     result = await bu.calculate_batch_cost_and_usage(file_content_dictionary=[], custom_llm_provider="vertex_ai")
@@ -735,7 +735,11 @@ def test_vertex_batch_usage_preserves_modality_token_details(monkeypatch):
     )
     responses = [
         {
+            "key": "id_1",
+            "status": "",
+            "request": {"content": {"parts": [{"text": "hello"}, {"fileData": {"mimeType": "audio/wav"}}]}},
             "response": {
+                "embedding": {"values": [0.1, 0.2]},
                 "usageMetadata": {
                     "promptTokenCount": 84,
                     "candidatesTokenCount": 0,
@@ -744,13 +748,14 @@ def test_vertex_batch_usage_preserves_modality_token_details(monkeypatch):
                         {"modality": "AUDIO", "tokenCount": 64},
                         {"modality": "TEXT", "tokenCount": 20},
                     ],
-                }
-            }
+                },
+            },
         }
     ]
 
     result = bu.calculate_vertex_ai_batch_cost_and_usage(responses, "gemini-embedding-2")
 
+    assert (result.successful_requests, result.usage.prompt_tokens) == (1, 84)
     assert result.prompt_cost == pytest.approx(64 * 3.25e-6 + 20 * 1e-7)
 
 
@@ -1336,7 +1341,7 @@ async def test_handle_completed_batch_vertex_disable_transform_path(monkeypatch)
     monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", True, raising=False)
     seen: dict = {}
 
-    def fake_vertex_calc(content, model):
+    def fake_vertex_calc(content, model, model_info=None):
         seen["content"] = content
         seen["model"] = model
         return bu.BatchCostUsageResult(
@@ -1358,7 +1363,7 @@ async def test_handle_completed_batch_vertex_disable_transform_path(monkeypatch)
     assert result.cost == 7.7
     assert result.usage.total_tokens == 3
     assert result.models == ["gemini-x"]
-    assert seen["content"] == raw_rows
+    assert list(seen["content"]) == raw_rows
     assert seen["model"] == "gemini-x"
 
 
