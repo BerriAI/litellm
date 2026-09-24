@@ -1446,9 +1446,9 @@ export const teamDailyActivityAggregatedCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  teamIds: string[] | null = null,
-  cursor: string | null = null,
+  ...options: [teamIds?: string[] | null, cursor?: string | null]
 ) => {
+  const [teamIds = null, cursor = null] = options;
   /**
    * Get aggregated daily team activity with per-team breakdown (no pagination)
    */

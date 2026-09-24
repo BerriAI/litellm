@@ -190,8 +190,8 @@ class _GroupingSetsRow(_RollupMetricsRow):
     endpoint: str | None
     group_level: int
     distinct_api_keys: int | None
-    key_spend: float | None
-    remaining_api_keys: int | None
+    key_spend: float | None = None
+    remaining_api_keys: int | None = None
 
 
 class _EntityRollupRow(_RollupMetricsRow):
@@ -921,7 +921,7 @@ def _build_aggregated_sql_query(
                 | GROUPING(model, {_MODEL_GROUP_EXPR},
                            custom_llm_provider, mcp_namespaced_tool_name,
                            endpoint) AS group_level,
-            NULL::bigint AS distinct_api_keys, NULL::float AS key_spend,
+            NULL::bigint AS distinct_api_keys, NULL::float8 AS key_spend,
             NULL::bigint AS remaining_api_keys,{metric_select}
         FROM {_key_free_source(pg_table, where_clause, marker_param)}
         GROUP BY GROUPING SETS (
@@ -1823,18 +1823,14 @@ async def get_daily_activity_aggregated(
 
         records: Final = [_GroupingSetsRow(**row) for row in (raw_rows or ())]
         total_api_keys: Final = next((r.distinct_api_keys for r in records if r.distinct_api_keys is not None), 0)
-        remaining_api_keys: Final = next(
-            (r.remaining_api_keys or 0 for r in records if getattr(r, "remaining_api_keys", None) is not None),
-            0,
+        remaining_api_keys: Final = next((r.remaining_api_keys for r in records if r.remaining_api_keys is not None), 0)
+        page_keys: Final = tuple(
+            (spend, key) for r in records if (spend := r.key_spend) is not None and (key := r.api_key) is not None
         )
-        page_last: Final = max(
-            (r for r in records if r.api_key is not None and getattr(r, "key_spend", None) is not None),
-            key=lambda r: (-(r.key_spend or 0.0), r.api_key or ""),
-            default=None,
-        )
+        page_last: Final = max(page_keys, key=lambda k: (-k[0], k[1]), default=None)
         next_cursor: Final = (
-            KeyPageCursor(page_last.key_spend or 0.0, page_last.api_key or "").encode()
-            if remaining_api_keys > USAGE_TOP_API_KEYS_LIMIT and page_last is not None
+            KeyPageCursor(*page_last).encode()
+            if page_last is not None and remaining_api_keys > USAGE_TOP_API_KEYS_LIMIT
             else None
         )
 

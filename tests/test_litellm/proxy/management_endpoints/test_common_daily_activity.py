@@ -1878,6 +1878,7 @@ async def test_get_daily_activity_aggregated_reports_exact_limit_key_count_as_co
 
     assert result.metadata.total_api_keys == USAGE_TOP_API_KEYS_LIMIT
     assert result.metadata.api_key_limit == USAGE_TOP_API_KEYS_LIMIT
+    assert result.metadata.next_cursor is None
     assert len(result.results[0].breakdown.api_keys) == USAGE_TOP_API_KEYS_LIMIT
 
 
