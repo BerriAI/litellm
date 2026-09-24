@@ -349,7 +349,7 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("tier", GetStringValue(modelResp.ModelInfo.Tier, d.Get("tier").(string)))
 	d.Set("mode", GetStringValue(modelResp.ModelInfo.Mode, d.Get("mode").(string)))
 	d.Set("team_id", GetStringValue(modelResp.ModelInfo.TeamID, d.Get("team_id").(string)))
-	d.Set("display_name", GetStringValue(modelResp.ModelInfo.DisplayName, d.Get("display_name").(string)))
+	d.Set("display_name", modelResp.ModelInfo.DisplayName)
 
 	// Preserve credential name from state since it might not be returned by API
 	d.Set("litellm_credential_name", d.Get("litellm_credential_name").(string))

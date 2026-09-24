@@ -122,7 +122,7 @@ func TestResourceLiteLLMModelReadDisplayName(t *testing.T) {
 	}{
 		"server value wins inside data envelope": {serverBody: modelInfoDataEnvelope("Renamed In Admin UI"), want: "Renamed In Admin UI"},
 		"server value wins unwrapped":            {serverBody: modelInfoBody("Renamed In Admin UI"), want: "Renamed In Admin UI"},
-		"state preserved when server omits":      {serverBody: modelInfoDataEnvelope(""), want: "Claude Sonnet 4.5"},
+		"external removal clears state":          {serverBody: modelInfoDataEnvelope(""), want: ""},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
