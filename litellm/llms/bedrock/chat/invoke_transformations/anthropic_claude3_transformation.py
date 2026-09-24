@@ -124,13 +124,22 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             and AnthropicModelInfo.forced_tool_use_unsupported(original_model)
         ):
             optional_params.pop("tool_choice")
-        if "response_format" in non_default_params and (
-            self.is_thinking_enabled(non_default_params)
-            or AnthropicModelInfo.forced_tool_use_unsupported(original_model)
+        if (
+            "response_format" in non_default_params
+            and "tools" in optional_params
+            and (
+                self.is_thinking_enabled(non_default_params)
+                or AnthropicModelInfo.forced_tool_use_unsupported(original_model)
+            )
         ):
-            for tool in optional_params.get("tools", ()):
-                if tool.get("name") == RESPONSE_FORMAT_TOOL_NAME:
-                    tool["description"] = RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
+            # Rebuild the tool instead of writing into it: Anthropic-format tools reach
+            # here as the caller's own dicts, and the repo rules out in-place mutation
+            optional_params["tools"] = [  # rebind-ok: out-param store like siblings
+                {**tool, "description": RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION}
+                if tool.get("name") == RESPONSE_FORMAT_TOOL_NAME
+                else tool
+                for tool in optional_params["tools"]
+            ]
 
         return optional_params
 
