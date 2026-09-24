@@ -3,6 +3,21 @@ use serde_json::{Map, Value};
 
 use crate::llms::openai::{ChatCompletionThinkingBlock, ChatCompletionToolCallChunk};
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProviderSpecificHeader {
+    #[serde(default)]
+    pub custom_llm_provider: String,
+    #[serde(default)]
+    pub extra_headers: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProviderSpecificHeaders {
+    One(ProviderSpecificHeader),
+    Many(Vec<ProviderSpecificHeader>),
+}
+
 /// OpenAI `usage`, including the `prompt_tokens_details` split LiteLLM's Python
 /// path reports so cost tracking sees the same numbers on either path.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -41,7 +56,7 @@ pub struct ChatCompletionsChoice {
 ///
 /// There is deliberately no `id`: Python mints the `chatcmpl-…` id on the
 /// `ModelResponse` it already created, and echoing the provider's own id here
-/// would change it. Pinned by `response_carries_no_id` in `tests.rs`.
+/// would change it. Pinned by `response_carries_no_id` in the Anthropic chat transformation tests.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatCompletionsResponse {
     pub created: u64,
