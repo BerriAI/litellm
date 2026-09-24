@@ -35,7 +35,7 @@ from typing import (
 )
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
@@ -6851,7 +6851,7 @@ def _export_csv_headers(export_type: TeamDailyActivityExportType) -> tuple[str, 
 
 
 def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:
-    record: Final[dict[str, object]] = {
+    return {
         "Date": row.date,
         "Team": row.team_alias or "-",
         "Team ID": row.team_id,
@@ -6873,7 +6873,6 @@ def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:
         "Cache Read Input Tokens": row.cache_read_input_tokens,
         "Cache Creation Input Tokens": row.cache_creation_input_tokens,
     }
-    return record
 
 
 def _team_export_csv(export_type: TeamDailyActivityExportType, rows: Sequence[TeamDailyActivityExportRow]) -> str:
@@ -6899,7 +6898,7 @@ async def get_team_daily_activity_export(
     format: TeamDailyActivityExportFormat = "csv",
     team_id: str | None = None,
     exclude_team_ids: str | None = None,
-    timezone: int | None = None,
+    timezone_offset: Annotated[int | None, Query(alias="timezone")] = None,
 ) -> Response:
     """
     Server-side Team Usage export, not subject to USAGE_TOP_API_KEYS_LIMIT.
@@ -6910,8 +6909,6 @@ async def get_team_daily_activity_export(
     excluded, so metadata totals under those export types cover request spend
     only; the plain daily export includes them.
     """
-    from datetime import timezone as dt_timezone
-
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
@@ -6945,12 +6942,13 @@ async def get_team_daily_activity_export(
         end_date=end_date,
         api_key=scope.api_key_filter,
         exclude_entity_ids=scope.exclude_team_ids,
-        timezone_offset_minutes=timezone,
+        timezone_offset_minutes=timezone_offset,
         export_type=export_type,
     )
 
+    now: Final = datetime.now(timezone.utc)
     metadata: Final = TeamDailyActivityExportMetadata(
-        export_date=datetime.now(dt_timezone.utc).isoformat(),
+        export_date=now.isoformat(),
         export_type=export_type,
         start_date=start_date,
         end_date=end_date,
@@ -6970,7 +6968,7 @@ async def get_team_daily_activity_export(
         content=_team_export_csv(export_type, rows),
         media_type="text/csv; charset=utf-8",
         headers={
-            "Content-Disposition": f'attachment; filename="team_usage_{export_type}_{datetime.now(dt_timezone.utc).date().isoformat()}.csv"'
+            "Content-Disposition": f'attachment; filename="team_usage_{export_type}_{now.date().isoformat()}.csv"'
         },
     )
 

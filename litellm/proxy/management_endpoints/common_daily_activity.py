@@ -1017,9 +1017,7 @@ def _build_export_sql_query(
     by_model: Final = export_type == "daily_with_models"
     group_extras: Final = tuple(field for field in ("api_key" if keyed else "", "model" if by_model else "") if field)
     group_by: Final = f'date, "{entity_id_field}"' + "".join(f", {field}" for field in group_extras)
-    sentinel_clause: Final = (
-        " AND api_key <> $1".replace("$1", f"${len(where_params) + 1}") if (keyed or by_model) else ""
-    )
+    sentinel_clause: Final = f" AND api_key <> ${len(where_params) + 1}" if (keyed or by_model) else ""
     sentinel_params: Final = (PTU_SENTINEL_API_KEY,) if (keyed or by_model) else ()
 
     sql_query: Final = f"""

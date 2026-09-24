@@ -71,11 +71,12 @@ def test_team_activity_export_csv_downloads_every_key(gateway: Gateway) -> None:
         for key in keys:
             reply: Final = gateway.chat(model, key=key, text=f"team export {uuid.uuid4().hex}")
             assert reply["usage"]["total_tokens"] == 40, reply
-        eventually(
-            lambda: read_rows('SELECT api_key FROM "LiteLLM_DailyTeamSpend" WHERE team_id=%s', (team,)),
+        daily: Final = eventually(
+            lambda: read_rows('SELECT api_key, spend FROM "LiteLLM_DailyTeamSpend" WHERE team_id=%s', (team,)),
             lambda values: len({row["api_key"] for row in values}) == 3,
             seconds=70,
         )
+        spend_by_key: Final = {row["api_key"]: float(row["spend"]) for row in daily}
         response: Final = gateway.request(
             "GET",
             "/team/daily/activity/export",
@@ -93,6 +94,8 @@ def test_team_activity_export_csv_downloads_every_key(gateway: Gateway) -> None:
         assert len(records) == 3, response.text
         assert sorted(record["Key ID"] for record in records) == sorted(digests), response.text
         assert sorted(record["Team ID"] for record in records) == [team, team, team], response.text
+        for record in records:
+            assert record["Spend ($)"] == f"{spend_by_key[record['Key ID']]:.4f}", response.text
 
 
 def test_team_activity_export_denies_a_member_another_team(gateway: Gateway) -> None:
@@ -104,8 +107,8 @@ def test_team_activity_export_denies_a_member_another_team(gateway: Gateway) -> 
         member_key: Final = scenario.key(user_id=member, team_id=team_a, models=[model])
         reply: Final = gateway.chat(model, key=member_key, text=f"team export {uuid.uuid4().hex}")
         assert reply["usage"]["total_tokens"] == 40, reply
-        eventually(
-            lambda: read_rows('SELECT api_key FROM "LiteLLM_DailyTeamSpend" WHERE team_id=%s', (team_a,)),
+        daily: Final = eventually(
+            lambda: read_rows('SELECT api_key, spend FROM "LiteLLM_DailyTeamSpend" WHERE team_id=%s', (team_a,)),
             lambda values: len(values) == 1,
             seconds=70,
         )
@@ -125,5 +128,6 @@ def test_team_activity_export_denies_a_member_another_team(gateway: Gateway) -> 
         )
         assert allowed.status_code == 200, allowed.text
         rows: Final = tuple(object_value(row) for row in object_value(allowed.json())["data"])
-        assert len(rows) >= 1, allowed.text
-        assert all(row["team_id"] == team_a for row in rows), allowed.text
+        assert len(rows) == 1, allowed.text
+        assert rows[0]["team_id"] == team_a, allowed.text
+        assert float(rows[0]["spend"]) == pytest.approx(float(daily[0]["spend"])), allowed.text
