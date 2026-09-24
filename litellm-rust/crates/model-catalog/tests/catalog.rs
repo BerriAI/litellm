@@ -84,7 +84,7 @@ fn snapshot_does_not_borrow_source() {
 #[case("shared", "Second")]
 #[case("FIRST", "First")]
 #[case("sHaReD", "Second")]
-fn alias_collisions_and_case_fallback_follow_python_order(
+fn alias_collisions_and_case_fallback_follow_entry_order(
     #[case] lookup: &str,
     #[case] expected: &str,
 ) {
@@ -267,7 +267,7 @@ fn parses_current_and_packaged_catalogs_without_pinning_counts(
     assert!(backup_catalog.sample_spec().is_some());
     assert!(
         current_catalog
-            .validate(IntegrityLimits::python_defaults(
+            .validate(IntegrityLimits::for_backup_model_count(
                 backup_catalog.model_count()
             ))
             .is_ok()

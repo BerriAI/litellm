@@ -21,7 +21,7 @@ pub struct IntegrityLimits {
 }
 
 impl IntegrityLimits {
-    pub fn python_defaults(backup_model_count: usize) -> Self {
+    pub fn for_backup_model_count(backup_model_count: usize) -> Self {
         Self {
             backup_model_count,
             min_model_count: 50,
