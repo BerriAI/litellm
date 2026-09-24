@@ -3112,14 +3112,9 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
   it("keeps the prompt mounted while the member-budget reset is in flight", async () => {
     const user = userEvent.setup({ delay: null });
     const input = await openEditorWithCustomMembers(user);
-    let resolveBulk: ((value: { data: { data: { success: boolean; user_id: string }[] } }) => void) | undefined;
+    const bulk = Promise.withResolvers<{ data: { data: { success: boolean; user_id: string }[] } }>();
     vi.mocked(networking.teamInfoCall).mockImplementationOnce(() => new Promise(() => {}));
-    bulkUpdatePOST.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveBulk = resolve;
-        }),
-    );
+    bulkUpdatePOST.mockImplementationOnce(() => bulk.promise);
 
     await submitNewDefault(user, input, "20");
     await user.click(await screen.findByRole("button", { name: "Reset to $20" }));
@@ -3128,7 +3123,7 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
     expect(screen.getByText("Reset member budgets?")).toBeInTheDocument();
     expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
 
-    resolveBulk?.({ data: { data: [{ success: true, user_id: "user-custom@x.com" }] } });
+    bulk.resolve({ data: { data: [{ success: true, user_id: "user-custom@x.com" }] } });
     await waitFor(() => expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument());
   });
 
