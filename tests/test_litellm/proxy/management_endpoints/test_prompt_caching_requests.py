@@ -169,7 +169,7 @@ async def test_request_filters_match_accounting_and_paginate_before_projection(
     from litellm.proxy import proxy_server
 
     _seed(_cache_postgresql)
-    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=_cache_prisma))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=_cache_prisma, replica_db=_cache_prisma))
     monkeypatch.setattr(proxy_server, "llm_router", None)
     expected: Final = tuple(sorted((case.request_id for case in _CASES if case.matches(filter)), reverse=True))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app(role)), base_url="http://test") as client:
@@ -285,7 +285,7 @@ async def test_cursor_keeps_remaining_requests_once_during_insertions_and_deleti
         "older-cache-read", {"usage_object": {"cache_read_input_tokens": 100}}, start_time=datetime(2026, 9, 1, 11),
     ))
     _seed(_cache_postgresql, cases)
-    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=_cache_prisma))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=_cache_prisma, replica_db=_cache_prisma))
     monkeypatch.setattr(proxy_server, "llm_router", None)
     expected: Final = (*sorted((case.request_id for case in _CASES if case.matches("all")), reverse=True), "older-cache-read")
     async with httpx.AsyncClient(

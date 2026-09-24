@@ -653,6 +653,7 @@ def _make_db_attachment_row(
 def _prisma_with_attachment_rows(rows: list[MagicMock]) -> MagicMock:
     prisma = MagicMock()
     prisma.configure_mock(**{"db.litellm_policyattachmenttable.find_many": AsyncMock(return_value=rows)})
+    prisma.replica_db = prisma.db
     return prisma
 
 
