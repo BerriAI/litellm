@@ -4,8 +4,9 @@ Dynamic configuration class generator for JSON-based providers.
 
 from collections.abc import Coroutine, Mapping
 from types import MappingProxyType
-from typing import Any, Final, Literal, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, overload
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -15,6 +16,11 @@ from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ServiceTier
+
+if TYPE_CHECKING:
+    from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+    from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
+    from litellm.types.router import GenericLiteLLMParams
 
 from .json_loader import SimpleProviderConfig
 
@@ -98,13 +104,6 @@ _SUPPORTED_SERVICE_TIERS: Final = frozenset((*_SERVICE_TIER_TO_COMPLETION_WINDOW
 def _service_tier_completion_window_drop(
     provider: SimpleProviderConfig, service_tier: object, model: str, drop_params: bool | None
 ) -> bool:
-    """Whether the caller's service_tier must be dropped instead of sent.
-
-    Raises UnsupportedParamsError for values Sail cannot map onto a
-    completion_window unless the request or deployment opts into drop_params.
-    """
-    import litellm
-
     if not _service_tier_as_completion_window_enabled(provider):
         return False
     if service_tier is None or (isinstance(service_tier, str) and service_tier.lower() in _SUPPORTED_SERVICE_TIERS):
@@ -325,7 +324,15 @@ def _json_responses_complete_url(provider: SimpleProviderConfig, api_base: str |
     return f"{resolved.rstrip('/')}/responses"
 
 
-def _json_responses_request_body(provider: SimpleProviderConfig, config, model, input, params, litellm_params, headers):
+def _json_responses_request_body(
+    provider: SimpleProviderConfig,
+    config: "OpenAILikeResponsesConfig",
+    model: str,
+    input: "str | ResponseInputParam",
+    params: "dict[str, object]",  # mutable-ok: matches base signature
+    litellm_params: "GenericLiteLLMParams",
+    headers: "dict[str, object]",  # mutable-ok: matches base signature
+) -> "dict[str, object]":  # mutable-ok: matches base signature
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 
     if provider.special_handling.get("force_store_false"):
@@ -343,7 +350,13 @@ def _json_responses_request_body(provider: SimpleProviderConfig, config, model, 
     return body
 
 
-def _json_responses_map_params(provider: SimpleProviderConfig, config, params, model: str, drop_params: bool):
+def _json_responses_map_params(
+    provider: SimpleProviderConfig,
+    config: "OpenAILikeResponsesConfig",
+    params: "ResponsesAPIOptionalRequestParams",
+    model: str,
+    drop_params: bool,
+) -> dict:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 
     mapped: Final = OpenAILikeResponsesConfig.map_openai_params(
