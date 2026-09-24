@@ -10,12 +10,12 @@ from .ibm_detector import (
 )
 
 __all__ = [
-    "IBMGuardrailsBaseConfigModel",
+    "IBMDetectorDetection",
     "IBMDetectorGuardrailConfigModel",
     "IBMDetectorOptionalParams",
     "IBMDetectorRequestBodyDetectorServer",
     "IBMDetectorRequestBodyOrchestrator",
     "IBMDetectorResponseDetectorServer",
     "IBMDetectorResponseOrchestrator",
-    "IBMDetectorDetection",
+    "IBMGuardrailsBaseConfigModel",
 ]

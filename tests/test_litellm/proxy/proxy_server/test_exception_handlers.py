@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -28,9 +30,11 @@ from litellm.proxy.proxy_server import (
 from .conftest import normalize
 
 
-def _make_request(parent_otel_span=None):
+def _make_request(parent_otel_span=None, path="/chat/completions"):
+    """A real Request always carries a url; the validation handler reads its path to
+    decide whether the caller is on a surface with its own error contract."""
     state = SimpleNamespace(parent_otel_span=parent_otel_span)
-    return SimpleNamespace(state=state)
+    return SimpleNamespace(state=state, url=SimpleNamespace(path=path))
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +97,71 @@ async def test_openai_exception_handler_invalid_empty_code_defaults_to_500():
     }
 
 
+def _call_id_exception(headers):
+    return ProxyException(
+        message="bad input",
+        type="invalid_request_error",
+        param="model",
+        code=400,
+        headers=headers,
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_copies_the_call_id_into_the_error_when_opted_in(monkeypatch):
+    """With include_call_id_in_error_body on, error.litellm_call_id is byte-identical to the
+    x-litellm-call-id header, so a pasted str(e) names the request to look up."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"include_call_id_in_error_body": True})
+    exc = _call_id_exception({"x-litellm-call-id": "call-8302"})
+
+    response = await openai_exception_handler(request=_make_request(), exc=exc)
+    body = json.loads(response.body)
+
+    assert response.headers["x-litellm-call-id"] == "call-8302"
+    assert body == {
+        "error": {
+            "message": "bad input",
+            "type": "invalid_request_error",
+            "param": "model",
+            "code": "400",
+            "litellm_call_id": "call-8302",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_leaves_the_error_alone_when_opted_out(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    exc = _call_id_exception({"x-litellm-call-id": "call-8302"})
+
+    response = await openai_exception_handler(request=_make_request(), exc=exc)
+    body = json.loads(response.body)
+
+    assert response.headers["x-litellm-call-id"] == "call-8302"
+    assert body == {
+        "error": {
+            "message": "bad input",
+            "type": "invalid_request_error",
+            "param": "model",
+            "code": "400",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_never_fabricates_a_call_id(monkeypatch):
+    """An error raised before a call id exists (auth failures, say) carries no header,
+    and the body must not invent one."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"include_call_id_in_error_body": True})
+    exc = _call_id_exception({})
+
+    response = await openai_exception_handler(request=_make_request(), exc=exc)
+    body = json.loads(response.body)
+
+    assert "x-litellm-call-id" not in response.headers
+    assert "litellm_call_id" not in body["error"]
+
+
 # ---------------------------------------------------------------------------
 # _close_dangling_otel_server_span
 # ---------------------------------------------------------------------------
@@ -122,6 +191,47 @@ def test_close_dangling_otel_server_span_records_status_and_ends(monkeypatch):
         "ended": True,
         "state_cleared": True,
     }
+
+
+def test_close_dangling_otel_server_span_v2_stamps_error_without_ending(monkeypatch):
+    """LIT-4179: under OTel v2 the FastAPI instrumentor owns the SERVER span, so
+    the handler must only stamp error.* on it (via record_error_attributes_on_span)
+    and must NOT set status, end the span, or clear request state — otherwise the
+    instrumentor's http.* attributes and span close are lost."""
+    import litellm.integrations.otel.model.config as otel_config
+    import litellm.proxy.proxy_server as ps
+
+    span = MagicMock()
+    fake_logger = MagicMock()
+    monkeypatch.setattr(ps, "open_telemetry_logger", fake_logger, raising=False)
+    monkeypatch.setattr(otel_config, "is_otel_v2_enabled", lambda: True)
+    request = _make_request(parent_otel_span=span)
+    exc = ProxyException(message="bad", type="bad_request_error", param=None, code=400)
+
+    _close_dangling_otel_server_span(request=request, status_code=422, exc=exc)
+
+    fake_logger.record_error_attributes_on_span.assert_called_once_with(span, exc, 422)
+    assert not span.end.called
+    assert not span.set_status.called
+    assert not fake_logger.set_response_status_code_attribute.called
+    assert request.state.parent_otel_span is span
+
+
+def test_close_dangling_otel_server_span_v2_success_does_not_stamp(monkeypatch):
+    """Under v2 a sub-400 status must not stamp an error onto the SERVER span."""
+    import litellm.integrations.otel.model.config as otel_config
+    import litellm.proxy.proxy_server as ps
+
+    span = MagicMock()
+    fake_logger = MagicMock()
+    monkeypatch.setattr(ps, "open_telemetry_logger", fake_logger, raising=False)
+    monkeypatch.setattr(otel_config, "is_otel_v2_enabled", lambda: True)
+    request = _make_request(parent_otel_span=span)
+
+    _close_dangling_otel_server_span(request=request, status_code=200)
+
+    assert not fake_logger.record_error_attributes_on_span.called
+    assert not span.end.called
 
 
 def test_close_dangling_otel_server_span_missing_span_is_noop_error():
@@ -180,6 +290,60 @@ async def test_otel_request_validation_exception_handler_empty_errors_invalid_pa
     assert body == {"detail": []}
 
 
+@pytest.mark.asyncio
+async def test_otel_request_validation_exception_handler_returns_a_problem_on_the_control_plane():
+    """`/management/v1` answers validation errors as RFC 9457, so a caller there gets a
+    400 problem document rather than the proxy-wide 422 `{"detail": [...]}` shape."""
+    errors = [
+        {"loc": ["query", "page_size"], "msg": "Input should be less than or equal to 100", "type": "less_than_equal"}
+    ]
+    exc = RequestValidationError(errors)
+    request = _make_request(path="/management/v1/spend_logs/end_users")
+
+    response = await otel_request_validation_exception_handler(request=request, exc=exc)
+    body = json.loads(response.body)
+
+    assert response.status_code == 400
+    assert response.media_type == "application/problem+json"
+    assert body["type"].startswith("urn:")
+    assert body["status"] == 400
+    assert "page_size" in body["detail"]
+    assert "detail" in body and not isinstance(body["detail"], list)
+
+
+@pytest.mark.asyncio
+async def test_otel_request_validation_exception_handler_answers_a_bad_control_plane_body_with_422():
+    """A request body that fails validation, an unknown field included, is 422 on
+    `/management/v1`; only query parameter problems are 400."""
+    errors = [
+        {"loc": ["body", "users", 0, "user_emial"], "msg": "Extra inputs are not permitted", "type": "extra_forbidden"}
+    ]
+    exc = RequestValidationError(errors)
+    request = _make_request(path="/management/v1/users/bulk")
+
+    response = await otel_request_validation_exception_handler(request=request, exc=exc)
+    body = json.loads(response.body)
+
+    assert response.status_code == 422
+    assert response.media_type == "application/problem+json"
+    assert body["type"] == "urn:litellm:error:invalid-request-body"
+    assert body["status"] == 422
+    assert "users.0.user_emial: Extra inputs are not permitted" in body["detail"]
+
+
+@pytest.mark.asyncio
+async def test_otel_request_validation_exception_handler_leaves_other_routes_on_422():
+    """The problem+json branch is scoped by path prefix. A route that merely contains
+    the word management, or sits above the prefix, keeps the shape its callers parse."""
+    exc = RequestValidationError([])
+
+    for path in ("/management", "/v1/management/foo", "/customer/list"):
+        response = await otel_request_validation_exception_handler(request=_make_request(path=path), exc=exc)
+
+        assert response.status_code == 422, path
+        assert json.loads(response.body) == {"detail": []}, path
+
+
 # ---------------------------------------------------------------------------
 # otel_unhandled_exception_handler
 # ---------------------------------------------------------------------------
@@ -202,6 +366,39 @@ async def test_otel_unhandled_exception_handler_returns_500_generic_payload():
     }
 
 
+_DB_OUTAGE_503_BODY: Final = {
+    "error": {
+        "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
+        "type": "no_db_connection",
+        "param": "None",
+        "code": "503",
+    }
+}
+
+
+def _raised_from(outer: Exception, cause: Exception) -> Exception:
+    try:
+        raise outer from cause
+    except Exception as chained:
+        return chained
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.ConnectError("All connection attempts failed"),
+        _raised_from(RuntimeError("user read failed"), httpx.ConnectError("All connection attempts failed")),
+    ],
+    ids=["raw_connect_error", "connect_error_as_cause"],
+)
+async def test_otel_unhandled_exception_handler_answers_a_db_outage_with_503_no_db_connection(exc):
+    response = await otel_unhandled_exception_handler(request=_make_request(path="/v2/team/list"), exc=exc)
+
+    assert response.status_code == 503
+    assert json.loads(response.body) == _DB_OUTAGE_503_BODY
+
+
 @pytest.mark.asyncio
 async def test_otel_unhandled_exception_handler_reraises_proxy_exception_error():
     """ProxyException / HTTPException / RequestValidationError are re-raised
@@ -217,6 +414,4 @@ async def test_otel_unhandled_exception_handler_reraises_proxy_exception_error()
 async def test_otel_unhandled_exception_handler_reraises_http_exception_invalid():
     request = _make_request()
     with pytest.raises(HTTPException):
-        await otel_unhandled_exception_handler(
-            request=request, exc=HTTPException(status_code=418, detail="teapot")
-        )
+        await otel_unhandled_exception_handler(request=request, exc=HTTPException(status_code=418, detail="teapot"))

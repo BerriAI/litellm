@@ -9,7 +9,8 @@ the LLM doesn't make a tool call, and we need to return a stream to the user.
 """
 
 import json
-from typing import Any, Dict, List, cast
+from collections.abc import Mapping
+from typing import Any, Final, cast
 
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -38,10 +39,10 @@ class FakeAnthropicMessagesStreamIterator:
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
 
-    def _create_content_block_chunks(self, block_dict: Dict[str, Any], index: int) -> List[bytes]:
+    def _create_content_block_chunks(self, block_dict: Mapping[str, object], index: int) -> list[bytes]:
         """Build SSE chunks for a single content block."""
-        chunks = []
-        block_type = block_dict.get("type")
+        chunks: Final = []
+        block_type: Final = block_dict.get("type")
 
         if block_type == "text":
             content_block_start = {
@@ -50,7 +51,7 @@ class FakeAnthropicMessagesStreamIterator:
                 "content_block": {"type": "text", "text": ""},
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
-            text = block_dict.get("text", "")
+            text: Final = block_dict.get("text", "")
             content_block_delta = {
                 "type": "content_block_delta",
                 "index": index,
@@ -65,7 +66,7 @@ class FakeAnthropicMessagesStreamIterator:
                 "content_block": {"type": "thinking", "thinking": "", "signature": ""},
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
-            thinking_text = block_dict.get("thinking", "")
+            thinking_text: Final = block_dict.get("thinking", "")
             if thinking_text:
                 content_block_delta = {
                     "type": "content_block_delta",
@@ -73,9 +74,9 @@ class FakeAnthropicMessagesStreamIterator:
                     "delta": {"type": "thinking_delta", "thinking": thinking_text},
                 }
                 chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
-            signature = block_dict.get("signature", "")
+            signature: Final = block_dict.get("signature", "")
             if signature:
-                signature_delta = {
+                signature_delta: Final = {
                     "type": "content_block_delta",
                     "index": index,
                     "delta": {"type": "signature_delta", "signature": signature},
@@ -102,7 +103,7 @@ class FakeAnthropicMessagesStreamIterator:
                 },
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
-            input_data = block_dict.get("input", {})
+            input_data: Final = block_dict.get("input", {})
             content_block_delta = {
                 "type": "content_block_delta",
                 "index": index,
@@ -113,26 +114,34 @@ class FakeAnthropicMessagesStreamIterator:
             }
             chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
 
-        content_block_stop = {"type": "content_block_stop", "index": index}
+        else:
+            passthrough_start: Final = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": block_dict,
+            }
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(passthrough_start)}\n\n".encode())
+
+        content_block_stop: Final = {"type": "content_block_stop", "index": index}
         chunks.append(f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode())
         return chunks
 
-    def _create_streaming_chunks(self) -> List[bytes]:
+    def _create_streaming_chunks(self) -> list[bytes]:
         """Convert the non-streaming response to streaming chunks"""
-        chunks = []
+        chunks: Final = []
 
         # Cast response to dict for easier access
-        response_dict = cast(Dict[str, Any], self.response)
+        response_dict: Final = cast(dict[str, Any], self.response)
 
         # 1. message_start event
-        usage = response_dict.get("usage", {})
-        message_start = {
+        usage: Final = self.response.get("usage")
+        message_start: Final = {
             "type": "message_start",
             "message": {
-                "id": response_dict.get("id"),
+                "id": self.response.get("id"),
                 "type": "message",
-                "role": response_dict.get("role", "assistant"),
-                "model": response_dict.get("model"),
+                "role": self.response.get("role", "assistant"),
+                "model": self.response.get("model"),
                 "content": [],
                 "stop_reason": None,
                 "stop_sequence": None,
@@ -145,36 +154,39 @@ class FakeAnthropicMessagesStreamIterator:
         chunks.append(f"event: message_start\ndata: {json.dumps(message_start)}\n\n".encode())
 
         # 2-4. For each content block, send start/delta/stop events
-        content_blocks = response_dict.get("content", [])
+        content_blocks: Final = response_dict.get("content", [])
         for index, block in enumerate(content_blocks):
-            block_dict = cast(Dict[str, Any], block)
+            block_dict = cast(dict[str, Any], block)
             chunks.extend(self._create_content_block_chunks(block_dict, index))
 
         # 5. message_delta event (with final usage and stop_reason)
         # Include cache usage fields so clients that only read message_delta
         # (like Claude Code's SDK) see the full input token breakdown.
-        delta_usage: Dict[str, Any] = {
+        delta_usage: Final[dict[str, int]] = {
             "output_tokens": usage.get("output_tokens", 0) if usage else 0,
         }
         if usage:
-            if usage.get("input_tokens") is not None:
-                delta_usage["input_tokens"] = usage["input_tokens"]
-            if usage.get("cache_creation_input_tokens") is not None:
-                delta_usage["cache_creation_input_tokens"] = usage["cache_creation_input_tokens"]
-            if usage.get("cache_read_input_tokens") is not None:
-                delta_usage["cache_read_input_tokens"] = usage["cache_read_input_tokens"]
-        message_delta = {
+            input_tokens: Final = usage.get("input_tokens")
+            if input_tokens is not None:
+                delta_usage["input_tokens"] = input_tokens
+            cache_creation_input_tokens: Final = usage.get("cache_creation_input_tokens")
+            if cache_creation_input_tokens is not None:
+                delta_usage["cache_creation_input_tokens"] = cache_creation_input_tokens
+            cache_read_input_tokens: Final = usage.get("cache_read_input_tokens")
+            if cache_read_input_tokens is not None:
+                delta_usage["cache_read_input_tokens"] = cache_read_input_tokens
+        message_delta: Final = {
             "type": "message_delta",
             "delta": {
-                "stop_reason": response_dict.get("stop_reason"),
-                "stop_sequence": response_dict.get("stop_sequence"),
+                "stop_reason": self.response.get("stop_reason"),
+                "stop_sequence": self.response.get("stop_sequence"),
             },
             "usage": delta_usage,
         }
         chunks.append(f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode())
 
         # 6. message_stop event
-        message_stop = {"type": "message_stop", "usage": usage if usage else {}}
+        message_stop: Final = {"type": "message_stop", "usage": usage if usage else {}}
         chunks.append(f"event: message_stop\ndata: {json.dumps(message_stop)}\n\n".encode())
 
         return chunks
@@ -186,7 +198,7 @@ class FakeAnthropicMessagesStreamIterator:
         if self.current_index >= len(self.chunks):
             raise StopAsyncIteration
 
-        chunk = self.chunks[self.current_index]
+        chunk: Final = self.chunks[self.current_index]
         self.current_index += 1
         return chunk
 
@@ -197,6 +209,6 @@ class FakeAnthropicMessagesStreamIterator:
         if self.current_index >= len(self.chunks):
             raise StopIteration
 
-        chunk = self.chunks[self.current_index]
+        chunk: Final = self.chunks[self.current_index]
         self.current_index += 1
         return chunk

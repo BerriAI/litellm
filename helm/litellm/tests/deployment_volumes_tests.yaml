@@ -1,0 +1,172 @@
+suite: test deployment volumes and volumeMounts
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: gateway renders only the config volume by default
+    template: gateway/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: gateway-config
+              configMap:
+                name: RELEASE-NAME-litellm-gateway-config
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: gateway-config
+              mountPath: /app/config/config.yaml
+              subPath: config.yaml
+
+  - it: gateway merges user volumes and volumeMounts with the config volume
+    template: gateway/deployment.yaml
+    set:
+      gateway.volumes:
+        - name: custom-callbacks
+          configMap:
+            name: custom-callbacks
+      gateway.volumeMounts:
+        - name: custom-callbacks
+          mountPath: /app/custom_callbacks.py
+          subPath: custom_callbacks.py
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: gateway-config
+      - equal:
+          path: spec.template.spec.volumes[1]
+          value:
+            name: custom-callbacks
+            configMap:
+              name: custom-callbacks
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].name
+          value: gateway-config
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[1]
+          value:
+            name: custom-callbacks
+            mountPath: /app/custom_callbacks.py
+            subPath: custom_callbacks.py
+
+  - it: gateway renders user volumes even when config creation is disabled
+    template: gateway/deployment.yaml
+    set:
+      gateway.config.create: false
+      gateway.volumes:
+        - name: certs
+          secret:
+            secretName: tls-certs
+      gateway.volumeMounts:
+        - name: certs
+          mountPath: /etc/certs
+          readOnly: true
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: certs
+              secret:
+                secretName: tls-certs
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: certs
+              mountPath: /etc/certs
+              readOnly: true
+
+  - it: gateway omits volumes when config creation is disabled and no user volumes are set
+    template: gateway/deployment.yaml
+    set:
+      gateway.config.create: false
+    asserts:
+      - isNull:
+          path: spec.template.spec.volumes
+      - isNull:
+          path: spec.template.spec.containers[0].volumeMounts
+
+  - it: backend merges user volumes and volumeMounts with the shared config volume
+    template: backend/deployment.yaml
+    set:
+      backend.volumes:
+        - name: sso-handler
+          configMap:
+            name: sso-handler
+      backend.volumeMounts:
+        - name: sso-handler
+          mountPath: /app/custom_sso.py
+          subPath: custom_sso.py
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: gateway-config
+      - equal:
+          path: spec.template.spec.volumes[1]
+          value:
+            name: sso-handler
+            configMap:
+              name: sso-handler
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[1]
+          value:
+            name: sso-handler
+            mountPath: /app/custom_sso.py
+            subPath: custom_sso.py
+
+  - it: backend renders user volumes even when config creation is disabled
+    template: backend/deployment.yaml
+    set:
+      gateway.config.create: false
+      backend.volumes:
+        - name: data
+          emptyDir: {}
+      backend.volumeMounts:
+        - name: data
+          mountPath: /data
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: data
+              emptyDir: {}
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: data
+              mountPath: /data
+
+  - it: ui renders no volumes by default
+    template: ui/deployment.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.volumes
+      - isNull:
+          path: spec.template.spec.containers[0].volumeMounts
+
+  - it: ui renders user volumes and volumeMounts
+    template: ui/deployment.yaml
+    set:
+      ui.volumes:
+        - name: nginx-config
+          configMap:
+            name: custom-nginx
+      ui.volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: nginx-config
+              configMap:
+                name: custom-nginx
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d

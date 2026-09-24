@@ -39,15 +39,15 @@ describe("PluginModeProvider effectiveMode fallback", () => {
     renderWithPlugins([]);
 
     await waitFor(() => expect(getMock).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByTestId("mode").textContent).toBe("ai-gateway"));
-    expect(screen.getByTestId("active").textContent).toBe("none");
+    await waitFor(() => expect(screen.getByTestId("mode")).toHaveTextContent("ai-gateway"));
+    expect(screen.getByTestId("active")).toHaveTextContent("none");
   });
 
   it("keeps the stored mode when it is still registered", async () => {
     renderWithPlugins([{ name: "my-plugin", display_name: "My Plugin", url: "https://p.example.com" }]);
 
-    await waitFor(() => expect(screen.getByTestId("active").textContent).toBe("my-plugin"));
-    expect(screen.getByTestId("mode").textContent).toBe("my-plugin");
+    await waitFor(() => expect(screen.getByTestId("active")).toHaveTextContent("my-plugin"));
+    expect(screen.getByTestId("mode")).toHaveTextContent("my-plugin");
   });
 
   it("falls back to ai-gateway when the plugins fetch fails, never stranding the user", async () => {
@@ -59,6 +59,6 @@ describe("PluginModeProvider effectiveMode fallback", () => {
     );
 
     await waitFor(() => expect(getMock).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByTestId("mode").textContent).toBe("ai-gateway"));
+    await waitFor(() => expect(screen.getByTestId("mode")).toHaveTextContent("ai-gateway"));
   });
 });

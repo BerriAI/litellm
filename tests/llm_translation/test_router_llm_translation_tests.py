@@ -4,13 +4,9 @@ Uses litellm.Router, ensures router.completion and router.acompletion pass BaseL
 
 import asyncio
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from base_llm_unit_tests import BaseLLMChatTest

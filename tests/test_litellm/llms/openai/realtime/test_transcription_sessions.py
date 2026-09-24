@@ -5,14 +5,11 @@ Tests for the Realtime transcription_sessions surface used by gpt-realtime-whisp
   - BaseLLMHTTPHandler.async_realtime_transcription_session_handler targeting
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.azure.realtime.http_transformation import AzureRealtimeHTTPConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
