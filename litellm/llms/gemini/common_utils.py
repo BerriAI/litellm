@@ -3,7 +3,7 @@ import datetime
 import json
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import httpx
 
@@ -497,68 +497,83 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
         from litellm.llms.gemini.count_tokens.transformation import (
+            InvalidCountTokensRequest,
             build_count_tokens_payload,
             normalize_count_tokens_tools,
         )
+        from litellm.types.llms.vertex_ai import SystemInstructions
 
         if contents is None and not messages:
             return None
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
-        try:
-            payload: Final = (
-                build_count_tokens_payload(model=model_to_use, messages=messages, system=system, tools=tools)
-                if contents is None
-                else None
-            )
-            system_instruction: Final = (
-                payload.system_instruction
-                if payload is not None
-                else (
-                    {"parts": [{"text": system}]}  # mutable-ok: SystemInstructions wire shape
-                    if isinstance(system, str)
-                    else system
-                )
-            )
-            gemini_tools: Final = payload.tools if payload is not None else normalize_count_tokens_tools(tools)
-            count_tokens_params: Final = {  # mutable-ok: kwargs dict for acount_tokens
-                "model": model_to_use,
-                "contents": payload.contents if payload is not None else contents,
-                **(
-                    {"system_instruction": system_instruction}  # mutable-ok: kwargs dict for acount_tokens
-                    if system_instruction is not None
-                    else {}  # mutable-ok: kwargs dict for acount_tokens
-                ),
-                **(
-                    {"tools": gemini_tools}  # mutable-ok: kwargs dict for acount_tokens
-                    if gemini_tools is not None
-                    else {}  # mutable-ok: kwargs dict for acount_tokens
-                ),
-            }
-            count_tokens_params_request.update(count_tokens_params)
-            result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-                client=client,
-                **count_tokens_params_request,
-            )
-            if result is not None:
-                return TokenCountResponse(
-                    total_tokens=result.get("totalTokens", 0),
-                    request_model=request_model,
-                    model_used=model_to_use,
-                    tokenizer_type="gemini_api",
-                    original_response=result,
-                )
-            return None
-        except Exception as e:
-            # provider counting is best-effort: translation, credential, and request
-            # failures all degrade to the proxy's local-tokenizer fallback
+        payload: Final = (
+            build_count_tokens_payload(model=model_to_use, messages=messages, system=system, tools=tools)
+            if contents is None
+            else None
+        )
+        if isinstance(payload, InvalidCountTokensRequest):
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
                 model_used=model_to_use,
                 tokenizer_type="gemini_api",
                 error=True,
-                error_message=getattr(e, "message", None) or str(e),
-                status_code=getattr(e, "status_code", None) or 500,
+                error_message=payload.message,
+                status_code=400,
             )
+        system_instruction: Final[SystemInstructions | None] = (
+            payload.system_instruction
+            if payload is not None
+            else (
+                {"parts": [{"text": system}]}  # mutable-ok: SystemInstructions wire shape
+                if isinstance(system, str)
+                else cast(  # cast-ok: contents-path callers pass a Gemini-shaped systemInstruction
+                    "SystemInstructions | None",
+                    system,
+                )
+            )
+        )
+        gemini_tools: Final = payload.tools if payload is not None else normalize_count_tokens_tools(tools)
+        count_tokens_params_request.update(
+            {  # mutable-ok: kwargs dict for acount_tokens
+                "model": model_to_use,
+                "contents": payload.contents if payload is not None else contents,
+            }
+        )
+        try:
+            result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
+                system_instruction=system_instruction,
+                tools=gemini_tools,
+                client=client,
+                **count_tokens_params_request,
+            )
+        except (litellm.APIError, litellm.APIConnectionError) as e:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="gemini_api",
+                error=True,
+                error_message=e.message,
+                status_code=e.status_code,
+            )
+        if "totalTokens" not in result:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="gemini_api",
+                error=True,
+                error_message="Google Gen AI Studio countTokens response has no totalTokens",
+                status_code=502,
+                original_response=result,
+            )
+        return TokenCountResponse(
+            total_tokens=result["totalTokens"],
+            request_model=request_model,
+            model_used=model_to_use,
+            tokenizer_type="gemini_api",
+            original_response=result,
+        )

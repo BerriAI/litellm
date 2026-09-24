@@ -144,7 +144,13 @@ class TestGoogleAIStudioTokenCounter:
             assert result.original_response == mock_response
 
             # Verify the mock was called correctly
-            mock_acount_tokens.assert_called_once_with(model=model_to_use, contents=contents, client=None)
+            mock_acount_tokens.assert_called_once_with(
+                system_instruction=None,
+                tools=None,
+                client=None,
+                model=model_to_use,
+                contents=contents,
+            )
 
     @pytest.mark.asyncio
     async def test_count_tokens_translates_anthropic_messages_system_and_tools(self):
@@ -254,13 +260,13 @@ class TestGoogleAIStudioTokenCounter:
 
     @pytest.mark.asyncio
     async def test_count_tokens_translation_error_falls_back(self):
-        """A crash translating bad message shapes must surface as an error
-        TokenCountResponse so the proxy falls back instead of 500ing."""
+        """Malformed message shapes surface as a 400 error TokenCountResponse so
+        the proxy falls back instead of 500ing."""
         token_counter = GoogleAIStudioTokenCounter()
 
         result = await token_counter.count_tokens(
             model_to_use="gemini-2.5-flash",
-            messages=[{"role": "tool", "content": "orphaned result", "tool_call_id": "missing-call"}],
+            messages=[{"role": "user", "content": [{"type": "text", "text": 123}]}],
             contents=None,
             deployment={"litellm_params": {"api_key": "test-key"}},
             request_model="gemini/gemini-2.5-flash",
@@ -268,21 +274,56 @@ class TestGoogleAIStudioTokenCounter:
 
         assert result is not None
         assert result.error is True
-        assert result.status_code == 500
+        assert result.status_code == 400
         assert result.total_tokens == 0
         assert result.error_message is not None
 
     @pytest.mark.asyncio
-    async def test_count_tokens_unexpected_handler_error_returns_error_response(self):
-        """A non-litellm exception escaping the handler must still surface as an
-        error TokenCountResponse so the proxy can fall back."""
+    async def test_count_tokens_malformed_anthropic_input_returns_400_without_http_call(self):
+        """Input that fails Anthropic request validation returns a 400 error
+        response before any request reaches the provider."""
+        import httpx
+
+        recorded: list = []
+
+        def _handler(request):
+            recorded.append(request)
+            return httpx.Response(200, json={"totalTokens": 7})
+
+        token_counter = GoogleAIStudioTokenCounter()
+
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://gemini.example.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            system={"not": "a valid system prompt"},
+            tools=[{"name": "get_weather", "input_schema": {"type": "object"}}],
+            client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+        )
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 400
+        assert result.total_tokens == 0
+        assert recorded == []
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_connection_error_returns_error_response(self):
+        """A provider APIConnectionError surfaces as an error TokenCountResponse
+        so the proxy falls back instead of 500ing."""
+        import litellm
+
         token_counter = GoogleAIStudioTokenCounter()
 
         with patch(
             "litellm.llms.gemini.count_tokens.handler.GoogleAIStudioTokenCounter.acount_tokens",
             new_callable=AsyncMock,
         ) as mock_acount_tokens:
-            mock_acount_tokens.side_effect = RuntimeError("unexpected failure")
+            mock_acount_tokens.side_effect = litellm.APIConnectionError(
+                message="connection refused", llm_provider="gemini", model="gemini-2.5-flash"
+            )
 
             result = await token_counter.count_tokens(
                 model_to_use="gemini-2.5-flash",
@@ -295,7 +336,38 @@ class TestGoogleAIStudioTokenCounter:
         assert result is not None
         assert result.error is True
         assert result.status_code == 500
-        assert "unexpected failure" in (result.error_message or "")
+        assert "connection refused" in (result.error_message or "")
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_response_without_total_tokens_returns_502(self):
+        """A 200 body missing totalTokens is a malformed provider response, not
+        a successful count, so it surfaces as a 502 error response."""
+        import httpx
+
+        recorded: list = []
+
+        def _handler(request):
+            recorded.append(request)
+            return httpx.Response(200, json={"promptTokensDetails": []})
+
+        token_counter = GoogleAIStudioTokenCounter()
+
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hello"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://gemini.example.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+        )
+
+        assert recorded != []
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 502
+        assert result.total_tokens == 0
+        assert "totalTokens" in (result.error_message or "")
+        assert result.original_response == {"promptTokensDetails": []}
 
     @pytest.mark.asyncio
     async def test_count_tokens_returns_none_without_contents_or_messages(self):

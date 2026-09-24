@@ -13,6 +13,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, cast
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
@@ -32,6 +34,11 @@ class GeminiCountTokensPayload:
     contents: list[ContentType]
     system_instruction: SystemInstructions | None
     tools: list[Tools] | None
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidCountTokensRequest:
+    message: str
 
 
 _ANTHROPIC_PART_TYPES: Final = frozenset(
@@ -345,28 +352,36 @@ def _payload_from_openai_parts(
     )
 
 
+_ANTHROPIC_REQUEST: Final = TypeAdapter(AnthropicMessagesRequest)
+
+
 def _build_anthropic_payload(
     model: str,
     messages: Sequence[Mapping[str, object]],
     system: object | None,
     tools: Sequence[Mapping[str, object]] | None,
-) -> GeminiCountTokensPayload:
+) -> GeminiCountTokensPayload | InvalidCountTokensRequest:
     hosted_tools: Final = tuple(tool for tool in tools or () if _hosted_tool_type(tool) is not None)
     adapter_tools: Final = tuple(tool for tool in tools or () if _hosted_tool_type(tool) is None)
-    anthropic_request: Final[AnthropicMessagesRequest] = cast(  # cast-ok: adapter reads only the keys supplied
+    raw_request: Final = {  # mutable-ok: transient request dict for the anthropic adapter
+        "model": model,
+        "messages": list(  # mutable-ok: adapter contract takes a list of messages
+            _textify_server_side_blocks(messages)
+        ),
+        **({"system": system} if system else {}),  # mutable-ok: transient request dict for the anthropic adapter
+        **(
+            {"tools": list(adapter_tools)}
+            if adapter_tools
+            else {}  # mutable-ok: transient request dict for the anthropic adapter
+        ),
+    }
+    try:
+        _ANTHROPIC_REQUEST.validate_python(raw_request)
+    except ValidationError as e:
+        return InvalidCountTokensRequest(message=str(e))
+    anthropic_request: Final = cast(  # cast-ok: validated above; pydantic returns lazy Iterable validators
         AnthropicMessagesRequest,
-        {  # mutable-ok: transient request dict for the anthropic adapter
-            "model": model,
-            "messages": list(  # mutable-ok: adapter contract takes a list of messages
-                _textify_server_side_blocks(messages)
-            ),
-            **({"system": system} if system else {}),  # mutable-ok: transient request dict for the anthropic adapter
-            **(
-                {"tools": list(adapter_tools)}
-                if adapter_tools
-                else {}  # mutable-ok: transient request dict for the anthropic adapter
-            ),
-        },
+        raw_request,
     )
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         anthropic_request, custom_llm_provider="gemini"
@@ -422,10 +437,13 @@ def build_count_tokens_payload(
     messages: Sequence[Mapping[str, object]],
     system: object | None,
     tools: Sequence[Mapping[str, object]] | None,
-) -> GeminiCountTokensPayload:
-    if _has_anthropic_shape(system=system, tools=tools, messages=messages):
-        return _build_anthropic_payload(model=model, messages=messages, system=system, tools=tools)
-    return _build_openai_payload(model=model, messages=messages, system=system, tools=tools)
+) -> GeminiCountTokensPayload | InvalidCountTokensRequest:
+    try:
+        if _has_anthropic_shape(system=system, tools=tools, messages=messages):
+            return _build_anthropic_payload(model=model, messages=messages, system=system, tools=tools)
+        return _build_openai_payload(model=model, messages=messages, system=system, tools=tools)
+    except (KeyError, TypeError, ValueError) as e:
+        return InvalidCountTokensRequest(message=f"Invalid token count request: {e!r}")
 
 
 # Matches real inlineData blobs; a short or non-base64 `data` field (tool args,

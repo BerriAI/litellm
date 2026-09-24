@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
 
 COUNT_TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:countTokens"
@@ -58,6 +59,81 @@ async def test_acount_tokens_keeps_contents_body_without_system_or_tools():
 
     body = json.loads(recorded[-1].content)
     assert body == {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+
+
+@pytest.mark.asyncio
+async def test_acount_tokens_sends_generate_content_request_with_system_only():
+    recorded: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        recorded.append(request)
+        return httpx.Response(200, json={"totalTokens": 9})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+
+    await GoogleAIStudioTokenCounter().acount_tokens(
+        model="gemini-2.5-flash",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        api_key="test-key",
+        system_instruction={"parts": [{"text": "be terse"}]},
+        client=client,
+    )
+
+    body = json.loads(recorded[-1].content)
+    assert body == {
+        "generateContentRequest": {
+            "model": "models/gemini-2.5-flash",
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "systemInstruction": {"parts": [{"text": "be terse"}]},
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_acount_tokens_sends_generate_content_request_with_tools_only():
+    recorded: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        recorded.append(request)
+        return httpx.Response(200, json={"totalTokens": 9})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+
+    await GoogleAIStudioTokenCounter().acount_tokens(
+        model="gemini-2.5-flash",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        api_key="test-key",
+        tools=[{"function_declarations": [{"name": "get_weather"}]}],
+        client=client,
+    )
+
+    body = json.loads(recorded[-1].content)
+    assert body == {
+        "generateContentRequest": {
+            "model": "models/gemini-2.5-flash",
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "tools": [{"function_declarations": [{"name": "get_weather"}]}],
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_acount_tokens_non_json_body_raises_api_error_with_response_status():
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<html>proxy error page</html>")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+
+    with pytest.raises(litellm.APIError) as exc_info:
+        await GoogleAIStudioTokenCounter().acount_tokens(
+            model="gemini-2.5-flash",
+            contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+            api_key="test-key",
+            client=client,
+        )
+
+    assert exc_info.value.status_code == 200
+    assert "non-JSON" in exc_info.value.message
 
 
 @pytest.mark.asyncio

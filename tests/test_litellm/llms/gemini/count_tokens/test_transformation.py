@@ -297,6 +297,20 @@ def test_build_count_tokens_payload_folds_system_into_contents_for_models_withou
     assert [part.get("text") for part in payload.contents[0]["parts"]] == ["be nice", "hi"]
 
 
+def test_build_count_tokens_payload_returns_invalid_for_malformed_anthropic_input():
+    from litellm.llms.gemini.count_tokens.transformation import InvalidCountTokensRequest
+
+    payload = build_count_tokens_payload(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        system={"not": "a valid system prompt"},
+        tools=[{"name": "get_weather", "input_schema": {"type": "object"}}],
+    )
+
+    assert isinstance(payload, InvalidCountTokensRequest)
+    assert payload.message
+
+
 def test_normalize_count_tokens_tools_handles_each_tool_shape():
     from litellm.llms.gemini.count_tokens.transformation import normalize_count_tokens_tools
 
