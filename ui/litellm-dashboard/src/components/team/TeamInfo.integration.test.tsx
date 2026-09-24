@@ -205,14 +205,15 @@ vi.mock("@/components/common_components/AccessGroupSelector", () => ({
   ),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
-  useKeys: vi.fn().mockReturnValue({
+vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => {
+  const useKeysResult = {
     data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
     isPending: false,
     isFetching: false,
     refetch: vi.fn(),
-  }),
-}));
+  };
+  return { useKeys: vi.fn().mockReturnValue(useKeysResult) };
+});
 
 vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchTeamFilterOptions: vi.fn().mockResolvedValue({
