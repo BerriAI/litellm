@@ -848,6 +848,97 @@ class _DownStore:
         raise RuntimeError("database unavailable")
 
 
+class _RegistersThenRaises:
+    def __init__(self):
+        self.store = InMemoryBackgroundSettlementStore()
+
+    async def register(self, pending):
+        await self.store.register(pending)
+        raise RuntimeError("connection reset after the row was committed")
+
+    async def pending(self, interaction_id):
+        return await self.store.pending(interaction_id)
+
+    async def is_claimed(self, interaction_id):
+        return await self.store.is_claimed(interaction_id)
+
+    async def claim(self, interaction_id):
+        return await self.store.claim(interaction_id)
+
+    async def record_outcome(self, interaction_id, outcome):
+        return None
+
+    async def unclaimed(self):
+        return await self.store.unclaimed()
+
+
+@pytest.mark.asyncio
+async def test_create_whose_registration_raised_after_landing_still_claims_the_stored_row():
+    """
+    A registration that raises after its row committed used to move the poll
+    to a private in-memory gate, so the creating worker billed while the
+    stored row stayed unclaimed for another replica's delete or the next boot
+    to bill again. The row that landed is the gate every settler shares.
+    """
+    store = _RegistersThenRaises()
+    logging_obj = _logging_obj(litellm_params={"metadata": _create_metadata()})
+    poll_fetch, _ = _fetch_sequence(_response("in_progress", with_usage=False))
+    task = await maybe_schedule_background_interaction_cost_polling(
+        response=_response("in_progress", with_usage=False),
+        create_kwargs={"litellm_logging_obj": logging_obj},
+        custom_llm_provider="gemini",
+        store=store,
+        fetch_interaction=poll_fetch,
+    )
+    fetch, _ = _capturing_fetch(_response("completed", with_usage=True))
+
+    outcome = await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc", delete_kwargs={}, fetch_interaction=fetch, store=store
+    )
+
+    assert outcome == "billed"
+    assert await store.is_claimed("interactions/bg-abc")
+    assert await store.unclaimed() == ()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_delete_on_a_worker_that_resumed_the_poll_fails_when_it_cannot_fetch():
+    """
+    After a restart every worker resumes the unclaimed rows, so none of them
+    is the creator whose delete may release and delete on a failed fetch. A
+    resumed worker's delete fails like any other replica's, and its own poll
+    still bills the interaction once it completes.
+    """
+    store = InMemoryBackgroundSettlementStore()
+    await store.register(
+        PendingBackgroundInteraction(
+            interaction_id="interactions/bg-abc",
+            custom_llm_provider="gemini",
+            create_context=_create_context(_logging_obj(litellm_params={"metadata": _create_metadata()}), "gemini"),
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    responses = [_response("in_progress", with_usage=False)]
+
+    async def poll_fetch(context):
+        return responses[-1]
+
+    (resumed,) = await resume_unsettled_background_interactions(store, poll_fetch, schedule=FAST_SCHEDULE)
+    fetch, _ = _fetch_sequence(RuntimeError("Google API key is required"))
+
+    with pytest.raises(RuntimeError, match="Google API key is required"):
+        await maybe_settle_background_interaction_before_delete(
+            interaction_id="interactions/bg-abc", delete_kwargs={}, fetch_interaction=fetch, store=store
+        )
+
+    assert await store.is_claimed("interactions/bg-abc") is False
+    responses.append(_response("completed", with_usage=True))
+    assert await asyncio.wait_for(resumed, timeout=5) == "billed"
+
+
 @pytest.mark.asyncio
 async def test_create_still_settles_on_its_own_replica_when_the_store_is_down():
     logging_obj = _logging_obj()

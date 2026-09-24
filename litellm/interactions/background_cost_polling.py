@@ -174,6 +174,7 @@ class BackgroundInteractionPollContext:
     max_interval_seconds: float = BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS
     timeout_seconds: float = BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS
     store: BackgroundSettlementStore = field(default_factory=InMemoryBackgroundSettlementStore)
+    resumed: bool = False
 
 
 FetchInteraction: TypeAlias = Callable[[BackgroundInteractionPollContext], Awaitable[InteractionsAPIResponse]]
@@ -490,6 +491,12 @@ async def _registered_store(
     try:
         await store.register(pending)
     except Exception:  # noqa: BLE001  # a store outage must not fail the create; the poll settles from this process
+        if await _registration_landed(store, pending.interaction_id):
+            verbose_logger.exception(
+                "Registering background interaction %s raised although its row landed; it settles through the store",
+                pending.interaction_id,
+            )
+            return store
         verbose_logger.exception(
             "Could not durably register background interaction %s; only this process can settle it",
             pending.interaction_id,
@@ -498,6 +505,13 @@ async def _registered_store(
         await fallback.register(pending)
         return fallback
     return store
+
+
+async def _registration_landed(store: BackgroundSettlementStore, interaction_id: str) -> bool:
+    try:
+        return await store.pending(interaction_id) is not None or await store.is_claimed(interaction_id)
+    except Exception:  # noqa: BLE001  # the row cannot be read either, so the poll settles from this process
+        return False
 
 
 async def maybe_schedule_background_interaction_cost_polling(
@@ -575,7 +589,7 @@ async def maybe_settle_background_interaction_before_delete(
     store: BackgroundSettlementStore | None = None,
 ) -> SettlementOutcome | None:
     entry: Final = _ACTIVE_POLLS.get(interaction_id)
-    if entry is not None:
+    if entry is not None and not entry.context.resumed:
         return await _settle_before_delete(entry.context, await _fetch_before_delete(entry.context, fetch_interaction))
     settlement_store: Final = store or _STORE.store
     pending: Final = await _pending(settlement_store, interaction_id)
@@ -633,6 +647,7 @@ def _resumed_context(
         max_interval_seconds=schedule.max_interval_seconds,
         timeout_seconds=max(schedule.timeout_seconds - age_seconds, schedule.initial_interval_seconds),
         store=store,
+        resumed=True,
     )
 
 
