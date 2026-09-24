@@ -269,7 +269,7 @@ def video_generation(
                 client=kwargs.get("client"),
                 api_base=litellm_params.get("api_base"),
                 extra_headers=extra_headers,
-                api_key=kwargs.get("api_key"),
+                api_key=kwargs.get("api_key") or litellm_params.get("api_key"),
                 # Real litellm_params so metadata.request_id reaches the
                 # clientRequestToken fallback (idempotent retries); aws_* keys
                 # are already merged into bedrock_optional_params above and are
@@ -397,7 +397,7 @@ def video_content(
                 litellm_params=litellm_params,
                 logging_obj=litellm_logging_obj,
                 api_base=litellm_params.get("api_base"),
-                api_key=kwargs.get("api_key"),
+                api_key=kwargs.get("api_key") or litellm_params.get("api_key"),
                 timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             )
         return base_llm_http_handler.video_content_handler(
@@ -1112,7 +1112,7 @@ def video_status(
                 litellm_params=litellm_params,
                 logging_obj=litellm_logging_obj,
                 api_base=litellm_params.get("api_base"),
-                api_key=kwargs.get("api_key"),
+                api_key=kwargs.get("api_key") or litellm_params.get("api_key"),
                 astatus=_is_async,
                 timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             )

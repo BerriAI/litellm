@@ -24,6 +24,7 @@ import base64
 import binascii
 import re
 from collections.abc import Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
@@ -79,6 +80,16 @@ _UNSUPPORTED_MESSAGE: Final = (
 )
 
 
+def _unsupported_operation_error(operation: str) -> BedrockError:
+    """400-class error for unsupported video operations.
+
+    Verified against litellm.exception_type: a plain ValueError/NotImplementedError
+    both fall through to APIConnectionError (500-class), while BedrockError carries
+    status_code=400 into BadRequestError through the bedrock mapping.
+    """
+    return BedrockError(status_code=400, message=_UNSUPPORTED_MESSAGE.format(operation=operation))
+
+
 def _data_url_payload(image: str) -> str:
     """Validate a ``data:<mime>;base64,`` URL and return only its payload."""
     header, sep, encoded = image.partition(",")
@@ -106,6 +117,11 @@ def _file_content_to_b64_and_format(image: FileContent) -> tuple[str, str]:
         if hasattr(image, "seek"):
             image.seek(0)
         image_bytes = image.read()
+        if not isinstance(image_bytes, bytes):
+            raise ValueError(  # noqa: TRY004  # ValueError maps to a 400-class through the video surface; TypeError would 500
+                "Nova Reel input_reference file objects must be opened in binary mode "
+                f"(read() returned {type(image_bytes).__name__}); open image files with 'rb'."
+            )
     else:
         raise ValueError(
             f"Nova Reel input_reference must be bytes, a file-like object or a base64 string; got {type(image)!r}"
@@ -148,13 +164,103 @@ def _sanitize_client_request_token(token: str) -> str:
 
 
 def _request_id_from_litellm_params(litellm_params: GenericLiteLLMParams) -> str | None:
-    """Best-effort litellm request id from litellm_params.metadata (extra field)."""
+    """Best-effort litellm request id: metadata.request_id, then the litellm_call_id extra field."""
     metadata: Final = getattr(litellm_params, "metadata", None)
     if isinstance(metadata, Mapping):
         request_id: Final = metadata.get("request_id")
         if isinstance(request_id, str) and request_id:
             return request_id
+    call_id: Final = getattr(litellm_params, "litellm_call_id", None)
+    if isinstance(call_id, str) and call_id:
+        return call_id
     return None
+
+
+def _generation_config_from_op(op: _VideoParams, task_type: object) -> _VideoParams:
+    """videoGenerationConfig from request params (pops seconds/size/dimension/fps/seed).
+
+    durationSeconds lives on videoGenerationConfig for TEXT_VIDEO and
+    MULTI_SHOT_AUTOMATED only; MULTI_SHOT_MANUAL durations live per shot
+    inside multiShotManualParams.shots, so it is omitted there.
+    """
+    generation_config: Final[_VideoParams] = {
+        "fps": NOVA_REEL_DEFAULT_FPS,
+        "dimension": NOVA_REEL_DEFAULT_DIMENSION,
+    }
+    single_duration: Final[bool] = task_type != "MULTI_SHOT_MANUAL"
+    if single_duration:
+        generation_config["durationSeconds"] = NOVA_REEL_DEFAULT_DURATION_SECONDS
+    seconds: Final = op.pop("seconds", None)
+    if isinstance(seconds, (int, float, str)):
+        try:
+            parsed_seconds: Final = int(float(seconds))
+        except ValueError as err:
+            raise ValueError(f"Nova Reel seconds must be a number; got {seconds!r}") from err
+        if single_duration:
+            generation_config["durationSeconds"] = parsed_seconds
+    size: Final = op.pop("size", None)
+    if size is not None and isinstance(size, str) and "x" in size:
+        generation_config["dimension"] = size.replace(" ", "")
+    dimension: Final = op.pop("dimension", None)
+    if dimension is not None and isinstance(dimension, str) and dimension.strip():
+        generation_config["dimension"] = dimension
+    fps: Final = op.pop("fps", None)
+    if fps is not None:
+        try:
+            generation_config["fps"] = int(float(fps))
+        except ValueError as err:
+            raise ValueError(f"Nova Reel fps must be a number; got {fps!r}") from err
+    seed: Final = op.pop("seed", None)
+    if seed is not None:
+        try:
+            generation_config["seed"] = int(float(seed))
+        except ValueError as err:
+            raise ValueError(f"Nova Reel seed must be a number; got {seed!r}") from err
+    return generation_config
+
+
+def _task_params_from_op(task_type: object, op: _VideoParams, prompt: str, input_reference: object) -> _VideoParams:
+    """Per-taskType params section for modelInput (pops multiShot params from op)."""
+    if task_type == "MULTI_SHOT_AUTOMATED":
+        # AWS schema: automated multi-shot takes multiShotAutomatedParams
+        # (never textToVideoParams) and forbids input images.
+        if input_reference is not None:
+            raise ValueError(
+                "Nova Reel MULTI_SHOT_AUTOMATED does not accept input images "
+                "(input_reference/image); automated multi-shot is text-driven only."
+            )
+        automated_params: Final[object | None] = op.pop("multiShotAutomatedParams", None)
+        automated_section: Final[_VideoParams] = {
+            "multiShotAutomatedParams": (
+                automated_params if isinstance(automated_params, Mapping) else {"text": prompt}
+            )
+        }
+        return automated_section
+    if task_type == "MULTI_SHOT_MANUAL":
+        manual_params: Final[object | None] = op.pop("multiShotManualParams", None)
+        if not isinstance(manual_params, Mapping):
+            raise ValueError(
+                "Nova Reel MULTI_SHOT_MANUAL requires multiShotManualParams in the request "
+                "(shot definitions with per-shot text/images/durationSeconds); "
+                f"got {manual_params!r}."
+            )
+        manual_section: Final[_VideoParams] = {"multiShotManualParams": manual_params}
+        return manual_section
+    # TEXT_VIDEO (default): textToVideoParams with the prompt and optional images.
+    text_to_video_params: Final[_VideoParams] = {"text": prompt}
+    if input_reference is not None:
+        if isinstance(input_reference, dict):
+            # Pre-built provider shape: {"format": ..., "source": {...}}
+            text_to_video_params["images"] = [input_reference]  # mutable-ok: AWS images param is a list
+        else:
+            image_b64, image_format = _file_content_to_b64_and_format(
+                input_reference  # pyright: ignore[reportArgumentType]  # request params are untyped user input; the helper validates and raises for unsupported shapes
+            )
+            text_to_video_params["images"] = [  # mutable-ok: AWS images param is a list
+                {"format": image_format, "source": {"bytes": image_b64}}  # mutable-ok: nested AWS image payload
+            ]
+    text_section: Final[_VideoParams] = {"textToVideoParams": text_to_video_params}
+    return text_section
 
 
 class BedrockNovaReelVideoConfig(BaseVideoConfig):
@@ -171,6 +277,8 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
             "dimension",
             "taskType",
             "output_s3_uri",
+            "kmsKeyId",
+            "bucketOwner",
             "input_reference",
             "image",
         ]
@@ -246,62 +354,33 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
                 'output_s3_uri="s3://my-bucket/optional-prefix/" in the request '
                 "(Bedrock writes output.mp4 there)."
             )
+        if not str(output_s3_uri).startswith("s3://"):
+            raise ValueError(
+                "Nova Reel output_s3_uri must be an S3 URI starting with s3:// "
+                f"(got {output_s3_uri!r}); Bedrock writes output.mp4 into that bucket."
+            )
+        # Pop the S3 config keys (and their snake_case aliases) before the
+        # modelInput passthrough merge so they never leak into modelInput; they
+        # are forwarded into outputDataConfig.s3OutputDataConfig below.
+        kms_key_id: Final = op.pop("kmsKeyId", None) or op.pop("output_s3_kms_key_id", None)
+        bucket_owner: Final = op.pop("bucketOwner", None) or op.pop("output_s3_bucket_owner", None)
 
         task_type: Final = op.pop("taskType", "TEXT_VIDEO")
 
-        text_to_video_params: Final[_VideoParams] = {"text": prompt}
+        if not str(prompt or "").strip():
+            raise ValueError("Nova Reel prompt is required and cannot be empty (or whitespace-only).")
+
         # Pop both reference keys unconditionally so neither leaks into modelInput;
         # input_reference wins when a caller passes both.
         popped_reference: Final = op.pop("input_reference", None)
         popped_image: Final = op.pop("image", None)
         input_reference: Final = popped_reference if popped_reference is not None else popped_image
-        if input_reference is not None:
-            if isinstance(input_reference, dict):
-                # Pre-built provider shape: {"format": ..., "source": {...}}
-                text_to_video_params["images"] = [input_reference]  # mutable-ok: AWS images param is a list
-            else:
-                image_b64, image_format = _file_content_to_b64_and_format(
-                    input_reference  # pyright: ignore[reportArgumentType]  # request params are untyped user input; the helper validates and raises for unsupported shapes
-                )
-                text_to_video_params["images"] = [  # mutable-ok: AWS images param is a list
-                    {"format": image_format, "source": {"bytes": image_b64}}  # mutable-ok: nested AWS image payload
-                ]
-
-        generation_config: Final[_VideoParams] = {
-            "durationSeconds": NOVA_REEL_DEFAULT_DURATION_SECONDS,
-            "fps": NOVA_REEL_DEFAULT_FPS,
-            "dimension": NOVA_REEL_DEFAULT_DIMENSION,
-        }
-        seconds: Final = op.pop("seconds", None)
-        if isinstance(seconds, (int, float, str)):
-            try:
-                generation_config["durationSeconds"] = int(float(seconds))
-            except ValueError as err:
-                raise ValueError(f"Nova Reel seconds must be a number; got {seconds!r}") from err
-        size: Final = op.pop("size", None)
-        if size is not None and isinstance(size, str) and "x" in size:
-            generation_config["dimension"] = size.replace(" ", "")
-        dimension: Final = op.pop("dimension", None)
-        if dimension is not None and isinstance(dimension, str) and dimension.strip():
-            generation_config["dimension"] = dimension
-        fps: Final = op.pop("fps", None)
-        if fps is not None:
-            try:
-                generation_config["fps"] = int(float(fps))
-            except ValueError as err:
-                raise ValueError(f"Nova Reel fps must be a number; got {fps!r}") from err
-        seed: Final = op.pop("seed", None)
-        if seed is not None:
-            try:
-                generation_config["seed"] = int(float(seed))
-            except ValueError as err:
-                raise ValueError(f"Nova Reel seed must be a number; got {seed!r}") from err
 
         model_input: Final[_VideoParams] = {
             "taskType": task_type,
-            "textToVideoParams": text_to_video_params,
-            "videoGenerationConfig": generation_config,
+            "videoGenerationConfig": _generation_config_from_op(op, task_type),
         }
+        model_input.update(_task_params_from_op(task_type, op, prompt, input_reference))
 
         # Known non-AWS video-client params have no Nova Reel mapping; drop them
         # instead of leaking junk keys into modelInput. Everything else keeps the
@@ -322,10 +401,16 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
             else (_sanitize_client_request_token(request_id) if request_id is not None else None)
         )
 
+        # Optional S3 config keys are added below before the envelope is returned.
+        s3_output_config: Final[_VideoParams] = {"s3Uri": output_s3_uri}
+        if kms_key_id is not None:
+            s3_output_config["kmsKeyId"] = kms_key_id
+        if bucket_owner is not None:
+            s3_output_config["bucketOwner"] = bucket_owner
         request_body: Final[_VideoParams] = {
             "modelId": model,
             "modelInput": model_input,
-            "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
+            "outputDataConfig": {"s3OutputDataConfig": s3_output_config},
         }
         if client_request_token:
             # Envelope key only when populated: caller-supplied token or litellm request id.
@@ -342,7 +427,13 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
     ) -> VideoObject:
         from litellm.types.videos.main import VideoObject
 
-        response_data: Final[BedrockStartAsyncInvokeResponse] = raw_response.json()
+        try:
+            response_data: Final[BedrockStartAsyncInvokeResponse] = raw_response.json()
+        except ValueError as err:
+            raise BedrockError(
+                status_code=502,
+                message=f"Nova Reel async-invoke returned a non-JSON response: {err}",
+            ) from err
         invocation_arn: Final[str | None] = response_data.get("invocationArn")
         if not invocation_arn:
             raise ValueError(f"Nova Reel async-invoke response missing invocationArn: {response_data}")
@@ -383,7 +474,13 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
     ) -> VideoObject:
         from litellm.types.videos.main import VideoObject
 
-        response_data: Final[BedrockGetAsyncInvokeResponse] = raw_response.json()
+        try:
+            response_data: Final[BedrockGetAsyncInvokeResponse] = raw_response.json()
+        except ValueError as err:
+            raise BedrockError(
+                status_code=502,
+                message=f"Nova Reel get-async-invoke returned a non-JSON response: {err}",
+            ) from err
         invocation_arn: Final[str | None] = response_data.get("invocationArn")
         if not invocation_arn:
             raise ValueError(f"Nova Reel get-async-invoke response missing invocationArn: {response_data}")
@@ -421,7 +518,10 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
             if s3_config is not None:
                 s3_uri: Final[str | None] = s3_config.get("s3Uri")
                 if s3_uri:
-                    video_obj.usage = {"output_s3_uri": s3_uri}  # mutable-ok: VideoObject.usage payload dict
+                    # Provider detail, not usage: rides on _hidden_params (like the
+                    # vertex video transforms' provider-specific fields) so cost
+                    # calculators reading usage.duration_seconds never trip on it.
+                    video_obj._hidden_params["output_s3_uri"] = s3_uri
         return video_obj
 
     def transform_video_content_request(
@@ -453,7 +553,7 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         headers: _VideoHeaders,
         extra_body: Mapping[str, object] | None = None,
     ) -> tuple[str, _VideoParams]:
-        raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="remix"))
+        raise _unsupported_operation_error("remix")
 
     def transform_video_remix_response(
         self,
@@ -461,7 +561,7 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         logging_obj: LiteLLMLogging | None,
         custom_llm_provider: str | None = None,
     ) -> VideoObject:
-        raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="remix"))
+        raise _unsupported_operation_error("remix")
 
     def transform_video_list_request(
         self,
@@ -473,7 +573,7 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         order: str | None = None,
         extra_query: Mapping[str, object] | None = None,
     ) -> tuple[str, _VideoParams]:
-        raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="list"))
+        raise _unsupported_operation_error("list")
 
     def transform_video_list_response(
         self,
@@ -481,7 +581,7 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         logging_obj: LiteLLMLogging | None,
         custom_llm_provider: str | None = None,
     ) -> _VideoStringParams:
-        raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="list"))
+        raise _unsupported_operation_error("list")
 
     def transform_video_delete_request(
         self,
@@ -490,14 +590,14 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: _VideoHeaders,
     ) -> tuple[str, _VideoParams]:
-        raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="delete"))
+        raise _unsupported_operation_error("delete")
 
     def transform_video_delete_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLogging | None,
     ) -> VideoObject:
-        raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="delete"))
+        raise _unsupported_operation_error("delete")
 
     @staticmethod
     def extract_invocation_arn(video_id: str) -> str:
@@ -514,9 +614,20 @@ def _epoch_now() -> int:
 
 
 def _to_epoch(timestamp: str | float | None) -> int | None:
+    """Bedrock timestamps to unix epoch seconds.
+
+    The bedrock-runtime Smithy model declares timestampFormat: iso8601 for
+    submitTime/endTime, so real GetAsyncInvoke payloads carry strings like
+    "2026-01-15T10:30:00Z"; numeric epochs are accepted too.
+    """
     if timestamp is None:
         return None
     try:
         return int(float(timestamp))
     except (TypeError, ValueError):
+        pass
+    try:
+        return int(datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        verbose_logger.warning("Nova Reel response carried an unparseable timestamp %r; leaving it unset", timestamp)
         return None

@@ -32,7 +32,7 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
-from litellm.types.videos.utils import decode_video_id_with_provider
+from litellm.types.videos.utils import decode_video_id_with_provider, extract_original_video_id
 
 from ..base_aws_llm import (
     AWSPreparedRequest,
@@ -51,6 +51,34 @@ _ExtraHeadersDict: TypeAlias = dict[str, object]
 
 DEFAULT_VIDEO_REGION: Final = "us-west-2"
 NOVA_REEL_OUTPUT_FILENAME: Final = "output.mp4"
+# S3 download client defaults when no per-call timeout is given (video_content
+# threads its call timeout in; these bound the boto3 client otherwise).
+DEFAULT_S3_CONNECT_TIMEOUT_S: Final = 5.0
+DEFAULT_S3_READ_TIMEOUT_S: Final = 60.0
+
+
+def _client_error_code(err: Exception) -> str:
+    """AWS error Code from a botocore ClientError response, '' when absent."""
+    response: Final = getattr(err, "response", None)
+    if isinstance(response, Mapping):
+        error: Final = response.get("Error")
+        if isinstance(error, Mapping):
+            code: Final = error.get("Code")
+            if isinstance(code, str):
+                return code
+    return ""
+
+
+def _client_error_http_status(err: Exception) -> int | None:
+    """HTTPStatusCode from a botocore ClientError ResponseMetadata, None when absent."""
+    response: Final = getattr(err, "response", None)
+    if isinstance(response, Mapping):
+        metadata: Final = response.get("ResponseMetadata")
+        if isinstance(metadata, Mapping):
+            status: Final = metadata.get("HTTPStatusCode")
+            if isinstance(status, int):
+                return status
+    return None
 
 
 def _sign_get_request(
@@ -99,8 +127,10 @@ def _region_from_invocation_arn(invocation_arn: str) -> str | None:
 
 def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
     """s3://bucket/optional/prefix/ -> (bucket, 'optional/prefix')."""
+    if not s3_uri.startswith("s3://"):
+        raise ValueError(f"Invalid S3 output URI (expected s3://bucket/prefix): {s3_uri!r}")
     trimmed: Final = s3_uri.rstrip("/")
-    without_scheme: Final = trimmed.removeprefix("s3://")
+    without_scheme: Final = trimmed[len("s3://") :]
     bucket, _, prefix = without_scheme.partition("/")
     if not bucket:
         raise ValueError(f"Invalid S3 output URI: {s3_uri!r}")
@@ -136,9 +166,10 @@ def _as_generic_litellm_params(
 ) -> GenericLiteLLMParams:
     """Normalize handler-level litellm_params to GenericLiteLLMParams for the create transform.
 
-    Only ``metadata.request_id`` is read downstream (the clientRequestToken
-    fallback); aws_* credential keys are consumed from optional_params only, so
-    nothing passed here double-processes credentials.
+    Only the clientRequestToken fallback inputs are read downstream
+    (metadata.request_id, then the litellm_call_id extra field); aws_* credential
+    keys are consumed from optional_params only, so nothing passed here
+    double-processes credentials.
     """
     if isinstance(litellm_params, GenericLiteLLMParams):
         return litellm_params
@@ -147,6 +178,9 @@ def _as_generic_litellm_params(
         metadata: Final = litellm_params.get("metadata")
         if isinstance(metadata, dict):
             params.metadata = metadata  # pyright: ignore[reportAttributeAccessIssue]  # metadata is an extra-allowed field on GenericLiteLLMParams
+        call_id: Final = litellm_params.get("litellm_call_id")
+        if isinstance(call_id, str) and call_id:
+            params.litellm_call_id = call_id  # pyright: ignore[reportAttributeAccessIssue]  # litellm_call_id is an extra-allowed field on GenericLiteLLMParams (set by the @client decorator)
     return params
 
 
@@ -435,13 +469,12 @@ class BedrockVideoGeneration(BaseAWSLLM):
         return status_url, prepped, aws_region_name
 
     def _decode_status_context(self, video_id: str) -> tuple[str, str]:
-        """Returns (invocation_arn, model) encoded in the video id."""
-        config: Final = BedrockNovaReelVideoConfig()
-        invocation_arn: Final = config.extract_invocation_arn(video_id)
+        """Returns (invocation_arn, model) encoded in the video id (single decode)."""
+        decoded: Final = decode_video_id_with_provider(video_id)
+        invocation_arn: Final[str] = decoded.get("video_id") or extract_original_video_id(video_id)
         if not invocation_arn:
             raise ValueError(f"Could not extract a Bedrock invocation ARN from video id: {video_id!r}")
-        decoded: Final = decode_video_id_with_provider(video_id)
-        model: Final = decoded.get("model_id") or "amazon.nova-reel-v1:0"
+        model: Final[str] = decoded.get("model_id") or "amazon.nova-reel-v1:0"
         return invocation_arn, model
 
     def _sync_get(self, prepped: AWSPreparedRequest, timeout: float | httpx.Timeout | None = None) -> httpx.Response:
@@ -508,14 +541,14 @@ class BedrockVideoGeneration(BaseAWSLLM):
         optional_params: Final[_LitellmParamsDict] = _params_to_dict(litellm_params)
         _, prepped, _ = self._status_request_parts(invocation_arn, optional_params, api_base, api_key=api_key)
         if astatus:
-            return self.async_video_status(
+            return self._async_video_status(
                 prepped=prepped, model=model, video_id=video_id, logging_obj=logging_obj, timeout=timeout
             )
         response: Final = self._sync_get(prepped, timeout=timeout)
         video_obj, _ = self._map_status_response(response, model, video_id, logging_obj)
         return video_obj
 
-    async def async_video_status(
+    async def _async_video_status(
         self,
         prepped: AWSPreparedRequest,
         model: str,
@@ -523,6 +556,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
         logging_obj: LiteLLMLogging | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> VideoObject:
+        """Private async arm of video_status; only its internal dispatch calls it."""
         response: Final = await self._async_get(prepped, timeout=timeout)
         video_obj, _ = self._map_status_response(response, model, video_id, logging_obj)
         return video_obj
@@ -576,7 +610,15 @@ class BedrockVideoGeneration(BaseAWSLLM):
             f"{prefix}/{invocation_arn.rsplit('/', 1)[-1]}/{NOVA_REEL_OUTPUT_FILENAME}".lstrip("/"),
             f"{prefix}/{NOVA_REEL_OUTPUT_FILENAME}".lstrip("/"),
         ]
-        return self._download_s3_object(bucket, key_candidates, litellm_params, raw, region_default=status_region)
+        return self._download_s3_object(
+            bucket,
+            key_candidates,
+            litellm_params,
+            raw,
+            region_default=status_region,
+            api_key=api_key,
+            timeout=timeout,
+        )
 
     def _download_s3_object(
         self,
@@ -585,53 +627,99 @@ class BedrockVideoGeneration(BaseAWSLLM):
         litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
         raw: BedrockGetAsyncInvokeResponse,
         region_default: str | None = None,
+        api_key: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> bytes:
         """Download the output object from S3.
 
         region_default (the region the status request resolved: explicit
         aws_region_name > ARN region > env > default) is used unless the fresh
         litellm_params carry an explicit aws_region_name, which still wins.
+        timeout (the video_content call timeout) bounds the boto3 client's
+        read timeout; connect timeout is it or DEFAULT_S3_CONNECT_TIMEOUT_S,
+        whichever is smaller.
         """
         try:
             import boto3
+            from botocore.config import Config as BotocoreConfig
             from botocore.exceptions import BotoCoreError, ClientError
         except ImportError:
             raise ImportError("Missing boto3 to download Nova Reel output. Run 'pip install boto3'.")
 
         optional_params: Final[_LitellmParamsDict] = _params_to_dict(litellm_params)
         explicit_region: Final[str | None] = optional_params.pop("aws_region_name", None)
+        bearer_token: Final[str | None] = bedrock_bearer_token(api_key)
+        # Always resolve SigV4 credentials for S3: a Bedrock bearer token only
+        # covers the async-invoke API, never S3 object access.
         credentials, region = self._load_credentials(
             optional_params,
             aws_region_name=(explicit_region if explicit_region is not None else region_default),
         )
+        if bearer_token is not None and credentials is None:
+            raise BedrockError(
+                status_code=400,
+                message=(
+                    "Nova Reel video content download requires AWS SigV4 credentials with S3 read "
+                    "access (aws_access_key_id/aws_secret_access_key or an ambient credential chain). "
+                    "Bedrock bearer tokens only cover the Bedrock asynchronous invoke API and cannot "
+                    "download objects from S3."
+                ),
+            )
         session_kwargs: Final[dict[str, str]] = {"region_name": region}  # mutable-ok: credential keys are added below
         if credentials is not None:
             session_kwargs["aws_access_key_id"] = credentials.access_key
             session_kwargs["aws_secret_access_key"] = credentials.secret_key
             if credentials.token:
                 session_kwargs["aws_session_token"] = credentials.token
+        read_timeout: Final[float] = float(timeout) if isinstance(timeout, (int, float)) else DEFAULT_S3_READ_TIMEOUT_S
+        connect_timeout: Final[float] = min(DEFAULT_S3_CONNECT_TIMEOUT_S, read_timeout)
+        client_config: Final = BotocoreConfig(connect_timeout=connect_timeout, read_timeout=read_timeout)
         session: Final = boto3.Session(**session_kwargs)
-        s3_client: Final = session.client("s3")
+        s3_client: Final = session.client("s3", config=client_config)
 
         s3_uri: Final[str | None] = _s3_uri_from_output_config(raw.get("outputDataConfig"))
         errors: list[str] = []  # mutable-ok: error strings accumulate across candidate keys
         try:
             for key in key_candidates:
+                body = None  # per-iteration resource; closed in finally
                 try:
                     obj = s3_client.get_object(Bucket=bucket, Key=key)
-                    content = obj["Body"].read()
-                    return bytes(content)
+                    body = obj["Body"]
+                    return body.read()
                 except ClientError as err:
-                    errors.append(str(err))
+                    # Annotated, not Final: basedpyright forbids Final assignment inside loops.
+                    error_code: str = _client_error_code(err)
+                    if error_code == "NoSuchKey" or _client_error_http_status(err) == 404:
+                        # Only a missing key falls through to the next candidate.
+                        errors.append(str(err))
+                        continue
+                    if error_code == "AccessDenied":
+                        raise BedrockError(
+                            status_code=403,
+                            message=(f"Access denied downloading Nova Reel output from {s3_uri} (key {key!r}): {err}"),
+                        ) from err
+                    raise BedrockError(
+                        status_code=502,
+                        message=(
+                            f"AWS error (code {error_code!r}) downloading Nova Reel output "
+                            f"from {s3_uri} (key {key!r}): {err}"
+                        ),
+                    ) from err
+                finally:
+                    if body is not None:
+                        body.close()
         except BotoCoreError as err:
-            # ClientError (caught per-key above) is a BotoCoreError subclass;
-            # anything else (NoCredentialsError, EndpointConnectionError, ...)
+            # ClientError never reaches this handler: it inherits Exception (not
+            # BotoCoreError) and is handled per-key above. Anything else that is
+            # a BotoCoreError (NoCredentialsError, EndpointConnectionError, ...)
             # aborts the download and maps to a 502. botocore messages carry
             # class name + failure reason, never credentials.
             raise BedrockError(
                 status_code=502,
                 message=f"Failed to download Nova Reel output from S3: {type(err).__name__}: {err}",
             )
+        finally:
+            s3_client.close()
         raise BedrockError(
             status_code=404,
             message=(

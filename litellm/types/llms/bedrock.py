@@ -1077,13 +1077,47 @@ class AmazonNovaReelVideoGenerationConfig(TypedDict, total=False):
     seed: ReadOnly[int]
 
 
+class AmazonNovaReelMultiShotAutomatedParams(TypedDict, total=False):
+    """
+    Params for Nova Reel MULTI_SHOT_AUTOMATED: text-driven shot planning only
+    (no input images; durationSeconds stays on videoGenerationConfig).
+    """
+
+    text: ReadOnly[str]
+
+
+class AmazonNovaReelMultiShotManualShot(TypedDict, total=False):
+    """
+    One shot of MULTI_SHOT_MANUAL: per-shot text, optional input images and
+    durationSeconds (durations live per shot, not on videoGenerationConfig).
+    """
+
+    text: ReadOnly[str]
+    durationSeconds: ReadOnly[int]
+    images: ReadOnly[Sequence[AmazonNovaReelImageSource]]
+
+
+class AmazonNovaReelMultiShotManualParams(TypedDict, total=False):
+    """
+    Params for Nova Reel MULTI_SHOT_MANUAL (required for that task type).
+    """
+
+    shots: ReadOnly[Sequence[AmazonNovaReelMultiShotManualShot]]
+
+
 class AmazonNovaReelModelInput(TypedDict, total=False):
     """
     modelInput body for Nova Reel StartAsyncInvoke.
+
+    TEXT_VIDEO (default) uses textToVideoParams; MULTI_SHOT_AUTOMATED uses
+    multiShotAutomatedParams (no input images); MULTI_SHOT_MANUAL requires
+    multiShotManualParams and omits top-level videoGenerationConfig.durationSeconds.
     """
 
     taskType: ReadOnly[NOVA_REEL_TASK_TYPES]
     textToVideoParams: ReadOnly[AmazonNovaReelTextToVideoParams]
+    multiShotAutomatedParams: ReadOnly[AmazonNovaReelMultiShotAutomatedParams]
+    multiShotManualParams: ReadOnly[AmazonNovaReelMultiShotManualParams]
     videoGenerationConfig: ReadOnly[AmazonNovaReelVideoGenerationConfig]
 
 
@@ -1137,7 +1171,8 @@ class BedrockGetAsyncInvokeResponse(TypedDict, total=False):
 
     status enum verified against the bedrock-runtime service model
     (AsyncInvokeStatus): InProgress | Completed | Failed. failureMessage is
-    present when status is Failed.
+    present when status is Failed. Timestamps use the model's iso8601
+    timestampFormat ("2026-01-15T10:30:00Z"); numeric epochs are tolerated.
     """
 
     invocationArn: ReadOnly[str]
@@ -1145,9 +1180,9 @@ class BedrockGetAsyncInvokeResponse(TypedDict, total=False):
     clientRequestToken: ReadOnly[str]
     status: ReadOnly[BEDROCK_ASYNC_INVOKE_STATUSES]
     failureMessage: ReadOnly[str]
-    submitTime: ReadOnly[float]
-    lastModifiedTime: ReadOnly[float]
-    endTime: ReadOnly[float]
+    submitTime: ReadOnly[str | float]
+    lastModifiedTime: ReadOnly[str | float]
+    endTime: ReadOnly[str | float]
     outputDataConfig: ReadOnly[BedrockAsyncInvokeOutputDataConfig]
 
 
