@@ -21,12 +21,14 @@ export const AutoRouterAvailabilityContext = createContext<AvailabilityState>({ 
 
 export const useAutoRouterAvailability = (accessToken: string, body: Request, enabled = true) => {
   const serialized = JSON.stringify(body.complexity_router_config ?? null);
-  const [debounced, setDebounced] = useState(serialized);
+  const [debouncedState, setDebounced] = useState(serialized);
   const debounceMs = useContext(AutoRouterAvailabilityDebounceContext);
   useEffect(() => {
+    if (debounceMs === 0) return;
     const timeout = setTimeout(() => setDebounced(serialized), debounceMs);
     return () => clearTimeout(timeout);
   }, [serialized, debounceMs]);
+  const debounced = debounceMs === 0 ? serialized : debouncedState;
   const options: UseQueryOptions<Availability> = {
     queryKey: ["autoRouterAvailability", accessToken, body.team_id, body.saved_model_id, debounced],
     queryFn: ({ signal }) =>
