@@ -236,8 +236,6 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
-        if api_base:
-            api_base = api_base.rstrip("/")
         if _is_claude_model(model):
             return f"{api_base}/cortex/v1/messages"
         return f"{api_base}/cortex/v1/chat/completions"
