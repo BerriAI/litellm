@@ -248,15 +248,70 @@ def test_pinned_temperature_preserved_when_thinking_dropped():
     assert result["temperature"] == 0
 
 
-def test_pinned_temperature_preserved_for_adaptive_model():
-    """Adaptive models (4.6+) own the thinking/temperature relationship natively, so
-    the passthrough must not strip a pinned temperature for them."""
+def test_pinned_temperature_dropped_for_adaptive_model():
+    """Adaptive models (4.6+) still 400 on a pinned non-1 temperature: Anthropic's
+    restriction applies "when thinking is enabled or in adaptive mode", so the
+    passthrough must drop the temperature (keeping the thinking the caller asked
+    for) rather than forwarding it untouched."""
     params = _claude_code_payload(effort="high")
     params["temperature"] = 0
     result = _transform("claude-sonnet-4-6", params)
 
     assert result["thinking"] == {"type": "adaptive"}
+    assert "temperature" not in result
+
+
+def test_pinned_temperature_one_kept_for_adaptive_model():
+    """temperature=1 is compatible with adaptive thinking, so it must survive."""
+    params = _claude_code_payload(effort="high")
+    params["temperature"] = 1
+    result = _transform("claude-sonnet-4-6", params)
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["temperature"] == 1
+
+
+def test_low_top_p_dropped_for_adaptive_thinking():
+    """Anthropic requires top_p >= 0.95 (or unset) when thinking is active, including
+    adaptive mode; a pinned top_p below that must be dropped."""
+    params = _claude_code_payload(effort="high")
+    params["top_p"] = 0.9
+    result = _transform("claude-sonnet-4-6", params)
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert "top_p" not in result
+
+
+def test_high_top_p_kept_for_adaptive_thinking():
+    """top_p >= 0.95 is allowed under thinking, so it must be preserved."""
+    params = _claude_code_payload(effort="high")
+    params["top_p"] = 0.95
+    result = _transform("claude-sonnet-4-6", params)
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["top_p"] == 0.95
+
+
+def test_top_k_dropped_for_adaptive_thinking():
+    """top_k must be unset when thinking is active, including adaptive mode."""
+    params = _claude_code_payload(effort="high")
+    params["top_k"] = 5
+    result = _transform("claude-sonnet-4-6", params)
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert "top_k" not in result
+
+
+def test_sampling_params_kept_when_no_thinking_active():
+    """With no thinking at all, sampling params are unrelated and must pass through."""
+    result = _transform(
+        "claude-sonnet-4-6",
+        {"max_tokens": 1024, "temperature": 0, "top_p": 0.9, "top_k": 5},
+    )
+
     assert result["temperature"] == 0
+    assert result["top_p"] == 0.9
+    assert result["top_k"] == 5
 
 
 def test_pinned_temperature_dropped_for_opus_4_5_effort():
@@ -334,3 +389,69 @@ def test_reasoning_effort_budget_capped_for_openai_like_messages_upstream():
 
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 3999}
     assert result["max_tokens"] == 4000
+
+
+def test_sampling_params_kept_when_thinking_disabled():
+    """An explicit ``thinking={type: disabled}`` is not active thinking, so sampling
+    params (even ones Anthropic would reject under active thinking) must pass through."""
+    result = _transform(
+        "claude-opus-4-6",
+        {"max_tokens": 1024, "thinking": {"type": "disabled"}, "temperature": 0, "top_p": 0.9, "top_k": 5},
+    )
+
+    assert result["thinking"] == {"type": "disabled"}
+    assert result["temperature"] == 0
+    assert result["top_p"] == 0.9
+    assert result["top_k"] == 5
+
+
+def test_all_incompatible_sampling_dropped_together_on_anthropic():
+    """Combined case: temperature != 1, top_p < 0.95 and top_k all present under active
+    adaptive thinking on the first-party Anthropic API must all be dropped together."""
+    params = _claude_code_payload(effort="high")
+    params.update({"temperature": 0, "top_p": 0.9, "top_k": 5})
+    result = _transform("claude-opus-4-6", params)
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert "temperature" not in result
+    assert "top_p" not in result
+    assert "top_k" not in result
+
+
+def test_top_p_top_k_not_stripped_on_other_anthropic_compatible_backend():
+    """Cross-backend guard: DeepSeek's Anthropic-compatible endpoint has its own sampling
+    rules. Temperature is still dropped under active thinking, but the Anthropic-specific
+    top_p/top_k stripping must not run there and silently remove user-supplied values."""
+    from litellm.llms.deepseek.messages.transformation import (
+        DeepSeekAnthropicMessagesConfig,
+    )
+
+    params = {
+        "max_tokens": 1024,
+        "thinking": {"type": "enabled", "budget_tokens": 512},
+        "temperature": 0,
+        "top_p": 0.9,
+        "top_k": 5,
+    }
+    result = DeepSeekAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="deepseek-reasoner",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=dict(params),
+        litellm_params={},
+        headers={},
+    )
+
+    assert "temperature" not in result
+    assert result["top_p"] == 0.9
+    assert result["top_k"] == 5
+
+
+def test_non_numeric_top_p_forwarded_under_thinking():
+    """A non-numeric top_p (e.g. a serialized string from an upstream gateway) must not
+    raise a TypeError during the comparison; it is left for Anthropic to validate."""
+    params = _claude_code_payload(effort="high")
+    params["top_p"] = "0.9"
+    result = _transform("claude-opus-4-6", params)
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["top_p"] == "0.9"
