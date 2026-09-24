@@ -3,9 +3,10 @@ import type { TeamMembership } from "./TeamInfo";
 export const MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES = 500;
 
 export interface MemberBudgetResetPending {
-  updateData: Record<string, unknown>;
-  userIds: string[];
-  newBudget: number;
+  readonly teamId: string;
+  readonly updateData: Record<string, unknown>;
+  readonly userIds: readonly string[];
+  readonly newBudget: number;
 }
 
 type MembershipBudgetRow = Pick<TeamMembership, "user_id" | "budget_source"> & {
@@ -31,5 +32,4 @@ export const chunk = <T>(items: readonly T[], size: number): T[][] => {
   return Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
 };
 
-export const pluralize = (count: number, singular: string, plural: string): string =>
-  count === 1 ? singular : plural;
+export const pluralize = (count: number, singular: string, plural: string): string => (count === 1 ? singular : plural);

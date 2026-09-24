@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { components } from "@/lib/http/schema";
 import { toast } from "@/lib/toast";
 import {
@@ -18,7 +18,7 @@ export type MemberBudgetResetState =
 
 export interface MemberBudgetResetGateway {
   saveTeam: (updateData: Record<string, unknown>) => Promise<void>;
-  resetMemberBudgets: (userIds: readonly string[]) => Promise<MemberBudgetBulkResult[]>;
+  resetMemberBudgets: (teamId: string, userIds: readonly string[]) => Promise<MemberBudgetBulkResult[]>;
   refreshTeamData: () => Promise<void>;
 }
 
@@ -30,7 +30,7 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
     const results: MemberBudgetBulkResult[] = [];
     try {
       for (const ids of chunk(pending.userIds.slice(attempted), MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES)) {
-        results.push(...(await resetMemberBudgets(ids)));
+        results.push(...(await resetMemberBudgets(pending.teamId, ids)));
         attempted += ids.length;
       }
     } catch (error) {
@@ -53,9 +53,7 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
         `Team updated, but ${failed.length} member ${pluralize(failed.length, "budget", "budgets")} could not be reset`,
       );
     } else {
-      toast.success(
-        `Reset ${attempted} member ${pluralize(attempted, "budget", "budgets")} to the team default`,
-      );
+      toast.success(`Reset ${attempted} member ${pluralize(attempted, "budget", "budgets")} to the team default`);
     }
     setState({ phase: "idle" });
     await refreshTeamData();
@@ -97,7 +95,7 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
     await gateway.refreshTeamData();
   };
 
-  const dismiss = () => setState({ phase: "idle" });
+  const dismiss = useCallback(() => setState({ phase: "idle" }), []);
 
   return { state, prompt, reset, retry, keepCustom, dismiss };
 };

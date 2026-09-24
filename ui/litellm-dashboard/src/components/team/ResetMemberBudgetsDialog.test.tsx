@@ -5,6 +5,7 @@ import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
 import type { MemberBudgetResetState } from "./useMemberBudgetReset";
 
 const pendingFor = (memberCount: number, newBudget = 10) => ({
+  teamId: "team-123",
   updateData: {},
   userIds: Array.from({ length: memberCount }, (_, i) => `u-${i}`),
   newBudget,

@@ -6,20 +6,20 @@ import { useMemberBudgetReset, type MemberBudgetResetGateway } from "./useMember
 
 const buildGateway = () => ({
   saveTeam: vi.fn(async (_updateData: Record<string, unknown>) => {}),
-  resetMemberBudgets: vi.fn(async (userIds: readonly string[]) =>
+  resetMemberBudgets: vi.fn(async (_teamId: string, userIds: readonly string[]) =>
     userIds.map((user_id) => ({ success: true, user_id })),
   ),
   refreshTeamData: vi.fn(async () => {}),
 });
 
 const pendingFor = (userIds: string[]) => ({
+  teamId: "team-123",
   updateData: { team_id: "team-123", team_member_budget: 20 },
   userIds,
   newBudget: 20,
 });
 
-const renderReset = (gateway: MemberBudgetResetGateway) =>
-  renderHook(() => useMemberBudgetReset(gateway));
+const renderReset = (gateway: MemberBudgetResetGateway) => renderHook(() => useMemberBudgetReset(gateway));
 
 describe("useMemberBudgetReset", () => {
   afterEach(() => {
@@ -56,7 +56,7 @@ describe("useMemberBudgetReset", () => {
 
     expect(gateway.saveTeam).toHaveBeenCalledTimes(1);
     expect(gateway.saveTeam).toHaveBeenCalledWith({ team_id: "team-123", team_member_budget: 20 });
-    expect(gateway.resetMemberBudgets).toHaveBeenCalledWith(["u-1", "u-2"]);
+    expect(gateway.resetMemberBudgets).toHaveBeenCalledWith("team-123", ["u-1", "u-2"]);
     expect(toast.success).toHaveBeenCalledWith("Reset 2 member budgets to the team default");
     expect(gateway.refreshTeamData).toHaveBeenCalledTimes(1);
     expect(result.current.state.phase).toBe("idle");
@@ -75,9 +75,31 @@ describe("useMemberBudgetReset", () => {
     });
 
     expect(gateway.resetMemberBudgets).toHaveBeenCalledTimes(2);
-    expect(gateway.resetMemberBudgets.mock.calls[0][0]).toHaveLength(MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES);
-    expect(gateway.resetMemberBudgets.mock.calls[1][0]).toEqual([`u-${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES}`]);
+    expect(gateway.resetMemberBudgets.mock.calls[0][0]).toBe("team-123");
+    expect(gateway.resetMemberBudgets.mock.calls[0][1]).toHaveLength(MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES);
+    expect(gateway.resetMemberBudgets.mock.calls[1][1]).toEqual([`u-${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES}`]);
     expect(result.current.state.phase).toBe("idle");
+  });
+
+  it("resets against the team carried by the pending update", async () => {
+    const gateway = buildGateway();
+    const { result } = renderReset(gateway);
+
+    const pending = {
+      teamId: "team-999",
+      updateData: { team_id: "team-999", team_member_budget: 20 },
+      userIds: ["u-1"],
+      newBudget: 20,
+    };
+    await act(async () => {
+      result.current.prompt(pending);
+    });
+    await act(async () => {
+      await result.current.reset();
+    });
+
+    expect(gateway.resetMemberBudgets).toHaveBeenCalledWith("team-999", ["u-1"]);
+    expect(gateway.resetMemberBudgets).not.toHaveBeenCalledWith("team-123", expect.anything());
   });
 
   it("returns to prompting without its own toast when the team save fails", async () => {
@@ -104,7 +126,9 @@ describe("useMemberBudgetReset", () => {
     const userIds = Array.from({ length: MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES + 1 }, (_, i) => `u-${i}`);
     const gateway = buildGateway();
     gateway.resetMemberBudgets
-      .mockResolvedValueOnce(userIds.slice(0, MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES).map((user_id) => ({ success: true, user_id })))
+      .mockResolvedValueOnce(
+        userIds.slice(0, MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES).map((user_id) => ({ success: true, user_id })),
+      )
       .mockRejectedValueOnce(new Error("second batch failed"));
     const { result } = renderReset(gateway);
 
@@ -120,14 +144,17 @@ describe("useMemberBudgetReset", () => {
       `Reset ${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES} of ${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES + 1} member budgets; the rest could not be reset`,
     );
 
-    gateway.resetMemberBudgets.mockResolvedValueOnce([{ success: true, user_id: `u-${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES}` }]);
+    gateway.resetMemberBudgets.mockResolvedValueOnce([
+      { success: true, user_id: `u-${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES}` },
+    ]);
     await act(async () => {
       await result.current.retry();
     });
 
     expect(gateway.saveTeam).toHaveBeenCalledTimes(1);
     expect(gateway.resetMemberBudgets).toHaveBeenCalledTimes(3);
-    expect(gateway.resetMemberBudgets.mock.calls[2][0]).toEqual([`u-${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES}`]);
+    expect(gateway.resetMemberBudgets.mock.calls[2][0]).toBe("team-123");
+    expect(gateway.resetMemberBudgets.mock.calls[2][1]).toEqual([`u-${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES}`]);
     expect(toast.success).toHaveBeenCalledWith(
       `Reset ${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES + 1} member budgets to the team default`,
     );

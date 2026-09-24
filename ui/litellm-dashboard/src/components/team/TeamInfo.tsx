@@ -901,15 +901,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         setIsTeamSaving(false);
       }
     },
-    resetMemberBudgets: async (userIds) => {
+    resetMemberBudgets: async (bulkTeamId, userIds) => {
       const { data } = await fetchClient.POST("/management/v1/teams/{team_id}/members/bulk_update", {
-        params: { path: { team_id: teamId } },
+        params: { path: { team_id: bulkTeamId } },
         body: { members: userIds.map((user_id) => ({ user_id, max_budget_in_team: null })) },
       });
       return data?.data ?? [];
     },
     refreshTeamData,
   });
+
+  const { dismiss: dismissMemberBudgetReset } = memberBudgetReset;
+  useEffect(() => {
+    dismissMemberBudgetReset();
+  }, [teamId, dismissMemberBudgetReset]);
 
   const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
     if (!accessToken) return;
@@ -1186,7 +1191,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           customBudgetUserIds,
         )
       ) {
-        memberBudgetReset.prompt({ updateData, userIds: customBudgetUserIds, newBudget: newTeamMemberBudget });
+        const pendingReset = {
+          teamId,
+          updateData,
+          userIds: customBudgetUserIds,
+          newBudget: newTeamMemberBudget,
+        };
+        memberBudgetReset.prompt(pendingReset);
         return;
       }
 
