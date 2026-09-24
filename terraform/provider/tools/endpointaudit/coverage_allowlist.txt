@@ -28,6 +28,7 @@ GET /tag/user-agent/per-user-analytics
 GET /tag/wau
 GET /team/daily/activity
 GET /team/daily/activity/aggregated
+GET /team/daily/activity/export
 GET /team/daily/activity/aggregated/search
 GET /team/spend/by_user
 GET /team/spend/report

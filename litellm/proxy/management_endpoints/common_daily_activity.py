@@ -1,4 +1,6 @@
 import asyncio
+import dataclasses
+import itertools
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
@@ -35,6 +37,10 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     MetricWithMetadata,
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
+)
+from litellm.types.proxy.management_endpoints.team_endpoints import (
+    TeamDailyActivityExportRow,
+    TeamDailyActivityExportType,
 )
 
 if TYPE_CHECKING:
@@ -199,7 +205,7 @@ class _AggregatedQueryKwargs(TypedDict):
     include_current_utc_day: ReadOnly[bool]
 
 
-_SqlQuery = tuple[str, list[str]]
+_SqlQuery = tuple[str, Sequence[str]]
 
 
 async def _query_raw_optional(
@@ -974,6 +980,291 @@ def _build_entity_rollup_sql_query(
     """
 
     return sql_query, sql_params
+
+
+def _build_export_sql_query(
+    *,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    start_date: str,
+    end_date: str,
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    exclude_entity_ids: list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    timezone_offset_minutes: int | None,
+    export_type: TeamDailyActivityExportType,
+) -> tuple[str, tuple[str, ...]]:
+    """One unbounded rollup for the export route, on the aggregated path's WHERE clause.
+
+    No LIMIT anywhere: the export exists so a caller can reach keys past
+    USAGE_TOP_API_KEYS_LIMIT. PTU sentinel rows stay in `daily` so per-team
+    totals match breakdown.entities, and are excluded from the key, user and
+    model exports where the flat-cost row has no meaning.
+    """
+    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    if pg_table is None:
+        raise ValueError(f"Unknown table name: {table_name}")
+
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    where_clause, where_params = _build_aggregated_where_clause(
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        adjusted_start=adjusted_start,
+        adjusted_end=adjusted_end,
+        model=None,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
+    )
+
+    keyed: Final = export_type in ("daily_with_keys", "daily_with_users")
+    by_model: Final = export_type == "daily_with_models"
+    group_extras: Final = tuple(field for field in ("api_key" if keyed else "", "model" if by_model else "") if field)
+    group_by: Final = f'date, "{entity_id_field}"' + "".join(f", {field}" for field in group_extras)
+    sentinel_clause: Final = f" AND api_key <> ${len(where_params) + 1}" if (keyed or by_model) else ""
+    sentinel_params: Final = (PTU_SENTINEL_API_KEY,) if (keyed or by_model) else ()
+
+    sql_query: Final = f"""
+        SELECT
+            date,
+            "{entity_id_field}" AS entity_id,
+            {"api_key" if keyed else "NULL::text AS api_key"},
+            {"model" if by_model else "NULL::text AS model"},{_rollup_metric_select(table_name)}
+        FROM "{pg_table}"
+        WHERE {where_clause}{sentinel_clause}
+        GROUP BY {group_by}
+        ORDER BY {group_by}
+    """
+
+    return sql_query, (*where_params, *sentinel_params)
+
+
+class _ExportRow(_RollupMetricsRow):
+    entity_id: str | None
+    model: str | None
+
+
+def _export_team_alias(entity_metadata_field: Mapping[str, dict[str, object]] | None, entity_id: str) -> str | None:
+    alias: Final = _entity_metadata(entity_metadata_field, entity_id).get("team_alias")
+    return alias if isinstance(alias, str) else None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ExportMetrics:
+    spend: float
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+
+    @classmethod
+    def from_record(cls, record: _RollupMetricsRow) -> "_ExportMetrics":
+        prompt_tokens: Final = record.prompt_tokens or 0
+        completion_tokens: Final = record.completion_tokens or 0
+        return cls(
+            spend=record.spend or 0.0,
+            api_requests=record.api_requests or 0,
+            successful_requests=record.successful_requests or 0,
+            failed_requests=record.failed_requests or 0,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cache_read_input_tokens=record.cache_read_input_tokens or 0,
+            cache_creation_input_tokens=record.cache_creation_input_tokens or 0,
+        )
+
+    @classmethod
+    def zero(cls) -> "_ExportMetrics":
+        return cls(
+            spend=0.0,
+            api_requests=0,
+            successful_requests=0,
+            failed_requests=0,
+            total_tokens=0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+
+    def __add__(self, other: "_ExportMetrics") -> "_ExportMetrics":
+        return _ExportMetrics(
+            spend=self.spend + other.spend,
+            api_requests=self.api_requests + other.api_requests,
+            successful_requests=self.successful_requests + other.successful_requests,
+            failed_requests=self.failed_requests + other.failed_requests,
+            total_tokens=self.total_tokens + other.total_tokens,
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            cache_read_input_tokens=self.cache_read_input_tokens + other.cache_read_input_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens + other.cache_creation_input_tokens,
+        )
+
+
+def _export_base_row(
+    record: _ExportRow,
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+) -> TeamDailyActivityExportRow:
+    entity_id: Final = record.entity_id or "Unassigned"
+    metrics: Final = _ExportMetrics.from_record(record)
+    return TeamDailyActivityExportRow(
+        date=record.date,
+        team_id=entity_id,
+        team_alias=_export_team_alias(entity_metadata_field, entity_id),
+        model=record.model,
+        spend=metrics.spend,
+        flat_cost=_reported_flat_cost(record),
+        api_requests=metrics.api_requests,
+        successful_requests=metrics.successful_requests,
+        failed_requests=metrics.failed_requests,
+        total_tokens=metrics.total_tokens,
+        prompt_tokens=metrics.prompt_tokens,
+        completion_tokens=metrics.completion_tokens,
+        cache_read_input_tokens=metrics.cache_read_input_tokens,
+        cache_creation_input_tokens=metrics.cache_creation_input_tokens,
+    )
+
+
+def _export_key_row(
+    record: _ExportRow,
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    api_key_metadata: Mapping[str, _KeyMetadataDict],
+) -> TeamDailyActivityExportRow:
+    entity_id: Final = record.entity_id or "Unassigned"
+    metadata: Final = _key_metadata(api_key_metadata, record.api_key or "")
+    metrics: Final = _ExportMetrics.from_record(record)
+    return TeamDailyActivityExportRow(
+        date=record.date,
+        team_id=entity_id,
+        team_alias=_export_team_alias(entity_metadata_field, entity_id),
+        api_key=record.api_key,
+        key_alias=metadata.key_alias,
+        user_id=metadata.user_id,
+        user_email=metadata.user_email,
+        spend=metrics.spend,
+        api_requests=metrics.api_requests,
+        successful_requests=metrics.successful_requests,
+        failed_requests=metrics.failed_requests,
+        total_tokens=metrics.total_tokens,
+        prompt_tokens=metrics.prompt_tokens,
+        completion_tokens=metrics.completion_tokens,
+        cache_read_input_tokens=metrics.cache_read_input_tokens,
+        cache_creation_input_tokens=metrics.cache_creation_input_tokens,
+    )
+
+
+def _fold_export_users(
+    records: Sequence[_ExportRow],
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    api_key_metadata: Mapping[str, _KeyMetadataDict],
+) -> tuple[TeamDailyActivityExportRow, ...]:
+    """Fold (date, team, api_key) rows into (date, team, user) rows."""
+
+    def bucket_of(record: _ExportRow) -> tuple[str, str, str]:
+        return (
+            record.date,
+            record.entity_id or "Unassigned",
+            _key_metadata(api_key_metadata, record.api_key or "").user_id or "Unassigned",
+        )
+
+    key_sets: Final = MappingProxyType(
+        {
+            bucket: frozenset(record.api_key or "" for record in group)
+            for bucket, group in itertools.groupby(sorted(records, key=bucket_of), key=bucket_of)
+        }
+    )
+    sums: Final[dict[tuple[str, str, str], _ExportMetrics]] = {}  # mutable-ok: local fold accumulator
+    emails: Final[dict[tuple[str, str, str], str | None]] = {}  # mutable-ok: local fold accumulator
+    for record in records:
+        metadata = _key_metadata(api_key_metadata, record.api_key or "")
+        bucket_key = bucket_of(record)
+        sums[bucket_key] = sums.get(bucket_key, _ExportMetrics.zero()) + _ExportMetrics.from_record(record)
+        emails.setdefault(bucket_key, metadata.user_email)
+        if emails[bucket_key] is None and metadata.user_email is not None:
+            emails[bucket_key] = metadata.user_email
+    return tuple(
+        _export_folded_user_row(
+            bucket_key, sums[bucket_key], emails[bucket_key], len(key_sets[bucket_key]), entity_metadata_field
+        )
+        for bucket_key in sorted(sums)
+    )
+
+
+def _export_folded_user_row(
+    bucket_key: tuple[str, str, str],
+    metrics: _ExportMetrics,
+    user_email: str | None,
+    keys: int,
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+) -> TeamDailyActivityExportRow:
+    date, entity_id, user_id = bucket_key
+    return TeamDailyActivityExportRow(
+        date=date,
+        team_id=entity_id,
+        team_alias=_export_team_alias(entity_metadata_field, entity_id),
+        user_id=user_id if user_id != "Unassigned" else None,
+        user_email=user_email,
+        keys=keys,
+        spend=metrics.spend,
+        api_requests=metrics.api_requests,
+        successful_requests=metrics.successful_requests,
+        failed_requests=metrics.failed_requests,
+        total_tokens=metrics.total_tokens,
+        prompt_tokens=metrics.prompt_tokens,
+        completion_tokens=metrics.completion_tokens,
+        cache_read_input_tokens=metrics.cache_read_input_tokens,
+        cache_creation_input_tokens=metrics.cache_creation_input_tokens,
+    )
+
+
+async def get_daily_activity_export_rows(
+    *,
+    prisma_client: PrismaClient,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    start_date: str,
+    end_date: str,
+    api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    exclude_entity_ids: list[str] | None,  # mutable-ok: filter union shared with the paginated path
+    timezone_offset_minutes: int | None,
+    export_type: TeamDailyActivityExportType,
+) -> tuple[TeamDailyActivityExportRow, ...]:
+    """Every (date, entity[, api_key|model]) rollup row in the range, uncapped."""
+    sql_query, sql_params = _build_export_sql_query(
+        table_name=table_name,
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        start_date=start_date,
+        end_date=end_date,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
+        timezone_offset_minutes=timezone_offset_minutes,
+        export_type=export_type,
+    )
+    raw_rows: Final = await _query_raw_optional(prisma_client, (sql_query, sql_params))
+    records: Final = tuple(_ExportRow(**row) for row in (raw_rows or ()))
+
+    if export_type in ("daily", "daily_with_models"):
+        return await asyncio.to_thread(
+            lambda: tuple(_export_base_row(record, entity_metadata_field) for record in records)
+        )
+
+    api_keys: Final = frozenset(record.api_key for record in records if record.api_key)
+    api_key_metadata: Final = (
+        await get_api_key_metadata(prisma_client, api_keys, _spend_logs_window(frozenset(r.date for r in records)))
+        if api_keys
+        else _EMPTY_KEY_METADATA
+    )
+    if export_type == "daily_with_keys":
+        return await asyncio.to_thread(
+            lambda: tuple(_export_key_row(record, entity_metadata_field, api_key_metadata) for record in records)
+        )
+    return await asyncio.to_thread(_fold_export_users, records, entity_metadata_field, api_key_metadata)
 
 
 def _aggregate_spend_records_sync(
