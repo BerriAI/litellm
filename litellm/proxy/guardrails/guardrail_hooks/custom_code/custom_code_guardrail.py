@@ -115,6 +115,9 @@ class CustomCodeGuardrail(CustomGuardrail):
             return allow()
     """
 
+    streaming_deliver_ended_rewrites: bool = True
+    """Buffer complete streams before delivering arbitrary custom-code rewrites."""
+
     def __init__(
         self,
         custom_code: str,

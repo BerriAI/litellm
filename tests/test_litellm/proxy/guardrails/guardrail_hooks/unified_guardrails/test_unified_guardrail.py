@@ -1,5 +1,6 @@
 """Tests for unified guardrail."""
 
+import json
 import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
@@ -33,6 +34,7 @@ from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import
     MCPGuardrailTranslationHandler,
 )
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
     unified_guardrail as unified_module,
 )
@@ -983,6 +985,163 @@ class TestStreamingTransform:
         assert streamed == full.upper()
         # No raw lowercase content leaked onto the wire.
         assert "hello" not in streamed
+
+    @pytest.mark.asyncio
+    async def test_custom_code_modify_rewrites_streamed_text(self):
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n"
+                "    if input_type == 'response':\n"
+                "        return modify(texts=['restored value'])\n"
+                "    return allow()\n"
+            ),
+            guardrail_name="custom-code-streaming",
+        )
+
+        chunks = [
+            _stream_chunk("PLACEHOLDER "),
+            _stream_chunk("value"),
+            _stream_chunk("", finish_reason="stop"),
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        streamed = "".join(_delta_text(item) for item in out)
+
+        assert streamed == "restored value"
+
+    @pytest.mark.asyncio
+    async def test_custom_code_shorter_placeholder_rewrite_buffers_fragmented_stream(self):
+        placeholder = "**LITELLM_PLACEHOLDER_34f4891d26871beebe77044c3270328a7b579c1f916127c4**"
+        replacement = "restored-secret"
+        original = f"before {placeholder} after"
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n"
+                f"    return modify(texts=[text.replace('{placeholder}', '{replacement}') for text in inputs['texts']])\n"
+            ),
+            guardrail_name="custom-code-placeholder-rewrite",
+        )
+
+        chunks = [_stream_chunk(original[index : index + 3]) for index in range(0, len(original), 3)]
+        chunks.append(_stream_chunk("", finish_reason="stop"))
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        streamed = "".join(_delta_text(item) for item in out)
+
+        assert placeholder not in streamed
+        assert streamed.count(replacement) == 1
+        assert streamed == original.replace(placeholder, replacement)
+        assert all("stream_transform_underflow" not in repr(item) for item in out)
+
+    @pytest.mark.asyncio
+    async def test_custom_code_rewrites_responses_api_stream(self, monkeypatch):
+        placeholder = "**LITELLM_PLACEHOLDER_34f4891d26871beebe77044c3270328a7b579c1f916127c4**"
+        replacement = "restored-secret"
+        original = f"before {placeholder} after"
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n"
+                f"    return modify(texts=[text.replace('{placeholder}', '{replacement}') for text in inputs['texts']])\n"
+            ),
+            guardrail_name="custom-code-responses-rewrite",
+        )
+        _patch_translation_mappings(
+            monkeypatch,
+            {CallTypes.aresponses: OpenAIResponsesHandler, CallTypes.responses: OpenAIResponsesHandler},
+        )
+
+        chunks = [
+            {"type": "response.created", "sequence_number": 0},
+            {"type": "response.reasoning_summary_text.delta", "sequence_number": 1, "delta": "thinking"},
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 2,
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": original,
+            },
+            {
+                "type": "response.output_text.done",
+                "sequence_number": 3,
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "text": original,
+            },
+            {
+                "type": "response.completed",
+                "sequence_number": 4,
+                "response": {
+                    "model": "gpt-4",
+                    "output": [{"type": "message", "content": [{"type": "output_text", "text": original}]}],
+                },
+            },
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/responses")
+        delta_text = "".join(item.get("delta", "") for item in out if item.get("type") == "response.output_text.delta")
+
+        assert delta_text == original.replace(placeholder, replacement)
+        assert placeholder not in repr(out)
+        assert out[-1]["response"]["output"][0]["content"][0]["text"] == original.replace(placeholder, replacement)
+        assert (
+            next(item for item in out if item["type"] == "response.reasoning_summary_text.delta")["delta"] == "thinking"
+        )
+
+    @pytest.mark.asyncio
+    async def test_custom_code_rewrites_streamed_tool_call_arguments(self):
+        from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+        guardrail = CustomCodeGuardrail(
+            custom_code=(
+                "def apply_guardrail(inputs, request_data, input_type):\n"
+                '    return modify(tool_calls=[{"id": "call_1", "type": "function", '
+                '"function": {"name": "lookup", "arguments": \'{"value": "restored-secret"}\'}}])\n'
+            ),
+            guardrail_name="custom-code-tool-rewrite",
+        )
+        placeholder = "**LITELLM_PLACEHOLDER_34f4891d26871beebe77044c3270328a7b579c1f916127c4**"
+        fragments = ['{"value": "', placeholder[:20], placeholder[20:45], placeholder[45:], '"}']
+        chunks = [
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(
+                            content=None,
+                            tool_calls=[
+                                ChatCompletionDeltaToolCall(
+                                    id="call_1",
+                                    index=0,
+                                    type="function",
+                                    function=Function(name="lookup", arguments=fragment),
+                                )
+                            ],
+                        ),
+                    )
+                ]
+            )
+            for fragment in fragments
+        ]
+        chunks.append(
+            ModelResponseStream(
+                choices=[
+                    StreamingChoices(index=0, delta=Delta(content=None, tool_calls=[]), finish_reason="tool_calls")
+                ]
+            )
+        )
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        arguments = "".join(
+            choice.delta.tool_calls[0].function.arguments or ""
+            for item in out
+            for choice in item.choices
+            if choice.delta.tool_calls
+        )
+
+        assert placeholder not in repr(out)
+        assert json.loads(arguments) == {"value": "restored-secret"}
 
     @pytest.mark.asyncio
     async def test_incremental_diff_holdback_boundary(self):
