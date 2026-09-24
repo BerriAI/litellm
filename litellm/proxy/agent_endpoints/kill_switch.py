@@ -1,7 +1,6 @@
 from base64 import b64encode
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from functools import lru_cache
 from types import MappingProxyType
 from typing import Final, Protocol
 
@@ -14,7 +13,9 @@ from litellm.constants import (
     AGENT_KILL_SWITCH_TIMEOUT_SECONDS,
     REDACTED_BY_LITELM_STRING,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # its params arg is a bare dict in http_handler
+)
 from litellm.types.agents import (
     AgentKillSwitchApiKeyAuth,
     AgentKillSwitchAuth,
@@ -23,6 +24,7 @@ from litellm.types.agents import (
     AgentKillSwitchConfig,
     AgentKillSwitchResult,
 )
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 
 def _with_auth(config: AgentKillSwitchConfig, auth: AgentKillSwitchAuth) -> AgentKillSwitchConfig:
@@ -141,14 +143,11 @@ class KillSwitchHttpClient(Protocol):
         timeout: float,
     ) -> httpx.Request: ...
 
-    async def send(self, request: httpx.Request, *, stream: bool) -> httpx.Response: ...
+    async def send(self, request: httpx.Request, *, stream: bool, follow_redirects: bool) -> httpx.Response: ...
 
 
-@lru_cache(maxsize=1)
 def default_kill_switch_http_client() -> KillSwitchHttpClient:
-    return AsyncHTTPHandler(
-        timeout=AGENT_KILL_SWITCH_TIMEOUT_SECONDS, client_alias="agent_kill_switch", follow_redirects=False
-    ).client
+    return get_async_httpx_client(llm_provider=httpxSpecialProvider.AgentKillSwitch).client
 
 
 async def fire_kill_switch(
@@ -171,6 +170,7 @@ async def fire_kill_switch(
                 timeout=timeout,
             ),
             stream=True,
+            follow_redirects=False,
         )
         body: Final = await _read_text_prefix(response, AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS)
     except httpx.HTTPError as exc:

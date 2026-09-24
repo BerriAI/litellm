@@ -29,6 +29,7 @@ class _SentRequest:
 class _RecordingClient:
     def __init__(self, respond: httpx.Response | httpx.HTTPError) -> None:
         self.sent: list[_SentRequest] = []  # mutable-ok: test double records calls
+        self.follow_redirects: list[bool] = []  # mutable-ok: test double records calls
         self._respond: Final = respond
 
     def build_request(
@@ -43,7 +44,8 @@ class _RecordingClient:
         self.sent.append(_SentRequest(method, url, headers, json, timeout))
         return httpx.Request(method, url, headers=dict(headers), json=json)
 
-    async def send(self, request: httpx.Request, *, stream: bool) -> httpx.Response:
+    async def send(self, request: httpx.Request, *, stream: bool, follow_redirects: bool) -> httpx.Response:
+        self.follow_redirects.append(follow_redirects)
         if isinstance(self._respond, httpx.HTTPError):
             raise self._respond
         return self._respond
@@ -197,6 +199,7 @@ async def test_fire_sends_exactly_the_built_request_and_reports_the_2xx_reply_wi
             timeout=3.5,
         )
     ]
+    assert client.follow_redirects == [False], "a redirecting webhook must not be followed to another host"
     assert result.succeeded is True
     assert result.model_dump() == {
         "agent_id": "agent-1",

@@ -32,6 +32,10 @@ class AgentObjectPermissionRecord(Protocol):
     def dict(self) -> dict[str, object]: ...
 
 
+class AgentIdWhere(TypedDict):
+    agent_id: ReadOnly[str]
+
+
 class AgentRecordDump(TypedDict):
     agent_id: str
     agent_name: str

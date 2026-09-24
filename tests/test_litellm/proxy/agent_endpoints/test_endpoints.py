@@ -1169,7 +1169,7 @@ class _FakeKillSwitchClient:
         self.calls.append((method, url, dict(headers), json, timeout))
         return httpx.Request(method, url, headers=dict(headers), json=json)
 
-    async def send(self, request: httpx.Request, *, stream: bool) -> httpx.Response:
+    async def send(self, request: httpx.Request, *, stream: bool, follow_redirects: bool) -> httpx.Response:
         return self._response
 
 

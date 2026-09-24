@@ -33,6 +33,7 @@ from litellm.proxy.a2a.agent_card import (
     normalize_protocol_version,
 )
 from litellm.proxy.agent_endpoints.agent_registry import (
+    AgentIdWhere,
     parse_agent_kill_switch,
     parse_agent_litellm_params,
     redact_sensitive_agent_litellm_params,
@@ -930,7 +931,8 @@ async def _resolve_agent_kill_switch(agent_id: str) -> tuple[str, AgentKillSwitc
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is not None:
-        row: Final = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        where: Final[AgentIdWhere] = {"agent_id": agent_id}
+        row: Final = await agents_table(prisma_client).find_unique(where=where)
         if row is not None:
             return row.agent_id, parse_agent_kill_switch(row.kill_switch)
 
