@@ -7,75 +7,13 @@ budget-window value types and the team-model alias table). Re-exported from
 """
 
 import json
-from collections.abc import Mapping
 from datetime import datetime
-from typing import Annotated, Final, Literal, Optional
+from typing import Final, Literal, Optional
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
-
-TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY: Final = "team_member_max_budget_alert_emails"
-
-
-def _parse_team_member_budget_alert_threshold(raw: object) -> str:
-    if isinstance(raw, str) and raw.isdigit() and len(raw) <= 3 and 1 <= int(raw) <= 100:
-        return str(int(raw))
-    raise ValueError(
-        f"metadata.{TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY} thresholds must be whole-number percentages "
-        f"from 1 to 100, got {raw!r}"
-    )
-
-
-def _is_plausible_email(raw: object) -> bool:
-    if not isinstance(raw, str):
-        return False
-    local, at, domain = raw.strip().partition("@")
-    return bool(local and at and domain) and not any(c.isspace() or c == "@" for c in local + domain)
-
-
-def _parse_team_member_budget_alert_recipients(threshold: str, raw: object) -> list[str]:
-    if raw is None:
-        return []
-    if not isinstance(raw, list):
-        raise ValueError(
-            f"metadata.{TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY}[{threshold!r}] must be a list of email addresses"
-        )
-    invalid: Final = [email for email in raw if not _is_plausible_email(email)]
-    if invalid:
-        raise ValueError(
-            f"metadata.{TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY}[{threshold!r}] has invalid email addresses: {invalid!r}"
-        )
-    return list(dict.fromkeys(email.strip() for email in raw))
-
-
-def validate_team_request_metadata(metadata: dict) -> dict:
-    """
-    Reject a malformed team_member_max_budget_alert_emails on write and store it canonically,
-    e.g. {"50": [], "100": ["finance@x.com"]}, so a bad threshold is a 422 instead of an alert that never fires.
-    """
-    raw: Final = metadata.get(TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY)
-    if raw is None:
-        return metadata
-    if not isinstance(raw, Mapping):
-        raise ValueError(
-            f"metadata.{TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY} must map percentages to email lists, "
-            'e.g. {"50": [], "100": ["finance@example.com"]}'
-        )
-    parsed: Final[dict[str, list[str]]] = {}
-    for raw_threshold, raw_recipients in raw.items():
-        threshold = _parse_team_member_budget_alert_threshold(raw_threshold)
-        if threshold in parsed:
-            raise ValueError(
-                f"metadata.{TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY} lists the {threshold}% threshold more than once"
-            )
-        parsed[threshold] = _parse_team_member_budget_alert_recipients(threshold, raw_recipients)
-    return {**metadata, TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY: parsed}
-
-
-# Request-side only: LiteLLM_TeamTable keeps plain `dict` so reading a stored row never fails validation.
-TeamRequestMetadata = Annotated[dict, AfterValidator(validate_team_request_metadata)]
 
 
 class MemberBase(LiteLLMPydanticObjectBase):

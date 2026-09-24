@@ -2075,7 +2075,6 @@ class OrgMember(MemberBase):
 
 
 from litellm.models.team import TeamBase as TeamBase  # noqa: E402
-from litellm.models.team import TeamRequestMetadata as TeamRequestMetadata  # noqa: E402
 
 RouterSettingsDict = Annotated[
     dict[str, object],
@@ -2084,7 +2083,6 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
-    metadata: TeamRequestMetadata | None = None
     router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
     model_max_budget: GenericBudgetConfigType | None = Field(
@@ -2160,7 +2158,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_id: str  # required
     team_alias: str | None = None
     organization_id: str | None = None
-    metadata: TeamRequestMetadata | None = None
+    metadata: dict | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     tpd_limit: int | None = None
@@ -2213,9 +2211,6 @@ class PatchTeamRequest(UpdateTeamRequest):
     """
 
     team_id: str | None = None
-    # A merge-patch body, not final metadata: `{"50": null}` must survive to delete that threshold.
-    # patch_team validates the merged result when it re-parses it as UpdateTeamRequest.
-    metadata: dict | None = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):

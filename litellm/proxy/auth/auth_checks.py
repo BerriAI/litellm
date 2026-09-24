@@ -40,7 +40,6 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.models.project import LiteLLM_ProjectTable
-from litellm.models.team import TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
@@ -5523,6 +5522,9 @@ async def _virtual_key_max_budget_alert_check(
                         user_info=call_info,
                     )
                 )
+
+
+TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY: Final = "team_member_max_budget_alert_emails"
 
 
 def _team_member_max_budget_alert_check(
