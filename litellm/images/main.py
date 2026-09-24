@@ -754,7 +754,11 @@ def image_edit(
             "n",
             "quality",
             "size",
-            "style",
+            # "style" is intentionally NOT blocklisted here: image_edit has no named
+            # `style` argument, so blocklisting it would drop the param for every
+            # provider. It only reaches handlers whose image-edit config advertises
+            # "style" in get_supported_openai_params (e.g. bedrock Nova Canvas,
+            # recraft); every other provider's transform ignores unknown keys.
             "async_call",
         ]
         litellm_params_list: Final = all_litellm_params

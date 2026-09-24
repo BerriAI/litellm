@@ -149,12 +149,38 @@ def _file_content_to_b64_and_format(image: FileContent) -> tuple[str, str]:
 
 
 def _duration_seconds_from_request(request_data: Mapping[str, object] | None) -> float | None:
-    """durationSeconds from the StartAsyncInvoke request envelope, for cost calculation."""
+    """durationSeconds from the StartAsyncInvoke request envelope, for cost calculation.
+
+    TEXT_VIDEO and MULTI_SHOT_AUTOMATED carry a single durationSeconds on
+    videoGenerationConfig; MULTI_SHOT_MANUAL carries per-shot durations inside
+    multiShotManualParams.shots[*].durationSeconds, so the billable duration is
+    the sum of the shot durations.
+    """
     if request_data is None:
         return None
     model_input: Final[object | None] = request_data.get("modelInput")
     if not isinstance(model_input, Mapping):
         return None
+    manual_params: Final[object | None] = model_input.get("multiShotManualParams")
+    if isinstance(manual_params, Mapping):
+        shots: Final[object | None] = manual_params.get("shots")
+        if isinstance(shots, list):
+            total = 0.0
+            saw_duration = False
+            for shot in shots:
+                if not isinstance(shot, Mapping):
+                    continue
+                # Annotated, not Final: basedpyright forbids Final assignment inside loops.
+                shot_duration: object | None = shot.get("durationSeconds")
+                if not isinstance(shot_duration, (int, float, str)):
+                    continue
+                try:
+                    total += float(shot_duration)
+                    saw_duration = True
+                except ValueError:
+                    continue
+            if saw_duration:
+                return total
     generation_config: Final[object | None] = model_input.get("videoGenerationConfig")
     if not isinstance(generation_config, Mapping):
         return None

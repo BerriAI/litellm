@@ -1659,3 +1659,44 @@ def test_avideo_content_not_complete_yet_maps_to_bad_request(monkeypatch):
         asyncio.run(litellm.avideo_content(video_id=video_id, custom_llm_provider="bedrock"))
     assert excinfo.value.status_code == 400
     assert "not complete" in str(excinfo.value)
+
+
+#################################################
+# MULTI_SHOT_MANUAL spend: per-shot durations sum into usage
+#################################################
+
+
+def test_transform_multi_shot_manual_usage_sums_shot_durations():
+    """3 shots x 6s must record usage.duration_seconds 18 (the billable total), not the
+    omitted top-level durationSeconds; the video cost calculator then prices 18s."""
+    from litellm.llms.openai.cost_calculation import video_generation_cost
+
+    body = _create_request(
+        {
+            "output_s3_uri": "s3://bucket/out/",
+            "taskType": "MULTI_SHOT_MANUAL",
+            "multiShotManualParams": {
+                "shots": [
+                    {"text": "shot one", "durationSeconds": 6},
+                    {"text": "shot two", "durationSeconds": 6},
+                    {"text": "shot three", "durationSeconds": 6},
+                ]
+            },
+        }
+    )
+    config = _make_config()
+    resp = httpx.Response(200, json={"invocationArn": TEST_ARN})
+    video = config.transform_video_create_response(
+        model="amazon.nova-reel-v1:1",
+        raw_response=resp,
+        logging_obj=None,
+        request_data=body,
+    )
+    assert video.usage is not None
+    assert video.usage["duration_seconds"] == 18.0
+    cost = video_generation_cost(
+        model="amazon.nova-reel-v1:1",
+        duration_seconds=video.usage["duration_seconds"],
+        custom_llm_provider="bedrock",
+    )
+    assert cost == pytest.approx(18 * 0.08)
