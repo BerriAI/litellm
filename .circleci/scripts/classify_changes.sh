@@ -29,7 +29,7 @@ while IFS= read -r file || [ -n "$file" ]; do
     *) has_backend=true ;;
   esac
   case "$file" in
-    model_prices_and_context_window.json | litellm/model_prices_and_context_window_backup.json | model_prices_and_context_window.schema.json)
+    model_prices_and_context_window.json | litellm/model_prices_and_context_window_backup.json)
       has_cost_map=true ;;
     tests/test_litellm/* | tests/proxy_unit_tests/*) : ;;
     *) outside_cost_map_set=true ;;

@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "litellm-rust/**"
+      - "model_prices_and_context_window.json"
+      - "litellm/model_prices_and_context_window_backup.json"
       - "litellm/rust_bridge/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
@@ -32,6 +34,8 @@ on:
       - "litellm_**"
     paths:
       - "litellm-rust/**"
+      - "model_prices_and_context_window.json"
+      - "litellm/model_prices_and_context_window_backup.json"
       - "litellm/rust_bridge/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"

@@ -21,7 +21,6 @@ def _load(name: str) -> ModuleType:
     return module
 
 
-schema_module: Final = _load("generate_model_prices_schema")
 guard: Final = _load("cost_map_guard")
 
 MAP_FILES: Final = (guard.COST_MAP_PATH,)
@@ -51,12 +50,9 @@ def _serialize(cost_map: dict[str, object]) -> str:
     return json.dumps(cost_map, indent=4, ensure_ascii=False) + "\n"
 
 
-def _snapshot(cost_map: dict[str, object], backup: str | None = None, schema: str | None = None) -> object:
+def _snapshot(cost_map: dict[str, object], backup: str | None = None) -> object:
     text = _serialize(cost_map)
-    rendered = schema_module.render(schema_module.build_schema(cost_map))
-    return guard.Snapshot(
-        cost_map=text, backup=text if backup is None else backup, schema=rendered if schema is None else schema
-    )
+    return guard.Snapshot(cost_map=text, backup=text if backup is None else backup)
 
 
 BASE: Final = _snapshot(BASE_MAP)
@@ -77,14 +73,14 @@ def test_bot_may_add_and_reprice_models() -> None:
 
 
 def test_broken_json_is_reported() -> None:
-    head = guard.Snapshot(cost_map="{not json", backup="{not json", schema="{}")
+    head = guard.Snapshot(cost_map="{not json", backup="{not json")
     assert _failures(head, bot=False) == (
         f"{guard.COST_MAP_PATH} is not valid JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
     )
 
 
 def test_non_object_root_is_reported() -> None:
-    head = guard.Snapshot(cost_map="[]", backup="[]", schema="{}")
+    head = guard.Snapshot(cost_map="[]", backup="[]")
     assert _failures(head, bot=False) == (f"{guard.COST_MAP_PATH} must be a JSON object at the root",)
 
 
@@ -93,28 +89,7 @@ def test_backup_drift_is_reported() -> None:
     assert [failure for failure in _failures(head, bot=False) if failure.startswith(guard.BACKUP_PATH)]
 
 
-def test_schema_out_of_sync_is_reported() -> None:
-    head = _snapshot({**BASE_MAP, "openrouter/c": _entry(supports_audio_input=True)}, schema=BASE.schema)
-    assert [failure for failure in _failures(head, bot=False) if failure.startswith(guard.SCHEMA_PATH)]
-
-
-def test_schema_validation_errors_are_reported() -> None:
-    head = _snapshot({**BASE_MAP, "openrouter/c": _entry(-1e-06)})
-    prefix = f"{guard.COST_MAP_PATH} does not validate against its schema: openrouter/c."
-    assert [failure.removeprefix(prefix).split(":")[0] for failure in _failures(head, bot=False)] == [
-        "input_cost_per_token",
-        "output_cost_per_token",
-    ]
-
-
-def test_unclassified_entry_key_is_reported() -> None:
-    text = _serialize({**BASE_MAP, "openrouter/c": _entry(weird_thing=1)})
-    head = guard.Snapshot(cost_map=text, backup=text, schema=BASE.schema)
-    (failure,) = _failures(head, bot=False)
-    assert "Unclassified keys" in failure and "weird_thing" in failure
-
-
-STALE_HEAD: Final = _snapshot(BASE_MAP, backup=_serialize({**BASE_MAP, "openrouter/b": _entry(3e-06)}), schema="{}")
+STALE_HEAD: Final = _snapshot(BASE_MAP, backup=_serialize({**BASE_MAP, "openrouter/b": _entry(3e-06)}))
 CODE_ONLY: Final = (
     "litellm/utils.py",
     "tests/test_litellm/test_utils.py",
@@ -123,7 +98,7 @@ CODE_ONLY: Final = (
 
 
 def test_human_pr_that_leaves_the_cost_map_alone_skips_the_file_checks() -> None:
-    unparseable: Final = guard.Snapshot(cost_map="{not json", backup="", schema="")
+    unparseable: Final = guard.Snapshot(cost_map="{not json", backup="")
     assert _failures(STALE_HEAD, changed_files=CODE_ONLY, bot=False) == ()
     assert _failures(STALE_HEAD, changed_files=(), bot=False) == ()
     assert _failures(unparseable, changed_files=CODE_ONLY, bot=False) == ()
@@ -133,18 +108,16 @@ def test_human_pr_that_leaves_the_cost_map_alone_skips_the_file_checks() -> None
 def test_touching_any_cost_map_file_keeps_the_file_checks(guarded_path: str) -> None:
     failures: Final = _failures(STALE_HEAD, changed_files=(*CODE_ONLY, guarded_path), bot=False)
     assert [failure for failure in failures if failure.startswith(guard.BACKUP_PATH)]
-    assert [failure for failure in failures if failure.startswith(guard.SCHEMA_PATH)]
 
 
 def test_bot_pr_always_gets_the_file_checks() -> None:
     failures: Final = _failures(STALE_HEAD, changed_files=CODE_ONLY, bot=True)
     assert [failure for failure in failures if failure.startswith(guard.BACKUP_PATH)]
-    assert [failure for failure in failures if failure.startswith(guard.SCHEMA_PATH)]
 
 
 def test_contract_names_the_skip() -> None:
     assert guard.contract_for(False, CODE_ONLY) == "human PR, cost map untouched"
-    assert guard.contract_for(False, (*CODE_ONLY, guard.SCHEMA_PATH)) == "human PR, file checks only"
+    assert guard.contract_for(False, (*CODE_ONLY, guard.BACKUP_PATH)) == "human PR, file checks only"
     assert guard.contract_for(True, CODE_ONLY) == "bot contract enforced"
 
 
@@ -180,7 +153,6 @@ def _commit(repo: Path, cost_map: dict[str, object], message: str) -> str:
     (repo / guard.COST_MAP_PATH).write_text(text)
     (repo / guard.BACKUP_PATH).parent.mkdir(exist_ok=True)
     (repo / guard.BACKUP_PATH).write_text(text)
-    (repo / guard.SCHEMA_PATH).write_text(schema_module.render(schema_module.build_schema(cost_map)))
     return _git_commit(repo, message)
 
 
@@ -233,9 +205,8 @@ def test_main_reads_both_revisions_from_git(
 def test_main_skips_the_file_checks_on_a_stale_base_the_pr_never_touched(tmp_path: Path) -> None:
     subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
     _commit(tmp_path, BASE_MAP, "base")
-    (tmp_path / guard.BACKUP_PATH).write_text(_serialize({**BASE_MAP, "openrouter/b": _entry(3e-06)}))
-    (tmp_path / guard.SCHEMA_PATH).write_text("{}")
-    stale_base: Final = _commit_code_only(tmp_path, "stale base with drifted backup and schema")
+    (tmp_path / guard.BACKUP_PATH).write_text("{}")
+    stale_base: Final = _commit_code_only(tmp_path, "stale base with drifted backup")
     head: Final = _commit_code_only(tmp_path, "code change on the stale base")
     human: Final = _run_guard(tmp_path, stale_base, head, "litellm_fix_pricing")
     assert human.returncode == 0, human.stdout + human.stderr

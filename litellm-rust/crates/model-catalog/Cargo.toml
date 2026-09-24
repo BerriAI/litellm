@@ -18,6 +18,7 @@ thiserror.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 rstest.workspace = true
+time.workspace = true
 litellm-model-catalog = { path = ".", features = ["schema"] }
 
 [[bench]]

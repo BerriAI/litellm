@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import re
 from collections.abc import Mapping
@@ -8,7 +7,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
-import jsonschema
 import pytest
 
 import litellm
@@ -17,163 +15,13 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
 REPO_ROOT = Path(__file__).parents[2]
-GENERATOR_PATH = REPO_ROOT / "ci_cd" / "generate_model_prices_schema.py"
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
-SCHEMA_PATH = REPO_ROOT / "model_prices_and_context_window.schema.json"
-
-
-def build_validator(schema: dict) -> jsonschema.Draft202012Validator:
-    return jsonschema.Draft202012Validator(schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER)
-
-
-def load_generator():
-    spec = importlib.util.spec_from_file_location("generate_model_prices_schema", GENERATOR_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.fixture(scope="module")
-def committed_schema() -> dict:
-    return json.loads(SCHEMA_PATH.read_text())
 
 
 @pytest.fixture(scope="module")
 def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
-
-
-def test_committed_schema_matches_generator_output(prices: dict, committed_schema: dict):
-    generator = load_generator()
-    regenerated = json.loads(generator.render(generator.build_schema(prices)))
-    assert regenerated == committed_schema, (
-        "model_prices_and_context_window.schema.json is out of sync; "
-        "run `python ci_cd/generate_model_prices_schema.py` and commit the result"
-    )
-
-
-def test_prices_file_validates_against_committed_schema(prices: dict, committed_schema: dict):
-    validator = build_validator(committed_schema)
-    errors = [
-        f"{'.'.join(str(part) for part in error.absolute_path)}: {error.message}"
-        for error in validator.iter_errors(prices)
-    ]
-    assert errors == []
-
-
-@pytest.mark.parametrize(
-    "entry",
-    [
-        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": "0.01"},
-        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": -1},
-        {"litellm_provider": "openai", "mode": "not_a_real_mode"},
-        {"mode": "chat"},
-        {"litellm_provider": "openai", "deprecation_date": "June 2026"},
-        {"litellm_provider": "openai", "deprecation_date": "2026-99-99"},
-        {"litellm_provider": "openai", "deprecation_date": "2026-13-01"},
-        {"litellm_provider": "openai", "deprecation_date": "2026-01-32"},
-        {"litellm_provider": "openai", "deprecation_date": "2026-01-00"},
-        {"litellm_provider": "openai", "deprecation_date": "2026-02-31"},
-        {"litellm_provider": "openai", "supported_modalities": ["smell"]},
-        {"litellm_provider": "openai", "supports_vision": "yes"},
-        {"litellm_provider": "openai", "max_tokens": 8191.5},
-        {"litellm_provider": "openai", "tiered_pricing": [{"unknown_tier_field": 1}]},
-    ],
-    ids=[
-        "cost_as_string",
-        "negative_cost",
-        "unknown_mode",
-        "missing_provider",
-        "non_iso_deprecation_date",
-        "impossible_month_and_day",
-        "month_out_of_range",
-        "day_out_of_range",
-        "day_zero",
-        "calendar_impossible_day",
-        "unknown_modality",
-        "boolean_flag_as_string",
-        "fractional_max_tokens",
-        "unknown_tiered_pricing_field",
-    ],
-)
-def test_schema_rejects_malformed_entries(committed_schema: dict, entry: dict):
-    validator = build_validator(committed_schema)
-    assert not validator.is_valid({"some-model": entry})
-
-
-def test_schema_accepts_minimal_and_unknown_optional_fields(committed_schema: dict):
-    validator = build_validator(committed_schema)
-    assert validator.is_valid({"some-model": {"litellm_provider": "openai"}})
-    assert validator.is_valid({"some-model": {"litellm_provider": "openai", "brand_new_field": {"nested": True}}})
-
-
-def test_schema_accepts_cache_creation_cost_inside_a_pricing_tier(committed_schema: dict):
-    validator = build_validator(committed_schema)
-    entry = {
-        "litellm_provider": "dashscope",
-        "mode": "chat",
-        "tiered_pricing": [
-            {
-                "range": [0, 256000],
-                "input_cost_per_token": 3.25e-07,
-                "output_cost_per_token": 1.95e-06,
-                "cache_creation_input_token_cost": 4.063e-07,
-                "cache_read_input_token_cost": 3.25e-08,
-            }
-        ],
-    }
-    assert validator.is_valid({"some-model": entry})
-
-
-OFF_PEAK_ENTRY: Final = MappingProxyType(
-    {
-        "litellm_provider": "openrouter",
-        "mode": "chat",
-        "input_cost_per_token": 2e-6,
-        "output_cost_per_token": 8e-6,
-        "off_peak_pricing": {
-            "hours_utc": "16:30-00:30",
-            "windows": [{"hours_utc": ["00:30-02:00"], "weekdays": [6, "Sunday", "mon", "THURS"]}],
-            "weekday_timezone": "Asia/Shanghai",
-            "input_cost_per_token": 1e-6,
-            "output_cost_per_token": 4e-6,
-            "cache_read_input_token_cost": 1e-7,
-        },
-    }
-)
-
-
-def test_generator_classifies_off_peak_pricing_as_a_windowed_rate_block():
-    generator = load_generator()
-    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(OFF_PEAK_ENTRY)})))
-    validator = build_validator(schema)
-    assert validator.is_valid({"some-model": dict(OFF_PEAK_ENTRY)})
-
-
-@pytest.mark.parametrize(
-    "block",
-    [
-        {"hours_utc": "16:30-00:30", "input_cost_per_token": "1e-6"},
-        {"hours_utc": "16:30-00:30", "input_cost_per_token": -1e-6},
-        {"hours_utc": 1630, "input_cost_per_token": 1e-6},
-        {"hours_utc": "16:30-00:30", "discount": 0.5},
-        {"windows": [{"weekdays": [6]}], "input_cost_per_token": 1e-6},
-        {"windows": [{"hours_utc": "00:30-02:00", "weekdays": [0]}], "input_cost_per_token": 1e-6},
-        {"windows": [], "input_cost_per_token": 1e-6},
-        {"input_cost_per_token": 1e-6},
-        {"hours_utc": "16:30", "input_cost_per_token": 1e-6},
-        {"hours_utc": "25:00-01:00", "input_cost_per_token": 1e-6},
-        {"hours_utc": ["16:30-00:30", "4pm-midnight"], "input_cost_per_token": 1e-6},
-        {"windows": [{"hours_utc": "00:30-02:00", "weekdays": ["Funday"]}], "input_cost_per_token": 1e-6},
-    ],
-)
-def test_generated_off_peak_schema_rejects_malformed_blocks(block: dict):
-    generator = load_generator()
-    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(OFF_PEAK_ENTRY)})))
-    validator = build_validator(schema)
-    assert not validator.is_valid({"some-model": {**OFF_PEAK_ENTRY, "off_peak_pricing": block}})
 
 
 def find_duplicate_keys(path: Path) -> list[str]:

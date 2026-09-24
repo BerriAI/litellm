@@ -99,13 +99,10 @@ impl Catalog {
                 }
                 _ => {}
             }
-            let Value::Object(ref object) = value else {
+            let Value::Object(mut fields) = value else {
                 return Err(Error::EntryNotObject { model: name });
             };
-            let info = ModelInfo::deserialize(object)?;
-            let Value::Object(mut fields) = value else {
-                unreachable!("value checked is_object above")
-            };
+            let info = ModelInfo::deserialize(&fields)?;
             if let Some(aliases) = fields.remove("aliases")
                 && !aliases.is_null()
             {
