@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use litellm_cost::pricing::{Metric, ModelPricing, ServiceTier};
 use litellm_cost::wire::RawCatalogEntry;
+use rstest::rstest;
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -46,7 +47,7 @@ fn parsed_pricing() -> ModelPricing {
     entry.pricing()
 }
 
-#[test]
+#[rstest]
 fn model_pricing_lookups_allocate_nothing_on_the_request_path() {
     let pricing = parsed_pricing();
     let tiers = [

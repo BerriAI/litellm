@@ -4,8 +4,9 @@ use std::sync::LazyLock;
 
 use litellm_cost::pricing::{Metric, Rate, ServiceTier, tokenize};
 use litellm_cost::wire::{EMBEDDED_CATALOG, rate};
+use rstest::rstest;
 
-#[test]
+#[rstest]
 fn every_embedded_key_is_recognized_by_the_tokenizer() {
     let mut offenders: Vec<String> = Vec::new();
     for (model, entry) in EMBEDDED_CATALOG.iter() {
@@ -21,7 +22,7 @@ fn every_embedded_key_is_recognized_by_the_tokenizer() {
     );
 }
 
-#[test]
+#[rstest]
 fn embedded_catalog_yields_decorated_and_plain_rates() {
     let mut thresholds = 0_usize;
     let mut tiers = 0_usize;
@@ -40,7 +41,7 @@ fn embedded_catalog_yields_decorated_and_plain_rates() {
     assert!(plain > 0);
 }
 
-#[test]
+#[rstest]
 fn tokenizer_applies_the_rate_key_grammar() {
     let plain = tokenize("input_cost_per_token").expect("plain rate key");
     assert_eq!(plain.metric, Metric::InputPerToken);
@@ -89,7 +90,7 @@ fn tokenizer_applies_the_rate_key_grammar() {
     assert!(batch.batch);
 }
 
-#[test]
+#[rstest]
 fn tokenizer_rejects_unknown_metrics_and_malformed_decorations() {
     assert!(tokenize("input_cost_per_gadget").is_err());
     assert!(tokenize("input_cost_per_token_standard").is_err());
@@ -98,7 +99,7 @@ fn tokenizer_rejects_unknown_metrics_and_malformed_decorations() {
     assert!(tokenize("max_tokens").is_err());
 }
 
-#[test]
+#[rstest]
 fn rate_parser_mirrors_get_cost_per_unit_coercions() {
     use serde_json::json;
     assert_eq!(rate(None), Rate::Missing);
@@ -113,7 +114,7 @@ fn rate_parser_mirrors_get_cost_per_unit_coercions() {
     assert_eq!(rate(Some(&json!({"cost": 1}))), Rate::Invalid);
 }
 
-#[test]
+#[rstest]
 fn parsed_pricing_buckets_a_synthetic_overlay_entry() {
     let entry: litellm_cost::wire::RawCatalogEntry = serde_json::from_value(serde_json::json!({
         "input_cost_per_token": 3e-6,
@@ -180,7 +181,7 @@ fn parsed_pricing_buckets_a_synthetic_overlay_entry() {
     let _: LazyLock<()> = LazyLock::new(|| ());
 }
 
-#[test]
+#[rstest]
 fn checked_rates_reject_negative_and_non_finite_where_python_bills_them() {
     use litellm_cost::error::CostError;
     use litellm_cost::pricing::Rate;

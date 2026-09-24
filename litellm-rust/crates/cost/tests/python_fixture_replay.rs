@@ -17,6 +17,7 @@ use litellm_cost::prompt_caching_savings::{
 };
 use litellm_cost::provider_cache::apply_provider_cache_read_default;
 use litellm_cost::usage_dispatch::get_usage_object;
+use rstest::rstest;
 use serde_json::{Value, json};
 
 fn fixtures() -> Value {
@@ -44,7 +45,7 @@ fn assert_close(actual: f64, expected: f64, id: &str) {
     );
 }
 
-#[test]
+#[rstest]
 fn generic_token_costs_match_executed_python_fixtures() {
     for row in fixtures().get("generic").unwrap().as_array().unwrap() {
         let id = row.get("id").and_then(Value::as_str).unwrap();
@@ -76,7 +77,7 @@ fn generic_token_costs_match_executed_python_fixtures() {
     }
 }
 
-#[test]
+#[rstest]
 fn billed_token_rates_match_executed_python_fixtures() {
     for row in fixtures().get("billed_rates").unwrap().as_array().unwrap() {
         let id = row.get("id").and_then(Value::as_str).unwrap();
@@ -131,7 +132,7 @@ fn billed_token_rates_match_executed_python_fixtures() {
     }
 }
 
-#[test]
+#[rstest]
 fn batch_cost_rates_match_executed_python_fixtures() {
     for row in fixtures().get("batch").unwrap().as_array().unwrap() {
         let id = row.get("id").and_then(Value::as_str).unwrap();
@@ -164,7 +165,7 @@ fn batch_cost_rates_match_executed_python_fixtures() {
     }
 }
 
-#[test]
+#[rstest]
 fn off_peak_decisions_match_executed_python_fixtures() {
     for row in fixtures().get("off_peak").unwrap().as_array().unwrap() {
         let id = row.get("id").and_then(Value::as_str).unwrap();
@@ -175,7 +176,7 @@ fn off_peak_decisions_match_executed_python_fixtures() {
     }
 }
 
-#[test]
+#[rstest]
 fn responses_usage_transforms_match_executed_python_fixtures() {
     for row in fixtures()
         .get("responses_usage")
@@ -191,7 +192,7 @@ fn responses_usage_transforms_match_executed_python_fixtures() {
     }
 }
 
-#[test]
+#[rstest]
 fn anthropic_usage_transforms_match_executed_python_fixtures() {
     for row in fixtures()
         .get("anthropic_usage")
@@ -312,7 +313,7 @@ fn count_of(details: Option<&Value>, key: &str) -> u64 {
         .unwrap_or(0)
 }
 
-#[test]
+#[rstest]
 fn prompt_caching_savings_match_executed_python_fixtures() {
     for row in fixtures()
         .get("caching_savings")
@@ -339,7 +340,7 @@ fn prompt_caching_savings_match_executed_python_fixtures() {
     }
 }
 
-#[test]
+#[rstest]
 fn fixture_ids_are_unique_per_surface() {
     let mut seen: HashMap<String, usize> = HashMap::new();
     let root = fixtures();

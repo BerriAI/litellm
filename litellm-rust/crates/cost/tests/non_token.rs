@@ -7,7 +7,7 @@ use litellm_cost::non_token::{
 };
 use rstest::rstest;
 
-#[test]
+#[rstest]
 fn combines_non_token_charges_without_losing_components() {
     let charges = [
         Charge {
@@ -51,7 +51,7 @@ fn combines_non_token_charges_without_losing_components() {
     assert!((result.total - 0.16).abs() < 1e-12);
 }
 
-#[test]
+#[rstest]
 fn supports_prices_per_thousand_units_and_free_usage() {
     let charges = [
         Charge {
@@ -74,7 +74,7 @@ fn supports_prices_per_thousand_units_and_free_usage() {
     assert_eq!(result.total, 1.5);
 }
 
-#[test]
+#[rstest]
 fn rejects_invalid_inputs_and_overflow() {
     let valid = Charge {
         unit: Unit::Credit,
@@ -114,7 +114,7 @@ fn rejects_invalid_inputs_and_overflow() {
     );
 }
 
-#[test]
+#[rstest]
 fn image_price_uses_first_priced_table_and_preserves_zero() {
     let deployment = ImageRates {
         input_per_image: Rate::Missing,
@@ -146,7 +146,7 @@ fn image_price_uses_first_priced_table_and_preserves_zero() {
     );
 }
 
-#[test]
+#[rstest]
 fn ocr_credits_take_precedence_and_annotation_uses_page_fallback() {
     let rates = OcrRates {
         per_credit: Rate::Value(0.2),

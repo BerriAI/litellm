@@ -817,6 +817,7 @@ pub struct ImageResponseInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     fn entry(fields: &[(&str, Value)]) -> RawCatalogEntry {
         RawCatalogEntry(Map::from_iter(
@@ -826,7 +827,7 @@ mod tests {
         ))
     }
 
-    #[test]
+    #[rstest]
     fn overlay_merges_fields_into_existing_entries_and_adds_new_ones() {
         let base = BTreeMap::from([(
             "synthetic-base".to_string(),
@@ -865,14 +866,14 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn embedded_catalog_excludes_generalizations_meta_key() {
         let catalog = LazyLock::force(&EMBEDDED_CATALOG);
         assert!(!catalog.is_empty());
         assert!(!catalog.contains_key("fallback_generalizations"));
     }
 
-    #[test]
+    #[rstest]
     fn chat_usage_reads_lenient_counts_and_cost_projection() {
         let usage: ChatUsageInput = serde_json::from_value(serde_json::json!({
             "prompt_tokens": true,
@@ -889,7 +890,7 @@ mod tests {
         assert_eq!(usage.cache_read_input_tokens, Some(7));
     }
 
-    #[test]
+    #[rstest]
     fn chat_usage_rejects_negative_and_garbage_counts() {
         assert!(
             serde_json::from_value::<ChatUsageInput>(serde_json::json!({
@@ -905,7 +906,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn usage_input_dispatches_on_format_tag_not_key_shapes() {
         let chat: UsageInput = serde_json::from_value(serde_json::json!({
             "format": "chat",
@@ -942,7 +943,7 @@ mod tests {
         assert_eq!((input_tokens, output_tokens), (100, 200));
     }
 
-    #[test]
+    #[rstest]
     fn hidden_params_read_wire_number_header_costs() {
         let hidden: HiddenParamsInput = serde_json::from_value(serde_json::json!({
             "custom_llm_provider": "openai",
@@ -957,7 +958,7 @@ mod tests {
         assert_eq!(header.and_then(WireNumber::cost), Some(0.0123));
     }
 
-    #[test]
+    #[rstest]
     fn query_count_counts_arrays_and_defaults_non_arrays_to_one() {
         let params: OptionalParamsInput =
             serde_json::from_value(serde_json::json!({"query": ["a", "b", "c"]})).unwrap();

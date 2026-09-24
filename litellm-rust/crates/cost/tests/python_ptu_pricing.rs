@@ -27,7 +27,7 @@ fn zeroed_with_flag(
     zeroed_ptu_pricing(model_info, declared, enabled)
 }
 
-#[test]
+#[rstest]
 fn a_complete_reservation_is_accepted() {
     let terms = ptu_terms(&valid_model_info()).expect("terms");
 
@@ -74,7 +74,7 @@ fn merge(base: &Value, override_value: &Value) -> Value {
     Value::Object(merged)
 }
 
-#[test]
+#[rstest]
 fn a_naive_start_is_read_as_utc() {
     let model_info = merge(
         &valid_model_info(),
@@ -91,7 +91,7 @@ fn a_naive_start_is_read_as_utc() {
     );
 }
 
-#[test]
+#[rstest]
 fn an_offset_start_is_converted_rather_than_relabelled() {
     let model_info = merge(
         &valid_model_info(),
@@ -108,7 +108,7 @@ fn an_offset_start_is_converted_rather_than_relabelled() {
     );
 }
 
-#[test]
+#[rstest]
 fn nothing_is_zeroed_while_the_feature_is_off() {
     assert_eq!(
         zeroed_with_flag(&valid_model_info(), &json!({}), false),
@@ -116,7 +116,7 @@ fn nothing_is_zeroed_while_the_feature_is_off() {
     );
 }
 
-#[test]
+#[rstest]
 fn the_standing_rates_are_all_zeroed() {
     let override_pricing =
         zeroed_with_flag(&valid_model_info(), &json!({}), true).expect("pricing");
@@ -128,7 +128,7 @@ fn the_standing_rates_are_all_zeroed() {
     );
 }
 
-#[test]
+#[rstest]
 fn tiered_pricing_is_emptied_rather_than_zeroed() {
     let declared = json!({"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 0.003}]});
 
@@ -137,7 +137,7 @@ fn tiered_pricing_is_emptied_rather_than_zeroed() {
     assert_eq!(override_pricing.get("tiered_pricing"), Some(&json!([])));
 }
 
-#[test]
+#[rstest]
 fn the_search_context_table_is_zeroed_in_place_on_every_deployment() {
     let override_pricing =
         zeroed_with_flag(&valid_model_info(), &json!({}), true).expect("pricing");
@@ -152,7 +152,7 @@ fn the_search_context_table_is_zeroed_in_place_on_every_deployment() {
     );
 }
 
-#[test]
+#[rstest]
 fn the_maps_grounding_rate_is_zeroed_on_every_deployment() {
     let override_pricing =
         zeroed_with_flag(&valid_model_info(), &json!({}), true).expect("pricing");
@@ -163,7 +163,7 @@ fn the_maps_grounding_rate_is_zeroed_on_every_deployment() {
     );
 }
 
-#[test]
+#[rstest]
 fn a_declared_table_does_not_become_a_scalar() {
     let declared = json!({"search_context_cost_per_query": {"search_context_size_medium": 0.05}});
 
@@ -179,7 +179,7 @@ fn a_declared_table_does_not_become_a_scalar() {
     );
 }
 
-#[test]
+#[rstest]
 fn a_rate_the_deployment_declares_itself_is_zeroed_too() {
     let extra = "input_cost_per_token_above_200k_tokens";
     let declared = json!({extra: 9e-06});
@@ -189,7 +189,7 @@ fn a_rate_the_deployment_declares_itself_is_zeroed_too() {
     assert_eq!(override_pricing.get(extra), Some(&json!(0.0)));
 }
 
-#[test]
+#[rstest]
 fn a_setting_that_is_not_a_charge_is_left_alone() {
     let declared = json!({"output_vector_size": 1536});
 
@@ -198,12 +198,12 @@ fn a_setting_that_is_not_a_charge_is_left_alone() {
     assert_eq!(override_pricing.get("output_vector_size"), None);
 }
 
-#[test]
+#[rstest]
 fn a_complete_reservation_has_no_error() {
     assert_eq!(ptu_config_error(&valid_model_info(), None), None);
 }
 
-#[test]
+#[rstest]
 fn a_deployment_with_no_ptu_fields_is_not_a_ptu_deployment() {
     assert_eq!(
         ptu_config_error(&json!({"team_id": "team-alpha"}), None),
@@ -231,7 +231,7 @@ fn an_incoherent_reservation_names_its_reason(
     );
 }
 
-#[test]
+#[rstest]
 fn a_missing_start_is_explained_rather_than_inferred() {
     let model_info = json!({
         "team_id": "team-alpha",
@@ -243,7 +243,7 @@ fn a_missing_start_is_explained_rather_than_inferred() {
     assert!(error.starts_with("ptu_effective_from is required when PTU fields are set"));
 }
 
-#[test]
+#[rstest]
 fn an_inverted_window_is_caught_before_the_count_and_rate_gate() {
     let window_only = json!({
         "ptu_effective_from": "2026-01-01T00:00:00Z",
@@ -256,7 +256,7 @@ fn an_inverted_window_is_caught_before_the_count_and_rate_gate() {
     );
 }
 
-#[test]
+#[rstest]
 fn a_declared_unique_id_is_accepted() {
     assert_eq!(
         ptu_identity_error(Some("azure-ptu-eastus"), false, None, None),
@@ -273,35 +273,35 @@ fn a_reservation_without_an_id_is_refused(#[case] missing: Option<&str>) {
     assert!(error.starts_with("model_info.id is required when PTU fields are set"));
 }
 
-#[test]
+#[rstest]
 fn the_refusal_names_the_id_the_deployment_already_uses() {
     let error = ptu_identity_error(None, false, Some("0ba149287615"), None).expect("error");
 
     assert!(error.contains("0ba149287615"));
 }
 
-#[test]
+#[rstest]
 fn the_refusal_points_at_the_model_info_route_when_the_current_id_is_unknown() {
     let error = ptu_identity_error(None, false, None, None).expect("error");
 
     assert!(error.contains("GET /model/info"));
 }
 
-#[test]
+#[rstest]
 fn an_id_declared_twice_is_refused() {
     let error = ptu_identity_error(Some("azure-ptu-eastus"), true, None, None).expect("error");
 
     assert!(error.contains("declared on more than one deployment"));
 }
 
-#[test]
+#[rstest]
 fn the_deployment_is_named_when_the_caller_supplies_one() {
     let error = ptu_identity_error(None, false, None, Some("azure-ptu")).expect("error");
 
     assert!(error.starts_with("PTU configuration on model 'azure-ptu' is invalid:"));
 }
 
-#[test]
+#[rstest]
 fn a_bare_yaml_date_bound_is_read_as_that_day_opening() {
     let model_info = merge(
         &valid_model_info(),
@@ -319,7 +319,7 @@ fn a_bare_yaml_date_bound_is_read_as_that_day_opening() {
     );
 }
 
-#[test]
+#[rstest]
 fn a_bare_yaml_date_start_is_read_as_that_day_opening() {
     let model_info = merge(
         &valid_model_info(),
@@ -336,19 +336,19 @@ fn a_bare_yaml_date_start_is_read_as_that_day_opening() {
     );
 }
 
-#[test]
+#[rstest]
 fn the_string_zero_is_a_declared_id() {
     assert_eq!(ptu_identity_error(Some("0"), false, None, None), None);
 }
 
-#[test]
+#[rstest]
 fn an_empty_id_is_no_id() {
     let error = ptu_identity_error(Some(""), false, None, None).expect("error");
 
     assert!(error.starts_with("model_info.id is required"));
 }
 
-#[test]
+#[rstest]
 fn the_spillover_header_marks_the_request_as_pay_as_you_go() {
     assert!(is_spilled_over_ptu_request(
         &valid_model_info(),
@@ -358,7 +358,7 @@ fn the_spillover_header_marks_the_request_as_pay_as_you_go() {
     ));
 }
 
-#[test]
+#[rstest]
 fn no_spillover_marker_keeps_the_zeroed_ptu_rates() {
     assert!(!is_spilled_over_ptu_request(
         &valid_model_info(),
@@ -374,7 +374,7 @@ fn no_spillover_marker_keeps_the_zeroed_ptu_rates() {
     ));
 }
 
-#[test]
+#[rstest]
 fn azure_spillover_carries_the_source_deployment_from_raw_headers() {
     assert_eq!(
         azure_spillover(
@@ -390,7 +390,7 @@ fn azure_spillover_carries_the_source_deployment_from_raw_headers() {
     );
 }
 
-#[test]
+#[rstest]
 fn azure_spillover_from_processed_headers_has_no_source_when_absent() {
     assert_eq!(
         azure_spillover(
@@ -403,7 +403,7 @@ fn azure_spillover_from_processed_headers_has_no_source_when_absent() {
     );
 }
 
-#[test]
+#[rstest]
 fn no_spillover_marker_returns_none() {
     assert_eq!(
         azure_spillover(Some(&json!({"x-ms-is-spilled-over": "false"})), None),
@@ -412,7 +412,7 @@ fn no_spillover_marker_returns_none() {
     assert_eq!(azure_spillover(None, None), None);
 }
 
-#[test]
+#[rstest]
 fn a_boolean_spillover_marker_matches_pythons_string_coercion() {
     assert!(is_spilled_over_ptu_request(
         &valid_model_info(),
@@ -428,7 +428,7 @@ fn a_boolean_spillover_marker_matches_pythons_string_coercion() {
     ));
 }
 
-#[test]
+#[rstest]
 fn spillover_requires_both_the_terms_and_the_feature_flag() {
     let headers = Some(&json!({"x-ms-is-spilled-over": "true"}));
 
@@ -468,14 +468,14 @@ fn coercions_and_bounds_match_python(
     }
 }
 
-#[test]
+#[rstest]
 fn a_numeric_team_id_is_stringified_like_python() {
     let model_info = merge(&valid_model_info(), &json!({"team_id": 7}));
 
     assert_eq!(ptu_terms(&model_info).expect("terms").team_id, "7");
 }
 
-#[test]
+#[rstest]
 fn a_declared_512k_cache_read_rate_is_zeroed_too() {
     let extra = "cache_read_input_token_cost_above_512k_tokens";
     let declared = json!({extra: 1e-06});
@@ -494,7 +494,7 @@ fn a_null_or_absent_effective_to_leaves_the_window_open(#[case] override_value: 
     assert_eq!(ptu_terms(&model_info).expect("terms").effective_to, None);
 }
 
-#[test]
+#[rstest]
 fn a_blank_current_id_falls_back_to_the_model_info_route() {
     let error = ptu_identity_error(None, false, Some(""), None).expect("error");
 
@@ -502,7 +502,7 @@ fn a_blank_current_id_falls_back_to_the_model_info_route() {
     assert!(!error.contains("uses, ,"));
 }
 
-#[test]
+#[rstest]
 fn a_null_spillover_source_is_absent_not_the_string_none() {
     assert_eq!(
         azure_spillover(
@@ -518,7 +518,7 @@ fn a_null_spillover_source_is_absent_not_the_string_none() {
     );
 }
 
-#[test]
+#[rstest]
 fn a_config_error_names_the_model_when_supplied() {
     let model_info = merge(&valid_model_info(), &json!({"team_id": ""}));
 
@@ -528,7 +528,7 @@ fn a_config_error_names_the_model_when_supplied() {
     );
 }
 
-#[test]
+#[rstest]
 fn the_zeroed_pricing_map_carries_exactly_the_python_fields() {
     let override_pricing =
         zeroed_with_flag(&valid_model_info(), &json!({}), true).expect("pricing");

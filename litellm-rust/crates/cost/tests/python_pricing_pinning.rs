@@ -9,6 +9,7 @@ use litellm_cost::call_type::CallTypes;
 use litellm_cost::pricing::{Metric, ServiceTier, tokenize};
 use litellm_cost::provider::LlmProviders;
 use litellm_cost::wire::{RawCatalogEntry, cost_per_unit};
+use rstest::rstest;
 use strum::VariantArray;
 
 fn fixture() -> Value {
@@ -19,7 +20,7 @@ fn pinning() -> Value {
     fixture()["pinning"].clone()
 }
 
-#[test]
+#[rstest]
 fn tokenizer_agrees_with_parse_above_token_threshold_where_python_parses() {
     for row in pinning()["thresholds"].as_array().expect("threshold rows") {
         let key = row["key"].as_str().expect("key");
@@ -48,7 +49,7 @@ fn tokenizer_agrees_with_parse_above_token_threshold_where_python_parses() {
     );
 }
 
-#[test]
+#[rstest]
 fn service_tier_suffixes_match_python() {
     let pinning = pinning();
     let pinned: Vec<&str> = pinning["service_tier_suffixes"]
@@ -64,7 +65,7 @@ fn service_tier_suffixes_match_python() {
     assert_eq!(rust, pinned);
 }
 
-#[test]
+#[rstest]
 fn batch_tier_grammar_matches_python_regex_language() {
     let pattern = pinning()["batch_tier_key"]
         .as_str()
@@ -99,7 +100,7 @@ fn batch_tier_grammar_matches_python_regex_language() {
     }
 }
 
-#[test]
+#[rstest]
 fn cost_per_unit_replays_python_coercion_and_tier_fallback() {
     for row in pinning()["cost_per_unit"]
         .as_array()
@@ -114,7 +115,7 @@ fn cost_per_unit_replays_python_coercion_and_tier_fallback() {
     }
 }
 
-#[test]
+#[rstest]
 fn model_info_projection_passes_rate_keys_the_tokenizer_recognizes() {
     let fixture = fixture();
     let projected = fixture["model_info_projection"]["projected"]
@@ -145,7 +146,7 @@ fn model_info_projection_passes_rate_keys_the_tokenizer_recognizes() {
     );
 }
 
-#[test]
+#[rstest]
 fn registered_entry_parses_into_model_pricing_with_projected_rates() {
     let entry: RawCatalogEntry = serde_json::from_value(serde_json::json!({
         "input_cost_per_token": 1e-6,
@@ -176,7 +177,7 @@ fn registered_entry_parses_into_model_pricing_with_projected_rates() {
     );
 }
 
-#[test]
+#[rstest]
 fn provider_and_call_type_enums_mirror_python() {
     let pinning = pinning();
     let python_providers: std::collections::BTreeSet<&str> = pinning["llm_providers"]

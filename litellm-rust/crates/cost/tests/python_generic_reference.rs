@@ -5,6 +5,7 @@
 use jiff::Timestamp;
 use litellm_cost::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use litellm_cost::responses_usage::ChatUsage;
+use rstest::rstest;
 use serde_json::Value;
 
 fn chat_usage(prompt: u64, completion: u64, cache_read: u64, cache_write: u64) -> ChatUsage {
@@ -38,7 +39,7 @@ fn model_info(fields: &[(&str, String)]) -> Value {
     Value::Object(object)
 }
 
-#[test]
+#[rstest]
 fn generic_path_matches_executed_python_reference_cases() {
     for row in include_str!("python_reference.tsv")
         .lines()

@@ -9,6 +9,7 @@ use litellm_cost::wire::{
     ChatUsageInput, DataLen, HiddenParamsInput, ImageResponseInput, OptionalParamsInput,
     QueryCount, ReportedCostInput, ResponseInput, TranscriptionUsageInput, UsageInput, WireNumber,
 };
+use rstest::rstest;
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!("python_fixtures.json")).expect("fixture parses")
@@ -18,7 +19,7 @@ fn usage_input(payload: &Value) -> UsageInput {
     serde_json::from_value(payload.clone()).expect("wire usage payload deserializes")
 }
 
-#[test]
+#[rstest]
 fn wire_usage_payloads_match_their_declared_format() {
     for row in fixture()["wire_usage"].as_array().expect("wire_usage rows") {
         let payload = &row["payload"];
@@ -35,7 +36,7 @@ fn wire_usage_payloads_match_their_declared_format() {
     }
 }
 
-#[test]
+#[rstest]
 fn chat_wire_usage_carries_every_field_the_cost_path_reads() {
     let input = usage_input(&fixture()["wire_usage"][0]["payload"]);
     let UsageInput::Chat { usage } = input else {
@@ -71,7 +72,7 @@ fn chat_wire_usage_carries_every_field_the_cost_path_reads() {
     assert_eq!(usage.citation_tokens, Some(1_500));
 }
 
-#[test]
+#[rstest]
 fn chat_wire_usage_with_gateway_merged_token_keys_stays_chat() {
     let input = usage_input(&fixture()["wire_usage"][2]["payload"]);
     let UsageInput::Chat { usage } = input else {
@@ -81,7 +82,7 @@ fn chat_wire_usage_with_gateway_merged_token_keys_stays_chat() {
     assert_eq!(usage.completion_tokens, 50);
 }
 
-#[test]
+#[rstest]
 fn responses_wire_usage_reads_both_detail_spellings() {
     let singular = usage_input(&fixture()["wire_usage"][3]["payload"]);
     let UsageInput::Responses { usage } = singular else {
@@ -104,7 +105,7 @@ fn responses_wire_usage_reads_both_detail_spellings() {
     assert_eq!(usage.cost.map(ReportedCostInput::cost), Some(Some(0.25)));
 }
 
-#[test]
+#[rstest]
 fn anthropic_wire_usage_types_iterations_and_cache_breakdown() {
     let full = usage_input(&fixture()["wire_usage"][5]["payload"]);
     let UsageInput::Anthropic { usage } = full else {
@@ -149,7 +150,7 @@ fn anthropic_wire_usage_types_iterations_and_cache_breakdown() {
     );
 }
 
-#[test]
+#[rstest]
 fn interactions_wire_usage_types_modality_and_grounding_counts() {
     let input = usage_input(&fixture()["wire_usage"][7]["payload"]);
     let UsageInput::Interactions { usage } = input else {
@@ -171,7 +172,7 @@ fn interactions_wire_usage_types_modality_and_grounding_counts() {
     );
 }
 
-#[test]
+#[rstest]
 fn transcription_wire_usage_types_duration_and_tokens_variants() {
     let tokens = usage_input(&fixture()["wire_usage"][8]["payload"]);
     let UsageInput::Transcription { usage } = tokens else {
@@ -207,7 +208,7 @@ fn wire_response_rows() -> Vec<Value> {
         .clone()
 }
 
-#[test]
+#[rstest]
 fn wire_response_rows_deserialize_into_typed_structs() {
     let rows = wire_response_rows();
     let chat = serde_json::from_value::<ResponseInput>(rows[0]["response"].clone())
@@ -295,7 +296,7 @@ fn wire_response_rows_deserialize_into_typed_structs() {
     );
 }
 
-#[test]
+#[rstest]
 fn chat_usage_input_leniently_accepts_bool_string_and_integral_float_counts() {
     let usage: ChatUsageInput = serde_json::from_value(serde_json::json!({
         "prompt_tokens": true,
