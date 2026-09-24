@@ -183,6 +183,9 @@ jobs:
       pull_request_url:
         type: string
         default: ""
+      legacy_mcp_peer:
+        type: boolean
+        default: false
       reruns:
         type: integer
         default: 0
@@ -200,6 +203,15 @@ jobs:
           base_ref: << parameters.base_ref >>
           pull_request_url: << parameters.pull_request_url >>
       - setup_test_deps
+      - when:
+          condition: << parameters.legacy_mcp_peer >>
+          steps:
+            - run:
+                name: Install MCP SDK1 peer
+                command: |
+                  uv venv --python 3.12 .venv-mcp-peer
+                  uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+                  echo "export MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$BASH_ENV"
       - run:
           name: "Run << parameters.flag >> shard"
           no_output_timeout: 20m
@@ -215,6 +227,7 @@ jobs:
             rerun_args=(-p no:rerunfailures)
             if [ "<< parameters.reruns >>" -gt 0 ]; then rerun_args=(--reruns << parameters.reruns >> --reruns-delay 1 --rerun-except "from pytest-timeout"); fi
             test_env=(PATH="$PATH" HOME="$HOME" CI=true COVERAGE_CORE="$COVERAGE_CORE" LITELLM_LOCAL_MODEL_COST_MAP="$LITELLM_LOCAL_MODEL_COST_MAP")
+            if [ -n "${MCP_TEST_PEER_PYTHON:-}" ]; then test_env+=(MCP_TEST_PEER_PYTHON="$MCP_TEST_PEER_PYTHON"); fi
             set +e
             env -i "${test_env[@]}" \
               uv run --no-sync pytest "${files[@]}" "${rerun_args[@]}" -p no:pytest-retry --timeout=90 "${xdist_args[@]}" --tb=short --durations=20 -o junit_family=xunit1 --junitxml=test-results/<< parameters.flag >>/junit.xml --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml:coverage.xml --cov-config=pyproject.toml
@@ -309,6 +322,14 @@ workflows:
           matrix:
             parameters:
               flag: [caching-local, proxy-extras, enterprise-routing]
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
+          name: unit-mcp-integration
+          flag: mcp-integration
+          shards: 1
+          workers: 2
+          legacy_mcp_peer: true
           base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
           pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
       - unit:
