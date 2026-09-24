@@ -20,6 +20,7 @@ def test_skip_rust_bridge_builds_a_pure_python_wheel(tmp_path: Path) -> None:
     result: Final = subprocess.run(
         [
             sys.executable,
+            "-P",
             "-c",
             "import sys, litellm_build_backend as b; print(b.build_wheel(sys.argv[1]))",
             str(tmp_path),
@@ -54,6 +55,7 @@ def test_without_the_switch_the_hooks_are_maturins() -> None:
     result: Final = subprocess.run(
         [
             sys.executable,
+            "-P",
             "-c",
             "import litellm_build_backend as b, maturin; "
             "print(b.build_wheel is maturin.build_wheel and b.build_sdist is maturin.build_sdist "

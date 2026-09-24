@@ -90,7 +90,6 @@ def test_proxy_serves_chat_completions_with_fips_dropped_packages_absent(gateway
 def test_streaming_chat_completes_with_fips_dropped_packages_absent(gateway: Gateway, tmp_path: Path) -> None:
     with fips_proxy(gateway, tmp_path) as owned, owned.gateway.scenario() as scenario:
         model: Final = scenario.model()
-        chunks: Final = []
         with owned.gateway.client.stream(
             "POST",
             "/v1/chat/completions",
@@ -103,9 +102,9 @@ def test_streaming_chat_completes_with_fips_dropped_packages_absent(gateway: Gat
             headers={"Authorization": f"Bearer {owned.gateway.key}"},
         ) as response:
             assert response.status_code == 200, response.read().decode()
-            for line in response.iter_lines():
-                if line.startswith("data: "):
-                    chunks.append(line[len("data: ") :])
+            chunks: Final = tuple(
+                line[len("data: ") :] for line in response.iter_lines() if line.startswith("data: ")
+            )
         assert chunks, "stream produced no data chunks"
         assert chunks[-1] == "[DONE]", chunks
         final: Final = object_value(json.loads(chunks[-2]))

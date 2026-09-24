@@ -15159,6 +15159,7 @@ def test_proxy_server_imports_with_optional_native_packages_absent() -> None:
     result: Final = subprocess.run(
         [
             sys.executable,
+            "-P",
             "-c",
             "import sys\n"
             + "\n".join(f"sys.modules[{name!r}] = None" for name in blocked)
@@ -15168,7 +15169,10 @@ def test_proxy_server_imports_with_optional_native_packages_absent() -> None:
             + 'print("ok")',
         ],
         cwd=Path(__file__).resolve().parents[3],
-        env=dict(os.environ),
+        env={
+            **os.environ,
+            "PYTHONPATH": f"{Path(__file__).resolve().parents[3]}{os.pathsep}{os.environ.get('PYTHONPATH', '')}",
+        },
         capture_output=True,
         text=True,
     )
