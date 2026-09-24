@@ -10,6 +10,7 @@ import json
 import os
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 
 if TYPE_CHECKING:
@@ -321,6 +322,100 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         request_body.pop("output_config", None)
     else:
         request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param  # mutable-ok: json
+
+
+BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_KEYS: Final = frozenset({"output_config"})
+BEDROCK_INVOKE_UNSUPPORTED_CONTENT_BLOCK_TYPES: Final = frozenset({"tool_addition"})
+BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES: Final = frozenset({"summarized", "omitted"})
+
+
+@dataclass(frozen=True, slots=True)
+class SanitizedBedrockInvokeMessages:
+    messages: tuple[object, ...]
+    offenders: tuple[str, ...]
+    emptied: tuple[str, ...]
+
+
+def _is_unsupported_bedrock_invoke_block(block: object, unsupported_block_types: frozenset[str]) -> bool:
+    if not isinstance(block, dict):
+        return False
+    block_type: Final = block.get("type")
+    return isinstance(block_type, str) and block_type in unsupported_block_types
+
+
+def _bedrock_invoke_message_offenders(
+    index: int, message: object, unsupported_keys: frozenset[str], unsupported_block_types: frozenset[str]
+) -> tuple[str, ...]:
+    if not isinstance(message, dict):
+        return ()
+    key_paths: Final = tuple(f"messages[{index}].{key}" for key in sorted(unsupported_keys & message.keys()))
+    content: Final = message.get("content")
+    block_paths: Final = (
+        tuple(
+            f"messages[{index}].content[{block_index}] (type '{block['type']}')"
+            for block_index, block in enumerate(content)
+            if _is_unsupported_bedrock_invoke_block(block, unsupported_block_types)
+        )
+        if isinstance(content, list)
+        else ()
+    )
+    return key_paths + block_paths
+
+
+def _sanitized_bedrock_invoke_message(
+    message: object, unsupported_keys: frozenset[str], unsupported_block_types: frozenset[str]
+) -> object:
+    if not isinstance(message, dict):
+        return message
+    return {  # mutable-ok: outbound JSON message, same plain dict shape as the caller's input
+        key: (
+            [  # mutable-ok: outbound JSON content list
+                b for b in value if not _is_unsupported_bedrock_invoke_block(b, unsupported_block_types)
+            ]
+            if key == "content" and isinstance(value, list)
+            else value
+        )
+        for key, value in message.items()
+        if key not in unsupported_keys
+    }
+
+
+def sanitize_bedrock_invoke_messages(
+    messages: Sequence[object],
+    unsupported_keys: frozenset[str],
+    unsupported_block_types: frozenset[str],
+) -> SanitizedBedrockInvokeMessages:
+    offenders: Final = tuple(
+        path
+        for i, m in enumerate(messages)
+        for path in _bedrock_invoke_message_offenders(i, m, unsupported_keys, unsupported_block_types)
+    )
+    if not offenders:
+        return SanitizedBedrockInvokeMessages(messages=tuple(messages), offenders=(), emptied=())
+    emptied: Final = tuple(
+        f"messages[{i}]"
+        for i, m in enumerate(messages)
+        if isinstance(m, dict)
+        and isinstance(m.get("content"), list)
+        and len(m["content"]) > 0
+        and all(_is_unsupported_bedrock_invoke_block(b, unsupported_block_types) for b in m["content"])
+    )
+    return SanitizedBedrockInvokeMessages(
+        messages=tuple(
+            _sanitized_bedrock_invoke_message(m, unsupported_keys, unsupported_block_types) for m in messages
+        ),
+        offenders=offenders,
+        emptied=emptied,
+    )
+
+
+def normalize_bedrock_invoke_thinking_display(thinking: object, supported_display_values: frozenset[str]) -> object:
+    if not isinstance(thinking, dict):
+        return thinking
+    display: Final = thinking.get("display")
+    if not isinstance(display, str) or display in supported_display_values:
+        return thinking
+    return {**thinking, "display": "summarized"}  # mutable-ok: outbound JSON thinking object
 
 
 def normalize_custom_field_on_tools(request_body: dict) -> None:

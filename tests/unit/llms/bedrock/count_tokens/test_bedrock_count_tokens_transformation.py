@@ -253,3 +253,88 @@ def test_count_tokens_endpoint_encodes_model_id(monkeypatch):
         endpoint
         == "https://bedrock-runtime.us-east-1.amazonaws.com/model/..%2F..%2Fmodel%2Fother%3Fx%3D1%23frag/count-tokens"
     )
+
+
+def _decoded_invoke_body(result: dict) -> dict:
+    return json.loads(base64.b64decode(result["input"]["invokeModel"]["body"]))
+
+
+def test_transform_to_invoke_model_format_strips_per_message_output_config():
+    config = BedrockCountTokensConfig()
+    request = {
+        "model": "us.anthropic.claude-sonnet-4-6",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+            {"role": "user", "content": [{"type": "text", "text": "go"}], "output_config": {"effort": "low"}},
+        ],
+    }
+
+    body = _decoded_invoke_body(config.transform_anthropic_to_bedrock_count_tokens(request))
+
+    assert body["messages"] == [
+        request["messages"][0],
+        request["messages"][1],
+        {"role": "user", "content": [{"type": "text", "text": "go"}]},
+    ]
+
+
+def test_transform_to_invoke_model_format_strips_tool_addition_blocks_and_keeps_siblings():
+    config = BedrockCountTokensConfig()
+    text_a = {"type": "text", "text": "a"}
+    tool_use = {"type": "tool_use", "id": "toolu_01", "name": "Read", "input": {"path": "a.txt"}}
+    text_b = {"type": "text", "text": "b"}
+    tool_addition = {"type": "tool_addition", "tool_reference": {"type": "tool_reference", "tool_name": "Read"}}
+    request = {
+        "model": "us.anthropic.claude-sonnet-4-6",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {"role": "assistant", "content": [tool_addition, text_a, tool_use, tool_addition, text_b]},
+        ],
+    }
+
+    body = _decoded_invoke_body(config.transform_anthropic_to_bedrock_count_tokens(request))
+
+    assert body["messages"][1]["content"] == [text_a, tool_use, text_b]
+
+
+def test_transform_to_invoke_model_format_leaves_clean_anthropic_body_unchanged():
+    config = BedrockCountTokensConfig()
+    request = {
+        "model": "us.anthropic.claude-sonnet-4-6",
+        "system": "be brief",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        ],
+    }
+
+    body = _decoded_invoke_body(config.transform_anthropic_to_bedrock_count_tokens(request))
+
+    assert body == {
+        "system": "be brief",
+        "messages": request["messages"],
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
+    }
+
+
+def test_transform_anthropic_to_bedrock_request_string_content_still_uses_converse():
+    config = BedrockCountTokensConfig()
+    request = {
+        "model": "us.anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}],
+    }
+
+    result = config.transform_anthropic_to_bedrock_count_tokens(request)
+
+    assert result == {
+        "input": {
+            "converse": {
+                "messages": [
+                    {"role": "user", "content": [{"text": "Hello"}]},
+                    {"role": "assistant", "content": [{"text": "Hi"}]},
+                ]
+            }
+        }
+    }

@@ -792,3 +792,32 @@ async def test_mantle_anthropic_messages_streaming_sends_stream_and_passes_throu
     assert "event: message_start" in text
     assert '"text": "pong"' in text
     assert "event: message_stop" in text
+
+
+def test_mantle_messages_keep_per_message_output_config_tool_addition_and_display_updates():
+    from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_addition", "tool_reference": {"type": "tool_reference", "tool_name": "Read"}},
+                {"type": "text", "text": "ok"},
+            ],
+        },
+        {"role": "user", "content": "go", "output_config": {"effort": "low"}},
+    ]
+    thinking = {"type": "adaptive", "display": "updates"}
+
+    for config in (AmazonMantleMessagesConfig(), BedrockMantleAnthropicMessagesConfig()):
+        result = config.transform_anthropic_messages_request(
+            model="mantle/claude-mythos-preview",
+            messages=json.loads(json.dumps(messages)),
+            anthropic_messages_optional_request_params={"max_tokens": 64, "thinking": dict(thinking)},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert result["messages"] == messages, type(config).__name__
+        assert result["thinking"] == thinking, type(config).__name__

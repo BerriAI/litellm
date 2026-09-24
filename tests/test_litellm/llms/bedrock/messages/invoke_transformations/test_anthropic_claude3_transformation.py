@@ -3494,3 +3494,161 @@ async def test_get_async_streaming_response_iterator_yields_small_frame_before_u
     remaining: Final = tuple([chunk async for chunk in iterator])
     assert any(chunk.startswith(b"event: message_stop\n") for chunk in remaining), remaining
     await iterator.aclose()
+
+
+_NATIVE_EXTENSIONS_MODEL: Final = "us.anthropic.claude-sonnet-4-6"
+_TOOL_ADDITION_BLOCK: Final = {
+    "type": "tool_addition",
+    "tool_reference": {"type": "tool_reference", "tool_name": "Read"},
+}
+_TOOL_USE_BLOCK: Final = {"type": "tool_use", "id": "toolu_01", "name": "Read", "input": {"path": "a.txt"}}
+
+
+def _transform_for_bedrock_invoke(
+    messages: list[dict],
+    optional_params: dict | None = None,
+    config: AmazonAnthropicClaudeMessagesConfig | None = None,
+) -> dict:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return (config or AmazonAnthropicClaudeMessagesConfig()).transform_anthropic_messages_request(
+        model=_NATIVE_EXTENSIONS_MODEL,
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 64, **(optional_params or {})},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+
+def test_bedrock_invoke_strips_nested_message_output_config_by_default():
+    m0: Final = {"role": "user", "content": "hi"}
+    m1: Final = {"role": "assistant", "content": "hello"}
+    messages: Final = [m0, m1, {"role": "user", "content": "go", "output_config": {"effort": "low"}}]
+
+    result: Final = _transform_for_bedrock_invoke(messages)
+
+    assert result["messages"] == [m0, m1, {"role": "user", "content": "go"}]
+
+
+def test_bedrock_invoke_strips_tool_addition_blocks_and_keeps_siblings_in_order():
+    text_a: Final = {"type": "text", "text": "a"}
+    text_b: Final = {"type": "text", "text": "b"}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [_TOOL_ADDITION_BLOCK, text_a, _TOOL_USE_BLOCK, _TOOL_ADDITION_BLOCK, text_b]},
+        {"role": "user", "content": "go"},
+    ]
+
+    result: Final = _transform_for_bedrock_invoke(messages)
+
+    assert result["messages"][1]["content"] == [text_a, _TOOL_USE_BLOCK, text_b]
+
+
+def test_bedrock_invoke_rejects_message_emptied_by_stripping():
+    import litellm
+
+    with pytest.raises(litellm.BadRequestError) as exc:
+        _transform_for_bedrock_invoke(
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": [_TOOL_ADDITION_BLOCK]},
+                {"role": "user", "content": "go"},
+            ]
+        )
+    assert "messages[1]" in str(exc.value)
+
+    already_empty: Final = _transform_for_bedrock_invoke(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": []}, {"role": "user", "content": "go"}]
+    )
+    assert already_empty["messages"][1]["content"] == []
+
+
+def test_bedrock_invoke_maps_thinking_display_updates_to_summarized():
+    optional_params: Final = {"thinking": {"type": "adaptive", "display": "updates"}}
+
+    result: Final = _transform_for_bedrock_invoke([{"role": "user", "content": "hi"}], optional_params)
+
+    assert result["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert optional_params["thinking"]["display"] == "updates"
+
+
+@pytest.mark.parametrize(
+    "thinking",
+    [{"type": "adaptive", "display": "omitted"}, {"type": "adaptive", "display": "summarized"}, {"type": "adaptive"}],
+)
+def test_bedrock_invoke_passes_supported_thinking_display_through(thinking: dict):
+    result: Final = _transform_for_bedrock_invoke([{"role": "user", "content": "hi"}], {"thinking": dict(thinking)})
+
+    assert result["thinking"] == thinking
+
+
+def test_bedrock_invoke_leaves_clean_body_unchanged():
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "hello"}, _TOOL_USE_BLOCK]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "x"}]},
+    ]
+    thinking: Final = {"type": "adaptive", "display": "summarized"}
+
+    result: Final = _transform_for_bedrock_invoke(copy.deepcopy(messages), {"thinking": dict(thinking)})
+
+    assert result["messages"] == messages
+    assert result["thinking"] == thinking
+
+
+def test_bedrock_invoke_keeps_unknown_content_block_types():
+    unknown_block: Final = {"type": "connector_text", "text": "x"}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "a"}, unknown_block, _TOOL_ADDITION_BLOCK]},
+        {"role": "user", "content": "go"},
+    ]
+
+    result: Final = _transform_for_bedrock_invoke(messages)
+
+    assert result["messages"][1]["content"][1] == unknown_block
+
+
+def test_bedrock_invoke_tolerates_unhashable_discriminator_values():
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        {"role": "assistant", "content": [{"type": ["bogus"]}, {"type": "text", "text": "ok"}]},
+        {"role": "user", "content": "go"},
+    ]
+    thinking: Final = {"type": "adaptive", "display": ["updates"]}
+
+    result: Final = _transform_for_bedrock_invoke(copy.deepcopy(messages), {"thinking": copy.deepcopy(thinking)})
+
+    assert result["messages"] == messages
+    assert result["thinking"] == thinking
+
+
+def test_bedrock_invoke_does_not_mutate_caller_messages():
+    messages: Final = [
+        {"role": "user", "content": "hi", "output_config": {"effort": "low"}},
+        {"role": "assistant", "content": [_TOOL_ADDITION_BLOCK, {"type": "text", "text": "ok"}]},
+        {"role": "user", "content": "go"},
+    ]
+    optional_params: Final = {"thinking": {"type": "adaptive", "display": "updates"}}
+    messages_snapshot: Final = copy.deepcopy(messages)
+    optional_params_snapshot: Final = copy.deepcopy(optional_params)
+
+    _transform_for_bedrock_invoke(messages, optional_params)
+
+    assert messages == messages_snapshot
+    assert optional_params["thinking"] == optional_params_snapshot["thinking"]
+
+
+def test_bedrock_invoke_native_extension_policy_is_class_resolved():
+    class _KeepsToolAdditions(AmazonAnthropicClaudeMessagesConfig):
+        BEDROCK_INVOKE_UNSUPPORTED_CONTENT_BLOCK_TYPES: frozenset[str] = frozenset()
+
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [_TOOL_ADDITION_BLOCK, {"type": "text", "text": "ok"}]},
+        {"role": "user", "content": "go"},
+    ]
+
+    result: Final = _transform_for_bedrock_invoke(messages, config=_KeepsToolAdditions())
+
+    assert result["messages"][1]["content"] == [_TOOL_ADDITION_BLOCK, {"type": "text", "text": "ok"}]

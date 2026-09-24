@@ -12,7 +12,12 @@ from typing import Final, Literal
 from pydantic import JsonValue
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.llms.bedrock.common_utils import (
+    BEDROCK_INVOKE_UNSUPPORTED_CONTENT_BLOCK_TYPES,
+    BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_KEYS,
+    get_bedrock_base_model,
+    sanitize_bedrock_invoke_messages,
+)
 
 # Placeholder satisfying the Anthropic InvokeModel schema's required
 # max_tokens field; CountTokens only counts input, so it has no effect
@@ -190,7 +195,22 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         # For InvokeModel, we need to provide the raw body that would be sent to the model
         # Remove the 'model' field from the body as it's not part of the model input
-        body_data: Final = {k: v for k, v in request_data.items() if k != "model"}
+        messages: Final = request_data.get("messages")
+        sanitized_messages: Final = (
+            list(  # mutable-ok: outbound JSON messages array
+                sanitize_bedrock_invoke_messages(
+                    messages,
+                    unsupported_keys=BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_KEYS,
+                    unsupported_block_types=BEDROCK_INVOKE_UNSUPPORTED_CONTENT_BLOCK_TYPES,
+                ).messages
+            )
+            if isinstance(messages, list)
+            else messages
+        )
+        body_data: Final = {  # mutable-ok: outbound JSON body, defaults are set below like before
+            **{k: v for k, v in request_data.items() if k not in ("model", "messages")},  # mutable-ok: spread source
+            **({"messages": sanitized_messages} if "messages" in request_data else {}),  # mutable-ok: spread source
+        }
 
         if "messages" in body_data:
             # Bedrock validates the body against the model's InvokeModel schema;

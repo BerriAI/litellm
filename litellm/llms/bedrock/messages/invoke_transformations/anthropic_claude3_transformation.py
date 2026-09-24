@@ -29,15 +29,20 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES,
+    BEDROCK_INVOKE_UNSUPPORTED_CONTENT_BLOCK_TYPES,
+    BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_KEYS,
     BedrockError,
     apply_bedrock_invoke_structured_output,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    normalize_bedrock_invoke_thinking_display,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    sanitize_bedrock_invoke_messages,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
 )
@@ -455,6 +460,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             "clear_tool_uses_20250919": ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
         }
     )
+    BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_KEYS: frozenset[str] = BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_KEYS
+    BEDROCK_INVOKE_UNSUPPORTED_CONTENT_BLOCK_TYPES: frozenset[str] = BEDROCK_INVOKE_UNSUPPORTED_CONTENT_BLOCK_TYPES
+    BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES: frozenset[str] = BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES
 
     @classmethod
     def _filter_context_management_for_bedrock_invoke(
@@ -616,6 +624,47 @@ class AmazonAnthropicClaudeMessagesConfig(
             llm_provider="bedrock",
         )
 
+    def _apply_bedrock_invoke_native_extension_policy(
+        self,
+        anthropic_messages_request: dict,  # mutable-ok: outbound body edited in place like the sibling sanitizers
+        model: str,
+    ) -> None:
+        messages: Final = anthropic_messages_request.get("messages")
+        if isinstance(messages, list):
+            sanitized: Final = sanitize_bedrock_invoke_messages(
+                messages,
+                unsupported_keys=self.BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_KEYS,
+                unsupported_block_types=self.BEDROCK_INVOKE_UNSUPPORTED_CONTENT_BLOCK_TYPES,
+            )
+            if sanitized.emptied:
+                raise litellm.BadRequestError(
+                    message=(
+                        f"{', '.join(sanitized.emptied)} would be left with empty content after removing "
+                        f"{', '.join(sanitized.offenders)}, which Bedrock Invoke does not accept. "
+                        "Remove or rewrite the message."
+                    ),
+                    model=model,
+                    llm_provider="bedrock",
+                )
+            if sanitized.offenders:
+                verbose_logger.warning(
+                    "Bedrock Invoke: stripped unsupported native extensions at %s for model=%s",
+                    sanitized.offenders,
+                    model,
+                )
+                anthropic_messages_request["messages"] = list(sanitized.messages)  # mutable-ok: outbound JSON array
+        thinking: Final = anthropic_messages_request.get("thinking")
+        normalized_thinking: Final = normalize_bedrock_invoke_thinking_display(
+            thinking, supported_display_values=self.BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES
+        )
+        if normalized_thinking is not thinking:
+            verbose_logger.warning(
+                "Bedrock Invoke: mapping unsupported thinking.display %r to 'summarized' for model=%s",
+                thinking.get("display") if isinstance(thinking, dict) else thinking,
+                model,
+            )
+            anthropic_messages_request["thinking"] = normalized_thinking
+
     def _strip_unsupported_bedrock_invoke_fields(
         self,
         anthropic_messages_request: dict,
@@ -695,6 +744,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)
         self._remove_ttl_from_cache_control(anthropic_messages_request=anthropic_messages_request, model=model)
+        self._apply_bedrock_invoke_native_extension_policy(anthropic_messages_request, model=model)
 
         # 5. Route structured-output params (`output_format` /
         # `output_config.format`) to native enforcement or the inline-schema

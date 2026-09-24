@@ -63,6 +63,13 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
 
+    def _apply_bedrock_invoke_native_extension_policy(
+        self,
+        anthropic_messages_request: dict,  # mutable-ok: signature shared with the Invoke parent
+        model: str,
+    ) -> None:
+        return
+
     def get_complete_url(
         self,
         api_base: str | None,
