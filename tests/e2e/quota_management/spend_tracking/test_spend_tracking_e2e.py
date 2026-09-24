@@ -21,9 +21,9 @@ from math import isclose
 from typing import Final
 
 import pytest
-from e2e_http import Success
+from e2e_http import RateLimitedError, Success
 from lifecycle import ResourceManager
-from models import LiteLLMParamsBody, SpendLogs, SpendLogsParams
+from models import KeyGenerateBody, LiteLLMParamsBody, SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
@@ -43,6 +43,7 @@ def _summarize(rows: list[SpendLogRow]) -> list[dict[str, object]]:
         "cache_hit",
         "call_type",
         "custom_llm_provider",
+        "model_id",
         "prompt_tokens",
         "completion_tokens",
         "total_tokens",
@@ -496,6 +497,88 @@ def test_failure_call_writes_failure_status_row(
         rows, lambda r: r.status == "failure", "with status=failure for the rejected call"
     )
     assert (failure_row.spend or 0) == 0.0, "failed call must not be charged"
+
+
+@pytest.mark.covers("quota_management.spend_tracking.failure.writes_normalized_error")
+def test_failure_rows_share_normalized_error_across_provider_wording(
+    client: SpendClient, resources: ResourceManager, scoped_key: str
+) -> None:
+    """Two upstream auth failures with different provider wording land as failure rows
+    whose metadata.error_information keeps each provider's own error_message and
+    carries the same stable normalized_error cluster key."""
+    marker = unique_marker()
+    deployments: Final = (
+        (f"e2e-norm-openai-{marker}", "openai/gpt-5.5"),
+        (f"e2e-norm-anthropic-{marker}", "anthropic/claude-haiku-4-5"),
+    )
+    for name, provider_model in deployments:
+        model_id = client.proxy.create_model(
+            name, LiteLLMParamsBody(model=provider_model, api_key=f"sk-invalid-{marker}")
+        )
+        resources.defer(lambda model_id=model_id: client.proxy.delete_model(model_id))
+        result = client.chat(scoped_key, name, f"normalize failure {marker}", max_tokens=1)
+        assert not is_ok(result), f"{name}: invalid upstream key must fail the call, got {result}"
+
+    rows = client.poll_logs_for_key(
+        scoped_key,
+        min_rows=2,
+        predicate=lambda rs: sum(1 for r in rs if r.status == "failure") >= 2,
+    )
+    failure_rows = [r for r in rows if r.status == "failure"]
+    assert len(failure_rows) == 2, f"expected one failure row per deployment: {_summarize(rows)}"
+
+    infos = [r.metadata.error_information if r.metadata else None for r in failure_rows]
+    assert all(info is not None for info in infos), (
+        f"failure rows must carry metadata.error_information: {[r.model_dump() for r in failure_rows]}"
+    )
+    messages = {info.error_message for info in infos if info is not None}
+    assert len(messages) == 2, f"provider wording must stay distinct in error_message: {messages}"
+    normalized = {info.normalized_error for info in infos if info is not None}
+    assert normalized == {"401_AUTHENTICATION_FAILED"}, (
+        f"both auth failures must share one normalized_error cluster key; saw {normalized} "
+        f"for messages {messages}"
+    )
+
+
+@pytest.mark.covers("quota_management.spend_tracking.failure.attributes_provider")
+def test_pre_call_rejection_row_attributes_provider_and_model_id(
+    client: SpendClient, resources: ResourceManager
+) -> None:
+    """A request the proxy rejects before the router picks a deployment (here the
+    key's rpm limit, a pre_call_hook 429) never reaches the code that stamps the
+    deployment onto the log. The failure row must still carry the provider and
+    model_id of the model group's only deployment, so per-provider failure reports
+    can count it."""
+    model = f"e2e-spend-precall-{unique_marker()}"
+    model_id = client.proxy.create_model(
+        model, LiteLLMParamsBody(model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY")
+    )
+    resources.defer(lambda: client.proxy.delete_model(model_id))
+    key = client.proxy.generate_key(KeyGenerateBody(models=[model], rpm_limit=1))
+    resources.defer(lambda: client.proxy.delete_key(key))
+
+    unwrap(client.chat(key, model, f"reply with one word {unique_marker()}", max_tokens=8))
+    rejected = client.chat(key, model, f"over the rpm limit {unique_marker()}", max_tokens=8)
+    assert isinstance(rejected, RateLimitedError), (
+        f"the second call on an rpm_limit=1 key must be rejected with 429 before routing, got {rejected}"
+    )
+
+    rows = client.poll_logs_for_key(
+        key,
+        min_rows=2,
+        predicate=lambda rs: {r.status for r in rs} >= {"success", "failure"},
+    )
+    success_row = _require_row(rows, lambda r: r.status == "success", "for the served call")
+    failure_row = _require_row(rows, lambda r: r.status == "failure", "for the rate-limited call")
+
+    assert failure_row.custom_llm_provider == success_row.custom_llm_provider, (
+        f"rejected call lost its provider: failure row {failure_row.custom_llm_provider!r} vs "
+        f"served row {success_row.custom_llm_provider!r}; {_summarize(rows)}"
+    )
+    assert failure_row.model_id == model_id, (
+        f"rejected call lost its deployment: failure row model_id {failure_row.model_id!r} vs "
+        f"registered {model_id!r}; {_summarize(rows)}"
+    )
 
 
 @pytest.mark.covers("quota_management.spend_tracking.spend_calculate.returns_cost")

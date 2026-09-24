@@ -1148,7 +1148,7 @@ def test_openai_gateway_timeout_error():
 @pytest.mark.parametrize(
     "provider, model, call_type",
     [
-        ("anthropic", "claude-3-haiku-20240307", "chat_completion"),
+        ("anthropic", "claude-haiku-4-5-20251001", "chat_completion"),
     ],
 )
 @pytest.mark.asyncio

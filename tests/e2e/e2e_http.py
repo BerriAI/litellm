@@ -49,6 +49,7 @@ class AnthropicHeaders(AuthHeaders):
     on its own internal calls."""
 
     anthropic_version: str = Field(default="2023-06-01", alias="anthropic-version")
+    x_litellm_session_id: str | None = Field(default=None, serialization_alias="x-litellm-session-id")
 
 
 class PartialBody(BaseModel):
@@ -95,7 +96,7 @@ class UnauthorizedError(BaseModel):
 class RateLimitedError(BaseModel):
     kind: Literal["rate_limited"] = "rate_limited"
     retry_after_seconds: int | None = None
-    # litellm overloads 429 for budget_exceeded too, so keep the body to tell them apart.
+    # keep the body so callers can tell limiter kinds apart.
     body: str = ""
 
 
@@ -128,9 +129,9 @@ class ProbeResult(BaseModel):
 
 
 class ExternalWrite(BaseModel):
-    """Outcome of a write to a non-proxy API (an identity provider's admin API)
-    that answers with a status and, on create, a Location header naming the new
-    resource rather than a JSON body."""
+    """Outcome of a call to a non-proxy API (an identity provider's admin API, a
+    secret manager) that answers with a status, on create a Location header naming
+    the new resource, and a body kept as text rather than parsed as JSON."""
 
     status_code: int
     location: str = ""
@@ -344,6 +345,50 @@ def request_with_retry[T: RetryableResponse](
     return issue()
 
 
+PROVIDER_RATE_LIMIT_MARKER: Final = "litellm.RateLimitError"
+PROVIDER_RATE_LIMIT_ATTEMPTS: Final = 4
+PROVIDER_RATE_LIMIT_BACKOFF_SECONDS: Final = 5.0
+
+
+def tolerate_provider_rate_limit[R: BaseModel](
+    issue: Callable[[], Result[R]],
+    *,
+    attempts: int = PROVIDER_RATE_LIMIT_ATTEMPTS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Result[R]:
+    """Retry a call up to `attempts` times while the proxy relays the provider's own 429;
+    any other outcome, the proxy's own 429 included, comes back at once."""
+    for attempt in range(1, attempts):
+        match issue():
+            case RateLimitedError(body=body, retry_after_seconds=retry_after) if PROVIDER_RATE_LIMIT_MARKER in body:
+                delay = retry_after or PROVIDER_RATE_LIMIT_BACKOFF_SECONDS * (1 << (attempt - 1))
+                print(
+                    f"e2e-http: provider rate limit relayed by the proxy; retry {attempt}/{attempts - 1} in {delay}s",
+                    flush=True,
+                )
+                sleep(delay)
+            case result:
+                return result
+    return issue()
+
+
+class ProxyErrorDetail(BaseModel):
+    message: str
+    type: str
+    code: str
+
+
+class _ProxyErrorBody(BaseModel):
+    error: ProxyErrorDetail
+
+
+def relayed_provider_rate_limit(outcome: RateLimitedError) -> ProxyErrorDetail | None:
+    """The provider's own 429 as the proxy relayed it, or None when the 429 is the proxy's own."""
+    if PROVIDER_RATE_LIMIT_MARKER not in outcome.body:
+        return None
+    return _ProxyErrorBody.model_validate_json(outcome.body).error
+
+
 class ClassifiableResponse(Protocol):
     """What classifying an outcome reads off a response. requests.Response satisfies
     it, and so does a fake, so the classification rules are testable on their own."""
@@ -488,6 +533,30 @@ def post_json_external(
         location=resp.headers.get("Location", ""),
         body=resp.text,
     )
+
+
+def send_text_external(
+    method: Literal["GET", "POST", "PATCH"],
+    url: str,
+    *,
+    headers: BaseModel,
+    content: str | None = None,
+    timeout: float = 30.0,
+) -> ExternalWrite:
+    """Send an absolute URL outside the proxy a raw text body (or none) and keep the
+    answer as text, for an API that takes and returns neither JSON nor forms: CyberArk
+    Conjur takes a secret value or a YAML policy and returns a secret as its raw value."""
+    try:
+        resp = requests.request(
+            method,
+            url,
+            headers=_headers(headers),
+            data=content.encode() if content is not None else None,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return ExternalWrite(status_code=-1, body=str(exc))
+    return ExternalWrite(status_code=resp.status_code, body=resp.text)
 
 
 def delete_external(url: str, *, headers: BaseModel, timeout: float = 30.0) -> ExternalWrite:
@@ -674,6 +743,35 @@ def send(
     except requests.RequestException as exc:
         return StreamingResponse(status_code=-1, body=str(exc))
     return streaming_outcome(resp, stream, sent_at=sent_at)
+
+
+class AbandonedRequest(BaseModel):
+    """A non-streaming request whose socket the client closed ``after`` seconds in,
+    before the proxy had answered."""
+
+    kind: Literal["abandoned"] = "abandoned"
+    after: float
+
+
+def abandon(
+    url: URL, *, headers: BaseModel, json: BaseModel, after: float, connect_timeout: float = 10.0
+) -> AbandonedRequest | StreamingResponse:
+    """POST and close the connection ``after`` seconds if no response head has arrived
+    by then; returns the response instead when the proxy answered first."""
+    sent_at: Final = time.monotonic()
+    session: Final = requests.Session()
+    try:
+        resp = session.post(
+            str(url),
+            headers=_headers(headers),
+            json=wire_body(json),
+            timeout=(connect_timeout, after),
+        )
+    except requests.exceptions.ReadTimeout:
+        return AbandonedRequest(after=after)
+    finally:
+        session.close()
+    return streaming_outcome(resp, False, sent_at=sent_at)
 
 
 def stream(url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0) -> StreamingResponse:
@@ -877,7 +975,10 @@ class PreparedForward:
 
 
 def prepare_forward(
-    method: str, url: str, headers: dict[str, str], body: bytes | None,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
 ) -> PreparedForward | NetworkError:
     try:
         with requests.Session() as session:
@@ -896,7 +997,8 @@ def forward_prepared_stream(prepared: PreparedForward, timeout: float) -> Stream
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
     return StreamHead(
-        resp.status_code, {name.lower(): value for name, value in resp.headers.items()},
+        resp.status_code,
+        {name.lower(): value for name, value in resp.headers.items()},
         primed_steps(_stream_steps(resp)),
     )
 

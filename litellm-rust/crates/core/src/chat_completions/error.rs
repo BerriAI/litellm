@@ -1,3 +1,5 @@
+use litellm_llms::base_llm::chat::transformation::Error as LlmError;
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]
@@ -18,25 +20,24 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
-    Transport(#[from] crate::transport::Error),
+    Transport(#[from] litellm_http::transport::Error),
     #[error(transparent)]
-    Headers(#[from] crate::http_utils::HeaderError),
+    Headers(#[from] litellm_http::request::HeaderError),
+    #[error(transparent)]
+    Http(#[from] litellm_http::Error),
     #[error(transparent)]
     Aws(#[from] litellm_auth_aws::Error),
 }
 
-impl From<litellm_providers::chat::Error> for Error {
-    fn from(error: litellm_providers::chat::Error) -> Self {
+impl From<LlmError> for Error {
+    fn from(error: LlmError) -> Self {
         match error {
-            litellm_providers::chat::Error::MissingField(field) => Self::MissingField(field),
-            litellm_providers::chat::Error::InvalidRequest(message) => {
-                Self::InvalidRequest(message)
-            }
-            litellm_providers::chat::Error::InvalidResponse(message) => {
-                Self::InvalidResponse(message)
-            }
-            litellm_providers::chat::Error::Unsupported(reason) => Self::Unsupported(reason),
-            litellm_providers::chat::Error::Auth(error) => Self::Auth(error),
+            LlmError::InvalidType { expected, actual } => Self::InvalidType { expected, actual },
+            LlmError::MissingField(field) => Self::MissingField(field),
+            LlmError::InvalidRequest(message) => Self::InvalidRequest(message),
+            LlmError::InvalidResponse(message) => Self::InvalidResponse(message),
+            LlmError::Unsupported(reason) => Self::Unsupported(reason),
+            LlmError::Auth(error) => Self::Auth(error),
         }
     }
 }

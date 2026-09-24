@@ -49,6 +49,16 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
 @pytest.mark.parametrize(
     "category,changed,expected",
     [
+        ("mcp-dependencies", ["pyproject.toml"], "run"),
+        ("mcp-dependencies", ["uv.lock"], "run"),
+        ("mcp-dependencies", ["litellm/experimental_mcp_client/client.py"], "run"),
+        ("mcp-dependencies", ["tests/e2e/mcp/oauth_chat_client.py"], "run"),
+        ("mcp-dependencies", ["litellm-proxy-extras/pyproject.toml"], "run"),
+        ("mcp-dependencies", ["scripts/check_mcp_sdk_install.py"], "run"),
+        ("mcp-dependencies", [".github/workflows/test-mcp-dependency-resolution.yml"], "run"),
+        ("mcp-dependencies", [".circleci/scripts/classify_changes.sh"], "run"),
+        ("mcp-dependencies", ["litellm/llms/openai/chat/gpt_transformation.py"], "skip"),
+        ("mcp-dependencies", DOCS + CLIENT, "skip"),
         ("provider-harness", ["tests/e2e/provider_cache.py"], "run"),
         ("provider-harness", ["tests/e2e/conftest.py"], "run"),
         ("provider-harness", ["tests/e2e/e2e_http.py"], "run"),

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Optiona
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from typing_extensions import Any, override
+from typing_extensions import override
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -79,7 +79,7 @@ class _GuardChatCompletionsResult(BaseModel):
     """Whether or not the prompt triggered a block detection."""
     transformed: bool | None = None
     """Whether or not the original input was transformed."""
-    detectors: dict[str, Any] | None = None
+    detectors: dict[str, object] | None = None
     """Result of the policy analyzing and input prompt."""
 
 
@@ -147,8 +147,8 @@ def _extract_text_from_message(message: _Message) -> str:
     return "\n".join(part.text for part in content if isinstance(part, _TextContentPart))
 
 
-def _merge_metadata_bags(request_data: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    merged: Final[dict[str, Any]] = {}
+def _merge_metadata_bags(request_data: Mapping[str, object]) -> Mapping[str, object] | None:
+    merged: Final[dict[str, object]] = {}
     present = False
     for bag in (request_data.get("metadata"), request_data.get("litellm_metadata")):
         if isinstance(bag, Mapping):
@@ -325,7 +325,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         self._set_streaming_params(streaming_params_from_litellm_params(litellm_params))
 
     async def _call_crowdstrike_aidr_guard(
-        self, payload: dict[str, Any], hook_name: str
+        self, payload: dict[str, object], hook_name: str
     ) -> _GuardChatCompletionsResult:
         """
         Makes the API call to the CrowdStrike AIDR AI Guard endpoint.
@@ -425,14 +425,17 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
     def _build_guard_input_for_response(self, inputs: GenericGuardrailAPIInputs) -> _GuardInput:
         output_texts: Final[list[str]] = inputs.get("texts", [])
-        return _GuardInput(messages=[_Message(role="assistant", content=text) for text in output_texts], tools=[])
+        return _GuardInput(
+            messages=[_Message(role="assistant", content=text) for text in output_texts],
+            tools=inputs.get("tools", []),
+        )
 
     def _extract_transformed_texts(self, guard_output: _GuardInput, num_assistant_messages: int) -> list[str]:
         tail: Final = guard_output.messages[-num_assistant_messages:] if num_assistant_messages > 0 else []
         return [_extract_text_from_message(msg) for msg in tail]
 
     async def _call_or_fail_open(
-        self, payload: dict[str, Any], hook_name: str, request_data: dict[str, object]
+        self, payload: dict[str, object], hook_name: str, request_data: dict[str, object]
     ) -> _GuardChatCompletionsResult:
         start_time: Final = time.time()
         try:
@@ -515,7 +518,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             event_type = "output"
             hook_name = "apply_guardrail (response)"
 
-        ai_guard_payload: Final[dict[str, Any]] = {
+        ai_guard_payload: Final[dict[str, object]] = {
             "guard_input": guard_input.model_dump(mode="json"),
             "event_type": event_type,
         }
@@ -530,7 +533,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             if user_id:
                 ai_guard_payload["user_id"] = user_id
 
-            extra_info: Final[dict[str, str]] = {}
+            extra_info: Final[dict[str, object]] = {}
             user_email: Final = metadata.get("user_api_key_user_email")
             if user_email:
                 extra_info["user_name"] = user_email

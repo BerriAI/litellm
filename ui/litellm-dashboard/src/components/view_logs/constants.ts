@@ -21,6 +21,13 @@ export const AGENT_CALL_TYPES = ["asend_message"];
 /** Call types that represent Batch API operations (creation and retrieval, sync and async). */
 export const BATCH_CALL_TYPES = ["acreate_batch", "create_batch", "aretrieve_batch", "retrieve_batch"];
 
+export const SPAN_TYPE_LABELS: Record<string, string> = {
+  llm: "LLM",
+  agent: "Agent",
+  mcp: "MCP",
+  batch: "Batch",
+};
+
 export const QUICK_SELECT_OPTIONS: { label: string; value: number; unit: string }[] = [
   { label: "Last Minute", value: 1, unit: "minutes" },
   { label: "Last 15 Minutes", value: 15, unit: "minutes" },

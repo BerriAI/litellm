@@ -7,10 +7,10 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Final, List, Optional
 
 import pytest
 from fastapi import HTTPException
@@ -18,11 +18,16 @@ from fastapi import HTTPException
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
+    RateLimitDescriptor,
+    RateLimitedModel,
+    RateLimitResponse,
     RequestRateLimiterStash,
     _request_stash,
     get_or_create_request_stash,
@@ -3363,7 +3368,7 @@ async def test_pre_call_hook_keeps_internal_stash_out_of_request_body():
     stash = get_request_stash()
     assert stash is not None
     assert stash.reserved_tokens > 0
-    assert stash.reserved_model == "gpt-4o-mini"
+    assert stash.reserved_model == RateLimitedModel(requested="gpt-4o-mini", group="gpt-4o-mini")
     assert stash.reserved_scopes == frozenset({("api_key", _api_key)})
 
 
@@ -5603,6 +5608,155 @@ async def _reserved_tokens_for(
 
 
 @pytest.mark.asyncio
+async def test_tpm_reservation_resets_sibling_tokens_with_request_window(monkeypatch):
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "true")
+    time_controller = TimeController()
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        time_provider=time_controller.now,
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-window-reset-siblings"),
+        tpm_limit=1000,
+        rpm_limit=1000,
+    )
+
+    async def request(call_id):
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 200,
+            "litellm_call_id": call_id,
+            "metadata": {
+                "user_api_key": user_api_key_dict.api_key,
+                "user_api_key_user_id": user_api_key_dict.user_id,
+            },
+        }
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type="completion",
+        )
+        await handler.async_log_success_event(
+            kwargs={
+                "litellm_call_id": call_id,
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": user_api_key_dict.api_key,
+                        "user_api_key_user_id": user_api_key_dict.user_id,
+                        "model_group": "gpt-4o",
+                    }
+                },
+                "standard_logging_object": {
+                    "metadata": {
+                        "user_api_key_hash": user_api_key_dict.api_key,
+                        "user_api_key_user_id": user_api_key_dict.user_id,
+                    }
+                },
+            },
+            response_obj=ModelResponse(
+                model="gpt-4o",
+                usage=Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300),
+            ),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    tokens_key = handler.create_rate_limit_keys(
+        key="api_key", value=user_api_key_dict.api_key, rate_limit_type="tokens"
+    )
+    for index in range(3):
+        await request(f"call-{index}")
+        assert await local_cache.async_get_cache(key=tokens_key) == (index + 1) * 300
+
+    time_controller.advance(61)
+    await request("call-after-window-reset")
+    assert await local_cache.async_get_cache(key=tokens_key) == 300
+
+
+@pytest.mark.asyncio
+async def test_atomic_tpm_reservation_rollover_resets_sibling_requests_counter():
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    window_size = 60
+    now_int = int(time.time())
+    window_key = "{api_key:atomic-rollover}:window"
+    requests_key = handler.create_rate_limit_keys("api_key", "atomic-rollover", "requests")
+    tokens_key = handler.create_rate_limit_keys("api_key", "atomic-rollover", "tokens")
+    for key, value in ((window_key, str(now_int - window_size - 1)), (requests_key, 3), (tokens_key, 900)):
+        await local_cache.async_set_cache(key=key, value=value, ttl=window_size)
+
+    tpm_pass = await handler.atomic_check_and_increment_by_n(
+        descriptors=[
+            RateLimitDescriptor(
+                key="api_key",
+                value="atomic-rollover",
+                rate_limit={"tokens_per_unit": 1000, "window_size": window_size},
+            )
+        ],
+        increments=[{"tokens": 200}],
+    )
+    assert tpm_pass["overall_code"] == "OK"
+    assert await local_cache.async_get_cache(key=tokens_key) == 200
+
+    rpm_pass = await handler.should_rate_limit(
+        descriptors=[
+            RateLimitDescriptor(
+                key="api_key",
+                value="atomic-rollover",
+                rate_limit={"requests_per_unit": 5, "window_size": window_size},
+            )
+        ],
+        skip_tpm_check=True,
+    )
+    assert rpm_pass["overall_code"] == "OK"
+    assert [status["limit_remaining"] for status in rpm_pass["statuses"]] == [4]
+    assert await local_cache.async_get_cache(key=requests_key) == 1
+
+
+class _YieldingInMemoryCache(InMemoryCache):
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:
+        value = await super().async_get_cache(key, **kwargs)
+        await asyncio.sleep(0)
+        return value
+
+
+@pytest.mark.asyncio
+async def test_window_rollover_reset_does_not_erase_concurrent_sibling_increment():
+    local_cache = DualCache(in_memory_cache=_YieldingInMemoryCache())
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    window_size = 60
+    now_int = int(time.time())
+    window_key = "{api_key:concurrent-rollover}:window"
+    requests_key = handler.create_rate_limit_keys("api_key", "concurrent-rollover", "requests")
+    tokens_key = handler.create_rate_limit_keys("api_key", "concurrent-rollover", "tokens")
+    for key, value in ((window_key, str(now_int - window_size - 1)), (requests_key, 3), (tokens_key, 900)):
+        await local_cache.async_set_cache(key=key, value=value, ttl=window_size)
+
+    tpm_descriptor = RateLimitDescriptor(
+        key="api_key",
+        value="concurrent-rollover",
+        rate_limit={"tokens_per_unit": 1000, "window_size": window_size},
+    )
+    rpm_pass, tpm_pass = await asyncio.gather(
+        handler.in_memory_cache_sliding_window(
+            keys=[window_key, requests_key], now_int=now_int, window_size=window_size
+        ),
+        handler.atomic_check_and_increment_by_n(
+            descriptors=[tpm_descriptor],
+            increments=[{"requests": 0, "tokens": 200}],
+        ),
+    )
+
+    assert rpm_pass == [str(now_int), 1]
+    assert tpm_pass["overall_code"] == "OK"
+    assert await local_cache.async_get_cache(key=requests_key) == 1
+    assert await local_cache.async_get_cache(key=tokens_key) == 200
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "key_metadata, team_metadata, expected_output_estimate, tier",
     [
@@ -6030,10 +6184,10 @@ async def test_configured_estimate_blocks_the_overrun_the_static_floor_admits(mo
     assert await admitted({"default_estimated_output_tokens": 3000}) == 2
 
 
-def test_internal_call_origin_success_ops_are_skipped():
-    """Internal sub-calls (auto-router classifier, shadow eval shadow/judge) bill spend
-    to the caller's key but must not consume its TPM counters: the same kwargs charge
-    ops without the origin stamp and none with it."""
+@pytest.mark.parametrize("origin", ["shadow_eval_judge", "autorouter_compaction"])
+@pytest.mark.parametrize("rate_limit_type", ["input", "output", "total"])
+def test_internal_call_origin_success_ops_are_skipped(origin, rate_limit_type):
+    """Foreground compaction charges the same scopes as ordinary caller traffic."""
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache())
     )
@@ -6049,23 +6203,27 @@ def test_internal_call_origin_success_ops_are_skipped():
     def _kwargs(metadata: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "standard_logging_object": {
-                "metadata": {"user_api_key_hash": hash_token("sk-internal-origin")}
+                "metadata": {
+                    "user_api_key_hash": hash_token("sk-internal-origin"),
+                    "user_api_key_team_id": "compaction-team",
+                    "user_api_key_project_id": "compaction-project",
+                }
             },
             "litellm_params": {"metadata": metadata},
             "model": "gpt-4o-mini",
         }
 
     charged = handler._build_success_event_pipeline_operations(
-        kwargs=_kwargs({}), response_obj=response, rate_limit_type="output"
+        kwargs=_kwargs({}), response_obj=response, rate_limit_type=rate_limit_type
     )
     skipped = handler._build_success_event_pipeline_operations(
-        kwargs=_kwargs({INTERNAL_CALL_ORIGIN_METADATA_KEY: "shadow_eval_judge"}),
+        kwargs=_kwargs({INTERNAL_CALL_ORIGIN_METADATA_KEY: origin}),
         response_obj=response,
-        rate_limit_type="output",
+        rate_limit_type=rate_limit_type,
     )
 
     assert charged
-    assert skipped == []
+    assert skipped == (charged if origin == "autorouter_compaction" else [])
 
 
 def _conflicting_budget_bodies() -> Dict[str, Dict[str, object]]:
@@ -6760,3 +6918,235 @@ def test_success_tpm_accounting_skips_team_model_pool_when_key_owns_model_tpm_li
     assert handler.create_rate_limit_keys("model_per_key", f"{hash_token('sk-pool')}:test-model", "tokens") in charged_keys
     team_pool_key = handler.create_rate_limit_keys("model_per_team", "t:test-model", "tokens")
     assert (team_pool_key in charged_keys) is charges_team_model_pool
+
+
+@pytest.fixture(params=["Europe/Paris", "Asia/Kolkata", "America/Los_Angeles"])
+def process_timezone(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield request.param
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+def test_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_timezone: str) -> None:
+    now: Final = datetime(2026, 9, 4, 21, 53, 21, tzinfo=timezone.utc)
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), time_provider=lambda: now
+    )
+    expected_reset: Final = (now + timedelta(seconds=handler.window_size)).strftime("%Y-%m-%d %H:%M:%S UTC")
+    over_limit: Final[RateLimitResponse] = {
+        "overall_code": "OVER_LIMIT",
+        "statuses": [
+            {
+                "code": "OVER_LIMIT",
+                "descriptor_key": "api_key",
+                "limit_remaining": 0,
+                "rate_limit_type": "requests",
+                "current_limit": 2,
+            }
+        ],
+    }
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        handler._handle_rate_limit_error(
+            response=over_limit,
+            descriptors=[{"key": "api_key", "value": "sk-test", "rate_limit": None}],
+            requested_model="gpt-4o-mini",
+        )
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers == {
+        "retry-after": str(handler.window_size),
+        "rate_limit_type": "requests",
+        "reset_at": expected_reset,
+    }
+    assert exc_info.value.detail == (
+        "Rate limit exceeded for api_key: sk-test. Limit type: requests. "
+        f"Current limit: 2, Remaining: 0. Limit resets at: {expected_reset}"
+    )
+
+
+def _resolve_alias_to_target(model: str) -> str | None:
+    return "target" if model == "alias" else None
+
+
+async def _rpm_request(handler: _PROXY_MaxParallelRequestsHandler, cache: DualCache, auth: UserAPIKeyAuth, model: str) -> None:
+    await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data={"model": model}, call_type="acompletion")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_name, second_name", [("target", "alias"), ("alias", "target")])
+async def test_model_group_alias_shares_deployment_default_rpm_bucket_with_its_target(
+    monkeypatch: pytest.MonkeyPatch, first_name: str, second_name: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "target",
+                "litellm_params": {"model": "openai/gpt-test", "api_key": "test-key", "default_api_key_rpm_limit": 2},
+                "model_info": {"id": "target-deployment"},
+            }
+        ],
+        model_group_alias={"alias": "target"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-alias-default"))
+
+    await _rpm_request(handler, cache, auth, first_name)
+    await _rpm_request(handler, cache, auth, first_name)
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, auth, second_name)
+
+    assert exc.value.status_code == 429
+    assert "model_per_key" in str(exc.value.detail)
+    assert f"{auth.api_key}:target" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_name, second_name", [("target", "alias"), ("alias", "target")])
+@pytest.mark.parametrize(
+    "limits, counter_scope",
+    [
+        ({"metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_key"),
+        (
+            {
+                "team_id": "t",
+                "metadata": {"model_rpm_limit": {"other-model": 100}},
+                "team_metadata": {"model_rpm_limit": {"target": 1}},
+            },
+            "model_per_team",
+        ),
+        ({"org_id": "o", "organization_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_organization"),
+        ({"project_id": "p", "project_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_project"),
+    ],
+    ids=["key_metadata", "team_metadata", "organization_metadata", "project_metadata"],
+)
+async def test_model_group_alias_shares_metadata_model_rpm_bucket_with_its_target(
+    limits: dict[str, object], counter_scope: str, first_name: str, second_name: str
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), model_group_resolver=_resolve_alias_to_target
+    )
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-alias-metadata"), **limits)
+
+    await _rpm_request(handler, cache, auth, first_name)
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, auth, second_name)
+
+    assert exc.value.status_code == 429
+    assert counter_scope in str(exc.value.detail)
+    assert ":target" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_model_rpm_limit_keyed_by_the_alias_name_still_limits_alias_requests_only() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), model_group_resolver=_resolve_alias_to_target
+    )
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-alias-keyed"), metadata={"model_rpm_limit": {"alias": 1}})
+
+    await _rpm_request(handler, cache, auth, "alias")
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, auth, "alias")
+    assert exc.value.status_code == 429
+    assert "model_per_key" in str(exc.value.detail)
+
+    await _rpm_request(handler, cache, auth, "target")
+
+
+@pytest.mark.parametrize(
+    "key_metadata, charges_team_model_pool",
+    [({}, True), ({"model_tpm_limit": {"target": 500}}, False)],
+    ids=["no_key_override", "key_owns_target_tpm_limit"],
+)
+def test_success_tpm_accounting_charges_the_alias_target_bucket(
+    key_metadata: dict[str, object], charges_team_model_pool: bool
+) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), model_group_resolver=_resolve_alias_to_target
+    )
+    response: Final = ModelResponse(
+        id="alias-tpm",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="alias",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs: Final = {
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": hash_token("sk-alias-tpm"), "user_api_key_team_id": "t"}
+        },
+        "litellm_params": {
+            "metadata": {
+                "model_group": "alias",
+                "user_api_key_metadata": key_metadata,
+                "user_api_key_team_metadata": {"model_tpm_limit": {"target": 500}},
+            }
+        },
+        "model": "alias",
+    }
+
+    ops: Final = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs, response_obj=response, rate_limit_type="output"
+    )
+
+    charged_keys: Final = {op["key"] for op in ops}
+    assert handler.create_rate_limit_keys("model_per_key", f"{hash_token('sk-alias-tpm')}:target", "tokens") in charged_keys
+    assert not any(":alias" in key for key in charged_keys)
+    team_pool_key: Final = handler.create_rate_limit_keys("model_per_team", "t:target", "tokens")
+    assert (team_pool_key in charged_keys) is charges_team_model_pool
+
+
+@pytest.mark.asyncio
+async def test_success_tpm_accounting_keeps_the_admission_target_after_an_alias_reload() -> None:
+    alias_map: Final[dict[str, str]] = {"alias": "target-a"}
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), model_group_resolver=alias_map.get
+    )
+    key_metadata: Final = {"model_tpm_limit": {"target-a": 1000, "target-b": 1000}}
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-alias-reload"), metadata=key_metadata)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": "alias", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        call_type="acompletion",
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_model == RateLimitedModel(requested="alias", group="target-a")
+    assert stash.reserved_tokens > 0
+
+    alias_map["alias"] = "target-b"
+    response: Final = ModelResponse(
+        id="alias-reload",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="alias",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs: Final = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+        "litellm_params": {"metadata": {"model_group": "alias", "user_api_key_metadata": key_metadata}},
+        "model": "alias",
+    }
+
+    ops: Final = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs, response_obj=response, rate_limit_type="total"
+    )
+
+    admission_bucket: Final = handler.create_rate_limit_keys("model_per_key", f"{auth.api_key}:target-a", "tokens")
+    charged: Final = {op["key"]: op["increment_value"] for op in ops}
+    assert charged[admission_bucket] == 150 - stash.reserved_tokens
+    assert not any(":target-b" in key for key in charged)

@@ -164,6 +164,7 @@ lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 
 # Linting targets
 lint-ruff: $(LINT_DEP_INSTALL)
+	$(UV_RUN) python scripts/check_mcp_operation_boundary.py
 	cd litellm && $(UV_RUN) ruff check . && cd ..
 	$(UV_RUN) ruff check --config ruff-tests.toml tests
 

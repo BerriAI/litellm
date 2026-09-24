@@ -31,14 +31,14 @@
                         "model_id": null,
                         "cache_key": null,
                         "api_base": null,
-                        "response_cost": 7.5e-06,
+                        "response_cost": 3.5e-05,
                         "additional_headers": {},
                         "litellm_overhead_time_ms": null,
                         "batch_models": null,
-                        "litellm_model_name": "vertex_ai/gemini-2.0-flash-001",
+                        "litellm_model_name": "vertex_ai/gemini-3-flash-preview",
                         "usage_object": null
                     },
-                    "litellm_response_cost": 7.5e-06,
+                    "litellm_response_cost": 3.5e-05,
                     "cache_hit": false,
                     "requester_metadata": {}
                 },
@@ -54,13 +54,13 @@
                 "id": "time-14-15-40-349639_chatcmpl-59a988d0-7ef1-4dc4-bc18-d2e78961817f",
                 "endTime": "2025-05-26T14:15:40.607266-07:00",
                 "completionStartTime": "2025-05-26T14:15:40.607266-07:00",
-                "model": "gemini-2.0-flash-001",
+                "model": "gemini-3-flash-preview",
                 "modelParameters": {},
                 "usage": {
                     "input": 10,
                     "output": 10,
                     "unit": "TOKENS",
-                    "totalCost": 7.5e-06
+                    "totalCost": 3.5e-05
                 },
                 "usageDetails": {
                     "input": 10,

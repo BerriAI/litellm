@@ -1,6 +1,8 @@
 """
 Validate Claude Opus 5 model configuration entries.
 
+Opus 5.5 (``claude-opus-5-5``) is covered here too.
+
 Opus 5 carries Opus 4.8's pricing ($5 / $25 per MTok) and the gen-5 adaptive
 thinking profile, but differs from 4.8 in two ways that are behavior-bearing in
 LiteLLM: the cacheable-prefix minimum drops to 512 tokens, and Bedrock's Opus 5
@@ -22,6 +24,13 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "../..")
 
+
+def _load_root_cost_map() -> dict:
+    json_path = os.path.join(REPO_ROOT, "model_prices_and_context_window.json")
+    with open(json_path) as f:
+        return json.load(f)
+
+
 ALL_OPUS_5_VARIANTS = (
     "claude-opus-5",
     "anthropic.claude-opus-5",
@@ -32,7 +41,10 @@ ALL_OPUS_5_VARIANTS = (
     "jp.anthropic.claude-opus-5",
     "vertex_ai/claude-opus-5",
     "vertex_ai/claude-opus-5@default",
+    "vertex_ai/claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5@default",
     "azure_ai/claude-opus-5",
+    "azure_ai/claude-opus-5-5",
 )
 
 BEDROCK_OPUS_5_VARIANTS = (
@@ -43,12 +55,6 @@ BEDROCK_OPUS_5_VARIANTS = (
     "au.anthropic.claude-opus-5",
     "jp.anthropic.claude-opus-5",
 )
-
-
-def _load_root_cost_map() -> dict:
-    json_path = os.path.join(REPO_ROOT, "model_prices_and_context_window.json")
-    with open(json_path) as f:
-        return json.load(f)
 
 
 @pytest.mark.parametrize("model_name", BEDROCK_OPUS_5_VARIANTS)
@@ -62,31 +68,41 @@ def test_opus_5_bedrock_rejects_strict_tools(model_name, local_model_cost_map):
     assert bedrock_converse_supports_strict_tools(model_name) is False
 
 
-def test_opus_5_present_in_bundled_backup():
-    """The bundled backup is the runtime fallback (and what tests load with
-    ``LITELLM_LOCAL_MODEL_COST_MAP=True``); it must carry the same entries as the
-    root cost map, otherwise the model resolves on one path but not the other."""
-    backup = GetModelCostMap.load_local_model_cost_map()
-    for model_name in ALL_OPUS_5_VARIANTS:
-        assert model_name in backup, f"Missing from backup cost map: {model_name}"
-
-
 def test_opus_5_registered_for_bedrock_converse():
     assert "anthropic.claude-opus-5" in BEDROCK_CONVERSE_MODELS
 
 
-@pytest.mark.parametrize(
-    "cost_map",
-    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
-    ids=["root", "bundled_backup"],
+OPUS_5_5_VARIANTS = (
+    "claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5@default",
+    "azure_ai/claude-opus-5-5",
 )
-def test_opus_5_all_variants_carry_adaptive_thinking_flag(cost_map):
-    """Every Opus 5 entry must advertise ``supports_adaptive_thinking``.
 
-    Adaptive-thinking detection is cost-map driven, so a single variant missing
-    the flag silently sends the legacy ``thinking.type='enabled'`` shape, which
-    Opus 5 rejects with a 400."""
-    variants = [k for k in cost_map if "claude-opus-5" in k]
-    assert variants, "no claude-opus-5 entries found in cost map"
-    missing = [k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True]
-    assert not missing, f"missing supports_adaptive_thinking: {missing}"
+
+@pytest.mark.parametrize("model_name", OPUS_5_5_VARIANTS)
+def test_opus_5_5_present_in_bundled_backup(model_name):
+    backup = GetModelCostMap.load_local_model_cost_map()
+    root = _load_root_cost_map()
+    assert model_name in backup
+    assert model_name in root
+    assert backup[model_name] == root[model_name]
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        ("claude-opus-5-5", "anthropic"),
+        ("anthropic/claude-opus-5-5", "anthropic"),
+        ("vertex_ai/claude-opus-5-5", "vertex_ai"),
+        ("azure_ai/claude-opus-5-5", "azure_ai"),
+    ],
+)
+def test_opus_5_5_thinking_profile(local_model_cost_map, model, provider):
+    """Opus 5.5 has thinking always on with the adaptive thinking surface, and
+    no forced tool use, same as Fable 5.1."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    assert AnthropicModelInfo._is_adaptive_thinking_model(model, provider) is True
+    assert AnthropicModelInfo._is_always_on_thinking_model(model, provider) is True
+    assert AnthropicModelInfo.forced_tool_use_unsupported(model.removeprefix("anthropic/")) is True

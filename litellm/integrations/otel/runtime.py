@@ -8,13 +8,16 @@ identity unconditionally.
 """
 
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from functools import cache
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
 
 
 @cache
-def _otel_runtime() -> "tuple[Callable[[str], Any], Callable[..., None]] | None":
+def _otel_runtime() -> "tuple[Callable[[str], AbstractContextManager[Span | None]], Callable[..., None]] | None":
     """Resolve the SDK-backed hooks once and cache the outcome, absence included.
 
     CPython never caches a failed import, so without this memoization every call
@@ -29,7 +32,7 @@ def _otel_runtime() -> "tuple[Callable[[str], Any], Callable[..., None]] | None"
 
 
 @contextmanager
-def phase_span(name: str) -> "Iterator[Any]":
+def phase_span(name: str) -> "Iterator[Span | None]":
     """Run a request phase inside a live active span so its DB/service calls nest.
 
     Yields ``None`` (a plain no-op) when the OTel SDK is unavailable or V2 is not
@@ -43,7 +46,7 @@ def phase_span(name: str) -> "Iterator[Any]":
         yield span
 
 
-def seed_request_identity(user_api_key_dict: Any, model: Any = None) -> None:
+def seed_request_identity(user_api_key_dict: object, model: object = None) -> None:
     """Seed request-identity Baggage at the auth boundary (no-op without V2)."""
     runtime: Final = _otel_runtime()
     if runtime is None:

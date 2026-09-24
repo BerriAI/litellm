@@ -16,6 +16,7 @@ import json
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -1493,6 +1494,55 @@ async def test_summary_model_denied_when_team_member_scope_excludes_it():
             AsyncMock(return_value=None),
         ),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_not_awaited()
+    assert result.applied_edits[0].get("error") == "summary_model_access_denied"
+
+
+async def test_summary_model_denied_when_team_membership_read_hits_a_db_outage():
+    """A member-level scope that cannot be read fails closed: the summary
+    model is not invoked while the membership row is unreachable."""
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+
+    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-outage")
+    auth.user_id = "user-outage"
+
+    class _UnreachableMembershipPrisma:
+        class db:
+            class litellm_teammembership:
+                @staticmethod
+                async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
+                    raise httpx.ConnectError("All connection attempts failed")
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_project_object",
+            AsyncMock(return_value=None),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", _UnreachableMembershipPrisma()),
     ):
         result = await apply_compact_20260112(
             model=MODEL,

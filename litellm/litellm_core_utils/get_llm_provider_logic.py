@@ -362,6 +362,9 @@ def get_llm_provider(
                     elif endpoint == "https://ai-gateway.vercel.sh/v1":
                         custom_llm_provider = "vercel_ai_gateway"
                         dynamic_api_key = get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
+                    elif endpoint == "https://api.edenai.run/v3":
+                        custom_llm_provider = "edenai"  # rebind-ok: api_base detection resolves the provider in place
+                        dynamic_api_key = get_secret_str("EDENAI_API_KEY")
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
@@ -853,6 +856,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.VercelAIGatewayConfig()._get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "edenai":
+        api_base = litellm.EdenAIChatConfig.get_api_base(api_base)  # rebind-ok: chain resolves in place
+        dynamic_api_key = litellm.EdenAIChatConfig.get_api_key(api_key)  # rebind-ok: chain resolves in place
+    elif custom_llm_provider == "fal_ai":
+        dynamic_api_key = litellm.FalAIChatConfig.get_api_key(api_key)  # rebind-ok: chain resolves in place
     elif custom_llm_provider == "aiml":
         (
             api_base,

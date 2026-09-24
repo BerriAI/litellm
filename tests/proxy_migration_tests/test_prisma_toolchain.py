@@ -25,7 +25,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-
 from litellm_proxy_extras.prisma_toolchain import (
     DEFAULT_PRISMA_COMMAND_TIMEOUT,
     DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT,
@@ -36,13 +35,15 @@ from litellm_proxy_extras.prisma_toolchain import (
     heal_incomplete_nodeenv_cache,
     node_binary_path,
     prisma_bootstrap_timeout,
-    prisma_command_timeout,
     prisma_cli_available,
+    prisma_command_timeout,
     prisma_migrate_deploy_timeout,
     resolve_prisma_argv,
     run_prisma,
 )
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+from tests._process_helpers import process_is_gone
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROXY_EXTRAS = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
@@ -280,17 +281,6 @@ def test_migrate_deploy_stops_at_its_own_timeout(
     assert elapsed < 30
 
 
-def _process_is_gone(pid: int, within_seconds: float) -> bool:
-    deadline = time.monotonic() + within_seconds
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return True
-        time.sleep(0.05)
-    return False
-
-
 def test_a_timed_out_migrate_deploy_takes_its_process_tree_with_it(
     toolchain_env: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -309,7 +299,7 @@ def test_a_timed_out_migrate_deploy_takes_its_process_tree_with_it(
     grandchild_pid = int(pidfile.read_text())
     try:
         assert len(_deploy_calls(log_path)) == 2
-        assert _process_is_gone(grandchild_pid, within_seconds=5)
+        assert process_is_gone(grandchild_pid, within_seconds=5)
     finally:
         try:
             os.kill(grandchild_pid, signal.SIGKILL)

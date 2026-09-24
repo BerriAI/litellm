@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import threading
@@ -406,11 +407,9 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
     config = Mock()
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
-    config.transform_responses_api_request.return_value = {
-        "model": "gpt-5.3-codex",
-        "input": "hi",
-        "stream": True,
-    }
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5.3-codex", "input": "hi", "stream": True}
+    )
     config.sign_request.return_value = ({}, None)
     client = AsyncHTTPHandler()
     client.post = AsyncMock(
@@ -446,7 +445,9 @@ async def test_async_response_api_handler_streaming_passes_logging_obj_to_post()
     config = Mock()
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
-    config.transform_responses_api_request.return_value = {"model": "gpt-5", "input": "hi", "stream": True}
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5", "input": "hi", "stream": True}
+    )
     config.sign_request.return_value = ({}, None)
     client = AsyncHTTPHandler()
     client.post = AsyncMock(
@@ -469,6 +470,41 @@ async def test_async_response_api_handler_streaming_passes_logging_obj_to_post()
     )
 
     assert client.post.call_args.kwargs["logging_obj"] is logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_posts_the_async_transform_hook_result():
+    """A provider whose request transform must await (Bedrock inlines remote image URLs)
+    overrides the async hook; the async handler has to send that result, not the sync one."""
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5", "input": "inlined by the async hook", "stream": True}
+    )
+    config.sign_request.return_value = ({}, None)
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    await handler.async_response_api_handler(
+        model="gpt-5",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        client=client,
+    )
+
+    assert client.post.call_args.kwargs["json"]["input"] == "inlined by the async hook"
+    config.transform_responses_api_request.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1551,7 +1587,7 @@ async def test_anthropic_post_uses_prebuilt_body_without_redumping():
     provider_config = Mock()
     provider_config.max_retry_on_anthropic_messages_http_error = 2
 
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     out = await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -1591,7 +1627,7 @@ async def test_anthropic_post_falls_back_to_json_dumps_when_unsigned_none():
 
     provider_config = Mock()
     provider_config.max_retry_on_anthropic_messages_http_error = 1
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -1639,7 +1675,7 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     # Re-sign returns no signed body (native anthropic path) -> must re-dump.
     provider_config.sign_request = Mock(return_value=({}, None))
 
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -1956,6 +1992,96 @@ async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(
     )
 
 
+_FOUNDRY_API_BASE: Final = "https://lit5418.services.ai.azure.com/anthropic"
+_FOUNDRY_SSE_BODY: Final = (
+    b'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_1", "type": "message", '
+    b'"role": "assistant", "model": "claude-fable-5-1", "content": [], "stop_reason": null, '
+    b'"usage": {"input_tokens": 1, "output_tokens": 0}}}\n\n'
+    b'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, '
+    b'"content_block": {"type": "text", "text": ""}}\n\n'
+    b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+    b'"delta": {"type": "text_delta", "text": "ready"}}\n\n'
+    b'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n'
+    b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, '
+    b'"usage": {"output_tokens": 1}}\n\n'
+    b'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_passes_deployment_api_base_to_agentic_hooks(stream, monkeypatch):
+    """
+    Regression for LIT-5418: an azure_ai deployment carries its Foundry endpoint as
+    ``api_base``, a named parameter that never lands in kwargs. The agentic hooks
+    (websearch interception's follow-up call after the search) must receive it on
+    both the non-streaming and the streaming path, or the follow-up fails with
+    "Missing Azure API Base" and the client gets the dangling tool_use back.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+
+    class CapturingAgenticCallback(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.hook_kwargs: dict | None = None
+
+        async def async_should_run_agentic_loop(self, response, model, messages, tools, stream, custom_llm_provider, kwargs):
+            self.hook_kwargs = dict(kwargs)
+            return False, {}
+
+    callback = CapturingAgenticCallback()
+    handler = BaseLLMHTTPHandler()
+    upstream_request = httpx.Request("POST", f"{_FOUNDRY_API_BASE}/v1/messages")
+    upstream_response = (
+        httpx.Response(200, content=_FOUNDRY_SSE_BODY, request=upstream_request)
+        if stream
+        else httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-fable-5-1",
+                "content": [{"type": "text", "text": "ready"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+            request=upstream_request,
+        )
+    )
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=upstream_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.dynamic_success_callbacks = [callback]
+
+    result = await handler.async_anthropic_messages_handler(
+        model="claude-fable-5-1",
+        messages=[{"role": "user", "content": "Say ready"}],
+        anthropic_messages_provider_config=AzureAnthropicMessagesConfig(),
+        anthropic_messages_optional_request_params={"max_tokens": 32},
+        custom_llm_provider="azure_ai",
+        litellm_params=GenericLiteLLMParams(api_key="foundry-key", api_base=_FOUNDRY_API_BASE),
+        logging_obj=mock_logging_obj,
+        client=mock_client,
+        api_key="foundry-key",
+        api_base=_FOUNDRY_API_BASE,
+        stream=stream,
+        kwargs={},
+    )
+    if stream:
+        _ = [chunk async for chunk in result]
+
+    assert mock_client.post.call_args.kwargs["url"] == f"{_FOUNDRY_API_BASE}/v1/messages"
+    assert callback.hook_kwargs is not None, "agentic hook never ran"
+    assert callback.hook_kwargs.get("api_base") == _FOUNDRY_API_BASE
+    assert callback.hook_kwargs.get("api_key") == "foundry-key"
+
+
 class _FakeWSExceptions:
     class WebSocketException(Exception):
         pass
@@ -2064,6 +2190,7 @@ async def _run_async_realtime_with_backend_failure(client_ws):
     provider_config = Mock()
     provider_config.get_complete_url.return_value = "wss://backend.example/live"
     provider_config.validate_environment.return_value = {}
+    provider_config.open_backend = AsyncMock(return_value=None)
 
     with patch.object(
         handler,
@@ -2487,7 +2614,7 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
             posts.append({"headers": dict(headers), "data": data})
             return invalid_signature_response if len(posts) == 1 else ok_response
 
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     response = await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -2759,6 +2886,68 @@ def test_direct_vector_store_search_debug_log_omits_stored_credentials(caplog, i
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "sup3r-s3cret-valkey-pw" not in logged
     assert "sk-embedding-s3cret" not in logged
+
+
+@pytest.mark.asyncio
+async def test_async_retrieve_batch_masks_presigned_auth_header_in_raw_request_log():
+    """Regression: a pre-signed retrieve-batch request (Mistral, Bedrock) embeds its auth
+    header inside the transformed request, which pre_call logs verbatim as the raw request
+    body, so the provider key landed unmasked in raw_request_typed_dict and every
+    raw-request callback."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+    from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+
+    provider_key = "mistral-s3cret-provider-key-123456"
+    job_payload = {
+        "id": "batch-1",
+        "input_files": ["file-1"],
+        "endpoint": "/v1/ocr",
+        "model": "mistral-ocr-latest",
+        "status": "SUCCESS",
+        "created_at": 1_757_400_000,
+    }
+    sent_requests = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(200, json=job_payload)
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_capture))
+
+    logging_obj = LitellmLogging(
+        model="mistral/mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="batch_retrieve",
+        start_time=time.time(),
+        litellm_call_id="batch-retrieve-call-id",
+        function_id="batch-retrieve-function-id",
+        log_raw_request_response=True,
+    )
+    logging_obj.update_environment_variables(
+        model="mistral/mistral-ocr-latest",
+        optional_params={},
+        litellm_params={"litellm_call_id": "batch-retrieve-call-id", "metadata": {}},
+    )
+
+    result = await BaseLLMHTTPHandler().retrieve_batch(
+        batch_id="batch-1",
+        litellm_params={"api_key": provider_key},
+        provider_config=MistralBatchesConfig(),
+        headers={},
+        api_base=None,
+        api_key=provider_key,
+        logging_obj=logging_obj,
+        _is_async=True,
+        client=client,
+        model="mistral/mistral-ocr-latest",
+    )
+
+    assert result.id == "batch-1"
+    assert sent_requests[0].headers["Authorization"] == f"Bearer {provider_key}"
+    raw_request_body = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"]
+    assert provider_key not in json.dumps(raw_request_body)
 
 
 @pytest.mark.asyncio
@@ -3707,3 +3896,273 @@ def test_image_edit_handler_keeps_the_sync_transform():
     assert config.transform_calls == ["sync"]
     assert captured["body"] == {"transformed_by": "sync"}
     assert response.data[0].b64_json == "sync"
+
+
+class _ScriptedClientWebSocket(_FakeClientWebSocket):
+    def __init__(self, messages: list[str], last_event_type: str) -> None:
+        super().__init__()
+        self._messages: Final = list(messages)
+        self._last_event_type: Final = last_event_type
+        self._backend_done: Final = asyncio.Event()
+
+    async def receive_text(self) -> str:
+        if self._messages:
+            return self._messages.pop(0)
+        await asyncio.wait_for(self._backend_done.wait(), timeout=5)
+        raise RuntimeError("client went away")
+
+    async def send_text(self, payload: str) -> None:
+        await super().send_text(payload)
+        if json.loads(payload).get("type") == self._last_event_type:
+            self._backend_done.set()
+
+    def sent_events(self) -> list[dict[str, object]]:
+        return [json.loads(payload) for name, payload in self.events if name == "send_text"]
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_bridges_a_transcription_session_through_the_provider_backend():
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    from datetime import timedelta
+
+    from google.cloud.speech_v2.types import (
+        RecognitionResponseMetadata,
+        SpeechRecognitionAlternative,
+        StreamingRecognitionResult,
+        StreamingRecognizeResponse,
+    )
+
+    from litellm.llms.vertex_ai.audio_transcription.realtime_backend import SpeechStreamingBackend
+    from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import VertexChirpRealtimeConfig
+
+    def google_response(transcript: str, is_final: bool, billed: float) -> StreamingRecognizeResponse:
+        return StreamingRecognizeResponse(
+            results=[
+                StreamingRecognitionResult(
+                    alternatives=[SpeechRecognitionAlternative(transcript=transcript)], is_final=is_final
+                )
+            ],
+            metadata=RecognitionResponseMetadata(total_billed_duration=timedelta(seconds=billed)),
+        )
+
+    class FakeTransport:
+        async def close(self) -> None:
+            return None
+
+    class FakeSpeechClient:
+        transport = FakeTransport()
+
+        def __init__(self) -> None:
+            self.requests: Final[list[object]] = []
+
+        async def streaming_recognize(self, requests=None):
+            return self._respond(requests)
+
+        async def _respond(self, requests):
+            script = [google_response("four score", False, 0.0), google_response("Four score and seven", True, 2.0)]
+            async for request in requests:
+                self.requests.append(request)
+                if request.audio and script:
+                    yield script.pop(0)
+
+    speech_client = FakeSpeechClient()
+
+    async def resolve_access_token() -> str:
+        return "token"
+
+    provider_config = VertexChirpRealtimeConfig(
+        resolve_access_token=resolve_access_token,
+        project="proj-1",
+        location="us",
+        backend_factory=lambda target: SpeechStreamingBackend(
+            target, client_factory=lambda target, access_token: speech_client
+        ),
+    )
+    audio = base64.b64encode(b"\x00\x01" * 800).decode()
+    client_ws = _ScriptedClientWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "transcription",
+                        "audio": {
+                            "input": {
+                                "format": {"type": "audio/pcm", "rate": 16000},
+                                "transcription": {"model": "chirp_3", "language": "en"},
+                                "turn_detection": {"type": "server_vad"},
+                            }
+                        },
+                    },
+                }
+            ),
+            json.dumps({"type": "input_audio_buffer.append", "audio": audio}),
+            json.dumps({"type": "input_audio_buffer.append", "audio": audio}),
+            json.dumps({"type": "input_audio_buffer.commit"}),
+        ],
+        last_event_type="conversation.item.input_audio_transcription.completed",
+    )
+    logging_obj = Mock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(side_effect=AssertionError("dialed a websocket"))) as dial:
+        await handler.async_realtime(
+            model="chirp_3",
+            websocket=client_ws,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            headers={},
+            query_params={"model": "chirp_3", "intent": "transcription"},
+        )
+
+    dial.assert_not_awaited()
+    events = client_ws.sent_events()
+    assert [event["type"] for event in events] == [
+        "session.created",
+        "session.updated",
+        "input_audio_buffer.speech_started",
+        "conversation.item.input_audio_transcription.delta",
+        "conversation.item.input_audio_transcription.delta",
+        "input_audio_buffer.speech_stopped",
+        "conversation.item.input_audio_transcription.completed",
+    ]
+    assert events[0]["session"]["audio"]["input"]["transcription"] == {"model": "chirp_3"}
+    assert events[1]["session"]["audio"]["input"] == {
+        "format": {"type": "audio/pcm", "rate": 16000},
+        "transcription": {"model": "chirp_3", "language": "en-US"},
+        "turn_detection": {"type": "server_vad"},
+    }
+    assert [event["delta"] for event in events[3:5]] == ["four score", " and seven"]
+    assert events[6]["transcript"] == "Four score and seven"
+    assert events[6]["usage"] == {"type": "duration", "seconds": 2.0}
+    assert speech_client.requests[0].streaming_config.config.model == "chirp_3"
+    assert [bytes(request.audio) for request in speech_client.requests[1:]] == [b"\x00\x01" * 800, b"\x00\x01" * 800]
+
+
+@pytest.mark.asyncio
+async def test_responses_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
+    """A plan whose kwargs repeat a request param must not crash the Responses follow-up with a duplicate keyword"""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+    followup_calls: list[dict[str, object]] = []
+
+    async def fake_aresponses(**kwargs: object) -> str:
+        followup_calls.append(kwargs)
+        return "followup-response"
+
+    monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+    request_kwargs: Final = {"prompt_cache_key": "thread-1", "metadata": {"user": "u1"}}
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "x"}],
+            optional_params={"prompt_cache_key": "thread-1"},
+            kwargs=dict(request_kwargs),
+        ),
+    )
+
+    response: Final = await BaseLLMHTTPHandler()._execute_responses_agentic_plan(
+        plan=plan,
+        model="gpt-5",
+        response_api_optional_request_params={"prompt_cache_key": "thread-1"},
+        logging_obj=Mock(litellm_call_id="call-1"),
+        kwargs=dict(request_kwargs),
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+        callback=CustomLogger(),
+    )
+
+    assert response == "followup-response"
+    assert len(followup_calls) == 1
+    assert followup_calls[0]["prompt_cache_key"] == "thread-1"
+    assert followup_calls[0]["metadata"] == {"user": "u1"}
+    assert followup_calls[0]["_agentic_loop_depth"] == 1
+
+
+@pytest.mark.asyncio
+async def test_responses_agentic_followup_sends_the_plans_request_param_over_a_stale_kwargs_copy(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+    followup_calls: list[dict[str, object]] = []
+
+    async def fake_aresponses(**kwargs: object) -> str:
+        followup_calls.append(kwargs)
+        return "followup-response"
+
+    monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+
+    await BaseLLMHTTPHandler()._execute_responses_agentic_plan(
+        plan=AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                model="gpt-5",
+                messages=[{"role": "user", "content": "x"}],
+                optional_params={"prompt_cache_key": "from-plan-params"},
+                kwargs={"prompt_cache_key": "stale-copy"},
+            ),
+        ),
+        model="gpt-5",
+        response_api_optional_request_params={"prompt_cache_key": "from-request"},
+        logging_obj=Mock(litellm_call_id="call-1"),
+        kwargs={},
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+        callback=CustomLogger(),
+    )
+
+    assert followup_calls[0]["prompt_cache_key"] == "from-plan-params"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
+    """A plan whose kwargs repeat a request param, or the explicitly passed model, must not crash the chat follow-up with a duplicate keyword"""
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+    followup_calls: list[dict[str, object]] = []
+
+    async def fake_acompletion(**kwargs: object) -> str:
+        followup_calls.append(kwargs)
+        return "followup-response"
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    request_kwargs: Final = {"temperature": 0.2, "api_base": "https://a", "model": "gpt-5"}
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "x"}],
+            optional_params={"temperature": 0.2},
+            kwargs=dict(request_kwargs),
+        ),
+    )
+
+    response: Final = await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
+        plan=plan,
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        optional_params={"temperature": 0.2},
+        kwargs=dict(request_kwargs),
+        custom_llm_provider="openai",
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+    )
+
+    assert response == "followup-response"
+    assert len(followup_calls) == 1
+    assert followup_calls[0]["temperature"] == 0.2
+    assert followup_calls[0]["api_base"] == "https://a"
+    assert followup_calls[0]["model"] == "openai/gpt-5"
