@@ -508,6 +508,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "cache_control",
         ]
 
+        # Claude 4.7+ (Opus 4.7+, Fable 5) removed sampling params: only
+        # ``temperature=1`` is accepted. Don't advertise ``temperature``/``top_p``
+        # as supported so callers don't send values that would 400.
+        if not AnthropicModelInfo._supports_sampling_params(model):
+            params = [p for p in params if p not in ("temperature", "top_p")]
+
         if (
             "claude-3-7-sonnet" in model
             or AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider)
