@@ -1,57 +1,79 @@
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
     get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
+    get_provider_specific_headers::get_provider_specific_headers,
+    settings::Lookup,
 };
 use litellm_llms::{
-    anthropic::common_utils::{
-        flatten_unencrypted_web_search_results, sanitize_tool_use_ids, strip_empty_content_blocks,
-        strip_provider_specific_fields,
+    anthropic::experimental_pass_through::messages::handler::shape_anthropic_messages_request,
+    base_llm::anthropic_messages::transformation::{
+        BaseAnthropicMessagesConfig, MessagesTransformContext,
     },
-    base_llm::anthropic_messages::transformation::MessagesTransformContext,
 };
-use litellm_types::llms::anthropic_messages::anthropic_request::{
-    AnthropicMessage, AnthropicMessagesRequest,
-};
-use serde_json::{Map, Value, json};
+use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
+use serde_json::{Map, Value};
 
 use super::{
     Error,
     common_utils::{messages_provider_config, string_headers},
 };
-use crate::messages::types::{MessagesRequest, MessagesShaping, ProviderMessagesRequest};
+use crate::messages::types::{MessagesRequest, ProviderMessagesRequest};
 
-pub(super) fn prepare_provider_request(
-    request: MessagesRequest<'_>,
-) -> Result<ProviderMessagesRequest, Error> {
-    let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
+pub(super) struct ResolvedProvider<'a> {
+    pub(super) model: &'a str,
+    pub(super) provider: &'a str,
+    pub(super) config: &'static dyn BaseAnthropicMessagesConfig,
+}
+
+pub(super) fn resolve_provider<'a>(
+    model: &'a str,
+    custom_llm_provider: Option<&'a str>,
+) -> Result<ResolvedProvider<'a>, Error> {
+    let CustomLlmProvider {
+        model,
+        custom_llm_provider: provider,
+    } = get_custom_llm_provider(model, custom_llm_provider)
         .or_else(|| {
-            request
-                .custom_llm_provider
-                .map(|provider| CustomLlmProvider {
-                    model: request.model,
-                    custom_llm_provider: provider,
-                })
+            custom_llm_provider.map(|provider| CustomLlmProvider {
+                model,
+                custom_llm_provider: provider,
+            })
         })
         .ok_or_else(|| {
             Error::InvalidProvider(
                 "unable to resolve custom_llm_provider for messages request".to_string(),
             )
         })?;
-    let model = provider_info.model.to_string();
-    let provider = provider_info.custom_llm_provider;
-
     let config = messages_provider_config(provider)
         .ok_or_else(|| Error::InvalidProvider(provider.to_string()))?;
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    Ok(ResolvedProvider {
+        model,
+        provider,
+        config,
+    })
+}
+
+pub(super) fn prepare_provider_request(
+    request: MessagesRequest<'_>,
+    resolved: ResolvedProvider<'_>,
+    secrets: &dyn Lookup,
+) -> Result<ProviderMessagesRequest, Error> {
+    let ResolvedProvider {
+        model,
+        provider,
+        config,
+    } = resolved;
+    let model = model.to_string();
+    let env_lookup = |key: &str| secrets.get(key);
 
     let typed_request: AnthropicMessagesRequest =
         serde_json::from_value(request.body).map_err(invalid_request)?;
-    let sanitized = sanitize_request(
+    let sanitized = shape_anthropic_messages_request(
         AnthropicMessagesRequest {
             model: model.clone(),
             ..typed_request
         },
-        &request.shaping,
+        request.shaping.reasoning_auto_summary,
     )?;
     let trimmed =
         without_additional_drop_params(sanitized, &request.shaping.additional_drop_params)?;
@@ -60,7 +82,15 @@ pub(super) fn prepare_provider_request(
         &MessagesTransformContext::new(request.shaping.capabilities, request.shaping.drop_params),
     )?;
 
-    let forwarded = string_headers(request.extra_headers)?;
+    let scoped = get_provider_specific_headers(request.provider_specific_header.as_ref(), provider);
+    let forwarded = string_headers(Some(
+        request
+            .extra_headers
+            .into_iter()
+            .flatten()
+            .chain(scoped)
+            .collect(),
+    ))?;
     let authenticated = config.authenticate(forwarded, request.api_key, &env_lookup)?;
     let headers = config.request_headers(
         with_default_headers(authenticated, config.default_headers()),
@@ -115,59 +145,6 @@ fn without_additional_drop_params(
     serde_json::from_value(Value::Object(merged)).map_err(invalid_request)
 }
 
-fn sanitize_request(
-    request: AnthropicMessagesRequest,
-    shaping: &MessagesShaping,
-) -> Result<AnthropicMessagesRequest, Error> {
-    Ok(AnthropicMessagesRequest {
-        messages: sanitize_messages(request.messages),
-        metadata: request
-            .metadata
-            .as_ref()
-            .map(allowed_metadata)
-            .transpose()?,
-        thinking: with_reasoning_auto_summary(request.thinking, shaping.reasoning_auto_summary),
-        ..request
-    })
-}
-
-fn sanitize_messages(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
-    strip_provider_specific_fields(flatten_unencrypted_web_search_results(
-        sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
-    ))
-}
-
-fn allowed_metadata(metadata: &Value) -> Result<Value, Error> {
-    let Value::Object(fields) = metadata else {
-        return Err(Error::InvalidRequest(format!(
-            "metadata must be an object, got {metadata}"
-        )));
-    };
-    match fields.get("user_id") {
-        None | Some(Value::Null) => Ok(json!({})),
-        Some(Value::String(user_id)) => Ok(json!({"user_id": user_id})),
-        Some(other) => Err(Error::InvalidRequest(format!(
-            "metadata.user_id must be a string, got {other}"
-        ))),
-    }
-}
-
-fn with_reasoning_auto_summary(thinking: Option<Value>, enabled: bool) -> Option<Value> {
-    let Some(Value::Object(thinking)) = thinking else {
-        return thinking;
-    };
-    if !enabled || thinking.get("type").and_then(Value::as_str) == Some("disabled") {
-        return Some(Value::Object(thinking));
-    }
-    Some(Value::Object(
-        thinking
-            .into_iter()
-            .filter(|(key, _)| key != "display")
-            .chain([("display".to_string(), json!("summarized"))])
-            .collect(),
-    ))
-}
-
 fn with_default_headers(
     headers: Vec<(String, String)>,
     defaults: &[(&str, &str)],
@@ -186,192 +163,103 @@ fn with_default_headers(
 
 #[cfg(test)]
 mod tests {
+    use litellm_types::utils::ProviderSpecificHeaders;
     use rstest::{fixture, rstest};
+    use serde_json::json;
 
     use super::*;
-
-    fn messages(value: Value) -> Vec<AnthropicMessage> {
-        serde_json::from_value(value).unwrap()
-    }
-
-    fn request(body: Value) -> AnthropicMessagesRequest {
-        serde_json::from_value(body).unwrap()
-    }
+    use crate::messages::types::MessagesShaping;
 
     #[fixture]
     fn shaping() -> MessagesShaping {
         MessagesShaping::default()
     }
 
+    fn prepare(request: MessagesRequest<'_>) -> Result<ProviderMessagesRequest, Error> {
+        prepare_with_secrets(request, &|_: &str| None)
+    }
+
+    fn prepare_with_secrets(
+        request: MessagesRequest<'_>,
+        secrets: &dyn Lookup,
+    ) -> Result<ProviderMessagesRequest, Error> {
+        let resolved = resolve_provider(request.model, request.custom_llm_provider)?;
+        prepare_provider_request(request, resolved, secrets)
+    }
+
+    #[rstest]
+    #[case::api_key(
+        &[("ANTHROPIC_API_KEY", "sk-secret")],
+        &[("x-api-key", "sk-secret")],
+        "https://api.anthropic.com/v1/messages"
+    )]
+    #[case::auth_token(
+        &[("ANTHROPIC_AUTH_TOKEN", "token")],
+        &[("authorization", "Bearer token")],
+        "https://api.anthropic.com/v1/messages"
+    )]
+    #[case::api_base(
+        &[("ANTHROPIC_API_KEY", "sk-secret"), ("ANTHROPIC_API_BASE", "https://gateway.test")],
+        &[("x-api-key", "sk-secret")],
+        "https://gateway.test/v1/messages"
+    )]
+    #[case::sdk_base_url(
+        &[("ANTHROPIC_API_KEY", "sk-secret"), ("ANTHROPIC_BASE_URL", "https://sdk.test")],
+        &[("x-api-key", "sk-secret")],
+        "https://sdk.test/v1/messages"
+    )]
+    fn credentials_and_base_come_from_the_resolved_secrets(
+        shaping: MessagesShaping,
+        #[case] secrets: &[(&str, &str)],
+        #[case] expected_auth: &[(&str, &str)],
+        #[case] expected_url: &str,
+    ) {
+        let lookup = |name: &str| {
+            secrets
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        };
+        let prepared = prepare_with_secrets(
+            MessagesRequest {
+                model: "claude-test",
+                body: json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+                api_key: None,
+                api_base: None,
+                custom_llm_provider: Some("anthropic"),
+                extra_headers: None,
+                provider_specific_header: None,
+                timeout: None,
+                shaping,
+            },
+            &lookup,
+        )
+        .unwrap();
+        let auth: Vec<(&str, &str)> = prepared
+            .upstream_headers
+            .iter()
+            .filter(|(name, _)| matches!(name.as_str(), "x-api-key" | "authorization"))
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        assert_eq!(
+            (auth.as_slice(), prepared.url.as_str()),
+            (expected_auth, expected_url)
+        );
+    }
+
     fn prepared_body(body: Value, shaping: MessagesShaping) -> Result<Value, Error> {
-        prepare_provider_request(MessagesRequest {
+        prepare(MessagesRequest {
             model: "anthropic/claude-test",
             body,
             api_key: Some("sk-test"),
             api_base: Some("https://anthropic.test"),
             custom_llm_provider: Some("anthropic"),
             extra_headers: None,
+            provider_specific_header: None,
             timeout: None,
             shaping,
         })
         .map(|prepared| prepared.body)
-    }
-
-    #[rstest]
-    #[case::empty_text_next_to_a_tool_use(
-        json!([{"role": "assistant", "content": [
-            {"type": "text", "text": "   "},
-            {"type": "tool_use", "id": "t", "name": "B", "input": {}}
-        ]}]),
-        json!([{"role": "assistant", "content": [
-            {"type": "tool_use", "id": "t", "name": "B", "input": {}}
-        ]}]),
-    )]
-    #[case::cross_provider_tool_ids(
-        json!([
-            {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]}
-        ]),
-        json!([
-            {"role": "assistant", "content": [{"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}}]},
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "ok"}]}
-        ]),
-    )]
-    #[case::replayed_unencrypted_web_search_results(
-        json!([
-            {"role": "user", "content": "latest litellm version?"},
-            {"role": "assistant", "content": [
-                {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "latest litellm version"}},
-                {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1", "content": [{
-                    "type": "web_search_result",
-                    "url": "https://github.com/BerriAI/litellm/releases",
-                    "title": "Releases",
-                    "page_age": null,
-                    "encrypted_content": "",
-                    "snippet": "Latest release v1.95.0"
-                }]}
-            ]},
-            {"role": "user", "content": "which version?"}
-        ]),
-        json!([
-            {"role": "user", "content": "latest litellm version?"},
-            {"role": "assistant", "content": [{
-                "type": "text",
-                "text": "Web search results for 'latest litellm version':\n\nTitle: Releases\nURL: https://github.com/BerriAI/litellm/releases\nSnippet: Latest release v1.95.0"
-            }]},
-            {"role": "user", "content": "which version?"}
-        ]),
-    )]
-    #[case::replayed_provider_specific_fields(
-        json!([
-            {"role": "assistant", "content": [{
-                "type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"},
-                "provider_specific_fields": {"signature": "sig_abc"}
-            }]},
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Sunny"}]}
-        ]),
-        json!([
-            {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}}]},
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Sunny"}]}
-        ]),
-    )]
-    #[case::ids_are_normalized_before_web_search_results_flatten(
-        json!([
-            {"role": "user", "content": "run it"},
-            {"role": "assistant", "content": [
-                {"type": "thinking", "thinking": "", "signature": "sig"},
-                {"type": "text", "text": ""},
-                {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}, "provider_specific_fields": {"x": 1}},
-                {"type": "server_tool_use", "id": "srv.1", "name": "web_search", "input": {"query": "q"}, "provider_specific_fields": {"x": 2}},
-                {"type": "web_search_tool_result", "tool_use_id": "srv.1", "provider_specific_fields": {"x": 3}, "content": [
-                    {"type": "web_search_result", "url": "u", "title": "", "encrypted_content": "", "provider_specific_fields": {"x": 4}}
-                ]}
-            ]},
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
-            {"role": "assistant", "content": [{"type": "text", "text": " "}]}
-        ]),
-        json!([
-            {"role": "user", "content": "run it"},
-            {"role": "assistant", "content": [
-                {"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}},
-                {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {"query": "q"}},
-                {"type": "text", "text": "Web search results:\n\nURL: u"}
-            ]},
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "ok"}]}
-        ]),
-    )]
-    fn sanitize_messages_cleans_replayed_history(#[case] history: Value, #[case] expected: Value) {
-        assert_eq!(
-            serde_json::to_value(sanitize_messages(messages(history))).unwrap(),
-            expected
-        );
-    }
-
-    #[rstest]
-    #[case::keeps_only_user_id(json!({"user_id": "u-1", "trace_id": "internal"}), Ok(json!({"user_id": "u-1"})))]
-    #[case::null_user_id(json!({"user_id": null, "trace_id": "internal"}), Ok(json!({})))]
-    #[case::no_user_id(json!({"trace_id": "internal"}), Ok(json!({})))]
-    #[case::empty(json!({}), Ok(json!({})))]
-    #[case::numeric_user_id(
-        json!({"user_id": 123}),
-        Err(Error::InvalidRequest("metadata.user_id must be a string, got 123".to_string())),
-    )]
-    #[case::boolean_user_id(
-        json!({"user_id": true}),
-        Err(Error::InvalidRequest("metadata.user_id must be a string, got true".to_string())),
-    )]
-    #[case::not_an_object(
-        json!(["u-1"]),
-        Err(Error::InvalidRequest(r#"metadata must be an object, got ["u-1"]"#.to_string())),
-    )]
-    fn allowed_metadata_passes_only_a_string_user_id(
-        #[case] metadata: Value,
-        #[case] expected: Result<Value, Error>,
-    ) {
-        assert_eq!(allowed_metadata(&metadata), expected);
-    }
-
-    #[rstest]
-    #[case::adaptive(
-        Some(json!({"type": "adaptive", "budget_tokens": 5000})),
-        true,
-        Some(json!({"type": "adaptive", "budget_tokens": 5000, "display": "summarized"})),
-    )]
-    #[case::enabled(
-        Some(json!({"type": "enabled", "budget_tokens": 10000})),
-        true,
-        Some(json!({"type": "enabled", "budget_tokens": 10000, "display": "summarized"})),
-    )]
-    #[case::no_type(Some(json!({})), true, Some(json!({"display": "summarized"})))]
-    #[case::display_omitted_is_overridden(
-        Some(json!({"type": "enabled", "budget_tokens": 10000, "display": "omitted"})),
-        true,
-        Some(json!({"type": "enabled", "budget_tokens": 10000, "display": "summarized"})),
-    )]
-    #[case::display_summarized_is_kept(
-        Some(json!({"type": "enabled", "display": "summarized"})),
-        true,
-        Some(json!({"type": "enabled", "display": "summarized"})),
-    )]
-    #[case::disabled_thinking(Some(json!({"type": "disabled"})), true, Some(json!({"type": "disabled"})))]
-    #[case::flag_off(
-        Some(json!({"type": "enabled", "budget_tokens": 10000})),
-        false,
-        Some(json!({"type": "enabled", "budget_tokens": 10000})),
-    )]
-    #[case::flag_off_keeps_callers_display(
-        Some(json!({"type": "enabled", "display": "omitted"})),
-        false,
-        Some(json!({"type": "enabled", "display": "omitted"})),
-    )]
-    #[case::no_thinking(None, true, None)]
-    #[case::non_object_thinking(Some(json!("enabled")), true, Some(json!("enabled")))]
-    fn reasoning_auto_summary_marks_active_thinking_as_summarized(
-        #[case] thinking: Option<Value>,
-        #[case] enabled: bool,
-        #[case] expected: Option<Value>,
-    ) {
-        assert_eq!(with_reasoning_auto_summary(thinking, enabled), expected);
     }
 
     #[rstest]
@@ -400,39 +288,6 @@ mod tests {
         assert_eq!(
             with_default_headers(owned(forwarded), defaults),
             owned(expected)
-        );
-    }
-
-    #[rstest]
-    fn sanitize_request_shapes_messages_metadata_and_thinking(shaping: MessagesShaping) {
-        let sanitized = sanitize_request(
-            request(json!({
-                "model": "m",
-                "messages": [{"role": "assistant", "content": [
-                    {"type": "text", "text": ""},
-                    {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}
-                ]}],
-                "metadata": {"user_id": "u", "trace_id": "t"},
-                "thinking": {"type": "enabled", "budget_tokens": 1024},
-                "safeguards": [{"type": "dangerous_tool_use"}]
-            })),
-            &MessagesShaping {
-                reasoning_auto_summary: true,
-                ..shaping
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            serde_json::to_value(sanitized).unwrap(),
-            json!({
-                "model": "m",
-                "messages": [{"role": "assistant", "content": [
-                    {"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}}
-                ]}],
-                "metadata": {"user_id": "u"},
-                "thinking": {"type": "enabled", "budget_tokens": 1024, "display": "summarized"},
-                "safeguards": [{"type": "dangerous_tool_use"}]
-            })
         );
     }
 
@@ -496,6 +351,54 @@ mod tests {
             prepared_body(with_messages(fields), shaping),
             Ok(with_messages(expected_fields))
         );
+    }
+
+    #[rstest]
+    #[case::model_prefix_picks_the_provider(
+        "azure_ai/claude-test",
+        None,
+        &[("x-priority", "extra"), ("x-scoped", "azure_ai")]
+    )]
+    #[case::explicit_provider(
+        "claude-test",
+        Some("anthropic"),
+        &[("x-priority", "scoped"), ("x-scoped", "anthropic")]
+    )]
+    #[case::provider_prefix_on_an_anthropic_model(
+        "anthropic/claude-test",
+        None,
+        &[("x-priority", "scoped"), ("x-scoped", "anthropic")]
+    )]
+    fn provider_specific_headers_follow_the_resolved_provider(
+        shaping: MessagesShaping,
+        #[case] model: &str,
+        #[case] custom_llm_provider: Option<&str>,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let configured: ProviderSpecificHeaders = serde_json::from_value(json!([
+            {"custom_llm_provider": "azure_ai", "extra_headers": {"x-scoped": "azure_ai"}},
+            {"custom_llm_provider": "anthropic", "extra_headers": {"x-scoped": "anthropic", "x-priority": "scoped"}}
+        ]))
+        .unwrap();
+        let prepared = prepare(MessagesRequest {
+            model,
+            body: json!({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            api_key: Some("sk-test"),
+            api_base: Some("https://resource.services.ai.azure.com"),
+            custom_llm_provider,
+            extra_headers: Some(serde_json::from_value(json!({"x-priority": "extra"})).unwrap()),
+            provider_specific_header: Some(configured),
+            timeout: None,
+            shaping,
+        })
+        .unwrap();
+        let caller_headers: Vec<(&str, &str)> = prepared
+            .upstream_headers
+            .iter()
+            .filter(|(name, _)| matches!(name.as_str(), "x-priority" | "x-scoped"))
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        assert_eq!(caller_headers, expected);
     }
 
     #[rstest]

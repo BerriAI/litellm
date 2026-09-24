@@ -3,7 +3,7 @@ use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessage
 use serde_json::{Map, Value, json};
 
 use super::{
-    headers::{Headers, authenticate, with_feature_betas},
+    headers::{authenticate, with_feature_betas},
     thinking::{ThinkingBudgets, ThinkingContext, translate_thinking},
 };
 use crate::{
@@ -13,13 +13,14 @@ use crate::{
     },
     base_llm::{
         anthropic_messages::transformation::{
-            BaseAnthropicMessagesConfig, MessagesTransformContext,
+            BaseAnthropicMessagesConfig, Headers, MessagesTransformContext,
         },
         chat::transformation::Error,
     },
 };
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
+const ANTHROPIC_AUTH_TOKEN_ENV: &str = "ANTHROPIC_AUTH_TOKEN";
 const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
 const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 const DEFAULT_ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
@@ -94,6 +95,15 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         resolve_anthropic_api_key(api_key, env_lookup).map_err(Error::from)
+    }
+
+    fn secret_names(&self) -> &'static [&'static str] {
+        &[
+            ANTHROPIC_API_KEY_ENV,
+            ANTHROPIC_AUTH_TOKEN_ENV,
+            ANTHROPIC_API_BASE_ENV,
+            ANTHROPIC_BASE_URL_ENV,
+        ]
     }
 
     fn authenticate(
@@ -855,5 +865,27 @@ mod tests {
                 ("content-type", "application/json"),
             ]
         );
+    }
+
+    #[test]
+    fn secret_names_cover_every_credential_and_base_lookup() {
+        let requested = std::cell::RefCell::new(Vec::<String>::new());
+        let record = |name: &str| -> Option<String> {
+            requested.borrow_mut().push(name.to_string());
+            None
+        };
+        let _ = ANTHROPIC_MESSAGES_CONFIG.authenticate(Vec::new(), None, &record);
+        let _ = ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
+        let requested = requested.into_inner();
+        assert!(!requested.is_empty());
+        let undeclared: Vec<&String> = requested
+            .iter()
+            .filter(|name| {
+                !ANTHROPIC_MESSAGES_CONFIG
+                    .secret_names()
+                    .contains(&name.as_str())
+            })
+            .collect();
+        assert_eq!(undeclared, Vec::<&String>::new());
     }
 }

@@ -1,6 +1,8 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
+use futures_util::future::BoxFuture;
 use litellm_http::request::{has_bearer_auth, has_header};
+use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::{Map, Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -11,8 +13,130 @@ use super::{
     Error,
     common_utils::{messages_provider_config, string_headers, truncate_error_body},
     messages,
+    route::{LocalMessagesHost, MessagesCall, MessagesOutput, messages_machine},
 };
 use crate::messages::types::{MessagesRequest, MessagesShaping};
+
+struct RecordingSecrets {
+    values: Vec<(&'static str, String)>,
+    fails: bool,
+    requested: std::sync::Mutex<Vec<String>>,
+}
+
+impl RecordingSecrets {
+    fn new(values: Vec<(&'static str, String)>, fails: bool) -> Self {
+        Self {
+            values,
+            fails,
+            requested: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl SecretSource for RecordingSecrets {
+    fn get_secret_str<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<SecretValue>, litellm_secrets::Error>> {
+        Box::pin(async move {
+            self.requested.lock().unwrap().push(name.to_string());
+            if self.fails {
+                return Err(litellm_secrets::Error::ManagedSecretMissing);
+            }
+            Ok(self
+                .values
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| SecretValue::new(value.clone())))
+        })
+    }
+}
+
+fn secrets_call() -> MessagesCall {
+    let Value::Object(body) = json!({
+        "model": "claude-sonnet-4-5",
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "hi"}]
+    }) else {
+        unreachable!("literal object")
+    };
+    MessagesCall {
+        model: "claude-sonnet-4-5".into(),
+        body,
+        api_key: None,
+        api_base: None,
+        custom_llm_provider: Some("anthropic".into()),
+        extra_headers: None,
+        provider_specific_header: None,
+        timeout: Some(Duration::from_secs(5)),
+        shaping: MessagesShaping::default(),
+    }
+}
+
+#[tokio::test]
+async fn route_reads_the_provider_credential_and_base_from_the_secret_source() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response_body = r#"{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        socket
+            .write_all(write_response(response_body).as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+    let secrets = Arc::new(RecordingSecrets::new(
+        vec![
+            ("ANTHROPIC_API_KEY", "sk-from-manager".to_string()),
+            ("ANTHROPIC_BASE_URL", format!("http://{addr}")),
+        ],
+        false,
+    ));
+
+    let output = litellm_host::run::run(
+        messages_machine(secrets.clone()),
+        &LocalMessagesHost::new(secrets_call()),
+    )
+    .await
+    .expect("messages request succeeds");
+
+    assert!(matches!(output, MessagesOutput::Message(_)));
+    let request = server.await.expect("server task completes");
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("x-api-key: sk-from-manager"),
+        "{request}"
+    );
+    let requested = secrets.requested.lock().unwrap().clone();
+    assert_eq!(
+        requested,
+        messages_provider_config("anthropic")
+            .unwrap()
+            .secret_names()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn route_surfaces_a_secret_manager_failure_before_the_call() {
+    let Err(error) = litellm_host::run::run(
+        messages_machine(Arc::new(RecordingSecrets::new(Vec::new(), true))),
+        &LocalMessagesHost::new(secrets_call()),
+    )
+    .await
+    else {
+        panic!("a secret manager failure fails the call");
+    };
+    assert!(
+        matches!(&error, Error::Secret(source) if matches!(source.source_error(), litellm_secrets::Error::ManagedSecretMissing)),
+        "{error:?}"
+    );
+}
 
 async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
@@ -158,6 +282,7 @@ async fn messages_round_trip_builds_azure_request_and_passes_response_through() 
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("azure_ai"),
         extra_headers: None,
+        provider_specific_header: None,
         timeout: Some(Duration::from_secs(5)),
         shaping: MessagesShaping::default(),
     })
@@ -215,6 +340,7 @@ async fn messages_round_trip_builds_native_anthropic_request() {
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("anthropic"),
         extra_headers: None,
+        provider_specific_header: None,
         timeout: Some(Duration::from_secs(5)),
         shaping: MessagesShaping::default(),
     })
@@ -269,6 +395,7 @@ async fn messages_does_not_duplicate_auth_when_x_api_key_supplied() {
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("azure_ai"),
         extra_headers: Some(headers),
+        provider_specific_header: None,
         timeout: Some(Duration::from_secs(5)),
         shaping: MessagesShaping::default(),
     })
@@ -324,6 +451,7 @@ async fn messages_forwards_entra_id_bearer_without_requiring_api_key() {
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("azure_ai"),
         extra_headers: Some(headers),
+        provider_specific_header: None,
         timeout: Some(Duration::from_secs(5)),
         shaping: MessagesShaping::default(),
     })
@@ -349,6 +477,7 @@ async fn messages_requires_auth_when_no_key_and_no_header() {
         api_base: Some("http://127.0.0.1:1"),
         custom_llm_provider: Some("azure_ai"),
         extra_headers: None,
+        provider_specific_header: None,
         timeout: Some(Duration::from_millis(50)),
         shaping: MessagesShaping::default(),
     })
@@ -388,6 +517,7 @@ async fn messages_ignores_malformed_authorization_and_uses_api_key() {
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("azure_ai"),
         extra_headers: Some(headers),
+        provider_specific_header: None,
         timeout: Some(Duration::from_secs(5)),
         shaping: MessagesShaping::default(),
     })
@@ -430,6 +560,7 @@ async fn messages_maps_provider_error_status_to_http_error() {
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("azure_ai"),
         extra_headers: None,
+        provider_specific_header: None,
         timeout: Some(Duration::from_secs(5)),
         shaping: MessagesShaping::default(),
     })
@@ -451,6 +582,7 @@ async fn messages_rejects_unsupported_provider() {
         api_base: Some("http://127.0.0.1:1"),
         custom_llm_provider: Some("openai"),
         extra_headers: None,
+        provider_specific_header: None,
         timeout: Some(Duration::from_millis(50)),
         shaping: MessagesShaping::default(),
     })

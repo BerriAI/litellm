@@ -11,7 +11,7 @@ use crate::{
     },
     base_llm::{
         anthropic_messages::transformation::{
-            BaseAnthropicMessagesConfig, MessagesAuthStrategy, MessagesTransformContext,
+            BaseAnthropicMessagesConfig, Headers, MessagesAuthStrategy, MessagesTransformContext,
         },
         chat::transformation::Error,
     },
@@ -76,6 +76,10 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
         resolve_azure_api_key(api_key, env_lookup)
     }
 
+    fn secret_names(&self) -> &'static [&'static str] {
+        &[AZURE_API_KEY_ENV, AZURE_API_BASE_ENV]
+    }
+
     fn auth_strategy(&self) -> MessagesAuthStrategy {
         self.anthropic.auth_strategy()
     }
@@ -86,6 +90,10 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         self.anthropic.default_headers()
+    }
+
+    fn request_headers(&self, headers: Headers, request: &AnthropicMessagesRequest) -> Headers {
+        self.anthropic.request_headers(headers, request)
     }
 }
 
@@ -520,6 +528,57 @@ mod tests {
         assert!(err.is_data());
     }
 
+    #[rstest::rstest]
+    #[case::compact_context_management_edit(
+        json!({"context_management": {"edits": [{"type": "compact_20260112"}]}}),
+        &[],
+        &[("x-api-key", "k"), ("anthropic-beta", "compact-2026-01-12")]
+    )]
+    #[case::forwarded_beta_merged_with_structured_output(
+        json!({"output_config": {"format": {"type": "json_schema"}}}),
+        &[("anthropic-beta", "web-search-2025-03-05")],
+        &[("x-api-key", "k"), ("anthropic-beta", "structured-outputs-2025-11-13,web-search-2025-03-05")]
+    )]
+    #[case::no_feature_needs_a_beta(json!({}), &[], &[("x-api-key", "k")])]
+    fn request_headers_carry_the_anthropic_feature_betas(
+        #[case] fields: serde_json::Value,
+        #[case] forwarded: &[(&str, &str)],
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let pairs = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect()
+        };
+        let serde_json::Value::Object(fields) = fields else {
+            panic!("case fields are an object")
+        };
+        let request = request_from(serde_json::Value::Object(
+            [
+                ("model".to_string(), json!("claude-sonnet")),
+                ("max_tokens".to_string(), json!(16)),
+                (
+                    "messages".to_string(),
+                    json!([{"role": "user", "content": "hi"}]),
+                ),
+            ]
+            .into_iter()
+            .chain(fields)
+            .collect(),
+        ));
+        assert_eq!(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG.request_headers(
+                pairs(&[("x-api-key", "k")])
+                    .into_iter()
+                    .chain(pairs(forwarded))
+                    .collect(),
+                &request
+            ),
+            pairs(expected)
+        );
+    }
+
     #[test]
     fn transform_response_passes_through() {
         let response: AnthropicMessagesResponse = serde_json::from_value(json!({
@@ -540,5 +599,27 @@ mod tests {
         assert_eq!(value["stop_reason"], json!("end_turn"));
         assert_eq!(value["stop_sequence"], json!(null));
         assert_eq!(value["content"][0]["text"], json!("hello"));
+    }
+
+    #[test]
+    fn secret_names_cover_every_credential_and_base_lookup() {
+        let requested = std::cell::RefCell::new(Vec::<String>::new());
+        let record = |name: &str| -> Option<String> {
+            requested.borrow_mut().push(name.to_string());
+            None
+        };
+        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.authenticate(Vec::new(), None, &record);
+        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
+        let requested = requested.into_inner();
+        assert!(!requested.is_empty());
+        let undeclared: Vec<&String> = requested
+            .iter()
+            .filter(|name| {
+                !AZURE_ANTHROPIC_MESSAGES_CONFIG
+                    .secret_names()
+                    .contains(&name.as_str())
+            })
+            .collect();
+        assert_eq!(undeclared, Vec::<&String>::new());
     }
 }

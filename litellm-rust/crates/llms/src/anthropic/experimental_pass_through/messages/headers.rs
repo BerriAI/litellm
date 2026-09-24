@@ -1,12 +1,16 @@
 use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
 use serde_json::Value;
 
-use crate::anthropic::{
-    ANTHROPIC_OAUTH_TOKEN_PREFIX,
-    common_utils::{
-        ANTHROPIC_OAUTH_BETA_HEADER, beta, has_advisor_tool, is_anthropic_oauth_key,
-        is_tool_search_used, join_beta_values, requires_native_compaction_beta, split_beta_values,
+use crate::{
+    anthropic::{
+        ANTHROPIC_OAUTH_TOKEN_PREFIX,
+        common_utils::{
+            ANTHROPIC_OAUTH_BETA_HEADER, beta, has_advisor_tool, is_anthropic_oauth_key,
+            is_tool_search_used, join_beta_values, requires_native_compaction_beta,
+            split_beta_values,
+        },
     },
+    base_llm::anthropic_messages::transformation::Headers,
 };
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -15,8 +19,6 @@ const BETA_HEADER: &str = "anthropic-beta";
 const AUTHORIZATION: &str = "authorization";
 const API_KEY_HEADER: &str = "x-api-key";
 const DIRECT_BROWSER_ACCESS_HEADER: &str = "anthropic-dangerous-direct-browser-access";
-
-pub type Headers = Vec<(String, String)>;
 
 fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers

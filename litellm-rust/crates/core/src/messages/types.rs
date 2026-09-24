@@ -4,6 +4,7 @@ use litellm_llms::{
     anthropic::common_utils::AnthropicModelCapabilities,
     base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
 };
+use litellm_types::utils::ProviderSpecificHeaders;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -26,6 +27,7 @@ pub struct MessagesRequest<'a> {
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
+    pub provider_specific_header: Option<ProviderSpecificHeaders>,
     pub timeout: Option<Duration>,
     pub shaping: MessagesShaping,
 }
