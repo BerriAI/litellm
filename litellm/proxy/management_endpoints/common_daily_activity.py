@@ -976,7 +976,12 @@ def _build_aggregated_sql_query(
 
     marker_params: Final = () if global_rollup_through is None else (global_rollup_through,)
     cursor_params: Final = () if cursor is None else (cursor.spend, cursor.api_key)
-    return sql_query, [*where_params, PTU_SENTINEL_API_KEY, *marker_params, *cursor_params]
+    return sql_query, [  # mutable-ok: prisma query_raw takes ordered $N params; tests assert list equality
+        *where_params,
+        PTU_SENTINEL_API_KEY,
+        *marker_params,
+        *cursor_params,
+    ]
 
 
 def _build_entity_rollup_sql_query(
