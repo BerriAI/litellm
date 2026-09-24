@@ -127,7 +127,6 @@ def test_flux2_flex_model_info():
     assert model_info["max_input_tokens"] == 32000
     assert model_info["max_tokens"] == 32000
     assert model_info["supported_endpoints"] == ["/v1/images/generations", "/v1/images/edits"]
-    assert catalog_info["input_cost_per_reference_pixel"] == catalog_info["input_cost_per_pixel"]
     assert catalog_info["input_cost_per_pixel"] * 1024 * 1024 == pytest.approx(0.05), (
         "Azure Retail Prices API, product 'Azure BFL Flux Models', meters 'Flex Megapixel' and "
         "'Flex Ref Megapixel' are $0.05 per MP where 1 MP = 1024x1024 pixels; confirmed against "

@@ -57,8 +57,8 @@ def cost_calculator(
 
     num_images: Final = n if n is not None else len(image_response.data or ())
     generated_cost: Final = _generated_cost(resolved, num_images, _generated_pixels(optional_params, size))
-    reference_rate: Final = _rate(resolved, "input_cost_per_reference_pixel") or 0.0
-    reference_cost: Final = reference_rate * (image_response.reference_pixels or 0)
+    per_pixel: Final = _rate(resolved, "input_cost_per_pixel") or 0.0
+    reference_cost: Final = per_pixel * (image_response.reference_pixels or 0)
     return generated_cost + reference_cost
 
 

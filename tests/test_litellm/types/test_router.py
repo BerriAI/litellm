@@ -229,25 +229,7 @@ def test_model_info_rejects_offset_aware_access_window_times():
     with pytest.raises(ValidationError):
         ModelInfo(
             id="x",
-            access_windows=[{"start": "22:00+05:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}],
+            access_windows=[
+                {"start": "22:00+05:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}
+            ],
         )
-
-
-def test_model_group_info_surfaces_input_cost_per_reference_pixel():
-    from typing import Final
-
-    from litellm import Router
-
-    configured_rate: Final = 3e-7
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "flux-edit",
-                "litellm_params": {"model": "azure_ai/FLUX.2-flex"},
-                "model_info": {"id": "dep-flux-1", "input_cost_per_reference_pixel": configured_rate},
-            }
-        ]
-    )
-    group: Final = router.get_model_group_info("flux-edit")
-    assert group is not None
-    assert group.input_cost_per_reference_pixel == configured_rate

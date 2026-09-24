@@ -319,7 +319,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_image_token_batches: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_pixel: ReadOnly[float | None]
-    input_cost_per_reference_pixel: ReadOnly[float | None]
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
     input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
@@ -3712,7 +3711,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_1024: float | None = None
     output_cost_per_image_1536: float | None = None
     input_cost_per_pixel: float | None = None
-    input_cost_per_reference_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
     # Include all ModelInfoBase fields as optional
