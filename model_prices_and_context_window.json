@@ -59469,6 +59469,7 @@
     },
     "fireworks_ai/glm-5p2-fast": {
         "cache_read_input_token_cost": 2.1e-07,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 2.1e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -59698,6 +59699,7 @@
     },
     "fireworks_ai/accounts/fireworks/routers/glm-5p2-fast": {
         "cache_read_input_token_cost": 2.1e-07,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 2.1e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
