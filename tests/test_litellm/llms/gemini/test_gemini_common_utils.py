@@ -1,8 +1,12 @@
+import json
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
+from litellm.types.utils import TokenCountResponse
 
 
 class TestGeminiModelInfo:
@@ -158,8 +162,127 @@ class TestGoogleAIStudioTokenCounter:
 
             # Verify the mock was called correctly
             mock_acount_tokens.assert_called_once_with(
-                model=model_to_use, contents=contents
+                model=model_to_use, contents=contents, client=None
             )
+
+    @staticmethod
+    def _counter_with_upstream(upstream_response: httpx.Response) -> tuple[GoogleAIStudioTokenCounter, list[httpx.Request]]:
+        seen_requests: list[httpx.Request] = []
+
+        def upstream(request: httpx.Request) -> httpx.Response:
+            seen_requests.append(request)
+            return upstream_response
+
+        client = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+        return GoogleAIStudioTokenCounter(client=client), seen_requests
+
+    @pytest.mark.asyncio
+    async def test_anthropic_messages_are_sent_as_gemini_contents_with_system_and_tools(self):
+        counter, seen = self._counter_with_upstream(httpx.Response(200, json={"totalTokens": 42}))
+
+        result = await counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            contents=None,
+            deployment={"litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "test-key"}},
+            request_model="gemini-flash",
+            tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}}],
+            system="Be terse",
+        )
+
+        assert len(seen) == 1, seen
+        assert seen[0].url.path == "/v1beta/models/gemini-2.5-flash:countTokens"
+        assert seen[0].headers["x-goog-api-key"] == "test-key"
+        assert json.loads(seen[0].content) == {
+            "generateContentRequest": {
+                "model": "models/gemini-2.5-flash",
+                "contents": [{"role": "user", "parts": [{"text": "What is the weather in Paris?"}]}],
+                "systemInstruction": {"parts": [{"text": "Be terse"}]},
+                "tools": [
+                    {"function_declarations": [{"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}]}
+                ],
+            }
+        }
+        assert result == TokenCountResponse(
+            total_tokens=42,
+            request_model="gemini-flash",
+            model_used="gemini-2.5-flash",
+            tokenizer_type="",
+            original_response={"totalTokens": 42},
+        )
+
+    @pytest.mark.asyncio
+    async def test_native_contents_are_sent_unchanged(self):
+        counter, seen = self._counter_with_upstream(httpx.Response(200, json={"totalTokens": 3}))
+        contents = [{"role": "user", "parts": [{"text": "Hello world"}]}]
+
+        result = await counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=contents,
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model="gemini-flash",
+        )
+
+        assert json.loads(seen[0].content) == {"contents": contents}
+        assert result is not None and result.total_tokens == 3
+
+    @pytest.mark.asyncio
+    async def test_provider_rejection_is_returned_as_error_value_not_raised(self):
+        counter, _ = self._counter_with_upstream(
+            httpx.Response(400, json={"error": {"message": "contents is not specified"}})
+        )
+
+        result = await counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model="gemini-flash",
+        )
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 400
+        assert result.error_message is not None and "contents is not specified" in result.error_message
+
+    @pytest.mark.asyncio
+    async def test_success_without_total_tokens_is_an_error_value_not_zero(self):
+        counter, _ = self._counter_with_upstream(httpx.Response(200, json={"promptTokensDetails": []}))
+
+        result = await counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model="gemini-flash",
+        )
+
+        assert result == TokenCountResponse(
+            total_tokens=0,
+            request_model="gemini-flash",
+            model_used="gemini-2.5-flash",
+            tokenizer_type="gemini_api",
+            original_response={"promptTokensDetails": []},
+            error=True,
+            error_message="Google Gen AI Studio countTokens response has no totalTokens",
+            status_code=502,
+        )
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_count_skips_the_provider_call(self):
+        counter, seen = self._counter_with_upstream(httpx.Response(200, json={"totalTokens": 0}))
+
+        result = await counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model="gemini-flash",
+        )
+
+        assert result is None
+        assert seen == []
 
     def test_clean_contents_for_gemini_api_removes_id_field(self):
         """Test that _clean_contents_for_gemini_api removes unsupported 'id' field from function responses"""

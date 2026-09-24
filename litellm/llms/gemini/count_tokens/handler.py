@@ -3,7 +3,8 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.types.llms.vertex_ai import SystemInstructions, Tools
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
@@ -84,6 +85,9 @@ class GoogleAIStudioTokenCounter:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
+        system_instruction: SystemInstructions | None = None,
+        tools: list[Tools] | None = None,
+        client: AsyncHTTPHandler | None = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         """
@@ -96,6 +100,9 @@ class GoogleAIStudioTokenCounter:
             api_key: Optional Google API key (will fall back to environment)
             api_base: Optional API base URL (defaults to Google Gen AI Studio)
             timeout: Optional timeout for the request
+            system_instruction: Optional Gemini systemInstruction, counted alongside contents
+            tools: Optional Gemini tool declarations, counted alongside contents
+            client: Optional HTTP client, defaults to the shared Gemini client
             **kwargs: Additional parameters
 
         Returns:
@@ -114,9 +121,8 @@ class GoogleAIStudioTokenCounter:
 
         Raises:
             ValueError: If API key is missing
-            litellm.APIError: If the API call fails
+            litellm.APIError: If the API call fails or returns a non-JSON body
             litellm.APIConnectionError: If the connection fails
-            Exception: For any other unexpected errors
         """
 
         # Prepare headers
@@ -130,22 +136,25 @@ class GoogleAIStudioTokenCounter:
 
         # Prepare request body - clean up contents to remove unsupported fields
         cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
-        request_body: Final = {"contents": cleaned_contents}
+        request_body: Final = (
+            {"contents": cleaned_contents}
+            if system_instruction is None and tools is None
+            else {
+                "generateContentRequest": {
+                    "model": f"models/{model}",
+                    "contents": cleaned_contents,
+                    **({"systemInstruction": system_instruction} if system_instruction is not None else {}),
+                    **({"tools": tools} if tools is not None else {}),
+                }
+            }
+        )
 
-        async_httpx_client: Final = get_async_httpx_client(
+        async_httpx_client: Final = client or get_async_httpx_client(
             llm_provider=LlmProviders.GEMINI,
         )
 
         try:
             response: Final = await async_httpx_client.post(url=url, headers=headers, json=request_body)
-
-            # Check for HTTP errors
-            response.raise_for_status()
-
-            # Parse response
-            result: Final = response.json()
-            return result
-
         except httpx.HTTPStatusError as e:
             error_msg = f"Google Gen AI Studio API error: {e.response.status_code} - {e.response.text}"
             raise litellm.APIError(
@@ -157,6 +166,14 @@ class GoogleAIStudioTokenCounter:
         except httpx.RequestError as e:
             error_msg = f"Request to Google Gen AI Studio failed: {e}"
             raise litellm.APIConnectionError(message=error_msg, llm_provider="gemini", model=model) from e
-        except Exception as e:
-            error_msg = f"Unexpected error during token counting: {e}"
-            raise Exception(error_msg) from e
+
+        try:
+            result: Final = response.json()
+        except ValueError as e:
+            raise litellm.APIError(
+                message=f"Google Gen AI Studio API returned a non-JSON body: {response.text}",
+                llm_provider="gemini",
+                model=model,
+                status_code=response.status_code,
+            ) from e
+        return result

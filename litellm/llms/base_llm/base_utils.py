@@ -27,7 +27,13 @@ class BaseTokenCounter(ABC):
         tools: list[dict[str, Any]] | None = None,
         system: Any | None = None,
     ) -> TokenCountResponse | None:
-        pass
+        """Count tokens with the provider's API.
+
+        Exactly one of `messages` (Anthropic or OpenAI chat shape, translated by the counter) or `contents`
+        (provider-native shape, forwarded as is) is set. Provider failures are returned as
+        `TokenCountResponse(error=True, status_code=...)`, never raised, so the proxy can decide between the
+        local fallback and surfacing the provider status. `None` means the counter has nothing to count
+        """
 
     @abstractmethod
     def should_use_token_counting_api(

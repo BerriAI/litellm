@@ -29,7 +29,8 @@ from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
-from litellm.proxy.proxy_server import token_counter
+from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.proxy.proxy_server import _try_provider_token_count, token_counter
 from litellm.types.utils import TokenCountResponse
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
@@ -1065,6 +1066,108 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
             original_get_provider_token_counter
         )
         litellm.proxy.proxy_server.llm_router = original_router
+
+
+class _RaisingCounter(BaseTokenCounter):
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def should_use_token_counting_api(self, custom_llm_provider: str | None = None) -> bool:
+        return True
+
+    async def count_tokens(self, **kwargs) -> TokenCountResponse | None:
+        raise self.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_error, expected_code",
+    [
+        (
+            litellm.APIError(
+                status_code=400, message="contents is not specified", llm_provider="gemini", model="gemini-2.5-flash"
+            ),
+            "400",
+        ),
+        (litellm.APIConnectionError(message="connection refused", llm_provider="gemini", model="gemini-2.5-flash"), "500"),
+    ],
+)
+async def test_provider_counter_raising_litellm_error_falls_back_or_surfaces_provider_status(
+    provider_error, expected_code, monkeypatch
+):
+    counter = _RaisingCounter(provider_error)
+    call = dict(
+        provider_counter=counter,
+        custom_llm_provider="gemini",
+        model_to_use="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hello"}],
+        contents=None,
+        deployment={"litellm_params": {"model": "gemini/gemini-2.5-flash"}},
+        request_model="gemini-flash",
+    )
+
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    assert await _try_provider_token_count(**call) is None
+
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    with pytest.raises(ProxyException) as exc_info:
+        await _try_provider_token_count(**call)
+    assert exc_info.value.code == expected_code
+    assert provider_error.message in exc_info.value.message
+    assert exc_info.value.type == "token_counting_error"
+
+
+@pytest.mark.asyncio
+async def test_gemini_deployment_counts_anthropic_messages_through_provider(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
+
+    seen_bodies: list[dict] = []
+
+    def google_ai_studio(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen_bodies.append(body)
+        contents = body.get("contents") or body.get("generateContentRequest", {}).get("contents")
+        if not contents:
+            return httpx.Response(400, json={"error": {"message": "contents is not specified", "status": "INVALID_ARGUMENT"}})
+        return httpx.Response(200, json={"totalTokens": 17})
+
+    counter = GoogleAIStudioTokenCounter(client=AsyncHTTPHandler(transport=httpx.MockTransport(google_ai_studio)))
+    deployment = {"litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "test-key"}, "model_info": {}}
+    router = MagicMock()
+    router.async_get_available_deployment = AsyncMock(return_value=deployment)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "_get_provider_token_counter",
+        lambda deployment, model_to_use: (counter, "gemini-2.5-flash", "gemini"),
+    )
+
+    response = await token_counter(
+        request=TokenCountRequest(
+            model="gemini-flash",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            system="Be terse",
+            tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}}],
+        ),
+        call_endpoint=True,
+    )
+
+    assert seen_bodies == [
+        {
+            "generateContentRequest": {
+                "model": "models/gemini-2.5-flash",
+                "contents": [{"role": "user", "parts": [{"text": "What is the weather in Paris?"}]}],
+                "systemInstruction": {"parts": [{"text": "Be terse"}]},
+                "tools": [
+                    {"function_declarations": [{"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}]}
+                ],
+            }
+        }
+    ]
+    assert response.total_tokens == 17
+    assert response.error is False
+    assert response.model_used == "gemini-2.5-flash"
 
 
 @pytest.mark.asyncio
