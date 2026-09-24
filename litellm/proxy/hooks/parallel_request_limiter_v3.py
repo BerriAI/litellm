@@ -3765,13 +3765,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # in-memory check otherwise — single-worker protection still holds
             # even without Redis.
             # ----------------------------------------------------------------
-            configured_tpm_limits: Final = [
-                int(v)
+            ptu_raw_output_limit: Final = (
+                stash.ptu_ceiling.raw_output_token_limit() if stash.ptu_ceiling is not None else None
+            )
+            configured_tpm_limits: Final = tuple(
+                ptu_raw_output_limit
+                if d["key"] == PTU_TEAM_DESCRIPTOR_KEY and ptu_raw_output_limit is not None
+                else int(v)
                 for d in descriptors
                 if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
                 if v is not None
-            ]
+            )
             has_tpm_limits: Final = bool(configured_tpm_limits)
 
             # Populated on a successful combined-TPM reservation below, so the

@@ -25,6 +25,10 @@ class PTUTeamCeiling:
     output_to_input_ratio: float
     cached_input_ratio: float
 
+    def raw_output_token_limit(self) -> int:
+        """The ceiling expressed in unweighted tokens: what fits under it when every token is output."""
+        return max(1, int(self.tpm_limit / max(self.output_to_input_ratio, 1.0)))
+
 
 @dataclass(frozen=True, slots=True)
 class PTUShareFilterResult(Generic[_DeploymentT]):

@@ -17295,6 +17295,38 @@ def test_team_export_csv_columns_match_the_dashboard_client_layout():
     ]
 
 
+def test_team_export_csv_escapes_a_formula_shaped_team_id_like_the_alias():
+    import csv
+    import io
+
+    from litellm.proxy.management_endpoints.team_endpoints import _team_export_csv
+    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+
+    row: Final = TeamDailyActivityExportRow(
+        date="2026-06-01",
+        team_id="=HYPERLINK(\"https://example.com\")",
+        team_alias="=SUM(A1)",
+        api_key=None,
+        key_alias=None,
+        user_id=None,
+        user_email=None,
+        spend=0.0,
+        api_requests=0,
+        successful_requests=0,
+        failed_requests=0,
+        total_tokens=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
+
+    record: Final = next(csv.DictReader(io.StringIO(_team_export_csv("daily", (row,)))))
+
+    assert record["Team ID"] == "'=HYPERLINK(\"https://example.com\")"
+    assert record["Team"] == "'=SUM(A1)"
+
+
 def test_team_export_csv_omits_key_columns_for_the_plain_daily_scope():
     import csv
     import io

@@ -6882,7 +6882,7 @@ def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:
     return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
         "Date": row.date,
         "Team": _csv_safe(row.team_alias) if row.team_alias else "-",
-        "Team ID": row.team_id,
+        "Team ID": _csv_safe(row.team_id),
         "Key Alias": _csv_safe(row.key_alias) if row.key_alias else "-",
         "Key ID": row.api_key or "-",
         "User ID": _csv_safe(row.user_id) if row.user_id else "-",

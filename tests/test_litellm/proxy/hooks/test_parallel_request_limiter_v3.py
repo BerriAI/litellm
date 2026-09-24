@@ -7286,6 +7286,32 @@ async def test_the_reservation_weighs_output_the_way_the_ceiling_does():
 
 
 @pytest.mark.asyncio
+async def test_a_one_ptu_share_admits_four_uncapped_requests_a_minute_and_rejects_the_fifth():
+    """One PTU of gpt-4.1 is 3,000 normalized tokens a minute. A request without max_tokens gets the
+    proxy's output floor measured against the share in output tokens (750), so its cap costs at most
+    a quarter of the share once weighted 4:1 and four such requests fit before the fifth is refused."""
+    cache = DualCache()
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=3000, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+    )
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+    uncapped = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}
+
+    admitted = [dict(uncapped) for _ in range(4)]
+    for data in admitted:
+        await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=data, call_type="acompletion")
+    with pytest.raises(HTTPException) as fifth:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=dict(uncapped), call_type="acompletion"
+        )
+
+    assert fifth.value.status_code == 429
+    assert "model_per_team_ptu" in str(fifth.value.detail)
+    assert all(data["max_tokens"] * 4 <= 3000 // 4 for data in admitted)
+
+
+@pytest.mark.asyncio
 async def test_the_ptu_counter_holds_the_normalized_reservation_beside_the_raw_one():
     cache = DualCache()
     resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=2000, ratio=4.0)
