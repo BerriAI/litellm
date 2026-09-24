@@ -635,6 +635,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     )
                 ):
                     assistant_message["thinking_blocks"] = thinking_blocks
+                elif len(thinking_blocks) == 0:
+                    # Preserve the existing response shape for ordinary assistant turns.
+                    assistant_message["thinking_blocks"] = None
                 reasoning_content = reasoning_content_from_thinking_blocks(thinking_blocks)
                 if reasoning_content:
                     assistant_message["reasoning_content"] = reasoning_content
