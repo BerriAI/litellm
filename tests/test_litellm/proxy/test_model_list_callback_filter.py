@@ -18,7 +18,7 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -325,8 +325,9 @@ async def test_listing_keeps_its_order_whatever_order_the_callback_returns(monke
 async def test_a_callback_returning_a_string_is_an_error_not_an_empty_listing(two_model_router, monkeypatch):
     _register(monkeypatch, _StringReturningGate())
 
-    with pytest.raises(TypeError, match=r"_StringReturningGate\.async_filter_listed_models"):
+    with pytest.raises(ProxyException, match=r"_StringReturningGate\.async_filter_listed_models") as raised:
         await _v1_models(_non_admin())
+    assert raised.value.code == "500"
 
 
 @pytest.mark.asyncio

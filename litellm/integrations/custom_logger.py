@@ -433,7 +433,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         from every listing, any alias of it offered in the same call goes with it, and
         `/v1/models/{id}` answers 404 for it, exactly as for a model that does not exist. Names
         outside `model_names` are ignored, so a callback can only narrow the listing, never widen
-        it.
+        it. Under `use_team_public_model_name: false`, `/v1/models` and `/model_group/info` list a
+        team model by its internal routing name while `/model/info` keeps its public name, so hide
+        both names to hide it on every route.
         """
         return model_names
 

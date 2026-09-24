@@ -36,6 +36,7 @@ from typing import (
     Final,
     Generic,
     Literal,
+    NoReturn,
     Optional,
     Protocol,
     TypeAlias,
@@ -1151,22 +1152,35 @@ def _overrides_moderation_hook(callback: CustomLogger) -> bool:
 _LISTED_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
 
 
+@dataclass(frozen=True, slots=True)
+class MalformedListingFilterReturn:
+    callback: str
+    tag: Literal["malformed_listing_filter_return"] = "malformed_listing_filter_return"
+
+
 async def _names_kept_by_listing_callbacks(
     callbacks: Sequence[CustomLogger],
     user_api_key_dict: UserAPIKeyAuth,
     model_names: tuple[str, ...],
-) -> tuple[str, ...]:
+) -> tuple[str, ...] | MalformedListingFilterReturn:
     if not callbacks or not model_names:
         return model_names
     returned: Final = await callbacks[0].async_filter_listed_models(user_api_key_dict, model_names)
     try:
         kept: Final = frozenset(_LISTED_MODEL_NAMES.validate_python(returned))
-    except ValidationError as error:
-        raise TypeError(
-            f"{type(callbacks[0]).__name__}.async_filter_listed_models must return a sequence of model names"
-        ) from error
+    except ValidationError:
+        return MalformedListingFilterReturn(callback=type(callbacks[0]).__name__)
     return await _names_kept_by_listing_callbacks(
         callbacks[1:], user_api_key_dict, tuple(name for name in model_names if name in kept)
+    )
+
+
+def _raise_malformed_listing_filter_return(error: MalformedListingFilterReturn) -> NoReturn:
+    raise ProxyException(
+        message=f"{error.callback}.async_filter_listed_models must return a sequence of model names",
+        type=ProxyErrorTypes.internal_server_error,
+        param=None,
+        code=500,
     )
 
 
@@ -3753,6 +3767,8 @@ class ProxyLogging:
             return frozenset()
         candidates: Final = tuple(model_names)
         kept: Final = await _names_kept_by_listing_callbacks(filters, user_api_key_dict, candidates)
+        if isinstance(kept, MalformedListingFilterReturn):
+            _raise_malformed_listing_filter_return(kept)
         return frozenset(candidates).difference(kept)
 
     @staticmethod
