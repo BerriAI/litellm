@@ -18137,7 +18137,8 @@ export interface paths {
          *
          *     LiteLLM only makes the configured HTTP call and reports what came back; it
          *     does not change the agent's state in LiteLLM. Returns 200 when the webhook
-         *     answered 2xx, 502 with the same result body otherwise.
+         *     answered 2xx, 502 with the same result body otherwise. Every attempt is
+         *     written to the audit log as a `kill_switch_fired` row against the agent.
          *
          *     Example Request:
          *     ```bash
