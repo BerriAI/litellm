@@ -5182,7 +5182,10 @@ async def _rotate_master_key(
     try:
         require_legacy_reader("rotate the master key")
     except LegacyEncryptionUnavailableError as error:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": str(error)}) from error
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(error)},  # mutable-ok: FastAPI detail contract
+        ) from error
 
     try:
         models: list | None = cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
