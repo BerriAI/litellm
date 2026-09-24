@@ -113,10 +113,13 @@ async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is not None:
-        await UserRepository(prisma_client).table.update(
-            where={"user_id": user_id},
-            data={"password": hash_password(password)},
-        )
+        try:
+            await UserRepository(prisma_client).table.update_many(
+                where={"user_id": user_id, "password": stored},
+                data={"password": hash_password(password)},
+            )
+        except Exception as e:  # noqa: BLE001  # a failed rehash must never surface into the login
+            verbose_proxy_logger.warning("Login-time password rehash could not update user %s: %s", user_id, e)
 
 
 def get_ui_credentials(master_key: str | None) -> tuple[str, str]:

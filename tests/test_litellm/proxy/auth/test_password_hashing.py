@@ -106,6 +106,15 @@ class TestVerifyPasswordFormats:
     def test_malformed_pbkdf2_rows_return_false(self, stored):
         assert verify_password("test", stored) is False
 
+    @pytest.mark.parametrize(
+        "iterations",
+        (10_000_001, 10**30, 0),
+        ids=("above_max", "overflows_c_long", "zero"),
+    )
+    def test_out_of_range_iteration_counts_return_false(self, iterations):
+        stored = _pbkdf2_row("test", 600_000).replace(":600000:", f":{iterations}:")
+        assert verify_password("test", stored) is False
+
     def test_scrypt_invalid_base64_rejected(self):
         assert verify_password("test", "scrypt:not-valid-base64!!!") is False
 

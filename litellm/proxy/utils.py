@@ -7048,6 +7048,7 @@ def hash_token(token: str):
 
 
 PBKDF2_ITERATIONS: Final = 600_000
+PBKDF2_MAX_ITERATIONS: Final = 10_000_000
 PBKDF2_PREFIX: Final = "pbkdf2:sha256:"
 SCRYPT_PREFIX: Final = "scrypt:"
 
@@ -7081,11 +7082,12 @@ def _verify_pbkdf2(password: str, stored: str) -> bool:
         scheme, digest, iterations, salt, derived = stored.split(":")
         if (scheme, digest) != ("pbkdf2", "sha256"):
             return False
-        expected: Final = hashlib.pbkdf2_hmac(
-            "sha256", password.encode(), base64.b64decode(salt, validate=True), int(iterations)
-        )
+        count: Final = int(iterations)
+        if not 1 <= count <= PBKDF2_MAX_ITERATIONS:
+            return False
+        expected: Final = hashlib.pbkdf2_hmac("sha256", password.encode(), base64.b64decode(salt, validate=True), count)
         return secrets.compare_digest(base64.b64decode(derived, validate=True), expected)
-    except (ValueError, binascii.Error, TypeError):
+    except (ValueError, binascii.Error, TypeError, OverflowError):
         return False
 
 
