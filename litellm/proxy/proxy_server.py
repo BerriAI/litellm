@@ -422,6 +422,9 @@ from litellm.proxy.common_utils.model_deprecation import collect_model_deprecati
 from litellm.proxy.common_utils.model_listing_utils import (
     ClaudeCodeRoutingNames,
     TeamModelNameTranslator,
+    alias_listing_entries,
+    alias_target,
+    caller_alias_maps,
     claude_code_view_ids,
     configured_display_names,
     is_claude_code_client,
@@ -11172,14 +11175,13 @@ async def model_list(
     view_aliases: Final = (
         view_router_settings.get("model_group_alias") if isinstance(view_router_settings, Mapping) else None
     )
+    caller_aliases: Final = caller_alias_maps(
+        user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+    )
     routing_names: Final = ClaudeCodeRoutingNames(
         llm_router,
         team_id or user_api_key_dict.team_id,
-        (
-            user_api_key_dict.aliases,
-            user_api_key_dict.team_model_aliases,
-            view_aliases,
-        ),
+        (*caller_aliases, view_aliases),
     )
 
     # Validate scope parameter if provided
@@ -11307,7 +11309,9 @@ async def model_list(
     # The internal routing key drives the metadata/fallback lookup, while the
     # public name is what the client sees as the model id.
     model_data = []
-    entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+    entries: Final = alias_listing_entries(
+        TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), caller_aliases
+    )
     for response_id, lookup_id in entries:
         model_info = create_model_info_response(
             model_id=lookup_id,
@@ -11404,7 +11408,13 @@ async def model_info(
 
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
-        model_id=model_id,
+        model_id=alias_target(
+            model_id,
+            caller_alias_maps(
+                user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+            ),
+        )
+        or model_id,
         available_models=all_models,
         llm_router=llm_router,
         general_settings=settings,

@@ -152,6 +152,50 @@ class ClaudeCodeRoutingNames:
         )
 
 
+def caller_alias_maps(
+    key_aliases: object,
+    team_aliases: object,
+    key_team_id: str | None,
+    listed_team_id: str | None,
+) -> tuple[object, ...]:
+    """The alias maps `/chat/completions` rewrites this caller's model through: the key's
+    own aliases always, the team's only when listing the team the key authenticated as."""
+    if listed_team_id is not None and listed_team_id != key_team_id:
+        return (key_aliases,)
+    return (key_aliases, team_aliases)
+
+
+def _alias_pairs(alias_maps: Sequence[object]) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (alias, target)
+        for aliases in alias_maps
+        if isinstance(aliases, Mapping)
+        for alias, target in cast(Mapping[object, object], aliases).items()  # any-ok: checked per pair
+        if isinstance(alias, str) and isinstance(target, str)
+    )
+
+
+def alias_target(model_id: str, alias_maps: Sequence[object]) -> str | None:
+    """The model group a key or team alias rewrites `model_id` to, else None."""
+    return next((target for alias, target in _alias_pairs(alias_maps) if alias == model_id), None)
+
+
+def alias_listing_entries(
+    entries: Sequence[tuple[str, str]],
+    alias_maps: Sequence[object],
+) -> list[tuple[str, str]]:
+    """`entries` plus one `(alias, lookup_id)` row per key or team alias whose target is
+    listed. An alias colliding with a listed id keeps the listed entry."""
+    lookup_by_response: Final = dict(entries)
+    lookup_ids: Final = frozenset(lookup_by_response.values())
+    added: Final = {
+        alias: lookup_by_response.get(target, target)
+        for alias, target in _alias_pairs(alias_maps)
+        if alias not in lookup_by_response and (target in lookup_by_response or target in lookup_ids)
+    }
+    return [*entries, *added.items()]
+
+
 def claude_code_requested_group(
     requested: str,
     llm_router: Router,
