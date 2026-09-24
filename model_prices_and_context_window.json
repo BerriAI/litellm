@@ -25193,6 +25193,7 @@
     },
     "fireworks_ai/kimi-k2p6-fast": {
         "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-08-27",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 262144,
@@ -25228,6 +25229,7 @@
     },
     "fireworks_ai/kimi-k2p7-code-fast": {
         "cache_read_input_token_cost": 3.8e-07,
+        "deprecation_date": "2026-08-27",
         "input_cost_per_token": 1.9e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 262144,
@@ -59459,6 +59461,7 @@
     },
     "fireworks_ai/glm-5p2-fast-us": {
         "cache_read_input_token_cost": 2.1e-07,
+        "deprecation_date": "2026-09-25",
         "input_cost_per_token": 2.1e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
