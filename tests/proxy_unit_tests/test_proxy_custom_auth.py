@@ -53,8 +53,7 @@ def test_custom_auth(client):
         "max_tokens": 10,
     }
     # Your bearer token
-    token = os.getenv("PROXY_MASTER_KEY")
-    print(f"token: {token}")
+    token = "sk-unit-test-master"
     headers = {"Authorization": f"Bearer {token}"}
     with pytest.raises(Exception, match="Authentication Error, Failed custom auth") as exc_info:
         client.post("/chat/completions", json=test_data, headers=headers)
@@ -71,7 +70,7 @@ def test_custom_auth_bearer(client):
         "max_tokens": 10,
     }
     # Your bearer token
-    token = os.getenv("PROXY_MASTER_KEY")
+    token = "sk-unit-test-master"
 
     headers = {"Authorization": f"WITHOUT BEAR Er  {token}"}
     with pytest.raises(Exception, match="CustomAuth - Malformed API Key passed in") as exc_info:
