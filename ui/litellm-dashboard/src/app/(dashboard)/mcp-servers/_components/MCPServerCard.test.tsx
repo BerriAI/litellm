@@ -22,7 +22,11 @@ describe("MCPServerCard publication", () => {
   it.each([true, false])("separates hub membership from internet access (%s)", (internetAccessible) => {
     const { rerender } = render(
       <MCPServerCard
-        server={{ ...baseServer, available_on_public_internet: internetAccessible, mcp_info: { is_public: false } }}
+        server={{
+          ...baseServer,
+          available_on_public_internet: internetAccessible,
+          mcp_info: { server_name: "demo_server", is_public: false },
+        }}
         onClick={vi.fn()}
       />,
     );
@@ -33,7 +37,11 @@ describe("MCPServerCard publication", () => {
 
     rerender(
       <MCPServerCard
-        server={{ ...baseServer, available_on_public_internet: internetAccessible, mcp_info: { is_public: true } }}
+        server={{
+          ...baseServer,
+          available_on_public_internet: internetAccessible,
+          mcp_info: { server_name: "demo_server", is_public: true },
+        }}
         onClick={vi.fn()}
       />,
     );
