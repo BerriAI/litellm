@@ -314,11 +314,11 @@
           "type": "number",
           "minimum": 0
         },
-        "input_cost_per_reference_pixel": {
+        "input_cost_per_query": {
           "type": "number",
           "minimum": 0
         },
-        "input_cost_per_query": {
+        "input_cost_per_reference_pixel": {
           "type": "number",
           "minimum": 0
         },
