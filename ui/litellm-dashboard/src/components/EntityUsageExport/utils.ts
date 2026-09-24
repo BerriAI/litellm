@@ -16,15 +16,13 @@ const resolveEntityDisplay = (
   entity: string,
   teamAliasMap: Record<string, string>,
   entityMetadata?: Record<string, any>,
-): { id: string; alias: string } => ({
-  id: entity,
-  alias:
-    teamAliasMap[entity] ||
-    entityMetadata?.team_alias ||
-    entityMetadata?.user_email ||
-    entityMetadata?.user_alias ||
-    entity,
-});
+): { id: string; alias: string } => {
+  const alias =
+    [teamAliasMap[entity], entityMetadata?.team_alias, entityMetadata?.user_email, entityMetadata?.user_alias].find(
+      Boolean,
+    ) ?? entity;
+  return { id: entity, alias };
+};
 
 // Mirrors backend SpendMetrics fields (litellm/types/activity_tracking.py).
 // If the backend adds a field, add it here too.
@@ -383,7 +381,7 @@ export const generateDailyWithModelsData = (
       const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, dailyEntityMetadata[entity]);
 
       Object.entries(models).forEach(([model, metrics]: [string, any]) => {
-        dailyModelBreakdown.push({
+        const row = {
           Date: day.date,
           [entityLabel]: alias,
           [`${entityLabel} ID`]: id,
@@ -397,7 +395,8 @@ export const generateDailyWithModelsData = (
           "Completion Tokens": metrics.completionTokens,
           "Cache Read Input Tokens": metrics.cacheReadInputTokens,
           "Cache Creation Input Tokens": metrics.cacheCreationInputTokens,
-        });
+        };
+        dailyModelBreakdown.push(row);
       });
     });
   });
