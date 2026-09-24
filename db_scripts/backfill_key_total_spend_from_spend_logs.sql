@@ -11,7 +11,8 @@
 -- written by older paths recorded the re-hashed digest instead of the
 -- token. It is idempotent and never lowers a value: every statement only
 -- touches rows where total_spend is below the rebuilt sum, so re-running is
--- a no-op.
+-- a no-op, and a key whose log history is shorter than its current period
+-- keeps the value backfill_key_total_spend.sql already gave it.
 --
 -- IMPORTANT caveats before running:
 --
