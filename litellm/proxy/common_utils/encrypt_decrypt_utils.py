@@ -165,16 +165,17 @@ def _decrypt_with_signing_key(value: str, signing_key: str) -> str:
 def decrypt_if_encrypted_with(value: str, signing_key: str) -> str | None:
     """None unless value is a ciphertext under signing_key.
 
-    A legacy ciphertext met without PyNaCl installed is not silently "not a ciphertext": it raises
-    :class:`LegacyEncryptionUnavailableError` naming the re-encrypt path.
+    A legacy ciphertext met without PyNaCl installed is logged with the re-encrypt path and read as None,
+    never handed back as if it were the plaintext.
     """
     try:
         # base64 decoding skips characters outside its alphabet, so "" and "*" decode to no bytes,
         # which decrypt_value reads as an empty plaintext under any key.
         decodes_to_nothing: Final = not is_versioned_gcm(value) and not _legacy_ciphertext_bytes(value)
         return None if decodes_to_nothing else _decrypt_with_signing_key(value=value, signing_key=signing_key)
-    except LegacyEncryptionUnavailableError:
-        raise
+    except LegacyEncryptionUnavailableError as error:
+        verbose_proxy_logger.error("%s", error)
+        return None
     except Exception:  # noqa: BLE001  # base64, nacl and AES-GCM each raise their own "not a ciphertext" type
         return None
 
@@ -193,8 +194,9 @@ def decrypt_value_helper(
 
         # if it's not str - do not decrypt it, return the value
         return value
-    except LegacyEncryptionUnavailableError:
-        raise
+    except LegacyEncryptionUnavailableError as error:
+        verbose_proxy_logger.error("Cannot decrypt value for key: %s. %s", key, error)
+        return None
     except Exception as e:
         error_message = f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {e}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
         if exception_type == "debug":

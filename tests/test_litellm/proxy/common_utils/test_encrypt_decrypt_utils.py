@@ -9,6 +9,7 @@ XSalsa20-Poly1305 (nacl) ciphertext decrypting after the default flip.
 
 import base64
 import hashlib
+import logging
 import os
 import sys
 
@@ -175,20 +176,21 @@ def test_versioned_gcm_values_never_import_nacl(monkeypatch):
     assert decrypt_value_helper(legacy_v2, key="t") == "v2-secret"
 
 
-def test_legacy_ciphertext_without_pynacl_names_the_reencrypt_path(monkeypatch):
+def test_legacy_ciphertext_without_pynacl_logs_the_reencrypt_path_and_reads_as_none(monkeypatch, caplog):
     legacy = _legacy_nacl_ciphertext("legacy-secret", _sha256_key())
     monkeypatch.setitem(sys.modules, "nacl", None)
     monkeypatch.setitem(sys.modules, "nacl.secret", None)
 
-    with pytest.raises(LegacyEncryptionUnavailableError) as missing:
-        decrypt_value_helper(legacy, key="t", exception_type="debug", return_original_value=True)
-    message = str(missing.value)
-    assert "PyNaCl is not installed" in message
-    assert "legacy-encryption" in message
-    assert "/credentials/migrate-encryption" in message
-
-    with pytest.raises(LegacyEncryptionUnavailableError):
-        decrypt_if_encrypted_with(legacy, _SALT_KEY)
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        assert decrypt_value_helper(legacy, key="t", exception_type="debug", return_original_value=True) is None
+        assert decrypt_if_encrypted_with(legacy, _SALT_KEY) is None
+    assert len(caplog.records) == 2, caplog.text
+    for record in caplog.records:
+        message = record.getMessage()
+        assert "PyNaCl is not installed" in message
+        assert "legacy-encryption" in message
+        assert "/credentials/migrate-encryption" in message
+    assert "legacy-secret" not in caplog.text
 
 
 def test_legacy_opt_in_without_pynacl_fails_the_write_not_silently(monkeypatch):
