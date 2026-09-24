@@ -792,7 +792,7 @@ describe("ChatUI", () => {
     });
   });
 
-  it("scrolls only the chat pane on streamed tokens, without scrollIntoView", async () => {
+  it("sends scroll the chat pane to the new message, tokens do not, jump button scrolls to bottom", async () => {
     const scrollTopSetter = vi.spyOn(HTMLElement.prototype, "scrollTop", "set");
     let streamChunk: ((chunk: string, model?: string) => void) | undefined;
     vi.mocked(makeOpenAIChatCompletionRequest).mockImplementation(async (...args) => {
@@ -827,6 +827,9 @@ describe("ChatUI", () => {
       expect(makeOpenAIChatCompletionRequest).toHaveBeenCalledTimes(1);
     });
 
+    expect(scrollTopSetter).toHaveBeenCalled();
+    scrollTopSetter.mockClear();
+
     const scrollIntoViewMock = vi.mocked(Element.prototype.scrollIntoView);
     const scrollIntoViewCallsBeforeTokens = scrollIntoViewMock.mock.calls.length;
 
@@ -834,7 +837,12 @@ describe("ChatUI", () => {
       streamChunk?.("Hello world", "Model 1");
     });
 
+    expect(scrollTopSetter).not.toHaveBeenCalled();
     expect(scrollIntoViewMock.mock.calls.length).toBe(scrollIntoViewCallsBeforeTokens);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Jump to bottom" }));
+
     expect(scrollTopSetter).toHaveBeenCalled();
   });
 });
