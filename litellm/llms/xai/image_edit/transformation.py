@@ -54,9 +54,8 @@ class XAIImageEditConfig(BaseImageEditConfig):
     ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
         supported: Final = frozenset(self.get_supported_openai_params(model))
         allowed: Final = supported | _XAI_NATIVE_PARAMS
-        incoming: Final = dict(
-            image_edit_optional_params
-        )  # mutable-ok: provider JSON body and base-class dict signature
+        raw = image_edit_optional_params
+        incoming: Final = dict(raw)  # mutable-ok: provider JSON body and base-class dict signature
         unknown: Final = tuple(key for key in incoming if key not in allowed)
         if unknown and not drop_params:
             raise ValueError(
@@ -65,24 +64,25 @@ class XAIImageEditConfig(BaseImageEditConfig):
                 "Set drop_params=True to drop unsupported parameters."
             )
 
-        mapped: Final = {
-            key: value for key, value in incoming.items() if key in allowed
-        }  # mutable-ok: provider JSON body and base-class dict signature
+        pairs = ((key, value) for key, value in incoming.items() if key in allowed)
+        mapped: Final = dict(pairs)  # mutable-ok: provider JSON body and base-class dict signature
         size: Final = mapped.get("size")
         aspect_ratio: Final = mapped.get("aspect_ratio") or (
             _SIZE_TO_ASPECT_RATIO.get(str(size), "1:1") if size else None
         )
         n: Final = mapped.get("n")
         resolution: Final = mapped.get("resolution")
+        aspect = {"aspect_ratio": aspect_ratio} if aspect_ratio is not None else None  # mutable-ok: provider JSON body
+        count = {"n": int(n)} if n is not None else None  # mutable-ok: provider JSON body
+        quality = {"resolution": resolution} if resolution is not None else None  # mutable-ok: provider JSON body
+        aspect_ratio_field: Final = aspect or {}  # mutable-ok: provider JSON body and base-class dict signature
+        n_field: Final = count or {}  # mutable-ok: provider JSON body and base-class dict signature
+        resolution_field: Final = quality or {}  # mutable-ok: provider JSON body and base-class dict signature
         return {  # mutable-ok: provider JSON body and base-class dict signature
-            **(
-                {"aspect_ratio": aspect_ratio} if aspect_ratio is not None else {}
-            ),  # mutable-ok: provider JSON body and base-class dict signature
-            **({"n": int(n)} if n is not None else {}),  # mutable-ok: provider JSON body and base-class dict signature
-            **(
-                {"resolution": resolution} if resolution is not None else {}
-            ),  # mutable-ok: provider JSON body and base-class dict signature
-        }
+            **aspect_ratio_field,
+            **n_field,
+            **resolution_field,
+        }  # mutable-ok: provider JSON body and base-class dict signature
 
     def use_multipart_form_data(self) -> bool:
         return False
@@ -163,14 +163,16 @@ class XAIImageEditConfig(BaseImageEditConfig):
             raise ValueError("xAI image edit requires at least one reference image.")
 
         n: Final = image_edit_optional_request_params.get("n")
+        prompt_body = {"prompt": prompt} if prompt is not None else None  # mutable-ok: provider JSON body
+        many = {"images": list(image_payloads)}  # mutable-ok: provider JSON body
+        one = image_payloads[0]
+        image_body = {"image": one} if len(image_payloads) == 1 else many  # mutable-ok: provider JSON body
+        prompt_field: Final = prompt_body or {}  # mutable-ok: provider JSON body and base-class dict signature
+        image_field: Final = image_body  # mutable-ok: provider JSON body and base-class dict signature
         request: Final[dict[str, object]] = {  # mutable-ok: provider JSON body and base-class dict signature
             "model": XAIModelInfo.get_base_model(model) or model,
-            **(
-                {"prompt": prompt} if prompt is not None else {}
-            ),  # mutable-ok: provider JSON body and base-class dict signature
-            **(
-                {"image": image_payloads[0]} if len(image_payloads) == 1 else {"images": list(image_payloads)}
-            ),  # mutable-ok: provider JSON body and base-class dict signature
+            **prompt_field,
+            **image_field,
             **{  # mutable-ok: provider JSON body and base-class dict signature
                 key: image_edit_optional_request_params[key]
                 for key in ("aspect_ratio", "resolution")
@@ -227,9 +229,8 @@ class XAIImageEditConfig(BaseImageEditConfig):
             if image.get("url"):
                 return {"url": str(image["url"])}  # mutable-ok: provider JSON body and base-class dict signature
             if image.get("file_id"):
-                return {
-                    "file_id": str(image["file_id"])
-                }  # mutable-ok: provider JSON body and base-class dict signature
+                file_id = str(image["file_id"])
+                return {"file_id": file_id}  # mutable-ok: provider JSON body and base-class dict signature
 
         mime: Final = ImageEditRequestUtils.get_image_content_type(image)
         encoded: Final = base64.b64encode(self._read_all_bytes(image)).decode("utf-8")

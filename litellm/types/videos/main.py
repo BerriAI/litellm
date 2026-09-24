@@ -102,7 +102,7 @@ class DecodedVideoId(TypedDict, total=False):
     custom_llm_provider: str | None
     model_id: str | None
     video_id: str
-    owner: str | None
+    owner: ReadOnly[str | None]
 
 
 class CharacterObject(BaseModel):

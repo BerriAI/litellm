@@ -27,6 +27,7 @@ from litellm.types.videos.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+_DROPPED = frozenset(("seconds", "size", "input_reference", "user", "extra_headers", "model"))
 _SIZE_TO_ASPECT_RATIO: Final = {  # mutable-ok: provider JSON body and base-class dict signature
     "1024x1024": "1:1",
     "1792x1024": "16:9",
@@ -77,45 +78,26 @@ class XAIVideoConfig(BaseVideoConfig):
         model: str,
         drop_params: bool,
     ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
-        incoming: Final = dict(
-            video_create_optional_params
-        )  # mutable-ok: provider JSON body and base-class dict signature
+        raw = video_create_optional_params
+        incoming: Final = dict(raw)  # mutable-ok: provider JSON body and base-class dict signature
         size: Final = incoming.get("size")
+        seconds = incoming.get("seconds")
+        use_duration = "seconds" in incoming and "duration" not in incoming
+        duration_value = _duration_from_seconds(seconds)
+        duration = {"duration": duration_value} if use_duration else None  # mutable-ok: provider JSON body
+        mapped_ratio = incoming.get("aspect_ratio") or _SIZE_TO_ASPECT_RATIO.get(str(size), "16:9")
+        use_ratio = bool(size) and "aspect_ratio" not in incoming
+        ratio = {"aspect_ratio": mapped_ratio} if use_ratio else None  # mutable-ok: provider JSON body
+        image_ref = incoming.get("image") or incoming.get("input_reference")
+        use_image = bool(incoming.get("input_reference")) and "image" not in incoming
+        image = {"image": image_ref} if use_image else None  # mutable-ok: provider JSON body
         return {  # mutable-ok: provider JSON body and base-class dict signature
             **{  # mutable-ok: provider JSON body and base-class dict signature
-                key: value
-                for key, value in incoming.items()
-                if key
-                not in {
-                    "seconds",
-                    "size",
-                    "input_reference",
-                    "user",
-                    "extra_headers",
-                    "model",
-                }  # mutable-ok: provider JSON body and base-class dict signature
+                key: value for key, value in incoming.items() if key not in _DROPPED
             },
-            **(
-                {
-                    "duration": _duration_from_seconds(incoming.get("seconds"))
-                }  # mutable-ok: provider JSON body and base-class dict signature
-                if "seconds" in incoming and "duration" not in incoming
-                else {}  # mutable-ok: provider JSON body and base-class dict signature
-            ),
-            **(
-                {
-                    "aspect_ratio": incoming.get("aspect_ratio") or _SIZE_TO_ASPECT_RATIO.get(str(size), "16:9")
-                }  # mutable-ok: provider JSON body and base-class dict signature
-                if size and "aspect_ratio" not in incoming
-                else {}  # mutable-ok: provider JSON body and base-class dict signature
-            ),
-            **(
-                {
-                    "image": incoming.get("image") or incoming.get("input_reference")
-                }  # mutable-ok: provider JSON body and base-class dict signature
-                if incoming.get("input_reference") and "image" not in incoming
-                else {}  # mutable-ok: provider JSON body and base-class dict signature
-            ),
+            **(duration or {}),  # mutable-ok: provider JSON body and base-class dict signature
+            **(ratio or {}),  # mutable-ok: provider JSON body and base-class dict signature
+            **(image or {}),  # mutable-ok: provider JSON body and base-class dict signature
         }
 
     def _resolve_api_base(
@@ -164,9 +146,8 @@ class XAIVideoConfig(BaseVideoConfig):
             should_use_xai_oauth,
         )
 
-        params: Final = (
-            litellm_params.model_dump() if litellm_params is not None else {}
-        )  # mutable-ok: provider JSON body and base-class dict signature
+        dumped = litellm_params.model_dump() if litellm_params is not None else None
+        params: Final = dumped or {}  # mutable-ok: provider JSON body and base-class dict signature
         resolved_api_key: Final = api_key or (litellm_params.api_key if litellm_params else None)
         dynamic_api_key: Final = XAIModelInfo.get_api_key(resolved_api_key)
         if should_use_xai_oauth(params) and not dynamic_api_key:
@@ -230,16 +211,14 @@ class XAIVideoConfig(BaseVideoConfig):
             )
             if video_create_optional_request_params.get(key) is not None
         }
+        prompt_body = {"prompt": prompt} if prompt else None  # mutable-ok: provider JSON body
+        duration_body = {"duration": 6} if "duration" not in copied else None  # mutable-ok: provider JSON body
         return (
             {  # mutable-ok: provider JSON body and base-class dict signature
                 "model": XAIModelInfo.get_base_model(model) or model,
-                **(
-                    {"prompt": prompt} if prompt else {}
-                ),  # mutable-ok: provider JSON body and base-class dict signature
+                **(prompt_body or {}),  # mutable-ok: provider JSON body and base-class dict signature
                 **copied,
-                **(
-                    {"duration": 6} if "duration" not in copied else {}
-                ),  # mutable-ok: provider JSON body and base-class dict signature
+                **(duration_body or {}),  # mutable-ok: provider JSON body and base-class dict signature
             },
             [],  # mutable-ok: provider JSON body and base-class dict signature
             api_base,
@@ -269,9 +248,8 @@ class XAIVideoConfig(BaseVideoConfig):
         )
         if custom_llm_provider:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
-        video_obj.usage = (
-            usage if isinstance(usage, dict) else {}
-        )  # mutable-ok: provider JSON body and base-class dict signature
+        usage_body = usage if isinstance(usage, dict) else None
+        video_obj.usage = usage_body or {}  # mutable-ok: provider JSON body and base-class dict signature
         video_obj._hidden_params["video_url"] = None
         return video_obj
 
@@ -302,9 +280,8 @@ class XAIVideoConfig(BaseVideoConfig):
         response_data: Final = raw_response.json()
         status_raw: Final = str(response_data.get("status") or "processing").lower()
         status: Final = _STATUS_MAP.get(status_raw, status_raw)
-        video_meta: Final = (
-            response_data.get("video") or {}
-        )  # mutable-ok: provider JSON body and base-class dict signature
+        video_body = response_data.get("video")
+        video_meta: Final = video_body or {}  # mutable-ok: provider JSON body and base-class dict signature
         video_url: Final = video_meta.get("url") if isinstance(video_meta, dict) else None
         seconds: Final = (
             str(video_meta.get("duration"))
