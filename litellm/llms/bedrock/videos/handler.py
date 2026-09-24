@@ -128,12 +128,15 @@ def _region_from_invocation_arn(invocation_arn: str) -> str | None:
 def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
     """s3://bucket/optional/prefix/ -> (bucket, 'optional/prefix')."""
     if not s3_uri.startswith("s3://"):
-        raise ValueError(f"Invalid S3 output URI (expected s3://bucket/prefix): {s3_uri!r}")
+        raise BedrockError(
+            status_code=400,
+            message=f"Invalid S3 output URI (expected s3://bucket/prefix): {s3_uri!r}",
+        )
     trimmed: Final = s3_uri.rstrip("/")
     without_scheme: Final = trimmed[len("s3://") :]
     bucket, _, prefix = without_scheme.partition("/")
     if not bucket:
-        raise ValueError(f"Invalid S3 output URI: {s3_uri!r}")
+        raise BedrockError(status_code=400, message=f"Invalid S3 output URI: {s3_uri!r}")
     return bucket, prefix
 
 
@@ -177,10 +180,10 @@ def _as_generic_litellm_params(
     if litellm_params is not None:
         metadata: Final = litellm_params.get("metadata")
         if isinstance(metadata, dict):
-            params.metadata = metadata  # pyright: ignore[reportAttributeAccessIssue]  # metadata is an extra-allowed field on GenericLiteLLMParams
+            params.metadata = metadata  # pyright: ignore[reportAttributeAccessIssue]  # extra-allowed field
         call_id: Final = litellm_params.get("litellm_call_id")
         if isinstance(call_id, str) and call_id:
-            params.litellm_call_id = call_id  # pyright: ignore[reportAttributeAccessIssue]  # litellm_call_id is an extra-allowed field on GenericLiteLLMParams (set by the @client decorator)
+            params.litellm_call_id = call_id  # pyright: ignore[reportAttributeAccessIssue]  # @client extra field
     return params
 
 
@@ -473,7 +476,10 @@ class BedrockVideoGeneration(BaseAWSLLM):
         decoded: Final = decode_video_id_with_provider(video_id)
         invocation_arn: Final[str] = decoded.get("video_id") or extract_original_video_id(video_id)
         if not invocation_arn:
-            raise ValueError(f"Could not extract a Bedrock invocation ARN from video id: {video_id!r}")
+            raise BedrockError(
+                status_code=400,
+                message=f"Could not extract a Bedrock invocation ARN from video id: {video_id!r}",
+            )
         model: Final[str] = decoded.get("model_id") or "amazon.nova-reel-v1:0"
         return invocation_arn, model
 
@@ -587,9 +593,13 @@ class BedrockVideoGeneration(BaseAWSLLM):
                 message=f"Nova Reel invocation failed: {failure_message}",
             )
         if video_obj.status != "completed":
-            raise ValueError(
-                "Nova Reel video generation is not complete yet "
-                f"(status={video_obj.status}). Check video_status() before downloading."
+            # Client error about job state: 400-class, not a 500 that SDKs retry.
+            raise BedrockError(
+                status_code=400,
+                message=(
+                    "Nova Reel video generation is not complete yet "
+                    f"(status={video_obj.status}). Check video_status() before downloading."
+                ),
             )
 
         s3_uri: Final[str | None] = _s3_uri_from_output_config(raw.get("outputDataConfig"))

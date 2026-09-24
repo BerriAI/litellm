@@ -44,6 +44,16 @@ else:
 NOVA_CANVAS_CONTROL_MODES: Final[tuple[str, ...]] = ("CANNY_EDGE", "SEGMENTATION")
 
 
+def _invalid_input_error(message: str) -> BedrockError:
+    """400-class error for invalid caller input.
+
+    A plain ValueError would surface as APIConnectionError (500-class, which OpenAI
+    SDKs auto-retry); BedrockError(status_code=400) maps to BadRequestError instead
+    (same mapping the Nova Reel video config relies on).
+    """
+    return BedrockError(status_code=400, message=message)
+
+
 def _resolve_edit_image_b64(
     image: FileTypes | None,
     condition_image_b64: str | None,
@@ -54,12 +64,12 @@ def _resolve_edit_image_b64(
     if image is not None:
         return _file_types_to_b64(image)
     if condition_image_b64 is not None and task_type != "TEXT_IMAGE":
-        raise ValueError(
+        raise _invalid_input_error(
             "Amazon Nova Canvas conditionImage is only supported with "
             f"taskType=TEXT_IMAGE (conditioned editing); got taskType={task_type!r}."
         )
     if task_type != "TEXT_IMAGE" or condition_image_b64 is None:
-        raise ValueError(
+        raise _invalid_input_error(
             "Nova Canvas image edit requires an image input. Pass the multipart "
             "`image` file, or a `conditionImage` for taskType=TEXT_IMAGE."
         )
@@ -116,12 +126,12 @@ def _nova_canvas_task_body(
         if mask_b64 is not None or mask_prompt is not None:
             # AWS TEXT_IMAGE has no mask field; fail fast instead of silently
             # dropping the caller's mask or maskPrompt.
-            raise ValueError(
+            raise _invalid_input_error(
                 "Amazon Nova Canvas TEXT_IMAGE (conditioned editing) does not support a "
                 "mask. Use INPAINTING or OUTPAINTING for mask-based editing workflows."
             )
         if control_mode is not None and control_mode not in NOVA_CANVAS_CONTROL_MODES:
-            raise ValueError(
+            raise _invalid_input_error(
                 f"Unsupported Amazon Nova Canvas controlMode: {control_mode!r}. Use one of {NOVA_CANVAS_CONTROL_MODES}."
             )
         control_strength_value: float | None = None
@@ -131,9 +141,9 @@ def _nova_canvas_task_body(
             try:
                 control_strength_value = float(control_strength)
             except (TypeError, ValueError):
-                raise ValueError("Amazon Nova Canvas controlStrength must be a number in [0.0, 1.0].")
+                raise _invalid_input_error("Amazon Nova Canvas controlStrength must be a number in [0.0, 1.0].")
             if not 0.0 <= control_strength_value <= 1.0:
-                raise ValueError(
+                raise _invalid_input_error(
                     f"Amazon Nova Canvas controlStrength must be between 0.0 and 1.0; got {control_strength_value!r}."
                 )
         t2i_params: Final[dict[str, object]] = {  # mutable-ok: optional conditioned-editing keys are set below
@@ -446,7 +456,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             "OUTPAINTING",
             "TEXT_IMAGE",
         ):
-            raise ValueError(
+            raise _invalid_input_error(
                 f"Amazon Nova Canvas {task_type} requires a text prompt. Pass a non-empty `prompt` in your request."
             )
         text: Final = prompt if prompt is not None and prompt != "" else " "
@@ -462,7 +472,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         ) and task_type != "TEXT_IMAGE":
             # Conditioning fields only exist on textToImageParams (TEXT_IMAGE);
             # any other resolved task type would silently drop them.
-            raise ValueError(
+            raise _invalid_input_error(
                 "Amazon Nova Canvas controlMode/controlStrength/style are only supported "
                 f"with taskType=TEXT_IMAGE (conditioned editing); resolved taskType={task_type!r} "
                 "would silently drop them. Set taskType=TEXT_IMAGE to use them."

@@ -91,7 +91,7 @@ def test_transform_create_request_jpeg_detected():
 
 
 def test_transform_create_request_both_reference_keys_pop_both():
-    """input_reference wins and no stray `image` key leaks into modelInput (F1)."""
+    """input_reference wins and no stray `image` key leaks into modelInput."""
     body = _create_request(
         {
             "output_s3_uri": "s3://bucket/out/",
@@ -107,7 +107,7 @@ def test_transform_create_request_both_reference_keys_pop_both():
 
 
 def test_transform_create_request_file_like_image_not_leaked_with_input_reference():
-    """A file-like `image` must be popped (not serialized) when input_reference is set (F1)."""
+    """A file-like `image` must be popped (not serialized) when input_reference is set."""
     body = _create_request(
         {
             "output_s3_uri": "s3://bucket/out/",
@@ -120,7 +120,7 @@ def test_transform_create_request_file_like_image_not_leaked_with_input_referenc
 
 
 def test_input_reference_data_url_round_trips():
-    """data:image/png;base64,<payload> decodes only the payload and sniffs the format (F2)."""
+    """data:image/png;base64,<payload> decodes only the payload and sniffs the format."""
     data_url = "data:image/png;base64," + base64.b64encode(PNG_BYTES).decode("utf-8")
     body = _create_request({"output_s3_uri": "s3://bucket/out/", "input_reference": data_url})
     image = body["modelInput"]["textToVideoParams"]["images"][0]
@@ -129,23 +129,29 @@ def test_input_reference_data_url_round_trips():
 
 
 def test_input_reference_undecodable_string_raises():
-    with pytest.raises(ValueError, match="base64"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request({"output_s3_uri": "s3://bucket/out/", "input_reference": "definitely!!not!!base64"})
+    assert excinfo.value.status_code == 400
+    assert "base64" in str(excinfo.value.message)
 
 
 def test_input_reference_unrecognized_magic_raises():
     mystery_b64 = base64.b64encode(b"neither a png nor a jpeg header").decode("utf-8")
-    with pytest.raises(ValueError, match="PNG or JPEG"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request({"output_s3_uri": "s3://bucket/out/", "input_reference": mystery_b64})
+    assert excinfo.value.status_code == 400
+    assert "PNG or JPEG" in str(excinfo.value.message)
 
 
 def test_input_reference_https_url_raises():
-    with pytest.raises(ValueError, match="base64"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request({"output_s3_uri": "s3://bucket/out/", "input_reference": "https://example.com/img.png"})
+    assert excinfo.value.status_code == 400
+    assert "base64" in str(excinfo.value.message)
 
 
 def test_transform_create_request_drops_non_aws_client_params():
-    """Known non-AWS video-client params are dropped; provider keys still pass through (F3)."""
+    """Known non-AWS video-client params are dropped; provider keys still pass through."""
     body = _create_request(
         {
             "output_s3_uri": "s3://bucket/out/",
@@ -203,23 +209,31 @@ def test_seconds_string_coerces():
 
 def test_seconds_non_numeric_raises():
     """Non-numeric seconds must raise like fps/seed, not silently keep the default 6."""
-    with pytest.raises(ValueError, match="seconds"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request({"output_s3_uri": "s3://bucket/out/", "seconds": "abc"})
+    assert excinfo.value.status_code == 400
+    assert "seconds" in str(excinfo.value.message)
 
 
 def test_fps_non_numeric_raises():
-    with pytest.raises(ValueError, match="fps"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request({"output_s3_uri": "s3://bucket/out/", "fps": "abc"})
+    assert excinfo.value.status_code == 400
+    assert "fps" in str(excinfo.value.message)
 
 
 def test_seed_non_numeric_raises():
-    with pytest.raises(ValueError, match="seed"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request({"output_s3_uri": "s3://bucket/out/", "seed": "abc"})
+    assert excinfo.value.status_code == 400
+    assert "seed" in str(excinfo.value.message)
 
 
 def test_transform_create_request_requires_output_s3_uri():
-    with pytest.raises(ValueError, match="output_s3_uri"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request({})
+    assert excinfo.value.status_code == 400
+    assert "output_s3_uri" in str(excinfo.value.message)
 
 
 def test_transform_create_request_task_type_passthrough():
@@ -287,7 +301,7 @@ def test_transform_status_response_maps_aws_enum(raw_status, expected):
         assert video.error == {"message": "blocked by content filters"}
     if raw_status == "Completed":
         assert video.completed_at == 1758000060
-        # output_s3_uri rides on _hidden_params (provider detail), not usage (F3/C3).
+        # output_s3_uri rides on _hidden_params (provider detail), not usage.
         assert video.usage is None
         assert video._hidden_params["output_s3_uri"] == "s3://bucket/out/"
     decoded = decode_video_id_with_provider(video.id)
@@ -295,7 +309,7 @@ def test_transform_status_response_maps_aws_enum(raw_status, expected):
 
 
 def test_transform_status_response_missing_status_raises():
-    """A get-async-invoke body without a status must fail loudly, not report InProgress (F6)."""
+    """A get-async-invoke body without a status must fail loudly, not report InProgress."""
     config = _make_config()
     resp = httpx.Response(200, json={"invocationArn": TEST_ARN, "submitTime": 1758000000.0})
     with pytest.raises(BedrockError, match="unexpected shape") as excinfo:
@@ -433,7 +447,7 @@ def test_handler_builds_status_get_url(monkeypatch):
 
 
 def test_handler_status_region_defaults_to_arn_region(monkeypatch):
-    """No explicit aws_region_name: the ARN region must be resolved and returned (F8)."""
+    """No explicit aws_region_name: the ARN region must be resolved and returned."""
     handler = BedrockVideoGeneration()
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA-test")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-test")
@@ -493,12 +507,14 @@ def test_handler_video_content_requires_completed(monkeypatch):
         },
     )
     monkeypatch.setattr(handler, "_sync_get", lambda prepped, timeout=None: resp)
-    with pytest.raises(ValueError, match="not complete"):
+    with pytest.raises(BedrockError) as excinfo:
         handler.video_content(video_id=video_id, litellm_params={})
+    assert excinfo.value.status_code == 400
+    assert "not complete" in str(excinfo.value.message)
 
 
 def test_handler_video_content_failed_status_raises_with_failure_message(monkeypatch):
-    """A Failed invocation surfaces failureMessage as a 502, not a not-complete-yet error (F7)."""
+    """A Failed invocation surfaces failureMessage as a 502, not a not-complete-yet error."""
     handler = BedrockVideoGeneration()
     from litellm.types.videos.utils import encode_video_id_with_provider
 
@@ -566,7 +582,7 @@ def test_handler_video_content_downloads_from_s3(monkeypatch):
 
 
 def test_handler_sync_create_passes_timeout(monkeypatch):
-    """The sync create path must forward its timeout to the POST (F9)."""
+    """The sync create path must forward its timeout to the POST."""
     handler = BedrockVideoGeneration()
     monkeypatch.setattr(
         BedrockVideoGeneration,
@@ -598,7 +614,7 @@ def test_handler_sync_create_passes_timeout(monkeypatch):
 
 
 def test_handler_sync_get_passes_timeout(monkeypatch):
-    """video_status must thread its timeout into the GET request (F9)."""
+    """video_status must thread its timeout into the GET request."""
     handler = BedrockVideoGeneration()
     from litellm.types.videos.utils import encode_video_id_with_provider
 
@@ -629,7 +645,7 @@ def test_handler_sync_get_passes_timeout(monkeypatch):
 
 
 def test_handler_async_get_passes_timeout(monkeypatch):
-    """_async_get must thread its timeout into the GET request (F9)."""
+    """_async_get must thread its timeout into the GET request."""
     handler = BedrockVideoGeneration()
     seen: dict[str, object] = {}
 
@@ -649,7 +665,7 @@ def test_handler_async_get_passes_timeout(monkeypatch):
 
 
 def test_sign_get_request_without_credentials_or_bearer_raises(monkeypatch):
-    """No SigV4 credentials and no bearer token must fail fast (F11), like the shared POST signer."""
+    """No SigV4 credentials and no bearer token must fail fast, like the shared POST signer."""
     from botocore.exceptions import NoCredentialsError
 
     from litellm.llms.bedrock.videos.handler import _sign_get_request
@@ -663,7 +679,9 @@ def test_sign_get_request_without_credentials_or_bearer_raises(monkeypatch):
         )
 
 
-def _patch_s3_download(monkeypatch, handler: BedrockVideoGeneration, get_object_side_effect) -> tuple[list, list, list[str]]:
+def _patch_s3_download(
+    monkeypatch, handler: BedrockVideoGeneration, get_object_side_effect
+) -> tuple[list, list, list[str]]:
     """Mock boto3 + credentials for _download_s3_object.
 
     Returns (session_kwargs, s3_clients, attempted_keys); each fake client records
@@ -717,7 +735,7 @@ class _TrackingBody(io.BytesIO):
 
 
 def test_download_s3_object_uses_status_region_by_default(monkeypatch):
-    """region_default (ARN-derived) beats env/default; explicit litellm_params region still wins (F8)."""
+    """region_default (ARN-derived) beats env/default; explicit litellm_params region still wins."""
     handler = BedrockVideoGeneration()
     raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
     sessions, _, _ = _patch_s3_download(
@@ -740,7 +758,7 @@ def test_download_s3_object_uses_status_region_by_default(monkeypatch):
 
 
 def test_download_s3_object_error_message_redacts_invocation(monkeypatch):
-    """The 404 names the s3Uri and tried keys, never the raw invocation (ARN/account id) (F12)."""
+    """The 404 names the s3Uri and tried keys, never the raw invocation (ARN/account id)."""
     from botocore.exceptions import ClientError
 
     def _raise(bucket, key):
@@ -766,7 +784,7 @@ def test_download_s3_object_error_message_redacts_invocation(monkeypatch):
 
 
 def test_transform_create_response_accepts_202(monkeypatch):
-    """Any 2xx is a success once raise_for_status ran; 202 must reach the transform (F10)."""
+    """Any 2xx is a success once raise_for_status ran; 202 must reach the transform."""
     handler = BedrockVideoGeneration()
     resp = httpx.Response(202, json={"invocationArn": TEST_ARN})
     video = handler._transform_create_response(TEST_MODEL, resp, {}, None)
@@ -1026,7 +1044,7 @@ def test_main_layer_bedrock_status_and_content_pass_default_timeout(monkeypatch)
 
 
 #################################################
-# C5: _to_epoch iso8601 timestamps
+# _to_epoch iso8601 timestamps
 #################################################
 
 
@@ -1074,34 +1092,40 @@ def test_transform_status_response_iso8601_times_become_epochs():
 
 
 #################################################
-# C18: empty prompt guard
+# empty prompt guard
 #################################################
 
 
 def test_transform_create_request_blank_prompt_raises():
-    with pytest.raises(ValueError, match="prompt is required"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request(prompt="   ")
+    assert excinfo.value.status_code == 400
+    assert "prompt is required" in str(excinfo.value.message)
 
 
 #################################################
-# C7: s3:// scheme validation
+# s3:// scheme validation
 #################################################
 
 
 def test_transform_create_request_non_s3_output_uri_raises():
-    with pytest.raises(ValueError, match="s3://"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request({"output_s3_uri": "https://bucket/out/"})
+    assert excinfo.value.status_code == 400
+    assert "s3://" in str(excinfo.value.message)
 
 
 def test_parse_s3_uri_rejects_non_s3_scheme():
     from litellm.llms.bedrock.videos.handler import _parse_s3_uri
 
-    with pytest.raises(ValueError, match="s3://"):
+    with pytest.raises(BedrockError) as excinfo:
         _parse_s3_uri("https://example.com/bucket/key")
+    assert excinfo.value.status_code == 400
+    assert "s3://" in str(excinfo.value.message)
 
 
 #################################################
-# C2: MULTI_SHOT body construction
+# MULTI_SHOT body construction
 #################################################
 
 
@@ -1127,15 +1151,17 @@ def test_transform_multi_shot_automated_preserves_explicit_params():
 
 
 def test_transform_multi_shot_automated_with_image_raises():
-    with pytest.raises(ValueError, match="does not accept input images"):
-        _create_request(
-            {"output_s3_uri": "s3://bucket/out/", "taskType": "MULTI_SHOT_AUTOMATED", "image": PNG_BYTES}
-        )
+    with pytest.raises(BedrockError) as excinfo:
+        _create_request({"output_s3_uri": "s3://bucket/out/", "taskType": "MULTI_SHOT_AUTOMATED", "image": PNG_BYTES})
+    assert excinfo.value.status_code == 400
+    assert "does not accept input images" in str(excinfo.value.message)
 
 
 def test_transform_multi_shot_manual_without_params_raises():
-    with pytest.raises(ValueError, match="multiShotManualParams"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request({"output_s3_uri": "s3://bucket/out/", "taskType": "MULTI_SHOT_MANUAL"})
+    assert excinfo.value.status_code == 400
+    assert "multiShotManualParams" in str(excinfo.value.message)
 
 
 def test_transform_multi_shot_manual_body_omits_duration_seconds():
@@ -1154,7 +1180,7 @@ def test_transform_multi_shot_manual_body_omits_duration_seconds():
 
 
 #################################################
-# C23: kmsKeyId/bucketOwner plumbing
+# kmsKeyId/bucketOwner plumbing
 #################################################
 
 
@@ -1190,7 +1216,7 @@ def test_kms_and_bucket_owner_snake_case_aliases_accepted():
 
 
 #################################################
-# C16: non-JSON 2xx responses
+# non-JSON 2xx responses
 #################################################
 
 
@@ -1213,7 +1239,7 @@ def test_transform_status_response_non_json_maps_to_bedrock_502():
 
 
 #################################################
-# C22: unsupported operations raise a 400-class error
+# unsupported operations raise a 400-class error
 #################################################
 
 
@@ -1245,17 +1271,19 @@ def test_unsupported_remix_operation_raises_400_class_bedrock_error():
 
 
 #################################################
-# C19: text-mode file guard
+# text-mode file guard
 #################################################
 
 
 def test_input_reference_text_mode_file_raises_value_error():
-    with pytest.raises(ValueError, match="binary mode"):
+    with pytest.raises(BedrockError) as excinfo:
         _create_request({"output_s3_uri": "s3://bucket/out/", "input_reference": io.StringIO("not binary")})
+    assert excinfo.value.status_code == 400
+    assert "binary mode" in str(excinfo.value.message)
 
 
 #################################################
-# C26: clientRequestToken falls back to litellm_call_id
+# clientRequestToken falls back to litellm_call_id
 #################################################
 
 
@@ -1302,7 +1330,7 @@ def test_handler_create_threads_litellm_call_id_from_mapping_into_token(monkeypa
 
 
 #################################################
-# C1/C28: S3 download error mapping per AWS error code
+# S3 download error mapping per AWS error code
 #################################################
 
 
@@ -1387,7 +1415,7 @@ def test_download_s3_object_http_404_client_error_falls_through(monkeypatch):
 
 
 #################################################
-# C14: bearer-only S3 path
+# bearer-only S3 path
 #################################################
 
 
@@ -1414,7 +1442,7 @@ def test_download_s3_object_bearer_without_sigv4_credentials_maps_to_400(monkeyp
 
 
 #################################################
-# C4: S3 client timeouts + resource closes
+# S3 client timeouts + resource closes
 #################################################
 
 
@@ -1468,7 +1496,7 @@ def test_download_s3_object_closes_client_on_404(monkeypatch):
 
 
 #################################################
-# C20: video id decoded once per status call
+# video id decoded once per status call
 #################################################
 
 
@@ -1503,7 +1531,7 @@ def test_video_status_decodes_video_id_once(monkeypatch):
 
 
 #################################################
-# C24: private async status arm
+# private async status arm
 #################################################
 
 
@@ -1533,7 +1561,7 @@ def test_video_status_async_dispatch_uses_private_async_arm(monkeypatch):
 
 
 #################################################
-# C8: api_key falls back to litellm_params on the bedrock branches
+# api_key falls back to litellm_params on the bedrock branches
 #################################################
 
 
@@ -1577,3 +1605,57 @@ def test_bedrock_branches_fall_back_to_litellm_params_api_key(monkeypatch):
     assert seen["create"]["api_key"] == "sigv4-key-from-litellm-params"
     assert seen["status"]["api_key"] == "sigv4-key-from-litellm-params"
     assert seen["content"]["api_key"] == "sigv4-key-from-litellm-params"
+
+
+#################################################
+# proxy contract: user-input validation maps to 400-class errors
+#################################################
+
+
+def test_avideo_generation_missing_output_s3_uri_maps_to_bad_request(monkeypatch):
+    """Through the litellm video layer, the missing-output_s3_uri validation error must
+    surface as litellm.BadRequestError (400-class), never APIConnectionError/500."""
+    monkeypatch.setattr(
+        BedrockVideoGeneration,
+        "_get_boto_credentials_from_optional_params",
+        lambda self, params, model=None, bearer_token=None: _FakeCredentialsInfo(),
+    )
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        asyncio.run(
+            litellm.avideo_generation(
+                prompt="waves at sunset",
+                model="bedrock/amazon.nova-reel-v1:0",
+            )
+        )
+    assert excinfo.value.status_code == 400
+    assert "output_s3_uri" in str(excinfo.value)
+
+
+def test_avideo_content_not_complete_yet_maps_to_bad_request(monkeypatch):
+    """Through the litellm video layer, downloading an in-progress video must surface
+    as litellm.BadRequestError (400-class), never APIConnectionError/500."""
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    video_id = encode_video_id_with_provider(TEST_ARN, "bedrock", TEST_MODEL)
+    monkeypatch.setattr(
+        BedrockVideoGeneration,
+        "_status_request_parts",
+        lambda self, arn, params, api_base, api_key=None: (
+            "https://example.com/async-invoke/arn",
+            Mock(url="https://example.com/async-invoke/arn", headers={}),
+            "us-east-1",
+        ),
+    )
+    resp = httpx.Response(
+        200,
+        json={
+            "invocationArn": TEST_ARN,
+            "status": "InProgress",
+            "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}},
+        },
+    )
+    monkeypatch.setattr(BedrockVideoGeneration, "_sync_get", lambda self, prepped, timeout=None: resp)
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        asyncio.run(litellm.avideo_content(video_id=video_id, custom_llm_provider="bedrock"))
+    assert excinfo.value.status_code == 400
+    assert "not complete" in str(excinfo.value)

@@ -90,11 +90,20 @@ def _unsupported_operation_error(operation: str) -> BedrockError:
     return BedrockError(status_code=400, message=_UNSUPPORTED_MESSAGE.format(operation=operation))
 
 
+def _user_input_error(message: str) -> BedrockError:
+    """400-class error for invalid caller input (same mapping as _unsupported_operation_error).
+
+    A plain ValueError would surface as APIConnectionError (500-class, which OpenAI
+    SDKs auto-retry); BedrockError(status_code=400) maps to BadRequestError instead.
+    """
+    return BedrockError(status_code=400, message=message)
+
+
 def _data_url_payload(image: str) -> str:
     """Validate a ``data:<mime>;base64,`` URL and return only its payload."""
     header, sep, encoded = image.partition(",")
     if not sep or not header.removeprefix("data:").endswith(";base64"):
-        raise ValueError(
+        raise _user_input_error(
             "Nova Reel input_reference data URLs must be base64-encoded "
             "(data:image/png;base64,<payload>); got an unsupported data URL prefix."
         )
@@ -112,18 +121,18 @@ def _file_content_to_b64_and_format(image: FileContent) -> tuple[str, str]:
         try:
             image_bytes = base64.b64decode(payload, validate=True)
         except (binascii.Error, ValueError) as err:
-            raise ValueError(f"Nova Reel input_reference string did not decode as base64: {err}") from err
+            raise _user_input_error(f"Nova Reel input_reference string did not decode as base64: {err}") from err
     elif hasattr(image, "read") and callable(getattr(image, "read", None)):
         if hasattr(image, "seek"):
             image.seek(0)
         image_bytes = image.read()
         if not isinstance(image_bytes, bytes):
-            raise ValueError(  # noqa: TRY004  # ValueError maps to a 400-class through the video surface; TypeError would 500
+            raise _user_input_error(
                 "Nova Reel input_reference file objects must be opened in binary mode "
                 f"(read() returned {type(image_bytes).__name__}); open image files with 'rb'."
             )
     else:
-        raise ValueError(
+        raise _user_input_error(
             f"Nova Reel input_reference must be bytes, a file-like object or a base64 string; got {type(image)!r}"
         )
 
@@ -132,7 +141,7 @@ def _file_content_to_b64_and_format(image: FileContent) -> tuple[str, str]:
     elif image_bytes.startswith(b"\xff\xd8"):
         image_format = "jpeg"
     else:
-        raise ValueError(
+        raise _user_input_error(
             "Nova Reel input_reference images must be PNG or JPEG encoded; "
             f"unrecognized image header bytes {image_bytes[:8]!r}"
         )
@@ -195,7 +204,7 @@ def _generation_config_from_op(op: _VideoParams, task_type: object) -> _VideoPar
         try:
             parsed_seconds: Final = int(float(seconds))
         except ValueError as err:
-            raise ValueError(f"Nova Reel seconds must be a number; got {seconds!r}") from err
+            raise _user_input_error(f"Nova Reel seconds must be a number; got {seconds!r}") from err
         if single_duration:
             generation_config["durationSeconds"] = parsed_seconds
     size: Final = op.pop("size", None)
@@ -209,13 +218,13 @@ def _generation_config_from_op(op: _VideoParams, task_type: object) -> _VideoPar
         try:
             generation_config["fps"] = int(float(fps))
         except ValueError as err:
-            raise ValueError(f"Nova Reel fps must be a number; got {fps!r}") from err
+            raise _user_input_error(f"Nova Reel fps must be a number; got {fps!r}") from err
     seed: Final = op.pop("seed", None)
     if seed is not None:
         try:
             generation_config["seed"] = int(float(seed))
         except ValueError as err:
-            raise ValueError(f"Nova Reel seed must be a number; got {seed!r}") from err
+            raise _user_input_error(f"Nova Reel seed must be a number; got {seed!r}") from err
     return generation_config
 
 
@@ -225,7 +234,7 @@ def _task_params_from_op(task_type: object, op: _VideoParams, prompt: str, input
         # AWS schema: automated multi-shot takes multiShotAutomatedParams
         # (never textToVideoParams) and forbids input images.
         if input_reference is not None:
-            raise ValueError(
+            raise _user_input_error(
                 "Nova Reel MULTI_SHOT_AUTOMATED does not accept input images "
                 "(input_reference/image); automated multi-shot is text-driven only."
             )
@@ -239,7 +248,7 @@ def _task_params_from_op(task_type: object, op: _VideoParams, prompt: str, input
     if task_type == "MULTI_SHOT_MANUAL":
         manual_params: Final[object | None] = op.pop("multiShotManualParams", None)
         if not isinstance(manual_params, Mapping):
-            raise ValueError(
+            raise _user_input_error(
                 "Nova Reel MULTI_SHOT_MANUAL requires multiShotManualParams in the request "
                 "(shot definitions with per-shot text/images/durationSeconds); "
                 f"got {manual_params!r}."
@@ -254,7 +263,7 @@ def _task_params_from_op(task_type: object, op: _VideoParams, prompt: str, input
             text_to_video_params["images"] = [input_reference]  # mutable-ok: AWS images param is a list
         else:
             image_b64, image_format = _file_content_to_b64_and_format(
-                input_reference  # pyright: ignore[reportArgumentType]  # request params are untyped user input; the helper validates and raises for unsupported shapes
+                input_reference  # pyright: ignore[reportArgumentType]  # untyped user input; helper validates
             )
             text_to_video_params["images"] = [  # mutable-ok: AWS images param is a list
                 {"format": image_format, "source": {"bytes": image_b64}}  # mutable-ok: nested AWS image payload
@@ -266,6 +275,16 @@ def _task_params_from_op(task_type: object, op: _VideoParams, prompt: str, input
 class BedrockNovaReelVideoConfig(BaseVideoConfig):
     """
     Video config for amazon.nova-reel-v1:0 (and regional variants) on Bedrock.
+
+    Health checks: the proxy's video_generation probe calls avideo_generation()
+    with only a prompt, which this config rejects with a 400 because Nova Reel
+    requires a per-request output_s3_uri; the deployment is then reported
+    unhealthy (the health check marks any errored probe unhealthy, 4xx included).
+    Every video provider's probe creates a real video, so there is no cheaper
+    repo-consistent probe. Operators should set
+    ``model_info.disable_background_health_check: true`` on Nova Reel
+    deployments (or put ``output_s3_uri`` in the deployment litellm_params and
+    accept that each health check starts a real, billed generation).
     """
 
     def get_supported_openai_params(self, model: str) -> _SupportedParams:
@@ -349,13 +368,13 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
 
         output_s3_uri: Final = op.pop("output_s3_uri", None)
         if not output_s3_uri or not str(output_s3_uri).strip():
-            raise ValueError(
+            raise _user_input_error(
                 "Nova Reel video generation requires an S3 output location. Pass "
                 'output_s3_uri="s3://my-bucket/optional-prefix/" in the request '
                 "(Bedrock writes output.mp4 there)."
             )
         if not str(output_s3_uri).startswith("s3://"):
-            raise ValueError(
+            raise _user_input_error(
                 "Nova Reel output_s3_uri must be an S3 URI starting with s3:// "
                 f"(got {output_s3_uri!r}); Bedrock writes output.mp4 into that bucket."
             )
@@ -368,7 +387,7 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         task_type: Final = op.pop("taskType", "TEXT_VIDEO")
 
         if not str(prompt or "").strip():
-            raise ValueError("Nova Reel prompt is required and cannot be empty (or whitespace-only).")
+            raise _user_input_error("Nova Reel prompt is required and cannot be empty (or whitespace-only).")
 
         # Pop both reference keys unconditionally so neither leaks into modelInput;
         # input_reference wins when a caller passes both.
