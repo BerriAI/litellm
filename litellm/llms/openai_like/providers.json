@@ -200,5 +200,10 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "hesperan": {
+    "base_url": "https://api.hesperan.com/v1",
+    "api_key_env": "HESPERAN_API_KEY",
+    "api_base_env": "HESPERAN_API_BASE"
   }
 }
