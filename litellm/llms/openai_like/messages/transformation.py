@@ -7,9 +7,9 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
     AnthropicMessagesConfig,
 )
 from litellm.llms.openai_like.dynamic_config import (
-    _apply_service_tier_as_completion_window,
-    _service_tier_as_completion_window_enabled,
-    _service_tier_completion_window_drop,
+    apply_service_tier_as_completion_window,
+    service_tier_as_completion_window_enabled,
+    service_tier_completion_window_drop,
 )
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.secret_managers.main import get_secret_str
@@ -186,10 +186,10 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         optional_params: Mapping[str, object],
         request_kwargs: Mapping[str, object],
     ) -> dict[str, object]:
-        if not _service_tier_as_completion_window_enabled(self._provider):
+        if not service_tier_as_completion_window_enabled(self._provider):
             return super().translate_passthrough_params(optional_params, request_kwargs)
         model: Final = request_kwargs.get("model")
-        drop_service_tier: Final = _service_tier_completion_window_drop(
+        drop_service_tier: Final = service_tier_completion_window_drop(
             self._provider,
             request_kwargs.get("service_tier"),
             model if isinstance(model, str) else "",
@@ -202,7 +202,7 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
                 key: request_kwargs[key] for key in passthrough_keys if key in request_kwargs
             },
         }
-        translated: Final = _apply_service_tier_as_completion_window(merged)
+        translated: Final = apply_service_tier_as_completion_window(merged)
         return {  # mutable-ok: matches dict-typed base signature
             key: value for key, value in translated.items() if key not in ("service_tier", "extra_body")
         }

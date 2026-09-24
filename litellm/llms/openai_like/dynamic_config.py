@@ -38,7 +38,7 @@ def _completion_window_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _apply_service_tier_as_completion_window(
+def apply_service_tier_as_completion_window(
     body: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: transform_request returns a plain dict
     service_tier: Final = body.get("service_tier")
@@ -94,17 +94,17 @@ def _merge_extra_body_keeping_metadata(
     return {**request, **extra_body, "metadata": merged_metadata}  # mutable-ok: request body sent over the wire
 
 
-def _service_tier_as_completion_window_enabled(provider: SimpleProviderConfig) -> bool:
+def service_tier_as_completion_window_enabled(provider: SimpleProviderConfig) -> bool:
     return provider.special_handling.get("service_tier_as_completion_window") is True
 
 
 _SUPPORTED_SERVICE_TIERS: Final = frozenset((*_SERVICE_TIER_TO_COMPLETION_WINDOW, "auto"))
 
 
-def _service_tier_completion_window_drop(
+def service_tier_completion_window_drop(
     provider: SimpleProviderConfig, service_tier: object, model: str, drop_params: bool | None
 ) -> bool:
-    if not _service_tier_as_completion_window_enabled(provider):
+    if not service_tier_as_completion_window_enabled(provider):
         return False
     if service_tier is None or (isinstance(service_tier, str) and service_tier.lower() in _SUPPORTED_SERVICE_TIERS):
         return False
@@ -209,8 +209,8 @@ def create_config_class(provider: SimpleProviderConfig):
                 litellm_params=dict(litellm_params),  # mutable-ok: base signature requires dict
                 headers=dict(headers),  # mutable-ok: base signature requires dict
             )
-            if _service_tier_as_completion_window_enabled(provider):
-                return _apply_service_tier_as_completion_window(body)
+            if service_tier_as_completion_window_enabled(provider):
+                return apply_service_tier_as_completion_window(body)
             return body
 
         def merge_extra_body(
@@ -218,7 +218,7 @@ def create_config_class(provider: SimpleProviderConfig):
             request: Mapping[str, object],
             extra_body: Mapping[str, object] | None,
         ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
-            if _service_tier_as_completion_window_enabled(provider):
+            if service_tier_as_completion_window_enabled(provider):
                 return _merge_extra_body_keeping_metadata(request, extra_body)
             return super().merge_extra_body(request, extra_body)
 
@@ -264,7 +264,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
             supported_params: Final = self.get_supported_openai_params(model)
 
-            drop_service_tier: Final = _service_tier_completion_window_drop(
+            drop_service_tier: Final = service_tier_completion_window_drop(
                 provider, non_default_params.get("service_tier"), model, drop_params
             )
             params_to_map: Final = (
@@ -345,8 +345,8 @@ def _json_responses_request_body(
         litellm_params=litellm_params,
         headers=headers,
     )
-    if _service_tier_as_completion_window_enabled(provider):
-        return _apply_service_tier_as_completion_window(body)
+    if service_tier_as_completion_window_enabled(provider):
+        return apply_service_tier_as_completion_window(body)
     return body
 
 
@@ -362,7 +362,7 @@ def _json_responses_map_params(
     mapped: Final = OpenAILikeResponsesConfig.map_openai_params(
         config, response_api_optional_params=params, model=model, drop_params=drop_params
     )
-    if _service_tier_completion_window_drop(provider, params.get("service_tier"), model, drop_params):
+    if service_tier_completion_window_drop(provider, params.get("service_tier"), model, drop_params):
         return {  # mutable-ok: drop_params strips the tier into a fresh dict
             key: value for key, value in mapped.items() if key != "service_tier"
         }
@@ -431,7 +431,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             request: Mapping[str, object],
             extra_body: Mapping[str, object] | None,
         ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
-            if _service_tier_as_completion_window_enabled(provider):
+            if service_tier_as_completion_window_enabled(provider):
                 return _merge_extra_body_keeping_metadata(request, extra_body)
             return super().merge_extra_body(request, extra_body)
 
