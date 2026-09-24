@@ -5540,10 +5540,11 @@ async def test_virtual_key_without_any_budget_does_not_raise() -> None:
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.budget_alerts = AsyncMock()
 
-    await _virtual_key_max_budget_check(
+    result = await _virtual_key_max_budget_check(
         valid_token=valid_token,
         proxy_logging_obj=proxy_logging_obj,
     )
+    assert result is None
 
 
 class _TTLCapturingInMemoryCache(InMemoryCache):
