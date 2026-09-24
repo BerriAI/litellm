@@ -69,45 +69,16 @@ def _webp_chunk(fourcc: bytes, body: bytes) -> bytes:
     return b"RIFF" + struct.pack("<I", len(chunk) + 4) + b"WEBP" + chunk
 
 
-JPEG_APP0: Final = 0xE0
-JPEG_APP2_MARKER: Final = 0xE2
-JPEG_DHT: Final = 0xC4
-JPEG_JPG_MARKER: Final = 0xC8
-JPEG_DAC_MARKER: Final = 0xCC
-JPEG_SOF0_MARKER: Final = 0xC0
-JPEG_SOF2_MARKER: Final = 0xC2
+def _fill_jpeg(fill_bytes: int, width: int = 320, height: int = 200) -> bytes:
+    return JPEG_SOI + b"\xff" * fill_bytes + _jpeg_sof_segment(0xC0, width, height)
 
-PADDED_JPEG: Final = JPEG_SOI + b"\xff\xff" + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
-SHORT_LENGTH_JPEG: Final = JPEG_SOI + bytes((0xFF, JPEG_APP0, 0x00, 0x01))
-TRUNCATED_SOF_JPEG: Final = JPEG_SOI + bytes((0xFF, JPEG_SOF0_MARKER, 0x00, 0x11, 0x08))
-SEGMENTS_63_JPEG: Final = (
-    JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 63 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
-)
-SEGMENTS_65_JPEG: Final = (
-    JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 65 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
-)
-SEGMENTS_300_JPEG: Final = (
-    JPEG_SOI + _jpeg_segment(JPEG_APP2_MARKER, bytes(4)) * 300 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
-)
-SEGMENTS_1030_JPEG: Final = (
-    JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(4)) * 1030 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
-)
-FILL_BYTES_JPEG: Final = JPEG_SOI + b"\xff" * 1100 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
-FILL_BEFORE_LARGE_SEGMENT_JPEG: Final = (
-    JPEG_SOI + b"\xff" + _jpeg_segment(JPEG_APP2_MARKER, bytes(0xFEFE)) + _jpeg_sof_segment(JPEG_SOF0_MARKER, 640, 480)
-)
-FILL_200K_JPEG: Final = JPEG_SOI + b"\xff" * 200_000 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
-FILL_65535_JPEG: Final = JPEG_SOI + b"\xff" * 65535 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
-FILL_65536_JPEG: Final = JPEG_SOI + b"\xff" * 65536 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
-OVERSIZED_HEADER_JPEG: Final = (
-    JPEG_SOI + _jpeg_segment(JPEG_APP0, bytes(65533)) * 260 + _jpeg_sof_segment(JPEG_SOF0_MARKER, 320, 200)
-)
-PROGRESSIVE_JPEG: Final = JPEG_SOI + _jpeg_sof_segment(JPEG_SOF2_MARKER, 111, 55)
-DHT_JPEG: Final = JPEG_SOI + _jpeg_segment(JPEG_DHT, bytes(8)) + _jpeg_sof_segment(JPEG_SOF0_MARKER, 400, 300)
+
+def _segments_jpeg(marker: int, count: int, payload_size: int = 4) -> bytes:
+    return JPEG_SOI + _jpeg_segment(marker, bytes(payload_size)) * count + _jpeg_sof_segment(0xC0, 320, 200)
+
 
 VP8_BODY: Final = bytes(3) + b"\x9d\x01\x2a" + struct.pack("<HH", 0xC000 | 500, 0xC000 | 250) + bytes(4)
-VP8L_BITS: Final = 299 | (199 << 14)
-VP8L_BODY: Final = b"\x2f" + VP8L_BITS.to_bytes(4, "little") + bytes(5)
+VP8L_BODY: Final = b"\x2f" + (299 | (199 << 14)).to_bytes(4, "little") + bytes(5)
 VP8X_BODY: Final = bytes(4) + (700 - 1).to_bytes(3, "little") + (350 - 1).to_bytes(3, "little")
 
 
@@ -126,21 +97,33 @@ def _dims(width: int, height: int) -> ImageDimensions:
 @pytest.mark.parametrize(
     ("header", "expected"),
     (
-        pytest.param(PADDED_JPEG, _dims(320, 200), id="jpeg-sof-after-0xff-padding"),
-        pytest.param(SHORT_LENGTH_JPEG, None, id="jpeg-segment-length-below-2"),
-        pytest.param(TRUNCATED_SOF_JPEG, None, id="jpeg-truncated-sof-payload"),
-        pytest.param(SEGMENTS_63_JPEG, _dims(320, 200), id="jpeg-sof-at-segment-64-boundary"),
-        pytest.param(SEGMENTS_65_JPEG, _dims(320, 200), id="jpeg-65-segments-within-budget"),
-        pytest.param(SEGMENTS_300_JPEG, _dims(320, 200), id="jpeg-300-app2-segments"),
-        pytest.param(SEGMENTS_1030_JPEG, None, id="jpeg-more-than-1024-segments"),
-        pytest.param(FILL_BYTES_JPEG, _dims(320, 200), id="jpeg-1100-fill-bytes-before-sof"),
-        pytest.param(FILL_BEFORE_LARGE_SEGMENT_JPEG, _dims(640, 480), id="jpeg-fill-before-large-segment"),
-        pytest.param(FILL_200K_JPEG, _dims(320, 200), id="jpeg-200k-fill-bytes-before-sof"),
-        pytest.param(FILL_65535_JPEG, _dims(320, 200), id="jpeg-65535-fill-bytes-before-sof"),
-        pytest.param(FILL_65536_JPEG, _dims(320, 200), id="jpeg-65536-fill-bytes-before-sof"),
-        pytest.param(OVERSIZED_HEADER_JPEG, None, id="jpeg-sof-beyond-16mib"),
-        pytest.param(PROGRESSIVE_JPEG, _dims(111, 55), id="jpeg-sof2-progressive"),
-        pytest.param(DHT_JPEG, _dims(400, 300), id="jpeg-dht-skipped-before-sof0"),
+        pytest.param(
+            JPEG_SOI + b"\xff\xff" + _jpeg_sof_segment(0xC0, 320, 200),
+            _dims(320, 200),
+            id="jpeg-sof-after-0xff-padding",
+        ),
+        pytest.param(JPEG_SOI + bytes((0xFF, 0xE0, 0x00, 0x01)), None, id="jpeg-segment-length-below-2"),
+        pytest.param(JPEG_SOI + bytes((0xFF, 0xC0, 0x00, 0x11, 0x08)), None, id="jpeg-truncated-sof-payload"),
+        pytest.param(_segments_jpeg(0xE0, 63), _dims(320, 200), id="jpeg-sof-at-segment-64-boundary"),
+        pytest.param(_segments_jpeg(0xE0, 65), _dims(320, 200), id="jpeg-65-segments-within-budget"),
+        pytest.param(_segments_jpeg(0xE2, 300), _dims(320, 200), id="jpeg-300-app2-segments"),
+        pytest.param(_segments_jpeg(0xE0, 1030), None, id="jpeg-more-than-1024-segments"),
+        pytest.param(_fill_jpeg(1100), _dims(320, 200), id="jpeg-1100-fill-bytes-before-sof"),
+        pytest.param(
+            JPEG_SOI + b"\xff" + _jpeg_segment(0xE2, bytes(0xFEFE)) + _jpeg_sof_segment(0xC0, 640, 480),
+            _dims(640, 480),
+            id="jpeg-fill-before-large-segment",
+        ),
+        pytest.param(_fill_jpeg(200_000), _dims(320, 200), id="jpeg-200k-fill-bytes-before-sof"),
+        pytest.param(_fill_jpeg(65535), _dims(320, 200), id="jpeg-65535-fill-bytes-before-sof"),
+        pytest.param(_fill_jpeg(65536), _dims(320, 200), id="jpeg-65536-fill-bytes-before-sof"),
+        pytest.param(_segments_jpeg(0xE0, 260, payload_size=65533), None, id="jpeg-sof-beyond-16mib"),
+        pytest.param(JPEG_SOI + _jpeg_sof_segment(0xC2, 111, 55), _dims(111, 55), id="jpeg-sof2-progressive"),
+        pytest.param(
+            JPEG_SOI + _jpeg_segment(0xC4, bytes(8)) + _jpeg_sof_segment(0xC0, 400, 300),
+            _dims(400, 300),
+            id="jpeg-dht-skipped-before-sof0",
+        ),
         pytest.param(_webp_chunk(b"VP8 ", VP8_BODY), _dims(500, 250), id="webp-vp8-lossy"),
         pytest.param(_webp_chunk(b"VP8L", VP8L_BODY), _dims(300, 200), id="webp-vp8l-lossless"),
         pytest.param(_webp_chunk(b"VP8X", VP8X_BODY), _dims(700, 350), id="webp-vp8x-extended"),
@@ -236,9 +219,9 @@ def test_read_image_dimensions_reads_every_jpeg_sof_marker(sof_marker: int):
     assert read_image_dimensions(JPEG_SOI + _jpeg_sof_segment(sof_marker, 320, 200)) == _dims(320, 200)
 
 
-@pytest.mark.parametrize("skipped_marker", (JPEG_JPG_MARKER, JPEG_DAC_MARKER))
+@pytest.mark.parametrize("skipped_marker", (0xC8, 0xCC))
 def test_read_image_dimensions_skips_non_sof_c_range_markers(skipped_marker: int):
-    jpeg: Final = JPEG_SOI + _jpeg_segment(skipped_marker, bytes(8)) + _jpeg_sof_segment(JPEG_SOF0_MARKER, 400, 300)
+    jpeg: Final = JPEG_SOI + _jpeg_segment(skipped_marker, bytes(8)) + _jpeg_sof_segment(0xC0, 400, 300)
 
     assert read_image_dimensions(jpeg) == _dims(400, 300)
 

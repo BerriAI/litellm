@@ -10,32 +10,20 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 )
 from litellm.types.utils import ImageResponse, ModelInfo
 
+_SIZE_PATTERN: Final = re.compile(r"(\d+)(?:x|-x-)(\d+)")
+
 
 def _rate(table: ModelInfo, key: str) -> float | None:
     return _get_cost_per_unit(table, key, default_value=None)
 
 
-_SIZE_PATTERN: Final = re.compile(r"(\d+)(?:x|-x-)(\d+)")
-
-
-def _size_pixels(size: str | None) -> int:
-    if size is None:
-        return 0
-    match: Final = _SIZE_PATTERN.fullmatch(size)
-    if match is None or int(match[1]) <= 0 or int(match[2]) <= 0:
-        return 0
-    return int(match[1]) * int(match[2])
-
-
-def _generated_pixels(
-    optional_params: Mapping[str, object] | None, size: str | None, image_response: ImageResponse
-) -> int:
+def _generated_pixels(optional_params: Mapping[str, object] | None, size: str | None) -> int:
     width: Final = optional_params.get("width") if optional_params else None
     height: Final = optional_params.get("height") if optional_params else None
-    if type(width) is int and type(height) is int and width > 0 and height > 0:
+    if isinstance(width, int) and isinstance(height, int):
         return width * height
-    raw_size: Final = size or image_response.size
-    return _size_pixels(raw_size if isinstance(raw_size, str) else None)
+    match: Final = _SIZE_PATTERN.fullmatch(size or "")
+    return int(match[1]) * int(match[2]) if match else 0
 
 
 def cost_calculator(
@@ -70,13 +58,13 @@ def cost_calculator(
     num_images: Final = n if n is not None else len(image_response.data or ())
     generated_meters: Final = (
         ("output_cost_per_image", num_images),
-        ("input_cost_per_pixel", _generated_pixels(optional_params, size, image_response) * num_images),
+        ("input_cost_per_pixel", _generated_pixels(optional_params, size) * num_images),
     )
-    generated: Final = next(
+    generated_cost: Final = next(
         (rate * units for key, units in generated_meters if (rate := _rate(resolved, key)) is not None),
         0.0,
     )
-    reference: Final = (_rate(resolved, "input_cost_per_reference_pixel") or 0.0) * (
+    reference_cost: Final = (_rate(resolved, "input_cost_per_reference_pixel") or 0.0) * (
         image_response.reference_pixels or 0
     )
-    return generated + reference
+    return generated_cost + reference_cost
