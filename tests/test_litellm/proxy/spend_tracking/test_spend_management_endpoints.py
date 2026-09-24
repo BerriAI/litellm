@@ -6817,6 +6817,33 @@ def test_key_spend_report_scopes_to_caller_key(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+def test_key_spend_report_scopes_a_cli_session_to_the_per_user_alias_not_the_login_token(client, monkeypatch):
+    mock_prisma = _spend_report_mock_prisma(
+        query_raw_returns=[{"api_key": "cli-session-alice", "total_cost": 1.5}]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="alice",
+        api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+        key_alias="cli-session-alice",
+        is_session_token=True,
+    )
+    try:
+        response = client.get(
+            "/key/spend/report",
+            params={"start_date": "2026-07-01", "end_date": "2026-07-31", "api_key": "cli-session-alice"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == [{"api_key": "cli-session-alice", "total_cost": 1.5}]
+        args, _ = mock_prisma.db.query_raw.await_args
+        assert args[3] == "cli-session-alice"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 def test_key_spend_report_non_admin_override_403(client, monkeypatch):
     mock_prisma = _spend_report_mock_prisma()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
