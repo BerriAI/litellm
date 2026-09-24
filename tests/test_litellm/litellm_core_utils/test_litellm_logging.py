@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import time
+import traceback
 from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
 from typing import Final, Literal
@@ -1614,6 +1615,57 @@ def test_logging_prevent_double_logging(logging_obj):
     assert logging_obj.should_run_logging(event_type="sync_failure") == True
     assert logging_obj.should_run_logging(event_type="async_success") == True
     assert logging_obj.should_run_logging(event_type="async_failure") == True
+
+
+def test_has_run_logging_stream_marks_failure_events(logging_obj):
+    """
+    On streaming requests the stream early-return must only skip the success
+    dedup markers (multiple chunks each log success); failure events must still
+    be marked so a retried stream failure is logged once.
+    """
+    logging_obj.stream = True
+    logging_obj.has_run_logging(event_type="async_failure")
+    logging_obj.has_run_logging(event_type="sync_failure")
+    assert logging_obj.should_run_logging(event_type="async_failure") == False
+    assert logging_obj.should_run_logging(event_type="sync_failure") == False
+    assert logging_obj.should_run_logging(event_type="async_success") == True
+    assert logging_obj.should_run_logging(event_type="sync_success") == True
+
+
+@pytest.mark.asyncio
+async def test_async_failure_handler_stream_runs_failure_callbacks_once():
+    """
+    A streamed call that retries re-enters async_failure_handler once per
+    attempt on the same logging object; only the first may run the failure
+    callbacks (issue #42988).
+    """
+
+    class CountingLogger(CustomLogger):
+        def __init__(self):
+            self.count = 0
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            self.count += 1
+
+    spy = CountingLogger()
+    logging_obj = LitellmLogging(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="stream-failure-dedup",
+        function_id="stream-failure-dedup",
+        dynamic_async_failure_callbacks=[spy],
+        kwargs={"litellm_params": {"metadata": {}}},
+    )
+    try:
+        raise ValueError("upstream auth failure")
+    except ValueError as e:
+        exception, tb = e, traceback.format_exc()
+    for _ in range(3):
+        await logging_obj.async_failure_handler(exception, tb)
+    assert spy.count == 1
 
 
 @pytest.mark.asyncio
