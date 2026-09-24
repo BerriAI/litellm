@@ -28,6 +28,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value,
     encrypt_value_helper,
     is_versioned_gcm,
+    legacy_encryption_available,
 )
 from litellm.proxy.common_utils.fips import FipsModeError
 
@@ -176,15 +177,18 @@ def test_versioned_gcm_values_never_import_nacl(monkeypatch):
     assert decrypt_value_helper(legacy_v2, key="t") == "v2-secret"
 
 
-def test_legacy_ciphertext_without_pynacl_logs_the_reencrypt_path_and_reads_as_none(monkeypatch, caplog):
+def test_legacy_ciphertext_without_pynacl_logs_the_reencrypt_path_and_keeps_the_stored_value(monkeypatch, caplog):
     legacy = _legacy_nacl_ciphertext("legacy-secret", _sha256_key())
+    assert legacy_encryption_available()
     monkeypatch.setitem(sys.modules, "nacl", None)
     monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    assert not legacy_encryption_available()
 
     with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-        assert decrypt_value_helper(legacy, key="t", exception_type="debug", return_original_value=True) is None
+        assert decrypt_value_helper(legacy, key="t", exception_type="debug", return_original_value=True) == legacy
+        assert decrypt_value_helper(legacy, key="t", exception_type="debug") is None
         assert decrypt_if_encrypted_with(legacy, _SALT_KEY) is None
-    assert len(caplog.records) == 2, caplog.text
+    assert len(caplog.records) == 3, caplog.text
     for record in caplog.records:
         message = record.getMessage()
         assert "PyNaCl is not installed" in message

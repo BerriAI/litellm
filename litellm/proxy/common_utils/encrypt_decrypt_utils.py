@@ -196,7 +196,7 @@ def decrypt_value_helper(
         return value
     except LegacyEncryptionUnavailableError as error:
         verbose_proxy_logger.error("Cannot decrypt value for key: %s. %s", key, error)
-        return None
+        return value if return_original_value else None
     except Exception as e:
         error_message = f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {e}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
         if exception_type == "debug":
@@ -210,6 +210,15 @@ def decrypt_value_helper(
             verbose_proxy_logger.exception(error_message)
             # [Non-Blocking Exception. - this should not block decrypting other values]
             return None
+
+
+def legacy_encryption_available() -> bool:
+    """True when PyNaCl is importable, so legacy xsalsa20-poly1305 ciphertext can be read."""
+    try:
+        import nacl.secret  # noqa: F401  # probe only
+    except ImportError:
+        return False
+    return True
 
 
 def _legacy_secret_box(signing_key: str, purpose: str) -> "SecretBox":

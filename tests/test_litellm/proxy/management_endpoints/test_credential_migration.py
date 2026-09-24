@@ -7,6 +7,7 @@ proof-of-fix (real proxy + DB) is performed separately on the repro server.
 """
 
 import json
+import sys
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -125,6 +126,21 @@ async def test_migrate_requires_aes_gate(salt_key, monkeypatch):
         await cm.migrate_encryption(
             prisma_client=MagicMock(), user_api_key_dict=MagicMock()
         )
+
+
+@pytest.mark.asyncio
+async def test_migrate_and_check_refuse_without_pynacl_instead_of_miscounting_legacy_rows(salt_key, monkeypatch):
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+
+    with pytest.raises(RuntimeError, match="legacy-encryption"):
+        await cm.migrate_encryption(prisma_client=client, user_api_key_dict=MagicMock())
+    with pytest.raises(RuntimeError, match="legacy-encryption"):
+        await cm.check_encryption(prisma_client=client)
+    for _, db_attr, _, _ in cm._COVERED_TABLE_SPECS:
+        getattr(client.db, db_attr).find_many.assert_not_awaited()
 
 
 # --------------------------- config-row walker ---------------------------
