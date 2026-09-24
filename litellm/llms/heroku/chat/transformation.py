@@ -64,16 +64,16 @@ class HerokuChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
+        resolved_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
 
-        if not api_base:
+        if not resolved_base:
             raise HerokuError(
                 "No api base was set. Please provide an api_base, or set the HEROKU_API_BASE environment variable."
             )
 
-        api_base = api_base.rstrip("/")
+        clean_api_base: Final = resolved_base.rstrip("/")
 
-        if not api_base.endswith("/v1/chat/completions"):
-            api_base = f"{api_base}/v1/chat/completions"
+        if not clean_api_base.endswith("/v1/chat/completions"):
+            return f"{clean_api_base}/v1/chat/completions"
 
-        return api_base
+        return clean_api_base
