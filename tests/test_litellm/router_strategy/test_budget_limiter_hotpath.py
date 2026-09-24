@@ -396,3 +396,23 @@ async def test_push_task_failure_is_logged_once_and_not_leaked(disable_budget_sy
         "Error syncing in-memory cache with Redis: Error 61 connecting to 127.0.0.1:6379"
     ]
     unretrieved.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_every_provider_over_budget_raises_a_429(disable_budget_sync):
+    from litellm.types.router import RouterErrors, RouterNoDeploymentsAvailableError
+
+    cache = DualCache()
+    limiter = RouterBudgetLimiting(
+        dual_cache=cache,
+        provider_budget_config={"openai": BudgetConfig(budget_duration="1d", max_budget=1.0)},
+    )
+    await cache.async_set_cache(key="provider_spend:openai:1d", value=5.0)
+    deployment = {"litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "d1"}}
+
+    with pytest.raises(RouterNoDeploymentsAvailableError) as raised:
+        await limiter.async_filter_deployments(
+            model="gpt-4o-mini", healthy_deployments=[deployment], messages=None, request_kwargs={}
+        )
+    assert raised.value.status_code == 429
+    assert RouterErrors.no_deployments_with_provider_budget_routing.value in str(raised.value)

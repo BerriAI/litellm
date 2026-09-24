@@ -8197,6 +8197,11 @@ class Router:
                 )
                 return False
 
+            from litellm.types.router import RouterNoDeploymentsAvailableError
+
+            if isinstance(exception, RouterNoDeploymentsAvailableError):
+                return False
+
             # Cache litellm_params to avoid repeated dict lookups
             litellm_params: Final = kwargs.get("litellm_params", {})
             _model_info: Final = litellm_params.get("model_info", {})
