@@ -6812,7 +6812,11 @@ def _team_key_search_where(*, search: str, scope: _TeamDailyActivityScope) -> Te
     if scope.team_ids is not None and own_keys is None:
         return {"team_id": {"in": tuple(scope.team_ids)}, "OR": search_or}  # mutable-ok: prisma where clause root
     assert scope.team_ids is not None and own_keys is not None
-    return {"team_id": {"in": tuple(scope.team_ids)}, "token": {"in": own_keys}, "OR": search_or}  # mutable-ok: prisma where clause root
+    return {
+        "team_id": {"in": tuple(scope.team_ids)},
+        "token": {"in": own_keys},
+        "OR": search_or,
+    }  # mutable-ok: prisma where clause root
 
 
 @router.get(
