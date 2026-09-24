@@ -11,7 +11,14 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { toast } from "@/lib/toast";
 import { ArrowLeft } from "lucide-react";
-import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "@/components/networking";
+import {
+  getAgentInfo,
+  patchAgentCall,
+  getAgentCreateMetadata,
+  triggerAgentKillSwitchCall,
+  AgentCreateInfo,
+  AgentKillSwitchResult,
+} from "@/components/networking";
 import { Agent } from "@/components/agents/types";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
@@ -83,6 +90,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   const [isEditing, setIsEditing] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const [isSaving, setIsSaving] = useState(false);
+  const [isFiringKillSwitch, setIsFiringKillSwitch] = useState(false);
+  const [killSwitchResult, setKillSwitchResult] = useState<AgentKillSwitchResult | null>(null);
   const form = useForm<AgentFormValues>({ defaultValues: {} });
   const panels = useCollapsiblePanels([AGENT_FORM_CONFIG.basic.key]);
   const [agentTypeMetadata, setAgentTypeMetadata] = useState<AgentCreateInfo[]>([]);
@@ -251,6 +260,24 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
     }
   };
 
+  const handleTriggerKillSwitch = async () => {
+    if (!accessToken || !agent) return;
+    const confirmed = window.confirm(`Fire the kill switch webhook for agent "${agent.agent_name}"?`);
+    if (!confirmed) return;
+
+    setIsFiringKillSwitch(true);
+    setKillSwitchResult(null);
+    try {
+      const result = await triggerAgentKillSwitchCall(accessToken, agentId);
+      setKillSwitchResult(result);
+      toast.success(`Kill switch fired (HTTP ${result.status_code})`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to fire kill switch");
+    } finally {
+      setIsFiringKillSwitch(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="p-4">
@@ -377,6 +404,36 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                   </div>
                 ) : (
                   "None"
+                )}
+              </DetailItem>
+              <DetailItem label="Kill Switch">
+                {agent.kill_switch ? (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="font-mono">
+                      {agent.kill_switch.method ?? "POST"} {agent.kill_switch.url}
+                    </span>
+                    {isAdmin && (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={handleTriggerKillSwitch}
+                        disabled={isFiringKillSwitch}
+                        aria-busy={isFiringKillSwitch}
+                      >
+                        {isFiringKillSwitch && <UiLoadingSpinner className="size-4" />}
+                        Fire Kill Switch
+                      </Button>
+                    )}
+                    {killSwitchResult && (
+                      <span className="text-muted-foreground" role="status">
+                        Last result: HTTP {killSwitchResult.status_code}
+                        {killSwitchResult.response_body ? ` ${killSwitchResult.response_body}` : ""}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  "Not configured"
                 )}
               </DetailItem>
               <DetailItem label="Created At">{formatDate(agent.created_at)}</DetailItem>

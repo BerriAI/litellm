@@ -45,6 +45,12 @@ from litellm.proxy.agent_endpoints.agent_search import (
     search_agents,
 )
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
+from litellm.proxy.agent_endpoints.kill_switch import (
+    KillSwitchHttpClient,
+    default_kill_switch_http_client,
+    fire_kill_switch,
+    redact_kill_switch,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -53,6 +59,7 @@ from litellm.types.agents import (
     AgentCard,
     AgentConfig,
     AgentKeySummary,
+    AgentKillSwitchResult,
     AgentMakePublicResponse,
     AgentResponse,
     MakeAgentsPublicRequest,
@@ -160,9 +167,10 @@ def _redact_sensitive_agent_fields(
 ) -> list[AgentResponse]:
     """
     Return copies of the given agents with credential-bearing litellm_params
-    values replaced by a fixed marker (never returned to ANY caller,
-    admin included) and, for non-admin callers, virtual-key and header
-    fields stripped entirely. The original objects are not modified.
+    values and kill-switch auth secrets replaced by a fixed marker (never
+    returned to ANY caller, admin included) and, for non-admin callers,
+    virtual-key, header and kill-switch fields stripped entirely. The original
+    objects are not modified.
     """
     redacted: Final[list[AgentResponse]] = []
     for agent in agents:
@@ -171,8 +179,10 @@ def _redact_sensitive_agent_fields(
             copy.static_headers = None
             copy.extra_headers = None
             copy.keys = None
+            copy.kill_switch = None
         if copy.litellm_params:
             copy.litellm_params = _redact_agent_litellm_params_dict(copy.litellm_params)
+        copy.kill_switch = redact_kill_switch(copy.kill_switch)
         redacted.append(copy)
     return redacted
 
@@ -870,6 +880,45 @@ async def delete_agent(
     except Exception as e:
         verbose_proxy_logger.exception("Error deleting agent: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/v1/agents/{agent_id}/kill_switch",
+    tags=["[beta] A2A Agents"],  # mutable-ok: fastapi types tags as list[str | Enum]
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=AgentKillSwitchResult,
+)
+async def trigger_agent_kill_switch(
+    agent_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    http_client: Annotated[KillSwitchHttpClient, Depends(default_kill_switch_http_client)],
+):
+    """
+    Fire the agent's configured kill switch webhook. Proxy admin only.
+
+    LiteLLM only makes the configured HTTP call and reports what came back; it
+    does not change the agent's state in LiteLLM. Returns 200 when the webhook
+    answered 2xx, 502 with the same result body otherwise.
+
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000/kill_switch" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+    """
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+    _check_agent_management_permission(user_api_key_dict)
+
+    agent: Final = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+    if agent.kill_switch is None:
+        raise HTTPException(status_code=400, detail=f"Agent with ID {agent_id} has no kill_switch configured")
+
+    result: Final = await fire_kill_switch(agent_id=agent.agent_id, config=agent.kill_switch, http_client=http_client)
+    if not result.succeeded:
+        raise HTTPException(status_code=502, detail=result.model_dump())
+    return result
 
 
 @router.post(

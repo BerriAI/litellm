@@ -9,6 +9,7 @@ vi.mock("@/components/networking", () => ({
   getAgentInfo: vi.fn(),
   getAgentCreateMetadata: vi.fn(),
   patchAgentCall: vi.fn(),
+  triggerAgentKillSwitchCall: vi.fn(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
@@ -75,9 +76,11 @@ const agent = {
 
 describe("AgentInfoView settings", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.mocked(networking.getAgentInfo).mockReset().mockResolvedValue(agent);
     vi.mocked(networking.getAgentCreateMetadata).mockReset().mockResolvedValue([]);
     vi.mocked(networking.patchAgentCall).mockReset().mockResolvedValue({});
+    vi.mocked(networking.triggerAgentKillSwitchCall).mockReset();
   });
 
   it("submits the edited agent when Save Changes is pressed", async () => {
@@ -157,5 +160,49 @@ describe("AgentInfoView settings", () => {
 
     expect(await screen.findByText("Access Groups")).toBeInTheDocument();
     expect(screen.getByText("None")).toBeInTheDocument();
+  });
+
+  it("fires the kill switch webhook after confirmation and shows the returned status", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...agent,
+      kill_switch: { url: "https://ops.example.com/kill", method: "DELETE" },
+    });
+    vi.mocked(networking.triggerAgentKillSwitchCall).mockResolvedValue({
+      agent_id: "agent-1",
+      url: "https://ops.example.com/kill",
+      method: "DELETE",
+      status_code: 202,
+      response_body: "stopping",
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    expect(await screen.findByText("DELETE https://ops.example.com/kill")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Fire Kill Switch" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Last result: HTTP 202 stopping");
+    expect(networking.triggerAgentKillSwitchCall).toHaveBeenCalledWith("sk-test", "agent-1");
+  });
+
+  it("does not call the webhook when the confirmation is dismissed", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...agent,
+      kill_switch: { url: "https://ops.example.com/kill", method: "POST" },
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Fire Kill Switch" }));
+
+    expect(networking.triggerAgentKillSwitchCall).not.toHaveBeenCalled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("hides the trigger button from non-admins and shows Not configured without a kill switch", async () => {
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={false} />);
+
+    expect(await screen.findByText("Kill Switch")).toBeInTheDocument();
+    expect(screen.getByText("Not configured")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Fire Kill Switch" })).not.toBeInTheDocument();
   });
 });

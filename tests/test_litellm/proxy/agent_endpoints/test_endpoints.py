@@ -2,6 +2,7 @@ import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -1136,3 +1137,134 @@ def test_make_agent_public_rejects_an_agent_published_only_in_the_db(monkeypatch
 
     assert duplicate.status_code == 400
     assert "already in public agent groups" in duplicate.json()["detail"]
+
+
+_KILL_SWITCH: Final = {
+    "url": "https://ops.example.com/kill",
+    "method": "POST",
+    "headers": {"X-Env": "prod"},
+    "query_params": {"reason": "manual"},
+    "body": {"action": "stop"},
+    "auth": {"type": "bearer", "token": "tok-real"},
+}
+
+
+def _agent_with_kill_switch() -> AgentResponse:
+    return AgentResponse(
+        agent_id="agent-123",
+        agent_name="Test Agent",
+        agent_card_params=_sample_agent_card_params(),
+        litellm_params={},
+        kill_switch=_KILL_SWITCH,
+    )
+
+
+class _FakeKillSwitchClient:
+    def __init__(self, response: httpx.Response) -> None:
+        self.calls: list[tuple[str, str, dict[str, str], object, float]] = []  # mutable-ok: test double records calls
+        self._response: Final = response
+
+    async def request(self, method: str, url: str, *, headers, json, timeout: float) -> httpx.Response:
+        self.calls.append((method, url, dict(headers), json, timeout))
+        return self._response
+
+
+def _kill_switch_app(role: LitellmUserRoles, http_client: _FakeKillSwitchClient) -> TestClient:
+    test_client: Final = _make_app_with_role(role)
+    test_client.app.dependency_overrides[agent_endpoints.default_kill_switch_http_client] = lambda: http_client
+    return test_client
+
+
+def test_kill_switch_trigger_fires_the_configured_webhook_and_returns_the_result(monkeypatch) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(200, text="ok"))
+
+    resp: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake).post(
+        "/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "agent_id": "agent-123",
+        "url": "https://ops.example.com/kill",
+        "method": "POST",
+        "status_code": 200,
+        "response_body": "ok",
+        "error": None,
+    }
+    (method, url, headers, body, _timeout) = fake.calls[0]
+    assert (method, url, body) == ("POST", "https://ops.example.com/kill?reason=manual", {"action": "stop"})
+    assert headers == {"X-Env": "prod", "Authorization": "Bearer tok-real"}
+
+
+def test_kill_switch_trigger_returns_502_when_the_webhook_rejects(monkeypatch) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(401, text="bad token"))
+
+    resp: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake).post(
+        "/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"}
+    )
+
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["detail"]["status_code"] == 401
+    assert resp.json()["detail"]["response_body"] == "bad token"
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+def test_kill_switch_trigger_is_refused_before_any_webhook_call_for_non_admins(monkeypatch, role) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(200))
+
+    resp: Final = _kill_switch_app(role, fake).post(
+        "/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"}
+    )
+
+    assert resp.status_code == 403, resp.text
+    assert fake.calls == []
+
+
+def test_kill_switch_trigger_404s_unknown_agent_and_400s_an_agent_without_one(monkeypatch) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(side_effect=[None, _sample_agent_response()])
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(200))
+    test_client: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake)
+
+    missing: Final = test_client.post("/v1/agents/nope/kill_switch", headers={"Authorization": "Bearer k"})
+    unconfigured: Final = test_client.post("/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"})
+
+    assert missing.status_code == 404
+    assert unconfigured.status_code == 400
+    assert "no kill_switch configured" in unconfigured.json()["detail"]
+    assert fake.calls == []
+
+
+def test_get_agent_redacts_kill_switch_secret_for_admins_and_hides_it_from_others(monkeypatch) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    registry.ids_for_agent = MagicMock(return_value=("agent-123",))
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+
+    def _get_as(role: LitellmUserRoles):
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+            mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+            return _make_app_with_role(role).get("/v1/agents/agent-123", headers={"Authorization": "Bearer k"})
+
+    admin: Final = _get_as(LitellmUserRoles.PROXY_ADMIN)
+    assert admin.status_code == 200, admin.text
+    assert admin.json()["kill_switch"] == {
+        **_KILL_SWITCH,
+        "auth": {"type": "bearer", "token": REDACTED_BY_LITELM_STRING},
+    }
+
+    internal: Final = _get_as(LitellmUserRoles.INTERNAL_USER)
+    assert internal.status_code == 200, internal.text
+    assert internal.json()["kill_switch"] is None
+    assert "tok-real" not in internal.text

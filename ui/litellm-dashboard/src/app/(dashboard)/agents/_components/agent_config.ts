@@ -3,6 +3,8 @@
  * Used across create, view, and update operations
  */
 
+import { EMPTY_KILL_SWITCH_FORM, buildKillSwitchFromForm, parseKillSwitchForForm } from "./kill_switch_config";
+
 export interface FieldConfig {
   name: string;
   label: string;
@@ -236,6 +238,7 @@ export const getDefaultFormValues = () => {
   const defaults: any = {
     defaultInputModes: ["text"],
     defaultOutputModes: ["text"],
+    kill_switch: { ...EMPTY_KILL_SWITCH_FORM },
   };
 
   Object.values(AGENT_FORM_CONFIG).forEach((section) => {
@@ -310,6 +313,11 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
     agentData.extra_headers = values.extra_headers;
   }
 
+  const killSwitch = buildKillSwitchFromForm(values.kill_switch);
+  if (killSwitch !== undefined && (killSwitch !== null || existingAgent?.kill_switch)) {
+    agentData.kill_switch = killSwitch;
+  }
+
   return agentData;
 };
 
@@ -380,6 +388,7 @@ export const parseAgentForForm = (agent: any) => {
       : [],
     // extra_headers: already an array of strings
     extra_headers: agent.extra_headers ?? [],
+    kill_switch: parseKillSwitchForForm(agent.kill_switch),
     ...parseMcpPermissionsForForm(agent),
     ...parseAccessGroupIdsForForm(agent),
   };

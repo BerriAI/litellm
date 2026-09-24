@@ -576,6 +576,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/agents/{agent_id}",
         "/v1/agents/make_public",
         "/v1/agents/{agent_id}/make_public",
+        "/v1/agents/{agent_id}/kill_switch",
     )
 
     # Backwards-compat union — virtual keys may be configured with
