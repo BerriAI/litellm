@@ -7848,16 +7848,21 @@ async def test_temp_budget_increase_applied_for_cached_key():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "team_member_spend, expect_blocked",
+    "team_member_spend, overflow_enabled, team_cap, expect_blocked",
     [
-        (2.4, True),
-        (2.4000000000000004, True),
-        (2.39, False),
+        (2.4, False, 10.0, True),
+        (2.4000000000000004, False, 10.0, True),
+        (2.39, False, 10.0, False),
+        (2.4, True, 10.0, False),
+        (2.5, True, 10.0, False),
+        (2.5, True, None, True),
+        (2.5, True, 0.0, True),
+        (2.5, True, float("inf"), True),
     ],
 )
-async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spend, expect_blocked):
-    """A team member counter sitting exactly at the cap (where a resized reservation
-    lands it) must be rejected by the cached-key auth path like every other budget check."""
+async def test_cached_key_team_member_budget_enforces_cap_unless_overflow_is_bounded(
+    team_member_spend: float, overflow_enabled: bool, team_cap: float | None, expect_blocked: bool
+) -> None:
     from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
     from litellm.proxy.common_utils.user_api_key_cache import team_membership_auth_cache_key
     from litellm.proxy.utils import hash_token
@@ -7876,13 +7881,17 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
             team_id=team_id,
             user_id=user_id,
             team_member_spend=team_member_spend,
+            team_max_budget=team_cap,
+            team_metadata={"allow_team_member_budget_overflow": overflow_enabled},
         ),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=None,
     )
     await user_api_key_cache.async_set_cache(
         key=f"team_id:{team_id}",
-        value=LiteLLM_TeamTableCachedObj(team_id=team_id),
+        value=LiteLLM_TeamTableCachedObj(
+            team_id=team_id, max_budget=team_cap, metadata={"allow_team_member_budget_overflow": overflow_enabled}
+        ),
     )
     await user_api_key_cache.async_set_cache(
         key=user_id,

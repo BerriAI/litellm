@@ -2273,7 +2273,15 @@ async def _user_api_key_auth_builder(
                         team_member_budget: Final = team_member_info.litellm_budget_table.effective_max_budget(
                             now=datetime.now(timezone.utc),
                         )
-                        if team_member_budget is not None and team_member_budget > 0:
+                        from litellm.models.team import team_member_budget_allows_overflow
+
+                        if (
+                            team_member_budget is not None
+                            and team_member_budget > 0
+                            and not team_member_budget_allows_overflow(
+                                _team_obj_from_token(valid_token), team_member_budget
+                            )
+                        ):
                             # Read from cross-pod counter (Redis-first) if available
                             from litellm.proxy.proxy_server import get_current_spend
 
