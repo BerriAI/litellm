@@ -30662,7 +30662,7 @@ export interface components {
          */
         GenericResponseOutputItem: {
             /** Content */
-            content: components["schemas"]["OutputText"][];
+            content: (components["schemas"]["OutputText"] | components["schemas"]["OutputReasoningText"])[];
             /** Id */
             id: string;
             /** Phase */
@@ -37135,6 +37135,21 @@ export interface components {
              * @constant
              */
             type: "timeout";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OutputReasoningText
+         * @description Reasoning text content of a reasoning output item
+         */
+        OutputReasoningText: {
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "reasoning_text";
         } & {
             [key: string]: unknown;
         };

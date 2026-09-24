@@ -17905,7 +17905,14 @@
           "properties": {
             "content": {
               "items": {
-                "$ref": "#/components/schemas/OutputText"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OutputText"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OutputReasoningText"
+                  }
+                ]
               },
               "title": "Content",
               "type": "array"
@@ -19782,6 +19789,27 @@
             "type"
           ],
           "title": "OutputOutcomeTimeout",
+          "type": "object"
+        },
+        "OutputReasoningText": {
+          "additionalProperties": true,
+          "description": "Reasoning text content of a reasoning output item",
+          "properties": {
+            "text": {
+              "title": "Text",
+              "type": "string"
+            },
+            "type": {
+              "const": "reasoning_text",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "title": "OutputReasoningText",
           "type": "object"
         },
         "OutputText": {
