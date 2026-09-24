@@ -84,5 +84,9 @@ WHERE k.token = s.token
            SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_duration IS NOT NULL
        ));
 
--- Verify: this should return 0.
---   SELECT count(*) FROM "LiteLLM_VerificationToken" WHERE total_spend < spend;
+-- Verify: non-resetting keys should return 0. Resetting keys are excluded
+-- because their current period spend is not comparable to lifetime spend.
+--   SELECT count(*) FROM "LiteLLM_VerificationToken"
+--   WHERE total_spend < spend AND budget_duration IS NULL
+--     AND (budget_id IS NULL OR budget_id NOT IN (
+--         SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_duration IS NOT NULL));
