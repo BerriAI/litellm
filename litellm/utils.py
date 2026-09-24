@@ -6713,6 +6713,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        elif custom_llm_provider == "requesty":
+            if "REQUESTY_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("REQUESTY_API_KEY")
         elif custom_llm_provider == "vercel_ai_gateway":
             if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8475,6 +8480,7 @@ class ProviderConfigManager:
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
             LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIChatConfig(), False),
             LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
+            LlmProviders.REQUESTY: (lambda: litellm.RequestyConfig(), False),
             LlmProviders.VERCEL_AI_GATEWAY: (
                 lambda: litellm.VercelAIGatewayConfig(),
                 False,
