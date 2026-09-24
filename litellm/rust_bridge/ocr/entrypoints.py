@@ -6,7 +6,7 @@ from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamicall
 
 import httpx
 
-from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRResponse
 from litellm.rust_bridge.bindings import NativeBinding
 
 
@@ -64,15 +64,8 @@ class NativeOcrPassthroughResponse(Protocol):
         api_base: str,
         endpoint: str,
         status_code: int,
-        headers: Mapping[str, str],
         body: bytes,
     ) -> Mapping[str, object] | None: ...
-
-
-def _callable_binding(value: object) -> Callable[..., object] | None:
-    if not callable(value):
-        return None
-    return cast("Callable[..., object]", value)  # cast-ok: callable validated at the native binding boundary
 
 
 def _health_check_document_binding(value: object) -> NativeOcrHealthCheckDocument | None:

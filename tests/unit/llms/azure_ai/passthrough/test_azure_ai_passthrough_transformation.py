@@ -396,7 +396,7 @@ MISTRAL_OCR_BODY = {
 def _passthrough_ocr(result):
     calls = []
 
-    def run(model, api_base, endpoint, status_code, headers, body):
+    def run(model, api_base, endpoint, status_code, body):
         calls.append((model, api_base, endpoint, status_code, body))
         return result
 

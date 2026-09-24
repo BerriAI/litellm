@@ -52,7 +52,6 @@ def ocr_passthrough_response(
     api_base: str,
     endpoint: str,
     status_code: int,
-    headers: Mapping[str, str],
     body: bytes,
 ) -> dict[str, object] | None: ...
 def embedding(

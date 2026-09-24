@@ -119,17 +119,14 @@ pub(crate) fn ocr_health_check_document(
 }
 
 #[pyfunction]
-#[expect(clippy::too_many_arguments)]
 pub(crate) fn ocr_passthrough_response(
     py: Python<'_>,
     model: &str,
     api_base: &str,
     endpoint: &str,
     status_code: u16,
-    headers: &Bound<'_, PyDict>,
     body: &[u8],
 ) -> PyResult<Option<Py<PyAny>>> {
-    let _ = headers;
     if status_code != 200 {
         return Ok(None);
     }

@@ -21,6 +21,7 @@ from litellm.llms.base_llm.passthrough.transformation import (
     relayed_body,
     strip_leading_model_segment,
 )
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.bindings import native_exception_types
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_PASSTHROUGH_RESPONSE
 from litellm.types.llms.openai import AllMessageValues
@@ -31,7 +32,6 @@ if TYPE_CHECKING:
     from httpx import URL, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.base_llm.ocr.transformation import OCRResponse
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
 
 
@@ -172,8 +172,6 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
     def logged_ocr_response(
         self, model: str, httpx_response: Response, logging_obj: Logging, endpoint: str
     ) -> OCRResponse | None:
-        from litellm.llms.base_llm.ocr.transformation import OCRResponse
-
         passthrough_ocr: Final = (
             self._passthrough_ocr if self._passthrough_ocr is not None else NATIVE_OCR_PASSTHROUGH_RESPONSE.load()
         )
@@ -190,7 +188,6 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
                 relayed_origin,
                 native_endpoint,
                 httpx_response.status_code,
-                dict(httpx_response.headers),
                 httpx_response.content,
             )
             ocr_response: Final = OCRResponse.model_validate(result) if result is not None else None
