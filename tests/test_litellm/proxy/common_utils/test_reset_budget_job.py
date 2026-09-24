@@ -57,6 +57,8 @@ class MockTable:
         self.find_many_calls.append({"where": where, **paging})
         rows = list(self._find_many_results)
         for field, condition in where.items():
+            if field == "budget_id" and isinstance(condition, dict) and "in" in condition:
+                rows = [row for row in rows if not hasattr(row, "budget_id") or row.budget_id in condition["in"]]
             if isinstance(condition, dict) and "gt" in condition and field != "spend":
                 rows = [row for row in rows if getattr(row, field, "") > condition["gt"]]
         for field, direction in (order or {}).items():
@@ -112,6 +114,7 @@ class MockBatcher:
 
 class MockDB:
     def __init__(self):
+        self.litellm_teamtable = MockTable()
         self.litellm_teammembership = MockTable()
         self.litellm_verificationtoken = MockTable()
         self.litellm_endusertable = MockTable()
@@ -3578,3 +3581,51 @@ def test_reset_deletes_spend_counter_instead_of_seeding(reset_budget_job, mock_p
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:user:carol")
     counter_cache.in_memory_cache.set_cache.assert_not_called()
     counter_cache.redis_cache.async_set_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_inherited_member_rollover_uses_default_cap_and_invalidates_private_link(
+    rollover_enabled: None, reset_budget_job: ResetBudgetJob, mock_prisma_client: MockPrismaClient
+) -> None:
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+    from litellm.models.team import LiteLLM_TeamTable
+
+    budget: Final = _budget_row(budget_id="default", max_budget=10.0)
+    mock_prisma_client.db.litellm_teamtable.set_find_many_results(
+        [LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "default"})]
+    )
+    member: Final = LiteLLM_TeamMembership(user_id="member", team_id="team", budget_id="overlay", spend=15.0)
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results([member])
+    cascade: Final = await reset_budget_job._collect_budget_cascade([budget])
+    assert ("spend:team_member:member:team", 5.0) in cascade.counter_resets
+    assert f"{member.team_id}_{member.user_id}" in cascade.cache_keys
+    batch: Final = MockBatcher()
+    reset_budget_job_module._queue_inherited_member_resets(
+        reset_budget_job_module.LinkedSpendResetWrites(batch.litellm_teammembership), cascade
+    )
+    assert _replay_spend_writes(batch.calls, 15.0) == 5.0
+    assert _replay_spend_writes(batch.calls, 8.0) == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_factory,commits", [(MockDB, True), (FailingCommitDB, False)])
+async def test_inherited_member_cache_eviction_requires_successful_reset(
+    db_factory: type[MockDB], commits: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+    from litellm.models.team import LiteLLM_TeamTable
+
+    cache: Final = _make_counter_invalidation_job(monkeypatch)
+    job, client = _job_with_expired_budget(db_factory())
+    client.db.litellm_teamtable.set_find_many_results([
+        LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "budget-1"})
+    ])
+    client.db.litellm_teammembership.set_find_many_results([
+        LiteLLM_TeamMembership(user_id="member", team_id="team", budget_id="overlay", spend=15.0)
+    ])
+    await job.reset_budget_for_litellm_budget_table()
+    deleted: Final = {call.kwargs["key"] for call in cache.in_memory_cache.delete_cache.call_args_list}
+    evicted: Final = {call.kwargs["key"] for call in cache.user_api_key_cache.async_delete_cache.await_args_list}
+    assert ("spend:team_member:member:team" in deleted) == commits
+    assert ("team_member" in evicted) == commits
+    assert client.db.batchers[0].committed == commits

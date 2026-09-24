@@ -264,6 +264,7 @@ export interface TeamMembership {
     max_parallel_requests: number | null;
     tpm_limit: number | null;
     rpm_limit: number | null;
+    tpd_limit?: number | null;
     model_max_budget: Record<string, number> | null;
     budget_duration: string | null;
     budget_reset_at: string | null;
@@ -315,6 +316,7 @@ export interface TeamData {
     team_member_budget_table: {
       max_budget: number;
       budget_duration: string | null;
+      budget_reset_at?: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
     } | null;

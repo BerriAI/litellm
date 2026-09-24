@@ -9,7 +9,9 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Final, Generic, Literal, Protocol, TypeVar
 
-from typing_extensions import assert_never
+from prisma import Json
+from pydantic import BaseModel
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -23,6 +25,7 @@ from litellm.constants import (
     RESET_BUDGET_JOB_NAME,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.models.budget import TEMPORARY_BUDGET_INHERITED_FIELDS
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     LiteLLM_BudgetTableFull,
@@ -279,6 +282,80 @@ class _BudgetCascade:
     counter_resets: tuple[tuple[str, float], ...] = ()
     cache_keys: tuple[str, ...] = ()
     rollover_caps: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
+    inherited_members: tuple["_InheritedMemberReset", ...] = ()
+
+
+class _TeamDefaultMetadata(BaseModel):
+    team_member_budget_id: str | None = None
+
+
+class _TeamDefaultLink(BaseModel):
+    team_id: str
+    metadata: _TeamDefaultMetadata | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _InheritedMemberReset:
+    budget_id: str
+    where: "_InheritedMemberWhere"
+    members: tuple[_TeamMembershipRow, ...]
+
+
+class _InheritedMemberWhere(TypedDict):
+    team_id: ReadOnly[Mapping[str, Sequence[str]]]
+    OR: ReadOnly[Sequence[Mapping[str, object]]]
+    spend: NotRequired[ReadOnly[Mapping[str, float]]]
+
+
+class _TeamDefaultWhere(TypedDict):
+    metadata: ReadOnly[Mapping[str, object]]
+
+
+def _team_default_where(budget_id: str) -> _TeamDefaultWhere:
+    where: Final[_TeamDefaultWhere] = {"metadata": {"path": ("team_member_budget_id",), "equals": Json(budget_id)}}
+    return where
+
+
+class _TeamDefaultsWhere(TypedDict):
+    OR: ReadOnly[Sequence[Mapping[str, object]]]
+
+
+def _inherited_member_where(team_ids: Sequence[str]) -> _InheritedMemberWhere:
+    where: Final[_InheritedMemberWhere] = {
+        "team_id": {"in": team_ids},
+        "OR": (
+            {"budget_id": None},
+            {
+                "litellm_budget_table": {
+                    "is": {
+                        **MappingProxyType({field: None for field in TEMPORARY_BUDGET_INHERITED_FIELDS}),
+                        "model_max_budget": {"equals": "AnyNull"},
+                        "temp_budget_increase": {"not": None},
+                        "temp_budget_expiry": {"not": None},
+                        "allowed_models": {"equals": ()},
+                    }
+                }
+            },
+        ),
+    }
+    return where
+
+
+def _queue_inherited_member_reset(
+    writes: LinkedSpendResetWrites, inherited: _InheritedMemberReset, cap: float | None
+) -> None:
+    if cap is None:
+        writes.queue_spend_zero(where=inherited.where)
+        return
+    under_cap: Final[_InheritedMemberWhere] = {**inherited.where, "spend": {"gt": 0, "lte": cap}}
+    over_cap: Final[_InheritedMemberWhere] = {**inherited.where, "spend": {"gt": cap}}
+    writes.queue_spend_zero(where=under_cap)
+    writes.queue_spend_decrement(where=over_cap, amount=cap)
+
+
+def _queue_inherited_member_resets(writes: LinkedSpendResetWrites, cascade: _BudgetCascade) -> None:
+    for inherited in cascade.inherited_members:
+        _queue_inherited_member_reset(writes, inherited, cascade.rollover_caps.get(inherited.budget_id))
 
 
 @dataclass(frozen=True, slots=True)
@@ -729,6 +806,42 @@ class ResetBudgetJob:
             )
         )
 
+    async def _collect_inherited_member_resets(self, budget_ids: Sequence[str]) -> tuple[_InheritedMemberReset, ...]:
+        filters: Final = tuple(_team_default_where(budget_id) for budget_id in budget_ids)
+        where: Final[_TeamDefaultsWhere] = {"OR": filters}
+        teams: Final = await self._with_db_retry(
+            lambda: TeamRepository(self.prisma_client).table.find_many(where=where),
+            reason="reset_budget_read_team_defaults_failure",
+        )
+        links: Final = tuple(_TeamDefaultLink.model_validate(team, from_attributes=True) for team in teams)
+        groups: Final = tuple(
+            (
+                budget_id,
+                tuple(
+                    link.team_id
+                    for link in links
+                    if link.metadata is not None and link.metadata.team_member_budget_id == budget_id
+                ),
+            )
+            for budget_id in budget_ids
+        )
+        return tuple(
+            [
+                _InheritedMemberReset(
+                    budget_id=budget_id,
+                    where=member_where,
+                    members=await self._fetch_linked_rows(
+                        table=TeamMembershipRepository(self.prisma_client).table,
+                        where=member_where,
+                        log_subject="inherited team memberships",
+                    ),
+                )
+                for budget_id, team_ids in groups
+                for offset in range(0, len(team_ids), RESET_BUDGET_JOB_BATCH_SIZE)
+                for member_where in (_inherited_member_where(team_ids[offset : offset + RESET_BUDGET_JOB_BATCH_SIZE]),)
+            ]
+        )
+
     async def _collect_budget_cascade(self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull]) -> _BudgetCascade:
         """Resolve every row the expiring budget tiers gate, before any write.
 
@@ -740,6 +853,7 @@ class ResetBudgetJob:
         if not budget_ids:
             return _EMPTY_CASCADE
 
+        inherited_members: Final = await self._collect_inherited_member_resets(budget_ids)
         team_memberships: Final[tuple[_TeamMembershipRow, ...]] = await self._fetch_linked_rows(
             table=TeamMembershipRepository(self.prisma_client).table,
             where=_budget_link_where(budget_ids),
@@ -792,6 +906,11 @@ class ResetBudgetJob:
             ),
             counter_resets=(
                 *(
+                    (_team_membership_counter_key(row), _carried_spend(row.spend, rollover_caps.get(group.budget_id)))
+                    for group in inherited_members
+                    for row in group.members
+                ),
+                *(
                     (_team_membership_counter_key(row), _row_carried_spend(row, rollover_caps))
                     for row in team_memberships
                 ),
@@ -805,7 +924,14 @@ class ResetBudgetJob:
                 *((_project_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in projects),
             ),
             rollover_caps=rollover_caps,
+            inherited_members=inherited_members,
             cache_keys=(
+                *(
+                    key
+                    for group in inherited_members
+                    for row in group.members
+                    for key in _team_membership_cache_keys(row)
+                ),
                 *(key for row in team_memberships for key in _team_membership_cache_keys(row)),
                 *(key for row in keys for key in _key_cache_keys(row)),
                 *(key for row in orgs for key in _org_cache_keys(row)),
@@ -834,6 +960,7 @@ class ResetBudgetJob:
     async def _commit_budget_cascade_once(self, cascade: _BudgetCascade) -> None:
         async with budget_cascade_unit_of_work(self._new_batch) as uow:
             _queue_budget_linked_resets(uow.team_memberships, cascade)
+            _queue_inherited_member_resets(uow.team_memberships, cascade)
             _queue_budget_linked_resets(uow.keys, cascade, extra=_LINKED_KEYS_WHERE)
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)

@@ -991,6 +991,14 @@ async def common_checks(
         if team_object is not None and membership_user_id is not None
         else None
     )
+    if team_membership_loaded:
+        await _inherit_team_member_rate_limits(
+            valid_token=valid_token,
+            team_object=team_object,
+            membership=loaded_team_membership,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
 
     unpriced_models: Final = (
         _unpriced_models_in_request(model=_model, llm_router=llm_router)
@@ -5595,6 +5603,34 @@ async def _virtual_key_max_budget_alert_check(
                         user_info=call_info,
                     )
                 )
+
+
+async def _inherit_team_member_rate_limits(
+    valid_token: UserAPIKeyAuth | None,
+    team_object: LiteLLM_TeamTable | None,
+    membership: LiteLLM_TeamMembership | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    if valid_token is None or valid_token.user_id is None or team_object is None:
+        return
+    member_budget: Final = membership.litellm_budget_table if membership is not None else None
+    if member_budget is not None and not member_budget.is_temporary_only():
+        return
+    default_budget_id: Final = (
+        team_object.metadata.get("team_member_budget_id") if team_object.metadata is not None else None
+    )
+    if not isinstance(default_budget_id, str):
+        return
+    default_budget: Final = await get_team_member_default_budget(
+        budget_id=default_budget_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if default_budget is None:
+        return
+    valid_token.team_member_rpm_limit = default_budget.rpm_limit  # rebind-ok: pin resolved limits on the request
+    valid_token.team_member_tpm_limit = default_budget.tpm_limit  # rebind-ok: pin resolved limits on the request
 
 
 async def _check_team_member_budget(

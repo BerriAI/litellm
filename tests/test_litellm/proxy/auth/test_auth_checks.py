@@ -9456,3 +9456,132 @@ def test_can_object_call_model_allows_listed_model_for_key():
     )
 
     assert result is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expired", [False, True])
+@pytest.mark.parametrize("has_membership", [False, True])
+async def test_temporary_topup_keeps_live_default_rate_limits(expired: bool, has_membership: bool) -> None:
+    from litellm.proxy.auth.auth_checks import _inherit_team_member_rate_limits
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+
+    cache: Final = UserApiKeyCache()
+    team: Final = LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "default"})
+    grant: Final = LiteLLM_BudgetTable(
+        temp_budget_increase=200,
+        temp_budget_expiry=datetime(2020 if expired else 2100, 1, 1, tzinfo=timezone.utc),
+    )
+    membership: Final = (
+        LiteLLM_TeamMembership(user_id="member", team_id="team", litellm_budget_table=grant) if has_membership else None
+    )
+    for rpm, tpm in ((2, 100), (5, 200)):
+        await cache.async_set_cache(
+            key="team_member_default_budget:default",
+            value=LiteLLM_BudgetTable(rpm_limit=rpm, tpm_limit=tpm),
+            model_type=LiteLLM_BudgetTable,
+        )
+        token: Final = UserAPIKeyAuth(user_id="member", team_id="team")
+        await _inherit_team_member_rate_limits(token, team, membership, MagicMock(), cache)
+        assert (token.team_member_rpm_limit, token.team_member_tpm_limit) == (rpm, tpm)
+    assert (grant.rpm_limit, grant.tpm_limit) == (None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "permanent",
+    [
+        {"max_budget": 0},
+        {"max_budget": 500},
+        {"rpm_limit": 1},
+        {"tpm_limit": 100},
+        {"tpd_limit": 100},
+        {"soft_budget": 50},
+        {"max_parallel_requests": 1},
+        {"budget_duration": "1d"},
+        {"model_max_budget": {"model": 1}},
+        {"allowed_models": ["model"]},
+    ],
+)
+async def test_topup_on_explicit_private_budget_does_not_inherit_limits(permanent: dict[str, object]) -> None:
+    from litellm.proxy.auth.auth_checks import _inherit_team_member_rate_limits
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+
+    budget: Final = LiteLLM_BudgetTable.model_validate(
+        {
+            "temp_budget_increase": 200,
+            "temp_budget_expiry": datetime(2100, 1, 1, tzinfo=timezone.utc),
+            **permanent,
+        }
+    )
+    token: Final = UserAPIKeyAuth(user_id="member", team_id="team", team_member_rpm_limit=7)
+    membership: Final = LiteLLM_TeamMembership(user_id="member", team_id="team", litellm_budget_table=budget)
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="team_member_default_budget:default",
+        value=LiteLLM_BudgetTable(rpm_limit=2, tpm_limit=100),
+        model_type=LiteLLM_BudgetTable,
+    )
+    await _inherit_team_member_rate_limits(
+        token,
+        LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "default"}),
+        membership,
+        MagicMock(),
+        cache,
+    )
+    assert (token.team_member_rpm_limit, token.team_member_tpm_limit) == (7, None)
+    assert not budget.is_temporary_only()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize("token_value", [None, "member-key"])
+async def test_common_checks_resolves_temporary_member_limits_for_key_and_jwt_context(
+    monkeypatch: pytest.MonkeyPatch, route: str, token_value: str | None
+) -> None:
+    from fastapi import Request
+
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    cache: Final = UserApiKeyCache()
+    membership: Final = LiteLLM_TeamMembership(
+        user_id="member",
+        team_id="team",
+        budget_id="temporary",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            temp_budget_increase=200,
+            temp_budget_expiry=datetime(2100, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id="member", team_id="team"),
+        value=membership,
+        model_type=LiteLLM_TeamMembership,
+    )
+    await cache.async_set_cache(
+        key="team_member_default_budget:default",
+        value=LiteLLM_BudgetTable(rpm_limit=2, tpm_limit=100),
+        model_type=LiteLLM_BudgetTable,
+    )
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    token: Final = UserAPIKeyAuth(token=token_value, user_id="member", team_id="team")
+    result: Final = await common_checks(
+        request_body={"model": "test-model"},
+        team_object=LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "default"}),
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=token,
+        request=Request({"type": "http", "headers": [], "path": route}),
+        skip_budget_checks=True,
+    )
+    assert result is True
+    assert (token.team_member_rpm_limit, token.team_member_tpm_limit) == (2, 100)
+    assert (membership.litellm_budget_table.rpm_limit, membership.litellm_budget_table.tpm_limit) == (None, None)

@@ -12,6 +12,17 @@ from pydantic import ConfigDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
+TEMPORARY_BUDGET_INHERITED_FIELDS: Final = (
+    "soft_budget",
+    "max_budget",
+    "max_parallel_requests",
+    "tpm_limit",
+    "rpm_limit",
+    "tpd_limit",
+    "model_max_budget",
+    "budget_duration",
+)
+
 
 class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     """Represents user-controllable params for a LiteLLM_BudgetTable record.
@@ -35,6 +46,14 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     temp_budget_expiry: datetime | None = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    def is_temporary_only(self) -> bool:
+        return (
+            self.temp_budget_increase is not None
+            and self.temp_budget_expiry is not None
+            and not self.allowed_models
+            and all(getattr(self, field) is None for field in TEMPORARY_BUDGET_INHERITED_FIELDS)
+        )
 
     def active_temp_budget_increase(self, now: datetime) -> float:
         if self.temp_budget_increase is None or self.temp_budget_expiry is None:

@@ -16,6 +16,7 @@ import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { CircleHelp } from "lucide-react";
 import { useState, type ComponentProps } from "react";
 import { TeamData, TeamMemberBudgetSource, TeamMembership } from "./TeamInfo";
+import { displayedMemberBudget } from "./memberBudget";
 
 const BUDGET_SOURCE_LABELS: Record<Exclude<TeamMemberBudgetSource, "none">, string> = {
   team_default: "Team default",
@@ -100,6 +101,8 @@ export default function TeamMemberTab({
   const getUserBudgetSource = (userId: string | null): TeamMemberBudgetSource => {
     if (!userId) return "none";
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    const teamDefault = teamData.team_info.team_member_budget_table;
+    if (teamDefault && displayedMemberBudget(membership, teamDefault) === teamDefault) return "team_default";
     return membership?.budget_source ?? "none";
   };
 
@@ -107,7 +110,7 @@ export default function TeamMemberTab({
     if (!userId) return null;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
     return (
-      membership?.litellm_budget_table?.max_budget ??
+      displayedMemberBudget(membership, teamData.team_info.team_member_budget_table)?.max_budget ??
       (membership?.budget_source === "team_default" ? teamDefaultBudget : null)
     );
   };
@@ -116,8 +119,9 @@ export default function TeamMemberTab({
   const getUserRateLimits = (userId: string | null): string => {
     if (!userId) return "No Limits";
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    const rpmLimit = membership?.litellm_budget_table?.rpm_limit;
-    const tpmLimit = membership?.litellm_budget_table?.tpm_limit;
+    const budget = displayedMemberBudget(membership, teamData.team_info.team_member_budget_table);
+    const rpmLimit = budget?.rpm_limit;
+    const tpmLimit = budget?.tpm_limit;
 
     const rpmText = rpmLimit != null ? `${formatNumber(rpmLimit)} RPM` : null;
     const tpmText = tpmLimit != null ? `${formatNumber(tpmLimit)} TPM` : null;
@@ -142,7 +146,7 @@ export default function TeamMemberTab({
   const getUserBudgetReset = (userId: string | null): string | null => {
     if (!userId) return null;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.litellm_budget_table?.budget_reset_at ?? null;
+    return displayedMemberBudget(membership, teamData.team_info.team_member_budget_table)?.budget_reset_at ?? null;
   };
 
   const extraColumns: NonNullable<ComponentProps<typeof MemberTable>["extraColumns"]> = [
