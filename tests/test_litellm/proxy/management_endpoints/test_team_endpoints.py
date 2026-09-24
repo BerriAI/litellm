@@ -8909,10 +8909,7 @@ async def test_delete_team_releases_the_tags_it_owned(
     )
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team1)
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
-    mock_prisma_client.db.litellm_tagtable.find_many = AsyncMock(
-        return_value=[SimpleNamespace(tag_name="billing-tag", team_id="team-1")]
-    )
-    mock_prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[])
     mock_tx = AsyncMock()
     mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     mock_tx_cm = MagicMock()
@@ -8920,6 +8917,11 @@ async def test_delete_team_releases_the_tags_it_owned(
     mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
     _wire_team_delete_tx(mock_prisma_client)
+    locked_tagtable = SimpleNamespace(
+        find_many=AsyncMock(return_value=[SimpleNamespace(tag_name="billing-tag", team_id="team-1")]),
+        update_many=AsyncMock(return_value=1),
+    )
+    mock_prisma_client.tx.return_value.__aenter__.return_value.litellm_tagtable = locked_tagtable
     evicted = AsyncMock()
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -8936,7 +8938,7 @@ async def test_delete_team_releases_the_tags_it_owned(
         litellm_changed_by="admin-user",
     )
 
-    release_call = mock_prisma_client.db.litellm_tagtable.update_many.await_args
+    release_call = locked_tagtable.update_many.await_args
     assert release_call.kwargs["where"] == {"team_id": {"in": ("team-1",)}}
     assert dict(release_call.kwargs["data"]) == {"team_id": None}
     assert (tag_cache_key("billing-tag"),) in [call.kwargs["cache_keys"] for call in evicted.await_args_list]

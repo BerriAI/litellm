@@ -192,7 +192,6 @@ from litellm.repositories.table_repositories import (
     DeletedTeamRepository,
     ModelTableRepository,
     OrganizationMembershipRepository,
-    TagRepository,
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
@@ -462,10 +461,6 @@ def _access_group_db(prisma_client: PrismaClient | None) -> "TableActions[prisma
 
 def _tokens_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
     return VerificationTokenRepository(prisma_client).table
-
-
-def _tags_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_TagTable]":
-    return TagRepository(prisma_client).table
 
 
 def _sanitize_for_log(value: object) -> str:
@@ -4573,10 +4568,10 @@ async def delete_team(
     # or is still waiting on the lock, in which case its own re-read happens after this commits
     # and sees the row gone before it writes anything.
     delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": data.team_ids}}
-    owned_tags: Final = await _tags_db(prisma_client).find_many(where=delete_filter)
     async with prisma_client.tx() as tx:
         for team_id in sorted(data.team_ids):
             await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+        owned_tags: Final = await tx.litellm_tagtable.find_many(where=delete_filter)
         await tx.litellm_teamtable.delete_many(where=delete_filter)
         await _sweep_deleted_team_references_tx(team_ids=data.team_ids, tx=tx)
 
