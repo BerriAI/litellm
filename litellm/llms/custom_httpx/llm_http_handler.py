@@ -6994,7 +6994,7 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
         data = image_edit_provider_config.finalize_image_edit_request_data(data, api_base)
-        reference_pixels: Final = uploaded_reference_pixels(files, data)
+        reference_pixels: Final = await asyncio.to_thread(uploaded_reference_pixels, files, data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -7223,7 +7223,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
             headers=headers,
         )
-        reference_pixels: Final = uploaded_reference_pixels(None, data)
+        reference_pixels: Final = await asyncio.to_thread(uploaded_reference_pixels, None, data)
 
         ## LOGGING
         logging_obj.pre_call(

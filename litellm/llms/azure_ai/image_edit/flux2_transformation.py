@@ -125,7 +125,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         if isinstance(image, bytes):
             image_bytes = image
         elif hasattr(image, "read"):
-            if image.seekable():
+            if hasattr(image, "seekable") and image.seekable():  # pyright: ignore[reportAny]  # image is a duck-typed file-like object by contract
                 image.seek(0)
             image_bytes = image.read()
         else:

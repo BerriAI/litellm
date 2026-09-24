@@ -11,10 +11,16 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.llms.azure.image_generation import get_azure_image_generation_config
 from litellm.llms.azure.image_generation.http_utils import azure_deployment_image_generation_json_body
+from litellm.llms.azure_ai.image_generation.cost_calculator import cost_calculator
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
-from litellm.types.utils import ImageObject, ImageResponse, ImageUsage
+from litellm.types.utils import (
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
+)
 from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params_image_gen
 
 
@@ -265,9 +271,7 @@ _ONE_MEGAPIXEL: Final = 1024 * 1024
 
 
 def test_flux2_cost_bills_references_once_for_multi_image_edits() -> None:
-    response: Final = ImageResponse(
-        data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")]
-    )
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
     response.set_reference_pixels(_ONE_MEGAPIXEL)
 
     cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
@@ -380,8 +384,6 @@ def test_flux2_cost_bills_pixels_when_usage_carries_no_token_rates() -> None:
 
 
 def test_flux2_cost_reads_pricing_declared_in_litellm_params_kwargs() -> None:
-    """A deployment declared under litellm_params (e.g. litellm.image_edit(..., input_cost_per_pixel=x))
-    prices the same model_info dict the router's deployment YAML folds into metadata.model_info."""
     deployment_rate: Final = 1e-06
     response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n")])
     response.set_reference_pixels(_ONE_MEGAPIXEL)
@@ -402,8 +404,6 @@ def test_flux2_cost_reads_pricing_declared_in_litellm_params_kwargs() -> None:
 
 
 def test_flux2_cost_overlays_litellm_params_kwargs_on_nested_model_info() -> None:
-    """Declared kwargs win per key over the router-folded metadata.model_info, so a call
-    that overrides one price key keeps the deployment's other declared pricing."""
     nested_rate: Final = 1e-06
     kwargs_rate: Final = 2e-06
     response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n")])
@@ -425,3 +425,98 @@ def test_flux2_cost_overlays_litellm_params_kwargs_on_nested_model_info() -> Non
     )
 
     assert cost == pytest.approx(kwargs_rate * _ONE_MEGAPIXEL * 2)
+
+
+def _edit_response(reference_pixels: int | None = _ONE_MEGAPIXEL * 2, **kwargs: object) -> ImageResponse:
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n")], size="1024x1024", **kwargs)
+    if reference_pixels is not None:
+        response.set_reference_pixels(reference_pixels)
+    return response
+
+
+def _edit_cost(response: ImageResponse, size: str = "1024x1024", **kwargs: object) -> float:
+    return CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="FLUX.2-flex",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size=size,
+        call_type="image_edit",
+        **kwargs,
+    )
+
+
+def test_get_model_info_surfaces_flux2_flex_pixel_rate() -> None:
+    model_info = litellm.get_model_info(model="FLUX.2-flex", custom_llm_provider="azure_ai")
+
+    assert model_info["input_cost_per_pixel"] == _catalog_pixel_rate()
+
+
+def test_flux2_cost_adds_reference_pixels_to_generated_pixels() -> None:
+    cost: Final = _edit_cost(_edit_response())
+
+    assert cost == pytest.approx(_catalog_pixel_rate() * _ONE_MEGAPIXEL * 3)
+
+
+def test_flux2_cost_prefers_deployment_rates_over_catalog_for_edits() -> None:
+    cost: Final = _edit_cost(_edit_response(), model_info={"input_cost_per_pixel": 2e-07})
+
+    assert cost == pytest.approx(2e-07 * _ONE_MEGAPIXEL * 3)
+
+
+def test_flux2_cost_honors_explicit_zero_pixel_rate() -> None:
+    cost: Final = _edit_cost(_edit_response(), model_info={"input_cost_per_pixel": 0.0})
+
+    assert cost == pytest.approx(0.0)
+
+
+def test_flux2_cost_per_image_rate_beats_per_pixel_rate() -> None:
+    cost: Final = _edit_cost(
+        _edit_response(),
+        model_info={"output_cost_per_image": 0.04, "input_cost_per_pixel": 1e-07},
+    )
+
+    assert cost == pytest.approx(0.04 + 1e-07 * _ONE_MEGAPIXEL * 2)
+
+
+def test_flux2_cost_bills_token_rates_when_usage_carries_them() -> None:
+    response: Final = _edit_response(
+        usage=ImageUsage(
+            input_tokens=150,
+            input_tokens_details=ImageUsageInputTokensDetails(image_tokens=100, text_tokens=50),
+            output_tokens=1000,
+            total_tokens=1150,
+        )
+    )
+
+    cost: Final = _edit_cost(
+        response,
+        model_info={
+            "input_cost_per_pixel": 5e-08,
+            "input_cost_per_token": 1e-05,
+            "input_cost_per_image_token": 2e-05,
+            "output_cost_per_image_token": 4e-05,
+            "output_cost_per_token": 4e-05,
+        },
+    )
+
+    assert cost == pytest.approx(50 * 1e-05 + 100 * 2e-05 + 1000 * 4e-05)
+
+
+def test_flux2_cost_parses_dashed_size_string() -> None:
+    cost: Final = _edit_cost(_edit_response(), size="1024-x-1024")
+
+    assert cost == pytest.approx(_catalog_pixel_rate() * _ONE_MEGAPIXEL * 3)
+
+
+def test_flux2_cost_optional_params_dimensions_beat_response_size() -> None:
+    cost: Final = _edit_cost(
+        _edit_response(reference_pixels=None),
+        optional_params={"width": 2048, "height": 1024},
+    )
+
+    assert cost == pytest.approx(_catalog_pixel_rate() * 2048 * 1024)
+
+
+def test_flux2_cost_rejects_non_image_response() -> None:
+    with pytest.raises(TypeError, match="must be of type ImageResponse"):
+        cost_calculator(model="FLUX.2-flex", image_response=object())

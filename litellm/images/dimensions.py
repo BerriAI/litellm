@@ -1,7 +1,7 @@
 import base64
 import os
 import struct
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sized
 from dataclasses import dataclass
 from io import BytesIO
 from typing import IO, Final
@@ -33,6 +33,7 @@ _WEBP_VP8_START_CODE: Final = b"\x9d\x01\x2a"
 _WEBP_VP8L_SIGNATURE: Final = 0x2F
 _BMP_CORE_DIB_SIZE: Final = 12
 _BMP_KNOWN_DIB_SIZES: Final = frozenset({12, 40, 52, 56, 64, 108, 124})
+_UNMEASURED_REFERENCE_PIXELS: Final = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,34 +46,34 @@ class ImageDimensions:
         return self.width * self.height
 
 
-def total_reference_pixels(images: Sequence[FileTypes]) -> int | None:
-    """All-or-nothing sum of measured reference pixels; never raises."""
+def total_reference_pixels(images: Iterable[FileTypes]) -> int:
+    """Reference pixels sent; never raises. A reference that cannot be measured is still metered by the
+    provider, so it counts as one megapixel rather than disappearing from spend."""
     try:
         measured: Final = tuple(read_image_dimensions(image) for image in images)
     except Exception:  # noqa: BLE001  # a billing helper must fall back, never fail the request
-        return None
-    dimensions: Final = tuple(size for size in measured if size is not None)
-    if len(dimensions) != len(measured):
+        return _UNMEASURED_REFERENCE_PIXELS * (len(images) if isinstance(images, Sized) else 1)
+    unmeasured: Final = sum(size is None for size in measured)
+    if unmeasured:
         verbose_logger.debug(
-            "Reference image %d could not be measured (path, non-seekable stream, or no readable PNG, JPEG, WebP, "
-            "GIF or BMP header); billing generated pixels only",
-            measured.index(None),
+            "%d reference image(s) could not be measured (path, non-seekable stream, or no readable PNG, JPEG, "
+            "WebP, GIF or BMP header); billing each as one megapixel",
+            unmeasured,
         )
-        return None
-    return sum(size.pixels for size in dimensions)
+    return sum(_UNMEASURED_REFERENCE_PIXELS if size is None else size.pixels for size in measured)
 
 
 def uploaded_reference_pixels(
     files: RequestFiles | None,
     json_body: Mapping[str, object] | None,
-) -> int | None:
+) -> int:
     """Pixels across the image-bearing parts a request actually sends.
 
     Multipart requests carry image content under ``files``; JSON requests embed base64 inside
     ``json_body`` (e.g. FLUX ``input_image`` fields). Measuring the outgoing payload instead of the
     caller's arguments keeps billing aligned with what the provider meters when a transform filters
-    images out or adds parts of its own (masks, single-image providers). All-or-nothing, ``0`` when
-    nothing image-bearing is sent.
+    images out or adds parts of its own (masks, single-image providers). ``0`` when nothing
+    image-bearing is sent.
     """
     parts: Final = _file_parts(files) + tuple(_embedded_image_values(json_body))
     if not parts:
@@ -110,7 +111,7 @@ def read_image_dimensions(image: FileTypes) -> ImageDimensions | None:
             if embedded is None:
                 return None
             return _dimensions_from_stream(BytesIO(embedded))
-        stream = BytesIO(content) if isinstance(content, (bytes, bytearray, memoryview)) else content
+        stream: Final = BytesIO(content) if isinstance(content, (bytes, bytearray, memoryview)) else content
         return _dimensions_from_stream(stream)
     except Exception:  # noqa: BLE001  # an odd stream or malformed file must fall back, never raise
         return None
@@ -127,7 +128,7 @@ def _dimensions_from_stream(stream: IO[bytes]) -> ImageDimensions | None:
         return None
     position: Final = stream.tell()
     try:
-        dimensions = _header_dimensions(stream, 0)
+        dimensions: Final = _header_dimensions(stream, 0)
     finally:
         stream.seek(position)
     if dimensions is None or dimensions.width <= 0 or dimensions.height <= 0:

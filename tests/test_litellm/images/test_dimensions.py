@@ -9,6 +9,7 @@ import pytest
 from PIL import Image
 
 from litellm.images.dimensions import (
+    _UNMEASURED_REFERENCE_PIXELS,
     ImageDimensions,
     read_image_dimensions,
     total_reference_pixels,
@@ -309,30 +310,32 @@ def test_read_image_dimensions_returns_none_for_short_and_none_tuples():
     assert read_image_dimensions(("ref.png", None)) is None
 
 
-def test_total_reference_pixels_returns_none_instead_of_raising():
-    assert total_reference_pixels([("ref.png",)]) is None
-    assert total_reference_pixels(cast(Any, 123)) is None
+def test_total_reference_pixels_bills_unmeasurable_input_as_one_megapixel():
+    assert total_reference_pixels([("ref.png",)]) == _UNMEASURED_REFERENCE_PIXELS
+    assert total_reference_pixels(cast(Any, 123)) == _UNMEASURED_REFERENCE_PIXELS
 
 
-def test_total_reference_pixels_returns_none_for_closed_and_read_only_streams():
+def test_total_reference_pixels_bills_closed_and_read_only_streams_as_one_megapixel():
     closed: Final = io.BytesIO(_png(64, 64))
     closed.close()
 
-    assert total_reference_pixels([closed]) is None
-    assert total_reference_pixels([cast(Any, _ReadOnlyObject())]) is None
+    assert total_reference_pixels([closed]) == _UNMEASURED_REFERENCE_PIXELS
+    assert total_reference_pixels([cast(Any, _ReadOnlyObject())]) == _UNMEASURED_REFERENCE_PIXELS
 
 
-def test_total_reference_pixels_returns_none_when_a_reference_has_invalid_dimensions():
+def test_total_reference_pixels_bills_invalid_dimensions_as_one_megapixel():
     negative_width_bmp: Final = _bmp(-1024, 768)
 
     assert read_image_dimensions(negative_width_bmp) is None
-    assert total_reference_pixels([negative_width_bmp, _png(1024, 1024)]) is None
+    assert total_reference_pixels([negative_width_bmp, _png(1024, 1024)]) == _UNMEASURED_REFERENCE_PIXELS + 1024 * 1024
 
 
-def test_total_reference_pixels_returns_none_when_any_reference_is_unmeasurable():
+def test_total_reference_pixels_bills_each_unmeasurable_reference_as_one_megapixel():
     assert total_reference_pixels([_png(64, 64), CAT_JPEG.read_bytes()]) == 64 * 64 + 512 * 512
     assert total_reference_pixels([_png(64, 64), _gif(b"GIF89a", 100, 50)]) == 64 * 64 + 100 * 50
-    assert total_reference_pixels([_png(64, 64), io.BytesIO(b"image"), CAT_JPEG.read_bytes()]) is None
+    assert total_reference_pixels([_png(64, 64), io.BytesIO(b"image"), CAT_JPEG.read_bytes()]) == (
+        64 * 64 + _UNMEASURED_REFERENCE_PIXELS + 512 * 512
+    )
     assert total_reference_pixels([]) == 0
 
 
@@ -343,31 +346,42 @@ def test_uploaded_reference_pixels_measures_the_uploaded_set_not_the_requested_s
     # a transform that keeps only the first image (MAI) bills only what it sends
     assert uploaded_reference_pixels({"image[]": ("ref.png", _png(64, 64))}, {"prompt": "hi"}) == 64 * 64
     # FLUX.2 embeds each reference as a base64 field in the JSON body
-    assert uploaded_reference_pixels(
-        [],
-        {"model": "FLUX.2-flex", "prompt": "blend", "input_image": png_b64, "input_image_2": jpeg_b64, "n": 2},
-    ) == 64 * 64 + 512 * 512
+    assert (
+        uploaded_reference_pixels(
+            [],
+            {"model": "FLUX.2-flex", "prompt": "blend", "input_image": png_b64, "input_image_2": jpeg_b64, "n": 2},
+        )
+        == 64 * 64 + 512 * 512
+    )
     # an extra file part a transform adds itself (a mask) is uploaded and metered too
-    assert uploaded_reference_pixels(
-        {"image": ("edit.png", _png(64, 64)), "mask": ("mask.png", _png(10, 10))}, {"prompt": "cut"}
-    ) == 64 * 64 + 10 * 10
+    assert (
+        uploaded_reference_pixels(
+            {"image": ("edit.png", _png(64, 64)), "mask": ("mask.png", _png(10, 10))}, {"prompt": "cut"}
+        )
+        == 64 * 64 + 10 * 10
+    )
 
 
 def test_uploaded_reference_pixels_skips_non_image_fields_and_nested_bodies():
     png_b64: Final = base64.b64encode(_png(64, 64)).decode()
     jpeg_b64: Final = base64.b64encode(CAT_JPEG.read_bytes()).decode()
 
-    assert uploaded_reference_pixels(
-        {"image": ("edit.png", _png(64, 64))},
-        {"model": "m", "prompt": "hi", "size": "1024x1024", "extra": {"nested": jpeg_b64}, "refs": [png_b64]},
-    ) == 64 * 64 + 512 * 512 + 64 * 64
+    assert (
+        uploaded_reference_pixels(
+            {"image": ("edit.png", _png(64, 64))},
+            {"model": "m", "prompt": "hi", "size": "1024x1024", "extra": {"nested": jpeg_b64}, "refs": [png_b64]},
+        )
+        == 64 * 64 + 512 * 512 + 64 * 64
+    )
     assert uploaded_reference_pixels(None, {"prompt": "hi", "model": "m"}) == 0
     assert uploaded_reference_pixels(None, None) == 0
 
 
-def test_uploaded_reference_pixels_returns_none_when_any_uploaded_part_is_unmeasurable():
+def test_uploaded_reference_pixels_bills_each_unmeasurable_part_as_one_megapixel():
     png_b64: Final = base64.b64encode(_png(64, 64)).decode()
     truncated_png_b64: Final = base64.b64encode(_png(64, 64)[:16]).decode()
 
-    assert uploaded_reference_pixels({"image": io.BytesIO(b"not an image")}, None) is None
-    assert uploaded_reference_pixels(None, {"input_image": png_b64, "input_image_2": truncated_png_b64}) is None
+    assert uploaded_reference_pixels({"image": io.BytesIO(b"not an image")}, None) == _UNMEASURED_REFERENCE_PIXELS
+    assert uploaded_reference_pixels(None, {"input_image": png_b64, "input_image_2": truncated_png_b64}) == (
+        64 * 64 + _UNMEASURED_REFERENCE_PIXELS
+    )

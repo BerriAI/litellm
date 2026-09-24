@@ -269,8 +269,6 @@ class TestImageEditCustomPricing:
         assert use_custom_pricing_for_model(litellm_params) is False
 
     def test_image_edit_forwards_custom_pricing_kwargs_to_logging(self):
-        """Pricing a deployment declares under litellm_params (e.g. input_cost_per_pixel)
-        reaches self.litellm_params so use_custom_pricing_for_model fires on image edits."""
         from litellm.images.main import image_edit
 
         captured_litellm_params = {}
@@ -344,9 +342,7 @@ class TestImageEditHandlerCredentialsForwarding:
             "vertex_ai_credentials": "/path/to/creds.json",
         }
 
-        with patch.object(
-            config, "_ensure_access_token", return_value=("token", "project")
-        ) as mock_ensure:
+        with patch.object(config, "_ensure_access_token", return_value=("token", "project")) as mock_ensure:
             config.validate_environment(
                 headers={},
                 model="test-model",
@@ -375,9 +371,7 @@ class TestImageEditHandlerCredentialsForwarding:
             "vertex_ai_credentials": "/path/to/creds.json",
         }
 
-        with patch.object(
-            config, "_ensure_access_token", return_value=("token", "project")
-        ) as mock_ensure:
+        with patch.object(config, "_ensure_access_token", return_value=("token", "project")) as mock_ensure:
             config.validate_environment(
                 headers={},
                 model="test-model",
@@ -447,10 +441,6 @@ class TestImageEditHandlerCredentialsForwarding:
             params = list(sig.parameters.keys())
 
             assert "litellm_params" in params, (
-                f"{config.__class__.__name__}.validate_environment "
-                "missing litellm_params parameter"
+                f"{config.__class__.__name__}.validate_environment missing litellm_params parameter"
             )
-            assert "api_base" in params, (
-                f"{config.__class__.__name__}.validate_environment "
-                "missing api_base parameter"
-            )
+            assert "api_base" in params, f"{config.__class__.__name__}.validate_environment missing api_base parameter"
