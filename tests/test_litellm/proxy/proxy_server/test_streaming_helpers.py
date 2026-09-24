@@ -2058,3 +2058,13 @@ async def test_queue_request_stream_is_untouched_while_keepalives_are_unconfigur
 
     assert not any(chunk.startswith(b": ping") for chunk in chunks)
     assert chunks[-1] == b"data: [DONE]\n\n"
+
+
+def test_fast_serialize_simple_model_response_stream_keeps_served_service_tier():
+    chunk = _simple_chunk()
+    chunk.service_tier = "priority"
+
+    result = _fast_serialize_simple_model_response_stream(chunk)
+
+    assert result is not None
+    assert json.loads(result)["service_tier"] == "priority"

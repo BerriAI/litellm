@@ -4352,3 +4352,20 @@ def test_map_optional_params_verbosity_merges_into_text():
         verbosity_only_request,
     )
     assert verbosity_only_request["text"] == {"verbosity": "low"}
+
+
+def test_response_completed_carries_the_served_service_tier():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    result = iterator.chunk_parser(
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_1", "status": "completed", "output": [], "service_tier": "default"},
+        }
+    )
+
+    assert result.model_dump()["service_tier"] == "default"

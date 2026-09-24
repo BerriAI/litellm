@@ -13,10 +13,18 @@ priority processing and served the default tier, the test fails there instead of
 producing a vacuous rate comparison. Reasoning is requested explicitly with
 `reasoning_effort`, so the reasoning-rate assertion rests on a parameter the test
 sets rather than on whatever the model happens to do by default.
+
+The streaming cases pin the served-tier contract: OpenAI stamps the tier it actually
+used on every stream chunk, and that echo is what the caller sees and what the bill
+must be computed on. The request sets no service_tier, so the only place the tier
+can come from is the provider's response. The spend row must record the served tier
+and price input at that tier's rate, and every chunk the proxy relays must carry the
+same service_tier the provider sent.
 """
 
-import pytest
+import json
 
+import pytest
 from cost_rows import (
     approx_equal,
     assert_fresh_tokens_billed_at,
@@ -24,16 +32,18 @@ from cost_rows import (
     poll_cost_row,
     register_priced_model,
 )
-from e2e_config import unique_marker
+from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import unwrap
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, LiteLLMParamsBody
+from models import ChatBody, ChatMessage, ChatStreamOptions, LiteLLMParamsBody
+from pydantic import BaseModel
 from spend_e2e_client import SpendClient
 
 pytestmark = pytest.mark.e2e
 
 BACKEND = "openai/gpt-5.6-luna"
 OPENAI_API_KEY = "os.environ/OPENAI_API_KEY"
+STREAM_BACKEND = f"openai/{CHEAP_OPENAI_MODEL}"
 
 INPUT_RATE = 4e-05
 OUTPUT_RATE = 8e-05
@@ -41,6 +51,26 @@ PRIORITY_INPUT_RATE = 6e-05
 PRIORITY_OUTPUT_RATE = 1.6e-04
 
 REASONING_EFFORT = "high"
+
+TIER_INPUT_RATES = {"default": INPUT_RATE, "priority": PRIORITY_INPUT_RATE}
+
+
+class _StreamChunk(BaseModel):
+    id: str | None = None
+    service_tier: str | None = None
+
+
+def _stream_chunks(events: list[str]) -> list[_StreamChunk]:
+    return [_StreamChunk.model_validate_json(event) for event in events if event.strip() != "[DONE]"]
+
+
+def _served_tier(chunks: list[_StreamChunk]) -> str:
+    tiers = {chunk.service_tier for chunk in chunks if chunk.service_tier}
+    assert len(tiers) == 1, (
+        f"the relayed stream carried {tiers or 'no'} service tier(s) across {len(chunks)} chunks; OpenAI stamps "
+        "the served tier on every chat chunk, so exactly one tier must reach the caller"
+    )
+    return tiers.pop()
 
 
 class TestServiceTierPricing:
@@ -83,8 +113,7 @@ class TestServiceTierPricing:
             )
         )
         assert chat.service_tier == "priority", (
-            f"OpenAI served tier {chat.service_tier!r} instead of priority; "
-            "tier billing was never exercised"
+            f"OpenAI served tier {chat.service_tier!r} instead of priority; tier billing was never exercised"
         )
         assert chat.id, f"chat response carried no id: {chat}"
 
@@ -119,3 +148,78 @@ class TestServiceTierPricing:
         )
 
         assert_total_is_sum_of_components(row)
+
+    @pytest.mark.covers("quota_management.spend_tracking.service_tier_stream.records_served_tier")
+    def test_streamed_call_records_and_bills_the_served_tier(
+        self, client: SpendClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        model = register_priced_model(
+            client.proxy,
+            resources,
+            "tier-priced-stream",
+            LiteLLMParamsBody(
+                model=BACKEND,
+                api_key=OPENAI_API_KEY,
+                input_cost_per_token=INPUT_RATE,
+                output_cost_per_token=OUTPUT_RATE,
+                input_cost_per_token_priority=PRIORITY_INPUT_RATE,
+                output_cost_per_token_priority=PRIORITY_OUTPUT_RATE,
+            ),
+        )
+
+        result = client.proxy.chat_stream(
+            scoped_key,
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=f"{unique_marker()} reply with one word")],
+                max_completion_tokens=64,
+                stream=True,
+            ),
+        )
+        assert result.ok and result.stream_events, (
+            f"streamed chat failed (status {result.status_code}): {result.body[:300]}"
+        )
+        chunks = _stream_chunks(result.stream_events)
+        served_tier = _served_tier(chunks)
+        assert served_tier in TIER_INPUT_RATES, f"no custom rate registered for served tier {served_tier!r}"
+        stream_id = chunks[0].id
+        assert stream_id, f"first stream chunk carried no id: {result.stream_events[0][:200]}"
+
+        row = poll_cost_row(client.proxy, stream_id)
+        assert row is not None, f"no spend row with a cost breakdown landed for {stream_id}"
+        assert row.breakdown.service_tier == served_tier, (
+            f"the provider served tier {served_tier!r} on every chunk but the bill records "
+            f"pricing basis {row.breakdown.service_tier!r}"
+        )
+        assert_fresh_tokens_billed_at(row, TIER_INPUT_RATES[served_tier])
+        assert_total_is_sum_of_components(row)
+
+    @pytest.mark.covers("llm.chat_completions.openai.service_tier.stream.echoes_served_tier")
+    def test_every_streamed_chunk_carries_the_served_tier(
+        self, client: SpendClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        model = register_priced_model(
+            client.proxy, resources, "tier-echo-stream", LiteLLMParamsBody(model=STREAM_BACKEND, api_key=OPENAI_API_KEY)
+        )
+        result = client.proxy.chat_stream(
+            scoped_key,
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=f"{unique_marker()} reply with one word")],
+                max_completion_tokens=64,
+                stream=True,
+                stream_options=ChatStreamOptions(include_usage=True),
+            ),
+        )
+        assert result.ok and result.stream_events, (
+            f"streamed chat failed (status {result.status_code}): {result.body[:300]}"
+        )
+        chunks = _stream_chunks(result.stream_events)
+        served_tier = _served_tier(chunks)
+        missing = [
+            json.loads(event) for event, chunk in zip(result.stream_events, chunks) if chunk.service_tier is None
+        ]
+        assert not missing, (
+            f"{len(missing)} of {len(chunks)} relayed chunks dropped the provider's service_tier "
+            f"{served_tier!r}: {missing}"
+        )

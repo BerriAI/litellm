@@ -1598,6 +1598,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
                 usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response_data.get("usage"))
             provider_metadata: Final = _provider_metadata(response_data)
+            served_service_tier: Final = response_data.get("service_tier")
             return ModelResponseStream(
                 choices=[
                     StreamingChoices(
@@ -1611,6 +1612,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 ],
                 usage=usage,
                 provider_specific_fields=dict(provider_metadata) or None,  # mutable-ok: field is typed dict
+                **({"service_tier": served_service_tier} if isinstance(served_service_tier, str) else {}),
             )
         else:
             pass
