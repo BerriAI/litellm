@@ -24,7 +24,7 @@ const request = (overrides: Partial<CacheRequest> = {}): CacheRequest => ({
   ...overrides,
 });
 const response = (requests: CacheRequest[], nextCursor: RequestsResponse["next_cursor"] = null) => {
-  const body: RequestsResponse = { requests, has_more: nextCursor !== null, next_cursor: nextCursor, page_size: 50 };
+  const body: RequestsResponse = { requests, has_more: nextCursor !== null, next_cursor: nextCursor, page_size: 10 };
   return Response.json(body);
 };
 const lastQuery = () => new URL(String(fetchMock.mock.calls.at(-1)?.[0]), "http://localhost").searchParams;
@@ -80,6 +80,36 @@ describe("PromptCachingRequestsTable", () => {
     expect(lastQuery().get("start_date")).toBe("2026-09-01T00:00:00.000Z");
     expect(lastQuery().get("end_date")).toBe("2026-09-02T23:59:59.999Z");
     expect(fetchMock.mock.calls[0][1]?.headers).toEqual(expect.objectContaining({ Authorization: "Bearer token-a" }));
+  });
+
+  it("shows ten requests per page and keeps the remaining request reachable", async () => {
+    const rows = Array.from({ length: 11 }, (_, index) => request({ request_id: `request-${index + 1}` }));
+    fetchMock.mockImplementation(async (input) => {
+      const query = new URL(String(input), "http://localhost").searchParams;
+      const start = rows.findIndex((row) => row.request_id === query.get("cursor_request_id")) + 1;
+      const end = start + Number(query.get("page_size"));
+      const page = rows.slice(start, end);
+      const last = page.at(-1);
+      return response(
+        page,
+        end < rows.length && last ? { start_time: last.start_time, request_id: last.request_id } : null,
+      );
+    });
+    renderWithProviders(<PromptCachingRequestsTable accessToken="token-a" dateValue={dates} />);
+
+    const table = await screen.findByRole("table", { name: "Prompt caching requests" });
+    expect(within(table).getAllByRole("link")).toHaveLength(10);
+    expect(within(table).queryByRole("link", { name: "request-11" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await screen.findByRole("link", { name: "request-11" });
+    expect(within(screen.getByRole("table", { name: "Prompt caching requests" })).getAllByRole("link")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    await screen.findByRole("link", { name: "request-1" });
+    expect(within(screen.getByRole("table", { name: "Prompt caching requests" })).getAllByRole("link")).toHaveLength(
+      10,
+    );
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
   });
 
   it("forwards complete server cursors, goes back to prior cursors, and clears them for each caching filter", async () => {
@@ -141,7 +171,7 @@ describe("PromptCachingRequestsTable", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Cache hits" }));
     await screen.findByRole("link", { name: "hits-1" });
     expect(lastQuery().get("filter")).toBe("hits");
-    expect(lastQuery().get("page_size")).toBe("50");
+    expect(lastQuery().get("page_size")).toBe("10");
     expect(screen.getByText("Page 1")).toBeInTheDocument();
   });
 
