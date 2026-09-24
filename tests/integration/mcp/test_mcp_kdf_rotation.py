@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from integration._support.client import Gateway
 from integration._support.mcp import McpPeer, mcp_peer, register_mcp
-from integration._support.oauth_server import oauth_server
+from integration._support.oauth_server import AuthorizationServer, oauth_server
 from integration._support.process import owned_proxy
 from pydantic import SecretStr
 from typing_extensions import ReadOnly, TypedDict
@@ -147,7 +147,7 @@ def _session_refresh(user_id: str, client_id: str, keys: SessionKeys) -> str:
     return minted.token.get_secret_value()
 
 
-def _upstream_refresh(auth) -> str:
+def _upstream_refresh(auth: AuthorizationServer) -> str:
     issued: Final = auth.issue("authorization_code", "kdf-client", "integration-user", "tools.read tools.call")
     token: Final = issued["refresh_token"]
     assert isinstance(token, str) and token, issued
