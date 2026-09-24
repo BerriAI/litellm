@@ -54,9 +54,12 @@ def build_count_tokens_payload(raw: AnthropicCountTokensInput) -> GeminiCountTok
     request: Final = _validated_request(raw)
     if isinstance(request, InvalidAnthropicRequest):
         return request
-    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-        request, custom_llm_provider="gemini"
-    )
+    try:
+        openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+            request, custom_llm_provider="gemini"
+        )
+    except (KeyError, TypeError, ValueError) as e:
+        return InvalidAnthropicRequest(message=f"Invalid Anthropic Messages request: {e!r}")
     system_instruction, remaining_messages = _transform_system_message(
         supports_system_message=True, messages=openai_request["messages"]
     )

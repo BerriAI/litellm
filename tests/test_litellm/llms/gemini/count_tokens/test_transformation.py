@@ -138,3 +138,12 @@ def test_tools_that_are_not_a_list_are_rejected_as_invalid():
 
     assert isinstance(result, InvalidAnthropicRequest), result
     assert "tools" in result.message, result.message
+
+
+def test_message_without_a_role_is_rejected_as_invalid_not_raised():
+    result = build_count_tokens_payload(
+        {"model": MODEL, "messages": [{"content": "hi"}], "system": None, "tools": None}
+    )
+
+    assert isinstance(result, InvalidAnthropicRequest), result
+    assert "role" in result.message, result.message
