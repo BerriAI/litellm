@@ -14,8 +14,6 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel
-
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
@@ -58,6 +56,7 @@ from litellm.types.llms.vertex_ai import (
     Tools,
 )
 from litellm.types.utils import GenericImageParsingChunk, LlmProviders
+from pydantic import BaseModel
 
 from ..common_utils import (
     _check_text_in_content,
@@ -640,40 +639,20 @@ def check_if_part_exists_in_parts(parts: list[PartType], part: PartType, exclude
 
 
 def _get_valid_base64_thought_signature(signature: object) -> str | None:
-    """Validate that a thought signature is a non-empty, valid Base64-encoded string.
-
-    Supports both standard Base64 (+, /) and URL-safe Base64 (-, _) variants, with
-    lenient handling of missing padding (=) stripped by upstream gateways.
-    Returns the valid Base64 string, or None if malformed or non-string.
-    Vertex AI / Gemini rejects requests before inference with HTTP 400 (TYPE_BYTES
-    decoding failed) if an invalid Base64 string is forwarded as a thought_signature.
-    """
     if not isinstance(signature, str):
         return None
-    val_clean = signature.strip()
-    if not val_clean:
+    stripped: Final = signature.strip()
+    if not stripped:
         return None
 
-    # Restore missing padding if stripped by upstream proxies
-    missing_padding = len(val_clean) % 4
-    if missing_padding:
-        val_clean += "=" * (4 - missing_padding)
+    padded: Final = stripped + "=" * (-len(stripped) % 4)
 
     try:
-        decoded = base64.b64decode(val_clean.encode("utf-8"), validate=True)
-        if len(decoded) > 0:
-            return val_clean
+        decoded: Final = base64.b64decode(padded.encode("utf-8"), altchars=b"-_", validate=True)
     except (binascii.Error, ValueError):
-        # Fall back to URL-safe Base64 decoding (- and _ instead of + and /)
-        try:
-            decoded = base64.urlsafe_b64decode(val_clean.encode("utf-8"))
-            if len(decoded) > 0:
-                return val_clean
-        except (binascii.Error, ValueError):
-            return None
+        return None
 
-    return None
-
+    return padded if decoded else None
 
 
 def _collect_tool_call_thought_signatures(
@@ -932,9 +911,7 @@ def _gemini_convert_messages_with_history(
                             valid_block_sig = _get_valid_base64_thought_signature(block_signature)
                             if block_thinking_str is not None:
                                 sig_kwargs: dict[str, Any] = (
-                                    {"thoughtSignature": valid_block_sig}
-                                    if valid_block_sig is not None
-                                    else {}
+                                    {"thoughtSignature": valid_block_sig} if valid_block_sig is not None else {}
                                 )
                                 try:
                                     assistant_content.append(
@@ -975,18 +952,11 @@ def _gemini_convert_messages_with_history(
 
                     valid_text_signature = (
                         _get_valid_base64_thought_signature(thought_signatures[0])
-                        if (
-                            thought_signatures
-                            and isinstance(thought_signatures, list)
-                            and len(thought_signatures) > 0
-                        )
+                        if (thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0)
                         else None
                     )
 
-                    if (
-                        valid_text_signature
-                        and valid_text_signature not in tool_call_signatures
-                    ):
+                    if valid_text_signature and valid_text_signature not in tool_call_signatures:
                         # Use the first signature for the text part (Gemini expects one signature per part)
                         assistant_content.append(
                             PartType(
@@ -1067,9 +1037,7 @@ def _gemini_convert_messages_with_history(
                                 }
                             }
                             if "thought_signature" in invocation:
-                                valid_inv_sig = _get_valid_base64_thought_signature(
-                                    invocation["thought_signature"]
-                                )
+                                valid_inv_sig = _get_valid_base64_thought_signature(invocation["thought_signature"])
                                 if valid_inv_sig:
                                     tc_part["thoughtSignature"] = valid_inv_sig
                             assistant_content.append(tc_part)
