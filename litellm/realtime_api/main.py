@@ -619,7 +619,9 @@ def _realtime_health_check_auth_headers(
     if custom_llm_provider == "azure":
         return azure_realtime.get_auth_headers(
             api_key=api_key,
-            azure_ad_token=(None if api_key else get_azure_ad_token(GenericLiteLLMParams.model_validate(model_params))),
+            azure_ad_token=(
+                None if api_key else get_azure_ad_token(GenericLiteLLMParams.model_validate(dict(model_params)))
+            ),
         )
     if api_key is None:
         return _EMPTY_AUTH_HEADERS
