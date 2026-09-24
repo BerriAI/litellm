@@ -519,13 +519,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [accessToken, apiKeySource, apiKey, endpointType, customProxyBaseUrl, selectedAgent]);
 
   useEffect(() => {
-    // Scroll to the bottom of the chat whenever chatHistory updates, unless the user scrolled up
+    // Scroll to the bottom of the chat whenever chatHistory updates
     if (!pinnedToBottomRef.current) return;
     if (chatEndRef.current) {
       // Add a small delay to ensure content is rendered
       setTimeout(() => {
         chatEndRef.current?.scrollIntoView({
-          behavior: "smooth",
           block: "end", // Keep the scroll position at the end
         });
       }, 100);
