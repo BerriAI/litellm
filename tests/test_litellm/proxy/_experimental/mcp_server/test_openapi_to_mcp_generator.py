@@ -1538,6 +1538,8 @@ async def test_local_spec_read_respects_async_timeout(tmp_path: Path) -> None:
     ):
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(load_openapi_spec_async(str(path)), timeout=0.02)
+
+
 class TestBoundedOpenAPISpecLoading:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("max_bytes", [12, 13])
