@@ -25,8 +25,8 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
-from litellm.types.litellm_params import ADDRESSED_RESPONSE_ID_FIELD
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
 
 
 class _StopForwarding(Exception):

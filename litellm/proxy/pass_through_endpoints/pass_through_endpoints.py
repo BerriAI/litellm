@@ -641,17 +641,26 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if isinstance(deployment_model_info, Mapping):
             _metadata["model_info"] = dict(deployment_model_info)
 
-        kwargs: Final = {
-            "litellm_params": {
-                **litellm_params_in_body,
-                "metadata": _metadata,
-                "proxy_server_request": {
-                    "url": str(request.url),
-                    "method": request.method,
-                    "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
-                    "headers": request.headers,
-                },
+        _litellm_params_with_metadata: Final = {
+            **litellm_params_in_body,
+            "metadata": _metadata,
+        }
+        ordered_litellm_params: Final = {
+            **{
+                k: _litellm_params_with_metadata[k]
+                for k in types_utils.all_litellm_params
+                if k in _litellm_params_with_metadata
             },
+            "proxy_server_request": {
+                "url": str(request.url),
+                "method": request.method,
+                "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
+                "headers": request.headers,
+            },
+        }
+
+        kwargs: Final = {
+            "litellm_params": ordered_litellm_params,
             "call_type": "pass_through_endpoint",
             "litellm_call_id": litellm_call_id,
             "passthrough_logging_payload": passthrough_logging_payload,

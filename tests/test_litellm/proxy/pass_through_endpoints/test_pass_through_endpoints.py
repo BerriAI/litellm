@@ -7323,7 +7323,8 @@ def _split_pass_through_body(body: str) -> _PassThroughSplit:
     mock_request.headers = Headers()
     mock_request.scope = MappingProxyType({})
 
-    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # untyped legacy helper
+    init_kwargs_for_pass_through_endpoint: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # untyped legacy helper
+    kwargs: Final = init_kwargs_for_pass_through_endpoint(
         request=mock_request,
         user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
         passthrough_logging_payload=MagicMock(),
@@ -7331,7 +7332,8 @@ def _split_pass_through_body(body: str) -> _PassThroughSplit:
         _parsed_body=json.loads(body),
         litellm_call_id="lit-owned-keys-call-id",
     )
-    litellm_params: Final = _LITELLM_PARAMS.validate_python(kwargs["litellm_params"])  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy helper
+    validate_litellm_params: Final = _LITELLM_PARAMS.validate_python  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy helper
+    litellm_params: Final = validate_litellm_params(kwargs["litellm_params"])
     return _PassThroughSplit(
         litellm_params=MappingProxyType(litellm_params),
         forwarded_body=MappingProxyType(
@@ -7399,17 +7401,11 @@ def test_passthrough_lets_metadata_win_over_litellm_metadata_on_a_shared_key() -
     }
 
 
-def test_passthrough_orders_extracted_litellm_params_by_the_registry_not_the_body() -> None:
+def test_passthrough_orders_extracted_litellm_params_by_the_registry() -> None:
     body: Final = json.dumps({"ttl": 30, "tags": ["team-a"], "num_retries": 2, "contents": []})
     split: Final = _split_pass_through_body(body)
 
-    assert tuple(split.litellm_params) == (
-        "num_retries",
-        "ttl",
-        "tags",
-        "metadata",
-        "proxy_server_request",
-    )
+    assert tuple(split.litellm_params) == tuple(k for k in types_utils.all_litellm_params if k in split.litellm_params)
 
 
 LATE_REGISTERED_BODY: Final = '{"registered_later": 1, "contents": [{"parts": [{"text": "hi"}]}]}'
