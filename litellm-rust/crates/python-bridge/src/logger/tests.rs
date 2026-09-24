@@ -1,4 +1,4 @@
-use std::{process::Command, task::Poll};
+use std::{convert::Infallible, process::Command, task::Poll};
 
 use litellm_host::{
     host::HostResult,
@@ -8,22 +8,24 @@ use litellm_host::{
 
 use pyo3::{prelude::*, types::PyDict};
 
-struct DiagnosticMachine;
+struct Silent;
 
-impl Route for DiagnosticMachine {
+impl Route for Silent {
     type Response = ();
     type Error = String;
-    type Op = ();
-    type OpResult = ();
-    type Chunk = ();
-    type StreamHead = ();
+    type Op = Infallible;
+    type OpResult = Infallible;
+    type Chunk = Infallible;
+    type StreamHead = Infallible;
 }
 
+struct DiagnosticMachine;
+
 impl Machine for DiagnosticMachine {
-    type Route = Self;
+    type Route = Silent;
     type Complete = ();
 
-    fn resume(&mut self, _: Option<HostResult<Self>>) -> Step<'_, Self> {
+    fn resume(&mut self, _: Option<HostResult<Silent>>) -> Step<'_, Self> {
         litellm_tracing::warn!("machine started");
         Box::pin(async {
             tokio::task::yield_now().await;
