@@ -58,13 +58,12 @@ from litellm.types.mcp import MCPServerCostInfo
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
-from .litellm_params import (  # noqa: F401  # importers read both FIELD constants from litellm.types.utils
-    ADDRESSED_RESPONSE_ID_FIELD,
+from .litellm_params import (
     KWARG_ARTIFACTS,
     LITELLM_OWNED_ROOTS,
-    TRUSTED_CALLBACK_VARS_FIELD,
     AgenticLoopState,
     BedrockBatchConnection,
+    owned_wire_names,
     wire_names,
 )
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -3917,7 +3916,7 @@ agentic_loop_internal_litellm_params: Final = list(  # mutable-ok: public type s
 bedrock_batch_litellm_params: Final = wire_names(BedrockBatchConnection)
 
 all_litellm_params = [  # rebind-ok: litellm/__init__.py star imports rebind it  # mutable-ok: callers concat lists
-    *(name for root in LITELLM_OWNED_ROOTS for name in wire_names(root)),
+    *(name for root in LITELLM_OWNED_ROOTS for name in owned_wire_names(root)),
     *KWARG_ARTIFACTS,
     *StandardCallbackDynamicParams.__annotations__,
     *CustomPricingLiteLLMParams.model_fields,

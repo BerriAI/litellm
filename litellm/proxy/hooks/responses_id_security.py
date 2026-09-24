@@ -18,11 +18,12 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.types.litellm_params import ADDRESSED_RESPONSE_ID_FIELD
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypesLiteral, LLMResponseTypes, SpecialEnums
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, SpecialEnums
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache

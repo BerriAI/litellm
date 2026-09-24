@@ -15,21 +15,22 @@ declared here.
 
 A field's kwarg name is its field name unless the field carries `wire(...)` metadata,
 which is reserved for names that are not clean identifiers or that carry a leading
-underscore to mark them internal. Nothing constructs these objects yet; they are the
-declaration the request-boundary parser will target.
+underscore to mark them internal. Nothing constructs these objects yet.
 
-Three names in `all_litellm_params` are not settings at all and so get no field: `self`
+Four names in `all_litellm_params` are not settings at all and so get no field: `self`
 and `model_config` arrive when a caller forwards `locals()` or a model's attributes as
-kwargs, and `use_client` is a module-level flag that stopped being a kwarg. They stay
-registered so they keep falling out of provider params, and `KWARG_ARTIFACTS` names them.
+kwargs, and `use_client` and `rust` are module-level switches (`litellm.use_client`,
+`litellm.rust(...)`) that nothing reads from a call's kwargs. They stay registered so they
+keep falling out of provider params, and `KWARG_ARTIFACTS` names them.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 if TYPE_CHECKING:
+    import httpx
     from aiohttp import ClientSession
     from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
@@ -43,6 +44,17 @@ if TYPE_CHECKING:
     from litellm.types.router import ConfigurableClientsideParamsCustomAuth, DeploymentTypedDict, RetryPolicy
     from litellm.types.router_weights import RouterWeights
     from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderSpecificHeader
+
+    ProviderClient: TypeAlias = (
+        OpenAI
+        | AsyncOpenAI
+        | AzureOpenAI
+        | AsyncAzureOpenAI
+        | HTTPHandler
+        | AsyncHTTPHandler
+        | httpx.Client
+        | httpx.AsyncClient
+    )
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
@@ -64,7 +76,7 @@ class ProviderConnection:
     region_name: str | None = None
     headers: Mapping[str, str] | None = None
     provider_specific_header: "ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None" = None
-    client: "OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | HTTPHandler | AsyncHTTPHandler | None" = None
+    client: "ProviderClient | None" = None
     shared_session: "ClientSession | None" = None
     ssl_verify: bool | str | None = None
     request_timeout: float | None = None
@@ -114,7 +126,6 @@ class DispatchOptions:
     use_litellm_proxy: bool | None = None
     use_chat_completions_api: bool | None = None
     use_in_pass_through: bool | None = None
-    rust: bool | None = None
     allowed_openai_params: Sequence[str] | None = None
 
 
@@ -204,8 +215,8 @@ class ObservabilityOptions:
     """Identifiers, metadata and logging switches. Read by the logging object and callbacks."""
 
     id: str | None = None
-    metadata: Mapping[str, object] | None = None
-    litellm_metadata: Mapping[str, object] | None = None
+    metadata: MutableMapping[str, object] | None = None
+    litellm_metadata: MutableMapping[str, object] | None = None
     tags: Sequence[str] | None = None
     litellm_trace_id: str | None = None
     litellm_session_id: str | None = None
@@ -369,16 +380,21 @@ class InternalState:
     entrypoint: EntrypointState
 
 
-KWARG_ARTIFACTS: Final[tuple[str, ...]] = ("self", "use_client", "model_config")
+KWARG_ARTIFACTS: Final[tuple[str, ...]] = ("self", "use_client", "model_config", "rust")
 
 LITELLM_OWNED_ROOTS: Final = (ConnectionSettings, LiteLLMOptions, InternalState)
 
 
 def wire_names(owner: type) -> tuple[str, ...]:
-    """Kwarg names owned by `owner`, walking into nested dataclass fields in declaration order."""
+    """Kwarg names of `owner`'s own fields in declaration order: the field name unless `wire(...)` renames it."""
+    return tuple(owned.metadata.get(WIRE_NAME, owned.name) for owned in fields(owner))
+
+
+def owned_wire_names(root: type) -> tuple[str, ...]:
+    """Kwarg names of every object nested in `root`, in declaration order, plus any field `root` holds directly."""
     return tuple(
         name
-        for owned in fields(owner)
+        for owned in fields(root)
         for name in (
             wire_names(owned.type)
             if isinstance(owned.type, type) and is_dataclass(owned.type)
