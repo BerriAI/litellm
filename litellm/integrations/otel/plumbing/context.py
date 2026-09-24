@@ -406,7 +406,6 @@ _SCOPES: Final[tuple[OtelSpanScope, ...]] = get_args(OtelSpanScope)
 
 
 def tenant_span_scope_default() -> OtelSpanScope:
-    """The ``span_scope`` a tenant destination gets when its own callback vars name none."""
     import litellm
 
     configured: Final = litellm.otel_tenant_span_scope or os.environ.get(OTEL_TENANT_SPAN_SCOPE_ENV)

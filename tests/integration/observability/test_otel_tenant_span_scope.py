@@ -579,6 +579,23 @@ def test_langfuse_alias_and_otel_scope_disagree_rejected(gateway: Gateway, langf
         assert "span_scope" in response.text, response.text
 
 
+def test_split_scope_aliases_on_two_entries_rejected(gateway: Gateway, langfuse_vars: dict[str, JsonValue]) -> None:
+    response: Final = gateway.request(
+        "POST",
+        "/team/new",
+        {
+            "metadata": {
+                "logging": [
+                    *_key_logging_entry({**langfuse_vars, "langfuse_span_scope": "full"}),
+                    *_key_logging_entry({**langfuse_vars, SPAN_SCOPE_VAR: "llm_only"}),
+                ]
+            }
+        },
+    )
+    assert response.status_code == 400, f"expected 400, got {response.status_code}: {response.text}"
+    assert "span_scope" in response.text, response.text
+
+
 def test_additive_mode_operator_full_tenant_no_internal(gateway: Gateway, audit_sinks: SpanSinks, langfuse_vars: dict[str, JsonValue], otel_audit_config: AuditConfigWriter, tmp_path: Path) -> None:
     with _candidate(gateway, tmp_path, audit_sinks, otel_audit_config, settings={"otel_tenant_destination_mode": "additive"}) as candidate:
         with candidate.scenario() as scenario:

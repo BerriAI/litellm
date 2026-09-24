@@ -31,7 +31,6 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
-    conflicting_otel_span_scope_error,
     conflicting_span_scope_error,
     cross_entry_family_error,
 )
@@ -354,10 +353,8 @@ async def add_team_callbacks(
         stored_entry_vars: Final = [  # mutable-ok: read-only input to the checks, never stored
             entry.get("callback_vars") or {} for entry in stored_entries
         ]
-        scope_error: Final = conflicting_span_scope_error(data.callback_vars, stored_entry_vars)
-        if scope_error is not None:
-            raise _callback_config_error(scope_error)
-        otel_scope_error: Final = conflicting_otel_span_scope_error(
+        scope_error: Final = conflicting_span_scope_error(
+            data.callback_name,
             data.callback_vars,
             tuple(
                 entry_vars
@@ -365,8 +362,8 @@ async def add_team_callbacks(
                 if entry.get("callback_name") == data.callback_name
             ),
         )
-        if otel_scope_error is not None:
-            raise _callback_config_error(otel_scope_error)
+        if scope_error is not None:
+            raise _callback_config_error(scope_error)
         # One entry has to own a credential family end to end. The entries are
         # flattened into one dict before a request reads them, so an entry
         # naming only a destination would pair with a key written on another

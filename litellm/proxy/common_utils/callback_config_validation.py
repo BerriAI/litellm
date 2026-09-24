@@ -106,11 +106,6 @@ def _otel_span_scope_error(callback_name: str | None, callback_vars: Mapping[str
 
 
 def _alias_conflict_error(callback_vars: Mapping[str, str]) -> str | None:
-    """Reject one entry that names both scope aliases with different values.
-
-    ``otel_span_scope`` outranks ``langfuse_span_scope`` when they disagree, so
-    storing both would export the one and silently drop the other.
-    """
     langfuse_scope: Final = callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
     otel_scope: Final = callback_vars.get(_OTEL_SPAN_SCOPE_VAR)
     if langfuse_scope is None or otel_scope is None or langfuse_scope == otel_scope:
@@ -211,36 +206,28 @@ def cross_entry_family_error(
     )
 
 
+def _effective_span_scope(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
+    langfuse_scope: Final = (
+        callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR) if callback_name == _LANGFUSE_OTEL_CALLBACK else None
+    )
+    return callback_vars.get(_OTEL_SPAN_SCOPE_VAR) or langfuse_scope
+
+
 def conflicting_span_scope_error(
+    callback_name: str | None,
     callback_vars: Mapping[str, str] | None,
     stored_vars_by_entry: Sequence[Mapping[str, str]],
 ) -> str | None:
-    return _conflicting_var_error(_LANGFUSE_SPAN_SCOPE_VAR, callback_vars, stored_vars_by_entry)
-
-
-def conflicting_otel_span_scope_error(
-    callback_vars: Mapping[str, str] | None,
-    stored_vars_by_entry: Sequence[Mapping[str, str]],
-) -> str | None:
-    """``stored_vars_by_entry`` must hold only the entries of the same callback: the
-    request merges the var per backend, so two backends may legitimately disagree."""
-    return _conflicting_var_error(_OTEL_SPAN_SCOPE_VAR, callback_vars, stored_vars_by_entry)
-
-
-def _conflicting_var_error(
-    var: str,
-    callback_vars: Mapping[str, str] | None,
-    stored_vars_by_entry: Sequence[Mapping[str, str]],
-) -> str | None:
-    incoming: Final = None if callback_vars is None else callback_vars.get(var)
+    incoming: Final = None if callback_vars is None else _effective_span_scope(callback_name, callback_vars)
     if incoming is None:
         return None
     return next(
         (
-            f"{var} is already set to {stored!r} by another callback entry. "
+            f"span scope is already set to {stored!r} by another {callback_name} callback entry "
+            f"({_LANGFUSE_SPAN_SCOPE_VAR} and {_OTEL_SPAN_SCOPE_VAR} name the same setting). "
             f"Every entry shares one value: remove that entry or send the same value."
             for entry in stored_vars_by_entry
-            if (stored := entry.get(var)) not in (None, incoming)
+            if (stored := _effective_span_scope(callback_name, entry)) not in (None, incoming)
         ),
         None,
     )
@@ -260,9 +247,9 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
             error
             for error in (
                 *(_logging_entry_error(entry) for entry in entries),
-                *(conflicting_span_scope_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
                 *(
-                    conflicting_otel_span_scope_error(
+                    conflicting_span_scope_error(
+                        entry_names[i],
                         entry_vars[i],
                         tuple(vars_ for vars_, name in zip(entry_vars[:i], entry_names[:i]) if name == entry_names[i]),
                     )

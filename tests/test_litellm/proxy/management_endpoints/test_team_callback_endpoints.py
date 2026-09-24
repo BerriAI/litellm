@@ -1731,6 +1731,47 @@ async def test_a_second_entry_may_not_flip_span_scope_but_another_backend_may(pa
 
 
 @pytest.mark.asyncio
+async def test_split_span_scope_aliases_across_entries_are_rejected(patched_prisma):
+    """langfuse_span_scope and otel_span_scope name the same setting, so a stored
+    full under one name may not be flipped to llm_only under the other."""
+    patched_prisma.get_data = AsyncMock(
+        return_value=_team_row(
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk",
+                            "langfuse_secret_key": "sk",
+                            "langfuse_span_scope": "full",
+                        },
+                    }
+                ]
+            }
+        )
+    )
+    with pytest.raises(HTTPException) as exc:
+        await add_team_callbacks(
+            data=AddTeamCallback(
+                callback_name="langfuse_otel",
+                callback_type="failure",
+                callback_vars={
+                    "langfuse_public_key": "pk",
+                    "langfuse_secret_key": "sk",
+                    "otel_span_scope": "llm_only",
+                },
+            ),
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            user_api_key_dict=_admin_auth(),
+        )
+    assert exc.value.status_code == 400
+    assert "span_scope" in str(exc.value.detail) and "'full'" in str(exc.value.detail)
+    patched_prisma.db.litellm_teamtable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_add_team_callbacks_rejects_out_of_range_arize_sampling_rate(patched_prisma):
     data = AddTeamCallback(
         callback_name="arize",

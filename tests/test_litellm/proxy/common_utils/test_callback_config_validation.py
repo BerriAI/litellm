@@ -2,7 +2,6 @@ import pytest
 
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
-    conflicting_otel_span_scope_error,
     conflicting_span_scope_error,
     cross_entry_family_error,
     logging_metadata_config_error,
@@ -60,7 +59,7 @@ def test_a_bad_span_scope_is_reported_even_when_the_environment_is_fine():
 def test_one_span_scope_per_team(new_vars, stored, rejected):
     """The entries flatten last-wins, so a second scope would export whichever entry
     was stored last. An entry that names no scope leaves the stored one in charge."""
-    error = conflicting_span_scope_error(new_vars, stored)
+    error = conflicting_span_scope_error("langfuse_otel", new_vars, stored)
     assert (error is not None) is rejected
     if rejected:
         assert "langfuse_span_scope" in error and stored[-1]["langfuse_span_scope"] in error
@@ -166,7 +165,22 @@ def test_key_logging_entries_of_one_backend_may_not_disagree_on_span_scope():
     ],
 )
 def test_one_span_scope_value_per_backend(new_vars, stored, rejected):
-    error = conflicting_otel_span_scope_error(new_vars, stored)
+    error = conflicting_span_scope_error("arize", new_vars, stored)
+    assert (error is not None) is rejected
+
+
+@pytest.mark.parametrize(
+    "callback_name, new_vars, stored, rejected",
+    [
+        ("langfuse_otel", {"otel_span_scope": "llm_only"}, [{"langfuse_span_scope": "full"}], True),
+        ("newrelic", {"otel_span_scope": "llm_only"}, [{"otel_span_scope": "full"}], True),
+        ("langfuse_otel", {"otel_span_scope": "llm_only"}, [{"langfuse_span_scope": "llm_only"}], False),
+        ("langfuse_otel", {"otel_span_scope": "llm_only"}, [{"otel_span_scope": "llm_only"}], False),
+        ("langfuse_otel", {"langfuse_span_scope": "llm_only"}, [{"otel_span_scope": "llm_only"}], False),
+    ],
+)
+def test_split_span_scope_aliases_conflict_across_entries(callback_name, new_vars, stored, rejected):
+    error = conflicting_span_scope_error(callback_name, new_vars, stored)
     assert (error is not None) is rejected
 
 
