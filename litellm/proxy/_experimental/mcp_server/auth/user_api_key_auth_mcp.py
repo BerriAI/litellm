@@ -2045,18 +2045,24 @@ class MCPRequestHandler:
             auth
         ) or await MCPRequestHandler.admin_view_unscoped(auth)
 
-        source_grants: Final[list[McpToolGrant]] = []
-        for source, granted in await MCPRequestHandler.admitted_source_grants(auth):
-            # The open channel is evaluated against the user's OWN source (team_id is None), so that
-            # source's restrictions apply to it; a team's rules never ride an open-channel server.
-            if server_id not in granted and not (reachable_via_open_channel and source.team_id is None):
-                continue
-            source_grants.append(
+        # The open channel is evaluated against the user's OWN source (team_id is None), so that
+        # source's restrictions apply to it; a team's rules never ride an open-channel server.
+        granting_sources: Final = tuple(
+            source
+            for source, granted in await MCPRequestHandler.admitted_source_grants(auth)
+            if server_id in granted or (reachable_via_open_channel and source.team_id is None)
+        )
+        source_grants: Final[tuple[McpToolGrant, ...]] = tuple(
+            [
                 await MCPRequestHandler.resolve_tool_grant_for_server(server_id, source, keyless_source=True)
-            )
+                for source in granting_sources
+            ]
+        )
 
         if not source_grants:
-            return McpToolGrant(allowed=[], denied=frozenset())
+            return McpToolGrant(
+                allowed=[], denied=frozenset()  # mutable-ok: empty allowlist sentinel in a frozen grant; callers require list | None
+            )
 
         # A tool is granted when ANY granting source grants it (its allowlist reaches it and its own
         # denylist does not name it). Unrestricted sources cannot enumerate their tools, so the grant
@@ -2069,7 +2075,7 @@ class MCPRequestHandler:
             for tool in grant.allowed
             if tool not in grant.denied
         )
-        unrestricted_denied: Final = [grant.denied for grant in source_grants if grant.allowed is None]
+        unrestricted_denied: Final = tuple(grant.denied for grant in source_grants if grant.allowed is None)
         if unrestricted_denied:
             return McpToolGrant(
                 allowed=None,
@@ -2369,7 +2375,9 @@ class MCPRequestHandler:
             # keyless_source AND the marker are needed: each source resolves through an UNMARKED auth, so
             # without keyless_source a fault under a source returns None and wins the union as allow-all.
             deny_all = unreadable_entitlement or keyless_source or _is_mcp_admitted_user_subject(user_api_key_auth)
-            return McpToolGrant(allowed=[] if deny_all else None, denied=frozenset())
+            return McpToolGrant(
+                allowed=[] if deny_all else None, denied=frozenset()  # mutable-ok: deny-all sentinel shares the list | None contract of the except-free path
+            )
 
     @staticmethod
     async def _denied_tools_for_server(

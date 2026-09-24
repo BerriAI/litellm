@@ -1428,7 +1428,9 @@ async def filter_tools_by_key_team_permissions(
     # prefix (resolved from the server) rather than the first separator, so a
     # prefix containing the separator still reduces to the stored bare name.
     server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-    return [t for t in tools if grant.grants(strip_known_server_prefix(t.name, server))]
+    return [
+        t for t in tools if grant.grants(strip_known_server_prefix(t.name, server))
+    ]  # mutable-ok: list result is part of the function's signature; one-shot filter, never grown
 
 
 async def _list_mcp_tools(

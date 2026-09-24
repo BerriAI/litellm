@@ -124,7 +124,9 @@ async def prepare_object_permission_upsert(
         **new_object_permission,
         "object_permission_id": object_permission_id,
     }
-    record: Final[dict[str, object]] = {
+    record: Final[
+        dict[str, object]
+    ] = {  # mutable-ok: prisma create payload built in one shot from the merged fields, never grown afterward
         **merged,
         **{
             field: safe_dumps(merged[field])
@@ -419,7 +421,9 @@ def _drop_stale_object_permission_mcp_tool_permissions(
 
     mcp_tool_denied_tools: Final = object_permission.get("mcp_tool_denied_tools")
     if isinstance(mcp_tool_denied_tools, dict):
-        object_permission["mcp_tool_denied_tools"] = {
+        object_permission[
+            "mcp_tool_denied_tools"
+        ] = {  # mutable-ok: stored map must stay a plain dict for JSON serialization; one-shot rebuild like the allowlist above
             identifier: _dedupe_preserving_order(tools if isinstance(tools, list) else [])
             for identifier, tools in mcp_tool_denied_tools.items()
             if identifier_to_server_ids.get(identifier)
