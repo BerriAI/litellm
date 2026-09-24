@@ -8,6 +8,8 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
@@ -24,6 +26,11 @@ from .llm_provider_handlers.gemini_passthrough_logging_handler import (
 )
 from .llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
+)
+from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
+    TinyFishPassthroughLoggingHandler,
+    run_id_from_sse_frames,
+    sse_poller_spawned,
 )
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
@@ -60,7 +67,7 @@ class PassThroughStreamingHandler:
             litellm_logging_obj._update_completion_start_time(completion_start_time=datetime.now())
 
     @staticmethod
-    def schedule_stream_failure_logging(
+    async def schedule_stream_failure_logging(
         litellm_logging_obj: LiteLLMLoggingObj,
         endpoint_type: EndpointType,
         request_body: dict[str, object],
@@ -68,7 +75,10 @@ class PassThroughStreamingHandler:
         exception: Exception,
         stream_context: PassThroughStreamContext | None = None,
     ) -> None:
-        PassThroughStreamingHandler._record_partial_usage_for_failure(
+        # the tinyfish poller writes the one authoritative row; a failure row here would collide on its request_id
+        if endpoint_type == EndpointType.TINYFISH and sse_poller_spawned(litellm_logging_obj):
+            return
+        await asyncify(PassThroughStreamingHandler._record_partial_usage_for_failure)(
             litellm_logging_obj=litellm_logging_obj,
             endpoint_type=endpoint_type,
             request_body=request_body,
@@ -177,12 +187,25 @@ class PassThroughStreamingHandler:
                 )
             )
         )
+        # TinyFish SSE bills via a detached poller spawned on the first run_id frame, so disconnects can't lose the charge
+        tinyfish_scan_active = endpoint_type == EndpointType.TINYFISH  # rebind-ok: scan stops once the poller spawns
+        tinyfish_pending = b""  # rebind-ok: SSE frame reassembly buffer across transport chunks
         try:
             if not cost_injection_active:
                 # Hot path: just buffer for end-of-stream logging and forward.
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
+                    if tinyfish_scan_active:
+                        complete_frames, tinyfish_pending = split_complete_sse_frames(tinyfish_pending + chunk)
+                        run_id = run_id_from_sse_frames(complete_frames) if b"run_id" in complete_frames else None
+                        if run_id:
+                            TinyFishPassthroughLoggingHandler.start_sse_run_billing(
+                                run_id=run_id,
+                                litellm_logging_obj=litellm_logging_obj,
+                                start_time=start_time,
+                            )
+                            tinyfish_scan_active = False
                     yield chunk
             else:
                 # ``cost_injection_active`` already requires ``model_name`` to
@@ -194,9 +217,7 @@ class PassThroughStreamingHandler:
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
-                    complete_frames, pending = split_complete_sse_frames(
-                        pending + chunk
-                    )  # rebind-ok: SSE frame reassembly buffer across transport chunks
+                    complete_frames, pending = split_complete_sse_frames(pending + chunk)
                     if complete_frames:
                         yield ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                             complete_frames, resolved_model_name, litellm_logging_obj
@@ -217,12 +238,13 @@ class PassThroughStreamingHandler:
                 and response.status_code < 400
             ):
                 logging_scheduled = True
+                bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
                 litellm_logging_obj._deferred_stream_complete_args = (_build_logging_coroutine(),)
         except Exception as e:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
             if response.status_code < 400:
                 logging_scheduled = True
-                PassThroughStreamingHandler.schedule_stream_failure_logging(
+                await PassThroughStreamingHandler.schedule_stream_failure_logging(
                     litellm_logging_obj=litellm_logging_obj,
                     endpoint_type=endpoint_type,
                     request_body=resolved_request_body,
@@ -249,6 +271,8 @@ class PassThroughStreamingHandler:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=_build_logging_coroutine())
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
+                else:
+                    bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
 
     @staticmethod
     async def _route_streaming_logging_to_handler(
@@ -270,11 +294,60 @@ class PassThroughStreamingHandler:
         - Vertex AI
         - OpenAI
         """
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            _is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
+            _is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
+        )
+
+        # Transport reads can split event names and JSON payloads. Recognize terminal
+        # events only after the shared SSE framer has reassembled the collected bytes.
+        complete_frames, incomplete_tail = split_complete_sse_frames(
+            b"".join(raw_bytes) if endpoint_type == EndpointType.ANTHROPIC else b""
+        )
+        litellm_logging_obj.model_call_details[  # rebind-ok: stamp evidence on the per-request state read by callbacks
+            "prompt_cache_response_complete"
+        ] = (
+            endpoint_type == EndpointType.ANTHROPIC
+            and not incomplete_tail.strip()
+            and _is_message_stop_chunk(complete_frames)
+            and not _is_provider_error_chunk(complete_frames)
+        )
         try:
+            # TinyFish billing is owned by the detached poller; the $0 fallback below is only for streams with no run_id
+            if endpoint_type == EndpointType.TINYFISH:
+                if sse_poller_spawned(litellm_logging_obj):
+                    return
+                late_run_id: Final = run_id_from_sse_frames(b"".join(raw_bytes))
+                if late_run_id:
+                    # the run_id arrived in an unterminated frame; poll to terminal instead of mispricing a RUNNING run
+                    TinyFishPassthroughLoggingHandler.start_sse_run_billing(
+                        run_id=late_run_id,
+                        litellm_logging_obj=litellm_logging_obj,
+                        start_time=start_time,
+                    )
+                    return
+                tinyfish_payload: Final = (
+                    await TinyFishPassthroughLoggingHandler.handle_logging_tinyfish_collected_chunks(
+                        litellm_logging_obj=litellm_logging_obj,
+                        url_route=url_route,
+                        start_time=start_time,
+                        all_chunks=PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes),
+                        end_time=end_time,
+                    )
+                )
+                await litellm_logging_obj.dispatch_success_handlers(
+                    result=tinyfish_payload["result"],
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=litellm_logging_obj.model_call_details.get("cache_hit") is True,
+                    prefer_async_handlers=True,
+                    **tinyfish_payload["kwargs"],
+                )
+                return
             (
                 standard_logging_response_object,
                 kwargs,
-            ) = PassThroughStreamingHandler._build_passthrough_logging_result(
+            ) = await asyncify(PassThroughStreamingHandler._build_passthrough_logging_result)(
                 litellm_logging_obj=litellm_logging_obj,
                 passthrough_success_handler_obj=passthrough_success_handler_obj,
                 url_route=url_route,
@@ -316,8 +389,8 @@ class PassThroughStreamingHandler:
         Synchronous, CPU-bound reconstruction of the standard logging payload
         from collected raw SSE bytes. Extracted from
         _route_streaming_logging_to_handler so the per-endpoint dispatch can
-        be unit-tested in isolation. Still invoked synchronously on the event
-        loop; an off-loop dispatch is a future change, not part of this PR.
+        be unit-tested in isolation. The async callers run it in a worker
+        thread so the token counts inside stay off the event loop.
         """
         all_chunks: Final = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None

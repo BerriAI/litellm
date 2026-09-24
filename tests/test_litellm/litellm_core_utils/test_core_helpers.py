@@ -1,14 +1,74 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
+import logging
+
 import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+    bind_budget_reservation_to_callbacks,
+    budget_reservation_from_metadata,
+    drop_params_env_flag,
+    drop_params_flag,
     get_or_create_metadata_bucket,
     map_finish_reason,
+    normalize_drop_params,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    unbind_budget_reservation_from_callbacks,
 )
+from litellm.proxy._types import UserAPIKeyAuth
+
+
+class TestBudgetReservationBinding:
+    """The request-end release skips a reservation a cost callback has claimed, so the claim
+    must land on the one dict auth stamped, through whichever metadata field or auth object
+    carries it, and a failed call must be able to hand it back."""
+
+    @staticmethod
+    def _reservation() -> dict:
+        return {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+
+    @pytest.mark.parametrize("metadata_variable_name", ["metadata", "litellm_metadata"])
+    def test_reservation_stamped_on_the_metadata_is_bound(self, metadata_variable_name: str):
+        reservation = self._reservation()
+
+        bind_budget_reservation_to_callbacks({metadata_variable_name: {"user_api_key_budget_reservation": reservation}})
+
+        assert reservation["callback_bound"] is True
+
+    def test_reservation_reachable_only_through_the_auth_object_is_bound(self):
+        reservation = self._reservation()
+        user_api_key_auth = UserAPIKeyAuth(token="hashed")
+        user_api_key_auth.budget_reservation = reservation
+
+        bind_budget_reservation_to_callbacks({"metadata": {"user_api_key_auth": user_api_key_auth}})
+
+        assert reservation["callback_bound"] is True
+
+    def test_reservation_reachable_only_through_a_dumped_auth_object_is_bound(self):
+        reservation = self._reservation()
+
+        bind_budget_reservation_to_callbacks({"metadata": {"user_api_key_auth": {"budget_reservation": reservation}}})
+
+        assert reservation["callback_bound"] is True
+
+    def test_unbind_hands_a_claimed_reservation_back(self):
+        reservation = self._reservation()
+        litellm_params = {"litellm_metadata": {"user_api_key_budget_reservation": reservation}}
+        bind_budget_reservation_to_callbacks(litellm_params)
+
+        unbind_budget_reservation_from_callbacks(litellm_params)
+
+        assert reservation["callback_bound"] is False
+
+    def test_request_without_a_reservation_binds_nothing(self):
+        metadata = {"user_api_key_auth": UserAPIKeyAuth(token="hashed")}
+
+        bind_budget_reservation_to_callbacks({"metadata": metadata, "litellm_metadata": None})
+
+        assert budget_reservation_from_metadata(metadata) is None
+        assert "user_api_key_budget_reservation" not in metadata
 
 
 class TestGetOrCreateMetadataBucket:
@@ -146,6 +206,12 @@ class TestMapFinishReasonGemini:
             ("IMAGE_PROHIBITED_CONTENT", "content_filter"),
             ("TOO_MANY_TOOL_CALLS", "stop"),
             ("MALFORMED_RESPONSE", "stop"),
+            ("NO_IMAGE", "content_filter"),
+            ("IMAGE_RECITATION", "content_filter"),
+            ("IMAGE_OTHER", "content_filter"),
+            ("ESCALATION", "content_filter"),
+            ("UNEXPECTED_TOOL_CALL", "stop"),
+            ("MISSING_THOUGHT_SIGNATURE", "stop"),
         ],
     )
     def test_gemini_finish_reasons(self, gemini_reason, expected):
@@ -255,6 +321,95 @@ class TestRedactNestedMatchAndRegexKeys:
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+    def test_redacts_custom_keys_without_changing_default_keys(self):
+        payload = {
+            "keyword": "secret-keyword",
+            "snippet": "secret-snippet",
+            "match": "secret-match",
+            "regex": "secret-regex",
+            "nested": [{"keyword": "nested-keyword", "match": "nested-match"}],
+        }
+
+        custom_keys = redact_nested_match_and_regex_keys(payload, keys=("keyword", "snippet"))
+        default_keys = redact_nested_match_and_regex_keys(payload)
+
+        assert custom_keys["keyword"] == "[REDACTED]"
+        assert custom_keys["snippet"] == "[REDACTED]"
+        assert custom_keys["nested"][0]["keyword"] == "[REDACTED]"
+        assert custom_keys["match"] == "secret-match"
+        assert custom_keys["regex"] == "secret-regex"
+        assert default_keys["match"] == "[REDACTED]"
+        assert default_keys["regex"] == "[REDACTED]"
+        assert default_keys["keyword"] == "secret-keyword"
+        assert default_keys["snippet"] == "secret-snippet"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (True, True),
+        (False, False),
+        ("true", True),
+        ("True", True),
+        (" TRUE ", True),
+        ("false", False),
+        ("False", False),
+        ("yes", True),
+        ("off", False),
+        ("1", True),
+        (1, True),
+        (0, False),
+        (None, None),
+        ("", None),
+        ("os.environ/DROP_PARAMS", None),
+        ("v2:gcm:not-a-flag", None),
+        (2, None),
+    ],
+)
+def test_normalize_drop_params(value, expected):
+    assert normalize_drop_params(value) is expected
+
+
+@pytest.mark.parametrize("value, expected", [("true", True), ("off", False), (None, False)])
+def test_drop_params_flag_returns_a_bool_without_a_warning(value, expected, caplog):
+    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
+        assert drop_params_flag(value, "LITELLM_DROP_PARAMS", logging.getLogger("drop-params-test")) is expected
+    assert caplog.text == ""
+
+
+@pytest.mark.parametrize("value", ["temperature", "ture", 2])
+def test_drop_params_flag_treats_non_flag_values_as_off_with_a_warning(value, caplog):
+    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
+        assert drop_params_flag(value, "LITELLM_DROP_PARAMS", logging.getLogger("drop-params-test")) is False
+    assert f"LITELLM_DROP_PARAMS={value!r} is not a flag value, treating it as off" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "environ, expected",
+    [
+        ({}, False),
+        ({"LITELLM_DROP_PARAMS": ""}, False),
+        ({"LITELLM_DROP_PARAMS": "   "}, False),
+        ({"LITELLM_DROP_PARAMS": "true"}, True),
+        ({"LITELLM_DROP_PARAMS": " False "}, False),
+        ({"LITELLM_DROP_PARAMS": "0"}, False),
+    ],
+)
+def test_drop_params_env_flag_reads_a_flag_without_a_warning(environ, expected, caplog):
+    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
+        assert drop_params_env_flag(environ, logging.getLogger("drop-params-test")) is expected
+    assert caplog.text == ""
+
+
+@pytest.mark.parametrize("configured", ["temperature", "temperature,top_p", "enabled"])
+def test_drop_params_env_flag_keeps_a_non_flag_value_on_with_a_warning(configured, caplog):
+    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
+        assert drop_params_env_flag({"LITELLM_DROP_PARAMS": configured}, logging.getLogger("drop-params-test")) is True
+    assert (
+        f"LITELLM_DROP_PARAMS={configured!r} is not a flag value, treating it as on. Set it to true or false"
+        in caplog.text
+    )
 
 
 class TestIsExpectedClientError:

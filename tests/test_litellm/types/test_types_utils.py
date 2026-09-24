@@ -1,9 +1,16 @@
+import json
 from typing import Final
 
 import pytest
 
 
-from litellm.types.utils import HiddenParams, all_litellm_params
+from litellm.types.utils import (
+    HiddenParams,
+    ImageObject,
+    ImageResponse,
+    all_litellm_params,
+    text_tokens_without_nested_reasoning,
+)
 
 
 def test_rust_is_a_known_litellm_param():
@@ -763,8 +770,94 @@ def test_delta_function_tool_call_unchanged_by_custom_support():
 
 def test_image_response_keeps_background():
     """https://github.com/BerriAI/litellm/issues/38649"""
-    from litellm.types.utils import ImageResponse
-
     response = ImageResponse(created=1, data=[{"b64_json": "aGk="}], background="transparent", output_format="png")
     assert response.background == "transparent"
     assert response.model_dump()["background"] == "transparent"
+
+
+def test_image_response_serialization_honors_dump_options():
+    response: Final = ImageResponse(
+        data=[
+            ImageObject(
+                url="https://example.com/image.png",
+                provider_specific_fields={"width": 1024, "height": 1536, "content_type": "image/png"},
+            )
+        ]
+    )
+    expected: Final = [
+        {
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+        }
+    ]
+    assert response.model_dump(exclude_none=True)["data"] == expected
+    assert json.loads(response.model_dump_json(exclude_none=True))["data"] == expected
+    assert response.model_dump()["data"][0]["provider_specific_fields"] == expected[0]["provider_specific_fields"]
+    assert "url" not in response.model_dump(exclude={"data": {0: {"url"}}})["data"][0]
+    assert response.model_dump(include={"data": {"__all__": {"url"}}})["data"] == [
+        {"url": "https://example.com/image.png"}
+    ]
+    assert response.model_dump(include={"data": {0: True}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+        }
+    ]
+    assert response.model_dump(exclude={"data": {0: True}})["data"] == []
+
+    two_image_response: Final = ImageResponse(
+        data=[
+            ImageObject(url="https://example.com/image.png"),
+            ImageObject(url="https://example.com/second-image.png"),
+        ]
+    )
+    assert two_image_response.model_dump(exclude={"data": {1}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": None,
+        }
+    ]
+    assert two_image_response.model_dump(exclude={"data": {-1}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": None,
+        }
+    ]
+    assert two_image_response.model_dump(include={"data": {-1: {"url"}}})["data"] == [
+        {"url": "https://example.com/second-image.png"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("completion_tokens", "text_tokens", "reasoning_tokens", "other_modality_tokens", "expected_text_tokens"),
+    (
+        pytest.param(50, 30, 20, 0, 30, id="details_sum_to_completion_is_a_no_op"),
+        pytest.param(34, 30, 24, 0, 10, id="strip_is_capped_at_the_over_sum"),
+        pytest.param(100, 100, 10, 70, 90, id="only_the_reasoning_share_is_stripped_when_text_over_reports_further"),
+        pytest.param(10, 5, 20, 0, 0, id="text_never_goes_negative_when_reasoning_exceeds_it"),
+    ),
+)
+def test_text_tokens_without_nested_reasoning_clamps(
+    completion_tokens: int,
+    text_tokens: int,
+    reasoning_tokens: int,
+    other_modality_tokens: int,
+    expected_text_tokens: int,
+) -> None:
+    """The strip never exceeds the reasoning share, the reported text, or the over-sum past completion_tokens."""
+
+    assert (
+        text_tokens_without_nested_reasoning(
+            completion_tokens=completion_tokens,
+            text_tokens=text_tokens,
+            reasoning_tokens=reasoning_tokens,
+            other_modality_tokens=other_modality_tokens,
+        )
+        == expected_text_tokens
+    )

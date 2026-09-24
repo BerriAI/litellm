@@ -8,6 +8,7 @@ tool through a ``tool_use`` content block, and results are fed back as
 """
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final, NamedTuple
 
 from litellm._logging import verbose_logger
@@ -49,14 +50,14 @@ def _build_tool_result_message(tool_results: Sequence[Mapping[str, object]]) -> 
     """Turn executed tool results into the user message Anthropic expects."""
     return AnthropicMessagesUserMessageParam(
         role="user",
-        content=tuple(
+        content=[
             AnthropicMessagesToolResultParam(
                 type="tool_result",
                 tool_use_id=str(result.get("tool_call_id") or ""),
                 content=str(result.get("result") or ""),
             )
             for result in tool_results
-        ),
+        ],
     )
 
 
@@ -82,7 +83,7 @@ async def anthropic_messages_with_mcp(
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    mcp_references, other_tools = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
+    mcp_references, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(tools)
 
     if not mcp_references:
         return await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
@@ -94,7 +95,7 @@ async def anthropic_messages_with_mcp(
             **kwargs,
         )
 
-    context: Final = MCPRequestContext.resolve(kwargs=dict(kwargs), tools=tools)
+    context: Final = MCPRequestContext.resolve(kwargs=MappingProxyType({**kwargs, "model": model}), tools=tools)
 
     (
         deduplicated_mcp_tools,
@@ -155,6 +156,7 @@ async def anthropic_messages_with_mcp(
             litellm_call_id=context.litellm_call_id,
             litellm_trace_id=context.litellm_trace_id,
             request_tags=list(context.request_tags) if context.request_tags else None,
+            guardrail_context=context.guardrail_context,
         )
 
         # Every tool call was skipped, so there is nothing to feed back; a

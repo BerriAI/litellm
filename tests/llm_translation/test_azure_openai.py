@@ -335,6 +335,10 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
     ]
 
     with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
+        mock_post.return_value.headers = {}
+        mock_post.return_value.parse.return_value = litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": InvestigationOutput().model_dump_json()}}]
+        )
         response = litellm.completion(
             model="azure/gpt-4.1-mini",
             messages=[
@@ -362,6 +366,7 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
             assert "response_format" in mock_post.call_args.kwargs
         else:
             assert "response_format" not in mock_post.call_args.kwargs
+        assert response.choices[0].message.content == InvestigationOutput().model_dump_json()
 
 
 def test_map_openai_params():

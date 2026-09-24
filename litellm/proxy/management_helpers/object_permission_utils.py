@@ -4,11 +4,11 @@ organizations, teams, and keys.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter
@@ -17,6 +17,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerName, SpecialMCPServerNames
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
@@ -181,6 +183,22 @@ async def handle_update_object_permission_common(
     return created_object_permission_row.object_permission_id
 
 
+async def invalidate_cached_object_permissions(
+    object_permission_ids: Iterable[object],
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Drop permission rows an entitlement change makes stale.
+
+    ``get_object_permission`` caches a row under its own id separate from the entity's cache entry, and an
+    upsert keeps that id, so pass both the outgoing and incoming ids since a change can also mint a new row.
+    """
+    cache_keys: Final = tuple(
+        object_permission_cache_key(object_permission_id)
+        for object_permission_id in dict.fromkeys(pid for pid in object_permission_ids if isinstance(pid, str))
+    )
+    await evict_and_broadcast(cache_keys, user_api_key_cache)
+
+
 async def _set_object_permission(
     data_json: dict,
     prisma_client: PrismaClient | None,
@@ -230,7 +248,7 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return result
 
 
-def _mcp_server_identifier_matches(server: Any, identifier: str) -> bool:
+def _mcp_server_identifier_matches(server: object, identifier: str) -> bool:
     return identifier in {
         getattr(server, "server_id", None),
         getattr(server, "alias", None),

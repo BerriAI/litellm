@@ -250,3 +250,27 @@ def test_in_memory_cache_prunes_expired_heap_entries_below_capacity():
     assert len(in_memory_cache.cache_dict) == 5
     assert len(in_memory_cache.ttl_dict) == 5
     assert len(in_memory_cache.expiration_heap) == 5
+
+
+def test_in_memory_cache_injected_clock_controls_expiry_and_eviction() -> None:
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+    cache = InMemoryCache(max_size_in_memory=2, default_ttl=60, clock=clock)
+    cache.set_cache("first", "original", ttl=10)
+    clock.now = 9.0
+    cache.set_cache("second", "survivor")
+    assert cache.get_cache("first") == "original"
+    clock.now = 10.001
+    assert cache.get_cache("first") is None
+    cache.set_cache("third", "replacement")
+    assert cache.get_cache("second") == "survivor"
+    clock.now = 69.001
+    cache.set_cache("fourth", "new")
+    assert cache.get_cache("second") is None
+    assert cache.get_cache("third") == "replacement"
+    assert cache.get_cache("fourth") == "new"

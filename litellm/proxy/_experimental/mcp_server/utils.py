@@ -536,7 +536,11 @@ def extract_mcp_tool_result_error_message(result: object) -> str | None:
     Accepts both ``mcp.types.CallToolResult`` objects and their dict
     equivalents, duck-typed so the ``mcp`` package is not required.
     """
-    is_error: Final[object] = result.get("isError") if isinstance(result, Mapping) else getattr(result, "isError", None)
+    is_error: Final[object] = (
+        (result.get("isError") if result.get("isError") is not None else result.get("is_error"))
+        if isinstance(result, Mapping)
+        else getattr(result, "is_error", None)
+    )
     if is_error is not True:
         return None
     content: Final[object] = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
@@ -870,8 +874,9 @@ def json_unrewritable_labels(value: object, path_depth: int = 0) -> tuple[str, .
 def mcp_tool_result_structured_content(result: object) -> object:
     """The ``structuredContent`` of an MCP tool result, or ``None`` when it has none."""
     if isinstance(result, Mapping):
-        return result.get("structuredContent")
-    return getattr(result, "structuredContent", None)
+        structured: Final = result.get("structuredContent")
+        return structured if structured is not None else result.get("structured_content")
+    return getattr(result, "structured_content", None)
 
 
 def set_mcp_tool_result_structured_content(result: object, value: object) -> bool:
@@ -882,12 +887,12 @@ def set_mcp_tool_result_structured_content(result: object, value: object) -> boo
     unmasked value in the spend log and the OTel span.
     """
     if isinstance(result, MutableMapping):
-        result["structuredContent"] = value
+        result["structured_content" if "structured_content" in result else "structuredContent"] = value
         return True
-    if not hasattr(result, "structuredContent"):
+    if not hasattr(result, "structured_content"):
         return False
     try:
-        setattr(result, "structuredContent", value)  # attribute name is fixed by the MCP result shape
+        setattr(result, "structured_content", value)  # attribute name is fixed by the MCP result shape
         return True
     except (AttributeError, TypeError, ValueError):
         return False
@@ -981,7 +986,7 @@ def _forwarded_upstream_header_names() -> frozenset[str]:
     )
 
 
-def _upstream_credential_headers(header_names: Iterable[str]) -> frozenset[str]:
+def upstream_credential_headers(header_names: Iterable[str]) -> frozenset[str]:
     """Lowercased names of the headers in ``header_names`` that carry an upstream MCP
     credential rather than request context: the configured client side auth header, any
     header name a configured server forwards upstream via ``extra_headers``, and the
@@ -1033,7 +1038,7 @@ def build_synthetic_mcp_request(
     custom_key_header: Final = _custom_litellm_key_header_name()
     excluded: Final = (
         _SYNTHETIC_REQUEST_EXCLUDED_HEADERS
-        | _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
+        | upstream_credential_headers(raw_headers.keys() if raw_headers else ())
         | (frozenset({custom_key_header.lower()}) if custom_key_header else frozenset())
     )
     forwarded: Final = tuple(
@@ -1081,7 +1086,7 @@ def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[s
     )
 
     excluded: Final = (
-        _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
+        upstream_credential_headers(raw_headers.keys() if raw_headers else ())
         | UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
         | frozenset({"host"})
     )

@@ -24,12 +24,18 @@ describe("useScopedDailyActivityRange wiring", () => {
     );
     global.fetch = mockFetch;
 
-    renderHook(() => useScopedDailyActivityRange("sk-token", { userId: "u1", apiKey: "hash-abc" }));
+    const activity = {
+      dateValue: { from: new Date(2026, 7, 1), to: new Date(2026, 7, 10) },
+      onDateChange: vi.fn(),
+    };
+    renderHook(() => useScopedDailyActivityRange("sk-token", { userId: "u1", apiKey: "hash-abc" }, activity));
 
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
 
     const url = String(mockFetch.mock.calls[0][0]);
     expect(url).toContain("user_id=u1");
     expect(url).toContain("api_key=hash-abc");
+    expect(url).toContain("start_date=2026-08-01");
+    expect(url).toContain("end_date=2026-08-10");
   });
 });

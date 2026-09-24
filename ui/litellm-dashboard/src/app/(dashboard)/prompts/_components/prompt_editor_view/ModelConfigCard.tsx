@@ -6,11 +6,11 @@ import { SettingsIcon } from "lucide-react";
 import ModelSelector from "@/components/common_components/ModelSelector";
 
 interface ModelConfigCardProps {
-  model: string;
+  model: string | null;
   temperature?: number;
   maxTokens?: number;
   accessToken: string | null;
-  onModelChange: (model: string) => void;
+  onModelChange: (model: string | null) => void;
   onTemperatureChange: (temp: number) => void;
   onMaxTokensChange: (tokens: number) => void;
 }

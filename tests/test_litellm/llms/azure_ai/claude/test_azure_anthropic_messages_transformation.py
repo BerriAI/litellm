@@ -317,7 +317,6 @@ class TestProviderConfigManagerAzureAnthropicMessages:
         assert config is None
 
 
-
 def test_messages_thinking_shape_follows_exact_azure_entry_flag(local_model_cost_map, monkeypatch):
     """The Azure messages config must probe capabilities under ``azure_ai`` so an
     operator setting ``supports_adaptive_thinking: false`` on the exact

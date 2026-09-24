@@ -17,8 +17,8 @@ import { usePaginatedCombobox } from "./usePaginatedCombobox";
 
 interface PaginatedSearchSelectProps {
   options: SearchSelectOption[];
-  value?: string;
-  onValueChange: (value: string) => void;
+  value?: string | null;
+  onValueChange: (value: string | null) => void;
   onSearchChange: (query: string) => void;
   onLoadMore?: () => void;
   hasNextPage?: boolean;
@@ -86,7 +86,7 @@ export function PaginatedSearchSelect({
   };
 
   const selected = useMemo<SearchSelectOption | null>(() => {
-    if (value === undefined || value === "") return null;
+    if (value == null || value === "") return null;
     return (
       options.find((option) => option.value === value) ??
       (pickedOption?.value === value ? pickedOption : { label: value, value })
@@ -118,7 +118,7 @@ export function PaginatedSearchSelect({
       inputValue={typedQuery ?? selected?.label ?? ""}
       onValueChange={(item: SearchSelectOption | null) => {
         setPickedOption(item);
-        onValueChange(item?.value ?? "");
+        onValueChange(item?.value ?? null);
       }}
       onInputValueChange={(next, eventDetails) => handleTypedInput(next, eventDetails.reason)}
       onOpenChange={(nextOpen, eventDetails) => handleOpenChange(nextOpen, eventDetails.reason)}
@@ -139,7 +139,7 @@ export function PaginatedSearchSelect({
         onKeyDown={snapshotWholeSelection}
         onPaste={snapshotWholeSelection}
         placeholder={placeholder}
-        showClear={value !== undefined && value !== ""}
+        showClear={value != null && value !== ""}
         className={`w-full ${className ?? ""}`}
       />
       <ComboboxContent>
