@@ -369,16 +369,17 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         )
 
     def _enqueue(self, element: s3BatchLoggingElement) -> None:
-        if len(self.log_queue) >= self.max_queue_size:
+        max_queue_size: Final = getattr(self, "max_queue_size", self.DEFAULT_MAX_QUEUE_SIZE)
+        if len(self.log_queue) >= max_queue_size:
             if self._dropped_at_enqueue == 0:
                 verbose_logger.warning(
                     "s3 logging: queue full (max_queue_size=%s), dropping new events until the next flush",
-                    self.max_queue_size,
+                    max_queue_size,
                 )
             self._dropped_at_enqueue += 1
             verbose_logger.debug(
                 "s3 logging: queue full (max_queue_size=%s), dropping event key=%s",
-                self.max_queue_size,
+                max_queue_size,
                 element.s3_object_key,
             )
             self.handle_callback_failure(callback_name="S3Logger")
