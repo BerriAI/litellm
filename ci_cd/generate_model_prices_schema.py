@@ -66,7 +66,8 @@ OFF_PEAK_WINDOW: Final[JsonSchema] = {
             "minItems": 1,
             "description": (
                 "YYYY-MM-DD dates, read on weekday_timezone, on which this rule alone decides: "
-                "weekdays and every other window are ignored. On any other date the rule does not apply."
+                "weekdays and every other window are ignored. On any other date the rule does not "
+                "apply, and malformed entries disable it."
             ),
         },
     },

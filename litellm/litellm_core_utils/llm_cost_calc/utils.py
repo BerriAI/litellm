@@ -504,7 +504,8 @@ def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None =
     hours apply only on its weekdays. A rule carrying override_dates applies only on those
     dates, read on the weekday_timezone calendar: on a listed date the matching rules alone
     decide (their weekdays are ignored, and the flat hours_utc and every other rule are
-    skipped), and on any other date the rule never applies.
+    skipped), and on any other date the rule never applies (a malformed override_dates
+    disables the rule entirely).
     """
     reference: Final = current_time if current_time is not None else current_billing_time()
     reference_utc: Final = (
@@ -528,7 +529,7 @@ def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None =
     if flat_windows and _is_within_off_peak_window(flat_windows, reference_utc):
         return True
     for rule in rules:
-        if _as_date_strings(rule.get("override_dates")):
+        if "override_dates" in rule:
             continue
         rule_windows = _as_window_strings(rule.get("hours_utc"))
         if not rule_windows:

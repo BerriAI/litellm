@@ -711,16 +711,16 @@ def test_is_off_peak_override_dates_read_on_weekday_timezone_calendar():
 
 
 def test_is_off_peak_ignores_malformed_override_dates():
-    """A bare string, non-string entries, or an unparseable date are ignored, so malformed
-    override_dates can never silently widen the off-peak hours."""
+    """A bare string, non-string entries, or an unparseable date disable the rule carrying
+    them, so malformed override_dates can never silently widen the off-peak hours."""
     from datetime import datetime, timezone
 
     peak_instant = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
-    weekday_windows = [{"hours_utc": "00:30-01:00", "weekdays": [1, 2, 3, 4, 5]}]
+    peak_windows = [{"hours_utc": "00:30-01:00", "weekdays": [1, 2, 3, 4, 5]}]
     for bad in ("2026-01-01", [20260101, None], ["2026-1-1"]):
-        block = {"windows": [{**weekday_windows[0], "override_dates": bad}]}
+        block = {"windows": peak_windows + [{"hours_utc": "00:00-00:00", "override_dates": bad}]}
         assert _is_off_peak(block, peak_instant) is False, (
-            f"override_dates={bad!r} is malformed and must be ignored"
+            f"override_dates={bad!r} is malformed and must disable its rule"
         )
 
 

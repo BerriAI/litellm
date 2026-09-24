@@ -235,7 +235,7 @@ class OffPeakWindow(TypedDict, total=False):
     omitted means every day. The weekday is read on the calendar named by the block's
     weekday_timezone. override_dates lists YYYY-MM-DD dates on that calendar on which this
     rule alone decides, ignoring weekdays and every other window; on any other date the
-    rule does not apply.
+    rule does not apply, and malformed entries disable it entirely.
     """
 
     hours_utc: ReadOnly[str | Sequence[str]]
