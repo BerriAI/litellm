@@ -106,9 +106,15 @@ def bedrock_batch_line_to_response(
         embedding: Final = model_output.get("embedding")
         return EmbeddingResponse(
             model=model,
-            data=[
-                {"object": "embedding", "index": 0, "embedding": embedding if isinstance(embedding, list) else []}
-            ],  # mutable-ok: EmbeddingResponse takes a plain data list
+            data=[  # mutable-ok: EmbeddingResponse takes a plain data list
+                {  # mutable-ok: plain row dict for EmbeddingResponse.data
+                    "object": "embedding",
+                    "index": 0,
+                    "embedding": embedding
+                    if isinstance(embedding, list)
+                    else [],  # mutable-ok: empty fallback for the row
+                }
+            ],
             usage=titan_embedding_usage_from_batch_output(model_output),
         )
     if "output" in model_output:

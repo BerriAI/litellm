@@ -307,9 +307,7 @@ async def _emit_line_event(
         custom_llm_provider=custom_llm_provider,
     )
     for secret_key in _SECRET_PARAM_KEYS:
-        child.litellm_params.pop(
-            secret_key, None
-        )  # mutable-ok: model_call_details holds this same dict  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped upstream
+        child.litellm_params.pop(secret_key, None)  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped upstream
 
     now: Final = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
     if result is None:
