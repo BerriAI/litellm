@@ -434,12 +434,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 else:
                     # Fallback: convert unexpected types to input_text
                     tool_output = [{"type": "input_text", "text": str(content)}]
-                normalized_tool_call_id = self._normalize_tool_call_id(tool_call_id)
                 if tool_call_id in custom_tool_call_ids:
                     input_items.append(
                         ResponseCustomToolCallOutputParam(
                             type="custom_tool_call_output",
-                            call_id=normalized_tool_call_id or "",
+                            call_id=self._normalize_tool_call_id(tool_call_id) or "",
                             output=content if isinstance(content, str) else tool_output,
                         )
                     )
@@ -447,7 +446,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     input_items.append(
                         FunctionCallOutput(
                             type="function_call_output",
-                            call_id=normalized_tool_call_id,
+                            call_id=self._normalize_tool_call_id(tool_call_id),
                             output=tool_output,
                         )
                     )
@@ -464,12 +463,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     custom = tool_call.get("custom")
-                    raw_id = tool_call.get("id")
-                    normalized_call_id = self._normalize_tool_call_id(raw_id)
                     if function:
                         input_tool_call: dict[str, object] = {
                             "type": "function_call",
-                            "call_id": normalized_call_id,
+                            "call_id": self._normalize_tool_call_id(tool_call.get("id")),
                         }
                         if "name" in function:
                             input_tool_call["name"] = function["name"]
@@ -480,7 +477,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         input_items.append(
                             ResponseCustomToolCallParam(
                                 type="custom_tool_call",
-                                call_id=normalized_call_id or "",
+                                call_id=self._normalize_tool_call_id(tool_call.get("id")) or "",
                                 name=custom.get("name", ""),
                                 input=custom.get("input", ""),
                             )
