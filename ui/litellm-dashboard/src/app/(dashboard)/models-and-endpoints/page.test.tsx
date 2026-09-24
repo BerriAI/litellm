@@ -111,10 +111,6 @@ describe("ModelsAndEndpointsPage", () => {
     expect(screen.getByTestId("team-info")).toHaveAttribute("data-team-admin", "true");
   });
 
-  // useAuthorized().userRole is the formatted session role: effectiveSessionRole maps a
-  // proxy_admin session to "Admin", never "Proxy Admin". The drill-in must treat "Admin" as
-  // the proxy-admin signal, or TeamInfo hides admin-only controls like the global-guardrail
-  // kill switch from real proxy admins.
   it("passes is_proxy_admin for an admin session on the ?team drill-in", () => {
     detailState.teamId = "team-a1b2";
     renderPage();

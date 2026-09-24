@@ -6,8 +6,6 @@ import * as networking from "@/components/networking";
 import { renderWithProviders } from "../../../../tests/test-utils";
 import ModelsAndEndpointsPage from "./page";
 
-// These panels never render on the ?team drill-in (the page returns early); stubbed to keep
-// the dependency graph small.
 vi.mock("./panels/AllModelsPanel", () => ({ default: () => <div data-testid="panel-all-models" /> }));
 vi.mock("./panels/AddModelPanel", () => ({ default: () => <div data-testid="panel-add" /> }));
 vi.mock("./panels/AutoRoutersTabPanel", () => ({ default: () => <div data-testid="panel-auto-routers" /> }));
@@ -26,7 +24,6 @@ vi.mock("./useModelDashboardData", () => ({
   useModelDashboardData: () => ({ availableModelAccessGroups: [], allModelsOnProxy: [], availableModelGroups: [] }),
 }));
 
-// A real proxy_admin session: effectiveSessionRole("proxy_admin") === "Admin".
 const authState = vi.hoisted(() => ({ userRole: "Admin", isViewOnly: false }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({
@@ -240,8 +237,6 @@ describe("ModelsAndEndpointsPage ?team drill-in", () => {
 
     await screen.findByText("Test Team");
 
-    // caller_edit_access is absent from the fixture, so canEditTeam is false and no edit
-    // affordance or kill switch may appear for a non-admin.
     expect(screen.queryByRole("button", { name: /edit settings/i })).not.toBeInTheDocument();
     expect(screen.queryByText("Disable all global guardrails")).not.toBeInTheDocument();
   });
