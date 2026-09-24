@@ -42,6 +42,7 @@ RUN curl -fsSL -o pgbouncer.tar.gz "https://www.pgbouncer.org/downloads/files/${
 # every other consumer in the image. The version is read from uv.lock through
 # its own tiny stage so this long compile is cached until grpcio itself moves.
 FROM $LITELLM_BUILD_IMAGE AS grpcio-version
+USER root
 COPY uv.lock /uv.lock
 RUN awk '/^name = "grpcio"$/ { found = 1 } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' /uv.lock \
     > /grpcio-version && test -s /grpcio-version
