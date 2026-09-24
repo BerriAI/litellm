@@ -101,8 +101,12 @@ async def test_mcp_server_manager_https_server():
         assert tools[0].name == f"{expected_prefix}-gmail_send_email"
 
         # Manually set up the tool mapping for the call_tool test
-        mcp_server_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = expected_prefix
-        mcp_server_manager.tool_name_to_mcp_server_name_mapping[f"{expected_prefix}-gmail_send_email"] = expected_prefix
+        mcp_server_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+            expected_prefix
+        )
+        mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            f"{expected_prefix}-gmail_send_email"
+        ] = expected_prefix
 
         result = await mcp_server_manager.call_tool(
             server_name="zapier_mcp_server",
@@ -213,10 +217,15 @@ async def test_mcp_http_transport_list_tools_mock():
         # Verify tool mapping was updated
         expected_prefix = "test_http_server"
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping[f"{expected_prefix}-gmail_send_email"] == expected_prefix
+            test_manager.tool_name_to_mcp_server_name_mapping[
+                f"{expected_prefix}-gmail_send_email"
+            ]
+            == expected_prefix
         )
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping[f"{expected_prefix}-calendar_create_event"]
+            test_manager.tool_name_to_mcp_server_name_mapping[
+                f"{expected_prefix}-calendar_create_event"
+            ]
             == expected_prefix
         )
 
@@ -230,7 +239,9 @@ async def test_mcp_http_transport_call_tool_mock():
 
     # Mock tool call result
     mock_result = CallToolResult(
-        content=[TextContent(type="text", text="Email sent successfully to test@example.com")],
+        content=[
+            TextContent(type="text", text="Email sent successfully to test@example.com")
+        ],
         isError=False,
     )
 
@@ -260,7 +271,9 @@ async def test_mcp_http_transport_call_tool_mock():
         )
 
         # Manually set up tool mapping (normally done by list_tools)
-        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = "test_http_server"
+        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+            "test_http_server"
+        )
 
         # Call the tool
         result = await test_manager.call_tool(
@@ -324,7 +337,9 @@ async def test_mcp_http_transport_call_tool_error_mock():
         )
 
         # Manually set up tool mapping
-        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = "test_http_server"
+        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+            "test_http_server"
+        )
 
         # Call the tool with invalid data
         result = await test_manager.call_tool(
@@ -364,7 +379,9 @@ async def test_mcp_http_transport_tool_not_found(config_only_mcp_manager_factory
     )
 
     # Mapping populated for this server but not for the requested tool
-    test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = "test_http_server"
+    test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+        "test_http_server"
+    )
 
     # Try to call a tool that doesn't exist in mapping
     with pytest.raises(ValueError, match="Tool nonexistent_tool not found"):
@@ -624,7 +641,9 @@ def test_generate_stable_server_id():
 
         # Test stability - same inputs should always produce same output
         result2 = manager._generate_stable_server_id(**test_case["params"])
-        assert result == result2, f"Hash should be stable for same inputs: {result} != {result2}"
+        assert (
+            result == result2
+        ), f"Hash should be stable for same inputs: {result} != {result2}"
 
     # Test Case 2: Different inputs produce different outputs
     base_params = {
@@ -648,8 +667,12 @@ def test_generate_stable_server_id():
     for variation in variations:
         modified_params = {**base_params, **variation}
         modified_hash = manager._generate_stable_server_id(**modified_params)
-        assert modified_hash != base_hash, f"Different params should produce different hash: {variation}"
-        assert len(modified_hash) == 32, f"Modified hash should be 32 characters: {variation}"
+        assert (
+            modified_hash != base_hash
+        ), f"Different params should produce different hash: {variation}"
+        assert (
+            len(modified_hash) == 32
+        ), f"Modified hash should be 32 characters: {variation}"
 
     # Test Case 3: Edge case with None auth_type
     params_with_none = {
@@ -670,7 +693,9 @@ def test_generate_stable_server_id():
     hash_empty = manager._generate_stable_server_id(**params_with_empty)
 
     # None and empty string should produce the same hash (both become empty string)
-    assert hash_none == hash_empty, "None auth_type should be equivalent to empty string"
+    assert (
+        hash_none == hash_empty
+    ), "None auth_type should be equivalent to empty string"
 
     # Test Case 4: Real-world example hashes that must remain stable
     # These are based on common configurations and MUST NOT CHANGE
@@ -736,9 +761,13 @@ async def test_list_tools_rest_api_server_not_found():
     mock_request.client.host = "127.0.0.1"  # Internal IP to bypass IP filtering
 
     # Mock the global_mcp_server_manager to allow the server ID but return None for the server
-    with patch("litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager") as mock_manager:
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager:
         # Allow the server ID in permissions
-        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["non_existent_server_id"])
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["non_existent_server_id"]
+        )
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
             side_effect=lambda server_ids, client_ip: (server_ids, 0)
@@ -805,8 +834,12 @@ async def test_list_tools_rest_api_success():
     mock_request.client.host = "127.0.0.1"  # Internal IP to bypass IP filtering
 
     # Mock the global_mcp_server_manager
-    with patch("litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager") as mock_manager:
-        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["test-server-123"])
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager:
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["test-server-123"]
+        )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
@@ -885,7 +918,9 @@ async def test_get_tools_from_mcp_servers():
 
         # Create a mock manager
         mock_manager = AsyncMock()
-        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1_id", "server2_id"])
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["server1_id", "server2_id"]
+        )
         mock_manager.get_mcp_server_by_id = lambda server_id: (
             mock_server_1 if server_id == "server1_id" else mock_server_2
         )
@@ -911,7 +946,9 @@ async def test_get_tools_from_mcp_servers():
             # Test Case 2: Without specific MCP servers
             # Create a different mock manager for the second test case
             mock_manager_2 = AsyncMock()
-            mock_manager_2.get_allowed_mcp_servers = AsyncMock(return_value=["server1_id", "server2_id"])
+            mock_manager_2.get_allowed_mcp_servers = AsyncMock(
+                return_value=["server1_id", "server2_id"]
+            )
             mock_manager_2.get_mcp_server_by_id = lambda server_id: (
                 mock_server_1 if server_id == "server1_id" else mock_server_2
             )
@@ -930,7 +967,9 @@ async def test_get_tools_from_mcp_servers():
                     return [mock_tool_1]
                 return [mock_tool_2]
 
-            mock_manager_2._get_tools_from_server = AsyncMock(side_effect=mock_get_tools_side_effect)
+            mock_manager_2._get_tools_from_server = AsyncMock(
+                side_effect=mock_get_tools_side_effect
+            )
             # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
             mock_manager_2.filter_server_ids_by_ip_with_info = MagicMock(
                 side_effect=lambda server_ids, client_ip: (server_ids, 0)
@@ -946,15 +985,17 @@ async def test_get_tools_from_mcp_servers():
                 mcp_servers=None,
             )
             assert len(result.tools) == 2, "Should return tools from all servers"
-            assert result.tools[0].name == "tool1" and result.tools[1].name == "tool2", (
-                "Should return tools from all servers"
-            )
+            assert (
+                result.tools[0].name == "tool1" and result.tools[1].name == "tool2"
+            ), "Should return tools from all servers"
 
         #
         # Test Case 3: With specific MCP servers and access groups
         # Create a mock manager
         mock_manager = AsyncMock()
-        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1_id", "server2_id", "server3_id"])
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["server1_id", "server2_id", "server3_id"]
+        )
         mock_manager.get_mcp_server_by_id = lambda server_id: (
             mock_server_1
             if server_id == "server1_id"
@@ -1014,9 +1055,13 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
 
     # Patch get_allowed_mcp_servers to only allow server_a
     async def mock_get_allowed_mcp_servers(self, user_api_key_auth=None):
-        return [list(test_manager.get_registry().keys())[0]]  # Only first server (server_a)
+        return [
+            list(test_manager.get_registry().keys())[0]
+        ]  # Only first server (server_a)
 
-    monkeypatch.setattr(MCPServerManager, "get_allowed_mcp_servers", mock_get_allowed_mcp_servers)
+    monkeypatch.setattr(
+        MCPServerManager, "get_allowed_mcp_servers", mock_get_allowed_mcp_servers
+    )
 
     # Mock tools for each server
     mock_tools_a = [
@@ -1083,7 +1128,11 @@ async def test_mcp_server_manager_access_groups_from_config(config_only_mcp_mana
     )
     # Check that access_groups are loaded
     config_server = next(
-        (s for s in test_manager.config_mcp_servers.values() if s.name == "config_server"),
+        (
+            s
+            for s in test_manager.config_mcp_servers.values()
+            if s.name == "config_server"
+        ),
         None,
     )
     assert config_server is not None
@@ -1103,15 +1152,26 @@ async def test_mcp_server_manager_access_groups_from_config(config_only_mcp_mana
         # Should find config_server for group-a, both for group-b, other_server for group-c
         import asyncio
 
-        server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups(["group-a"])
-        server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups(["group-b"])
-        server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups(["group-c"])
+        server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            ["group-a"]
+        )
+        server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            ["group-b"]
+        )
+        server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            ["group-c"]
+        )
         assert any(config_server.server_id == sid for sid in server_ids_a)
         assert set(server_ids_b) == set(
-            [s.server_id for s in test_manager.config_mcp_servers.values() if "group-b" in s.access_groups]
+            [
+                s.server_id
+                for s in test_manager.config_mcp_servers.values()
+                if "group-b" in s.access_groups
+            ]
         )
         assert any(
-            s.name == "other_server" and s.server_id in server_ids_c for s in test_manager.config_mcp_servers.values()
+            s.name == "other_server" and s.server_id in server_ids_c
+            for s in test_manager.config_mcp_servers.values()
         )
     finally:
         mcp_server_manager_mod.global_mcp_server_manager = original_manager
@@ -1207,7 +1267,9 @@ async def test_mcp_server_manager_config_integration_with_database(config_only_m
     test_manager.health_check_server = mock_health_check
 
     # Test the method (this tests our second fix)
-    servers_list = await test_manager.get_all_mcp_servers_with_health_and_teams(user_api_key_auth=mock_user_auth)
+    servers_list = await test_manager.get_all_mcp_servers_with_health_and_teams(
+        user_api_key_auth=mock_user_auth
+    )
 
     # Verify we have the config server properly converted
     assert len(servers_list) == 1
@@ -1338,8 +1400,14 @@ async def test_mcp_server_manager_alias_tool_prefixing():
         assert tools[0].name == "my_alias-send_email"
 
         # Verify mapping is updated correctly
-        assert test_manager.tool_name_to_mcp_server_name_mapping["send_email"] == "my_alias"
-        assert test_manager.tool_name_to_mcp_server_name_mapping["my_alias-send_email"] == "my_alias"
+        assert (
+            test_manager.tool_name_to_mcp_server_name_mapping["send_email"]
+            == "my_alias"
+        )
+        assert (
+            test_manager.tool_name_to_mcp_server_name_mapping["my_alias-send_email"]
+            == "my_alias"
+        )
 
 
 @pytest.mark.asyncio
@@ -1392,8 +1460,14 @@ async def test_mcp_server_manager_server_name_tool_prefixing():
         assert tools[0].name == "Test_Server-send_email"
 
         # Verify mapping is updated correctly
-        assert test_manager.tool_name_to_mcp_server_name_mapping["send_email"] == "Test Server"
-        assert test_manager.tool_name_to_mcp_server_name_mapping["Test_Server-send_email"] == "Test Server"
+        assert (
+            test_manager.tool_name_to_mcp_server_name_mapping["send_email"]
+            == "Test Server"
+        )
+        assert (
+            test_manager.tool_name_to_mcp_server_name_mapping["Test_Server-send_email"]
+            == "Test Server"
+        )
 
 
 @pytest.mark.asyncio
@@ -1446,8 +1520,16 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
         assert tools[0].name == "test-server-123-send_email"
 
         # Verify mapping is updated correctly
-        assert test_manager.tool_name_to_mcp_server_name_mapping["send_email"] == "test-server-123"
-        assert test_manager.tool_name_to_mcp_server_name_mapping["test-server-123-send_email"] == "test-server-123"
+        assert (
+            test_manager.tool_name_to_mcp_server_name_mapping["send_email"]
+            == "test-server-123"
+        )
+        assert (
+            test_manager.tool_name_to_mcp_server_name_mapping[
+                "test-server-123-send_email"
+            ]
+            == "test-server-123"
+        )
 
 
 @pytest.mark.asyncio
@@ -1700,7 +1782,9 @@ def test_get_server_auth_header_with_alias():
     }
     mcp_auth_header = "Bearer default_token"
 
-    result = _get_server_auth_header(mock_server, mcp_server_auth_headers, mcp_auth_header)
+    result = _get_server_auth_header(
+        mock_server, mcp_server_auth_headers, mcp_auth_header
+    )
     assert result == "Bearer zapier_token"
 
     # Test case-insensitive matching
@@ -1709,7 +1793,9 @@ def test_get_server_auth_header_with_alias():
         "slack": "Bearer slack_token",
     }
 
-    result = _get_server_auth_header(mock_server, mcp_server_auth_headers, mcp_auth_header)
+    result = _get_server_auth_header(
+        mock_server, mcp_server_auth_headers, mcp_auth_header
+    )
     assert result == "Bearer zapier_token_upper"
 
 
@@ -1731,7 +1817,9 @@ def test_get_server_auth_header_with_server_name():
     }
     mcp_auth_header = "Bearer default_token"
 
-    result = _get_server_auth_header(mock_server, mcp_server_auth_headers, mcp_auth_header)
+    result = _get_server_auth_header(
+        mock_server, mcp_server_auth_headers, mcp_auth_header
+    )
     assert result == "Bearer slack_token"
 
     # Test case-insensitive matching
@@ -1740,7 +1828,9 @@ def test_get_server_auth_header_with_server_name():
         "zapier": "Bearer zapier_token",
     }
 
-    result = _get_server_auth_header(mock_server, mcp_server_auth_headers, mcp_auth_header)
+    result = _get_server_auth_header(
+        mock_server, mcp_server_auth_headers, mcp_auth_header
+    )
     assert result == "Bearer slack_token_upper"
 
 
@@ -1762,7 +1852,9 @@ def test_get_server_auth_header_fallback_to_default():
     }
     mcp_auth_header = "Bearer default_token"
 
-    result = _get_server_auth_header(mock_server, mcp_server_auth_headers, mcp_auth_header)
+    result = _get_server_auth_header(
+        mock_server, mcp_server_auth_headers, mcp_auth_header
+    )
     assert result == "Bearer default_token"
 
     # Test with no server-specific headers at all
@@ -1784,7 +1876,9 @@ def test_get_server_auth_header_hyphenated_alias_sanitized_header_key():
         "github_mcp": {"Authorization": "Bearer github-mcp-token"},
     }
 
-    result = _get_server_auth_header(mock_server, mcp_server_auth_headers, "Bearer default_token")
+    result = _get_server_auth_header(
+        mock_server, mcp_server_auth_headers, "Bearer default_token"
+    )
     assert result == {"Authorization": "Bearer github-mcp-token"}
 
 
@@ -1883,7 +1977,9 @@ async def test_get_tools_for_single_server():
     ]
 
     # Mock the global_mcp_server_manager
-    with patch("litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager") as mock_manager:
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager:
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
 
         result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
@@ -1940,7 +2036,9 @@ async def test_get_tools_for_single_server_applies_disallowed_tools_without_allo
         ),
     ]
 
-    with patch("litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager") as mock_manager:
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager:
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
 
         result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
@@ -1987,14 +2085,14 @@ async def test_rest_listing_hides_key_grants_dispatch_would_refuse():
         ),
     ]
 
-    with (
-        patch("litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager") as mock_manager,
-        patch("litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager") as mock_server_manager,
-        patch.object(
-            MCPRequestHandler,
-            "resolve_tool_grant_for_server",
-            AsyncMock(return_value=McpToolGrant(allowed=[f"{server_id}-read_wiki_contents"], denied=frozenset())),
-        ),
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager, patch(
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
+    ) as mock_server_manager, patch.object(
+        MCPRequestHandler,
+        "resolve_tool_grant_for_server",
+        AsyncMock(return_value=McpToolGrant(allowed=[f"{server_id}-read_wiki_contents"], denied=frozenset())),
     ):
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
         mock_server_manager.get_mcp_server_by_id.return_value = mock_server
@@ -2026,8 +2124,12 @@ async def test_list_tool_rest_api_with_server_specific_auth():
     }
 
     # Mock the MCPRequestHandler methods
-    with patch.object(MCPRequestHandler, "_get_mcp_auth_header_from_headers") as mock_get_auth:
-        with patch.object(MCPRequestHandler, "_get_mcp_server_auth_headers_from_headers") as mock_get_server_auth:
+    with patch.object(
+        MCPRequestHandler, "_get_mcp_auth_header_from_headers"
+    ) as mock_get_auth:
+        with patch.object(
+            MCPRequestHandler, "_get_mcp_server_auth_headers_from_headers"
+        ) as mock_get_server_auth:
             mock_get_auth.return_value = "Bearer default_token"
             mock_get_server_auth.return_value = {
                 "zapier": "Bearer zapier_token",
@@ -2038,7 +2140,9 @@ async def test_list_tool_rest_api_with_server_specific_auth():
             with patch(
                 "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
             ) as mock_manager:
-                mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["test-server-123"])
+                mock_manager.get_allowed_mcp_servers = AsyncMock(
+                    return_value=["test-server-123"]
+                )
                 # Create a mock server
                 mock_server = MagicMock()
                 mock_server.server_id = "test-server-123"
@@ -2095,7 +2199,9 @@ async def test_list_tool_rest_api_with_server_specific_auth():
                     mock_get_tools.assert_called_once()
                     call_args = mock_get_tools.call_args
                     assert call_args[0][0] == mock_server  # server
-                    assert call_args[0][1] == "Bearer zapier_token"  # server_auth_header
+                    assert (
+                        call_args[0][1] == "Bearer zapier_token"
+                    )  # server_auth_header
 
 
 @pytest.mark.asyncio
@@ -2115,8 +2221,12 @@ async def test_list_tool_rest_api_with_default_auth():
     }
 
     # Mock the MCPRequestHandler methods
-    with patch.object(MCPRequestHandler, "_get_mcp_auth_header_from_headers") as mock_get_auth:
-        with patch.object(MCPRequestHandler, "_get_mcp_server_auth_headers_from_headers") as mock_get_server_auth:
+    with patch.object(
+        MCPRequestHandler, "_get_mcp_auth_header_from_headers"
+    ) as mock_get_auth:
+        with patch.object(
+            MCPRequestHandler, "_get_mcp_server_auth_headers_from_headers"
+        ) as mock_get_server_auth:
             mock_get_auth.return_value = "Bearer default_token"
             mock_get_server_auth.return_value = {}  # No server-specific headers
 
@@ -2124,7 +2234,9 @@ async def test_list_tool_rest_api_with_default_auth():
             with patch(
                 "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
             ) as mock_manager:
-                mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["test-server-123"])
+                mock_manager.get_allowed_mcp_servers = AsyncMock(
+                    return_value=["test-server-123"]
+                )
                 # Create a mock server
                 mock_server = MagicMock()
                 mock_server.server_id = "test-server-123"
@@ -2181,7 +2293,9 @@ async def test_list_tool_rest_api_with_default_auth():
                     mock_get_tools.assert_called_once()
                     call_args = mock_get_tools.call_args
                     assert call_args[0][0] == mock_server  # server
-                    assert call_args[0][1] == "Bearer default_token"  # server_auth_header
+                    assert (
+                        call_args[0][1] == "Bearer default_token"
+                    )  # server_auth_header
 
 
 @pytest.mark.asyncio
@@ -2202,8 +2316,12 @@ async def test_list_tool_rest_api_all_servers_with_auth():
     }
 
     # Mock the MCPRequestHandler methods
-    with patch.object(MCPRequestHandler, "_get_mcp_auth_header_from_headers") as mock_get_auth:
-        with patch.object(MCPRequestHandler, "_get_mcp_server_auth_headers_from_headers") as mock_get_server_auth:
+    with patch.object(
+        MCPRequestHandler, "_get_mcp_auth_header_from_headers"
+    ) as mock_get_auth:
+        with patch.object(
+            MCPRequestHandler, "_get_mcp_server_auth_headers_from_headers"
+        ) as mock_get_server_auth:
             mock_get_auth.return_value = "Bearer default_token"
             mock_get_server_auth.return_value = {
                 "zapier": "Bearer zapier_token",
@@ -2229,9 +2347,13 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     "zapier": mock_zapier_server,
                     "slack": mock_slack_server,
                 }
-                mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["zapier", "slack"])
-                mock_manager.get_mcp_server_by_id.side_effect = lambda server_id: (
-                    mock_manager.get_registry.return_value.get(server_id)
+                mock_manager.get_allowed_mcp_servers = AsyncMock(
+                    return_value=["zapier", "slack"]
+                )
+                mock_manager.get_mcp_server_by_id.side_effect = (
+                    lambda server_id: mock_manager.get_registry.return_value.get(
+                        server_id
+                    )
                 )
                 # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
                 mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
@@ -2290,10 +2412,17 @@ async def test_list_tool_rest_api_all_servers_with_auth():
 
                     # Verify that _get_tools_for_single_server was called for both servers
                     assert mock_get_tools.call_count == 2
-                    server_auth_map = {call_args[0][0]: call_args[0][1] for call_args in mock_get_tools.call_args_list}
+                    server_auth_map = {
+                        call_args[0][0]: call_args[0][1]
+                        for call_args in mock_get_tools.call_args_list
+                    }
 
-                    assert server_auth_map.get(mock_zapier_server) == "Bearer zapier_token"
-                    assert server_auth_map.get(mock_slack_server) == "Bearer slack_token"
+                    assert (
+                        server_auth_map.get(mock_zapier_server) == "Bearer zapier_token"
+                    )
+                    assert (
+                        server_auth_map.get(mock_slack_server) == "Bearer slack_token"
+                    )
 
 
 @pytest.mark.asyncio
@@ -2355,9 +2484,13 @@ async def test_filter_tools_by_allowed_tools_integration():
         return mock_client
 
     # Mock the global MCP server manager
-    with patch("litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager") as mock_manager:
+    with patch(
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
+    ) as mock_manager:
         # Mock manager methods
-        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["test-server-123"])
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["test-server-123"]
+        )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
@@ -2381,13 +2514,23 @@ async def test_filter_tools_by_allowed_tools_integration():
             filtered_tools = listing.tools
 
             # Verify that only allowed tools are returned
-            assert len(filtered_tools) == 2, f"Expected 2 tools, got {len(filtered_tools)}"
+            assert (
+                len(filtered_tools) == 2
+            ), f"Expected 2 tools, got {len(filtered_tools)}"
 
             tool_names = [tool.name for tool in filtered_tools]
-            assert "allowed_tool_1" in tool_names, "allowed_tool_1 should be in filtered results"
-            assert "allowed_tool_2" in tool_names, "allowed_tool_2 should be in filtered results"
-            assert "blocked_tool_1" not in tool_names, "blocked_tool_1 should be filtered out"
-            assert "blocked_tool_2" not in tool_names, "blocked_tool_2 should be filtered out"
+            assert (
+                "allowed_tool_1" in tool_names
+            ), "allowed_tool_1 should be in filtered results"
+            assert (
+                "allowed_tool_2" in tool_names
+            ), "allowed_tool_2 should be in filtered results"
+            assert (
+                "blocked_tool_1" not in tool_names
+            ), "blocked_tool_1 should be filtered out"
+            assert (
+                "blocked_tool_2" not in tool_names
+            ), "blocked_tool_2 should be filtered out"
 
             # Verify the manager methods were called correctly
             mock_manager.get_allowed_mcp_servers.assert_called_once_with(mock_user_auth)
@@ -2456,9 +2599,13 @@ async def test_filter_tools_by_disallowed_tools_integration():
         return mock_client
 
     # Mock the global MCP server manager
-    with patch("litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager") as mock_manager:
+    with patch(
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
+    ) as mock_manager:
         # Mock manager methods
-        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["test-server-456"])
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["test-server-456"]
+        )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
@@ -2481,13 +2628,23 @@ async def test_filter_tools_by_disallowed_tools_integration():
             filtered_tools = listing.tools
 
             # Verify that only safe tools are returned (dangerous tools filtered out)
-            assert len(filtered_tools) == 2, f"Expected 2 tools, got {len(filtered_tools)}"
+            assert (
+                len(filtered_tools) == 2
+            ), f"Expected 2 tools, got {len(filtered_tools)}"
 
             tool_names = [tool.name for tool in filtered_tools]
-            assert "safe_tool_1" in tool_names, "safe_tool_1 should be in filtered results"
-            assert "safe_tool_2" in tool_names, "safe_tool_2 should be in filtered results"
-            assert "dangerous_tool_1" not in tool_names, "dangerous_tool_1 should be filtered out"
-            assert "dangerous_tool_2" not in tool_names, "dangerous_tool_2 should be filtered out"
+            assert (
+                "safe_tool_1" in tool_names
+            ), "safe_tool_1 should be in filtered results"
+            assert (
+                "safe_tool_2" in tool_names
+            ), "safe_tool_2 should be in filtered results"
+            assert (
+                "dangerous_tool_1" not in tool_names
+            ), "dangerous_tool_1 should be filtered out"
+            assert (
+                "dangerous_tool_2" not in tool_names
+            ), "dangerous_tool_2 should be filtered out"
 
             # Verify the manager methods were called correctly
             mock_manager.get_allowed_mcp_servers.assert_called_once_with(mock_user_auth)
@@ -2543,9 +2700,13 @@ async def test_filter_tools_no_restrictions_integration():
         return mock_client
 
     # Mock the global MCP server manager
-    with patch("litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager") as mock_manager:
+    with patch(
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
+    ) as mock_manager:
         # Mock manager methods
-        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["test-server-000"])
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["test-server-000"]
+        )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
@@ -2569,7 +2730,9 @@ async def test_filter_tools_no_restrictions_integration():
             filtered_tools = listing.tools
 
             # Should return all tools when no restrictions
-            assert len(filtered_tools) == 2, f"Expected 2 tools, got {len(filtered_tools)}"
+            assert (
+                len(filtered_tools) == 2
+            ), f"Expected 2 tools, got {len(filtered_tools)}"
 
             tool_names = [tool.name for tool in filtered_tools]
             assert "tool_1" in tool_names, "tool_1 should be in filtered results"
@@ -2586,8 +2749,12 @@ async def test_mcp_access_group_permission_inheritance_integration():
 
     # Test scenario: team has access groups, key has no permissions -> should inherit
     # Use direct mocking of the helper functions instead of complex database mocking
-    with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
-        with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
+    with patch.object(
+        MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
+    ) as mock_key:
+        with patch.object(
+            MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
+        ) as mock_team:
             # Key has no permissions, team has servers
             mock_key.return_value = []  # Key inherits nothing directly
             mock_team.return_value = [
@@ -2622,8 +2789,12 @@ async def test_mcp_access_group_permission_intersection_integration():
 
     # Test scenario: both team and key have access groups -> should intersect
     # Use direct mocking of the helper functions instead of complex database mocking
-    with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
-        with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
+    with patch.object(
+        MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
+    ) as mock_key:
+        with patch.object(
+            MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
+        ) as mock_team:
             # Both key and team have permissions - should intersect
             mock_key.return_value = [
                 "ops-server",
@@ -2685,12 +2856,12 @@ async def test_mcp_server_manager_with_access_groups_integration(config_only_mcp
     )
 
     # Mock user with specific access groups
-    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-staff")
+    user_auth = UserAPIKeyAuth(
+        api_key="test-key", user_id="test-user", team_id="team-staff"
+    )
 
     # Mock the permission lookup to return staff access group
-    with patch.object(
-        MCPRequestHandler, "get_mcp_server_access"
-    ) as mock_get_allowed:  # test-quality-ok: manager resolver seam
+    with patch.object(MCPRequestHandler, "get_mcp_server_access") as mock_get_allowed:  # test-quality-ok: manager resolver seam
         mock_get_allowed.return_value = MCPServerAccess(
             server_ids=("staff-server-id", "ops-server-id"),
             scope="scoped",
@@ -2729,7 +2900,9 @@ async def test_get_allowed_mcp_servers_returns_registry_for_admin(config_only_mc
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
 
-    with patch.object(MCPRequestHandler, "get_allowed_mcp_servers", new_callable=AsyncMock) as mock_permission_lookup:
+    with patch.object(
+        MCPRequestHandler, "get_allowed_mcp_servers", new_callable=AsyncMock
+    ) as mock_permission_lookup:
         allowed_servers = await test_manager.get_allowed_mcp_servers(admin_auth)
 
     assert set(allowed_servers) == set(test_manager.get_registry().keys())
@@ -2763,7 +2936,9 @@ async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permi
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
 
-    with patch.object(MCPRequestHandler, "get_mcp_server_access", new_callable=AsyncMock) as mock_permission_lookup:
+    with patch.object(
+        MCPRequestHandler, "get_mcp_server_access", new_callable=AsyncMock
+    ) as mock_permission_lookup:
         mock_permission_lookup.return_value = MCPServerAccess(server_ids=())
         allowed_servers = await test_manager.get_allowed_mcp_servers(user_auth)
 
@@ -2806,7 +2981,9 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
             "_get_mcp_server_from_tool_name",
             return_value=mock_server,
         ) as mock_get_server,
-        patch("litellm.proxy._experimental.mcp_server.operations.global_mcp_tool_registry") as mock_tool_registry,
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_tool_registry"
+        ) as mock_tool_registry,
         patch(
             "litellm.proxy._experimental.mcp_server.operations._handle_managed_mcp_tool",
             new_callable=AsyncMock,
@@ -2835,7 +3012,10 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
     # The exact count isn't important, only that it is used.
     assert mock_get_server.call_count >= 2
     # First call should use the prefixed tool name
-    assert mock_get_server.call_args_list[0][0][0] == f"{mock_server.name}/gmail_send_email"
+    assert (
+        mock_get_server.call_args_list[0][0][0]
+        == f"{mock_server.name}/gmail_send_email"
+    )
 
 
 @pytest.mark.asyncio
@@ -2877,7 +3057,9 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
             "_get_mcp_server_from_tool_name",
             return_value=mock_server,
         ) as mock_get_server,
-        patch("litellm.proxy._experimental.mcp_server.operations.global_mcp_tool_registry") as mock_tool_registry,
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_tool_registry"
+        ) as mock_tool_registry,
         patch(
             "litellm.proxy._experimental.mcp_server.operations._handle_managed_mcp_tool",
             new_callable=AsyncMock,
