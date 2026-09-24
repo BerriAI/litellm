@@ -3,6 +3,7 @@ import json
 import struct
 import zlib
 from collections.abc import Mapping
+from io import BytesIO
 from typing import Final
 
 import httpx
@@ -182,6 +183,22 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
     ]
     # the reference b"image" decodes to non-image content and is not metered; generated pixels only
     assert response._hidden_params["response_cost"] == pytest.approx(catalog_rate * 2048 * 1024 * 2)
+
+
+def test_flux2_image_edit_encodes_a_mid_position_stream_from_the_start():
+    stream: Final = BytesIO(b"prefix" + b"image")
+    stream.seek(6)
+
+    request, files = AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
+        model="FLUX.2-flex",
+        prompt="Blend every reference",
+        image=[stream],
+        image_edit_optional_request_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["input_image"] == base64.b64encode(b"prefiximage").decode()
 
 
 def _png_bytes(width: int, height: int) -> bytes:
