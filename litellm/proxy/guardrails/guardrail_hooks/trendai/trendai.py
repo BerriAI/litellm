@@ -7,7 +7,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn, Optional, Protocol
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn, Protocol
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 import httpx
@@ -17,7 +17,10 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator has an untyped signature
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # legacy client factory has an untyped params map
     httpxSpecialProvider,
@@ -75,7 +78,6 @@ class TrendAIGuardrail(CustomGuardrail):
         app_name: str | None = None,
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 5.0,
-        stream_batch_size: int = 2048,
         stream_overlap_size: int = 256,
         response_content_chunk_size_bytes: int = RESPONSE_CONTENT_CHUNK_SIZE_BYTES,
         logging_only_scan: Literal["request", "response", "both"] = "both",
@@ -102,10 +104,8 @@ class TrendAIGuardrail(CustomGuardrail):
             raise ValueError("logging_only_scan must be 'request', 'response', or 'both'")
         if timeout <= 0:
             raise ValueError("timeout must be greater than zero")
-        if stream_batch_size < 1:
-            raise ValueError("stream_batch_size must be greater than zero")
-        if stream_overlap_size < 0 or stream_overlap_size >= stream_batch_size:
-            raise ValueError("stream_overlap_size must be non-negative and smaller than stream_batch_size")
+        if stream_overlap_size < 0:
+            raise ValueError("stream_overlap_size must be non-negative")
         if response_content_chunk_size_bytes < 1:
             raise ValueError("response_content_chunk_size_bytes must be greater than zero")
 
@@ -114,7 +114,6 @@ class TrendAIGuardrail(CustomGuardrail):
         self.app_name: str = app_name or os.environ.get("TMV1_APPLICATION_NAME", "litellm")
         self.fallback_on_error: Literal["block", "allow"] = fallback_on_error
         self.timeout: float = timeout
-        self.stream_batch_size: int = stream_batch_size
         self.stream_overlap_size: int = stream_overlap_size
         self.response_content_chunk_size_bytes: int = response_content_chunk_size_bytes
         self.logging_only_scan: Literal["request", "response", "both"] = logging_only_scan
@@ -127,8 +126,6 @@ class TrendAIGuardrail(CustomGuardrail):
             event_hook=event_hook,
             default_on=default_on,
             supported_event_hooks=self.get_supported_event_hooks(),
-            mask_request_content=True,
-            mask_response_content=True,
         )
 
     @classmethod
@@ -143,12 +140,13 @@ class TrendAIGuardrail(CustomGuardrail):
     def logging_only_scan_scope(self) -> Literal["request", "response", "both"]:
         return self.logging_only_scan
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict[str, object],  # mutable-ok: CustomGuardrail hook contract is a plain dict
         input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         texts: Final = tuple(inputs.get("texts") or ())
         match input_type:

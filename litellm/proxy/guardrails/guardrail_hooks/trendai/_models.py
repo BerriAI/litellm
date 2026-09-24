@@ -2,6 +2,7 @@
 # This file has been modified for integration into LiteLLM.
 # Licensed under the Apache License, Version 2.0. See LICENSE.txt in this directory.
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
@@ -12,7 +13,6 @@ class TrendAISettings(BaseModel):
     app_name: str | None = None
     fallback_on_error: Literal["block", "allow"] = "block"
     timeout: float = 5.0
-    stream_batch_size: int = 2048
     stream_overlap_size: int = 256
     response_content_chunk_size_bytes: int = 49_500
     logging_only_scan: Literal["request", "response", "both"] = "both"
@@ -86,7 +86,7 @@ class TrendAIResponse(BaseModel):
     action: str
     reasons: tuple[str, ...] = ()
     reason: str = ""
-    redacted_request: dict[str, object] | None = Field(default=None, alias="redactedRequest")
+    redacted_request: Mapping[str, object] | None = Field(default=None, alias="redactedRequest")
     sensitive_information: TrendAISensitiveInformation | None = Field(default=None, alias="sensitiveInformation")
 
 
