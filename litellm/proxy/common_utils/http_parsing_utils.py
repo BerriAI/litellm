@@ -563,11 +563,11 @@ def _tags_from_metadata_value(value: object) -> list[str]:
     metadata: Final[object] = safe_json_loads(value) if isinstance(value, str) else value
     if not isinstance(metadata, dict):
         return []
-    metadata_map: Final = cast(Mapping[str, object], metadata)
+    metadata_map: Final = cast(Mapping[str, object], metadata)  # cast-ok: dict checked above; only a string key is read
     tags: Final[object] = metadata_map.get("tags")
     if not isinstance(tags, list):
         return []
-    tag_values: Final = cast(list[object], tags)
+    tag_values: Final = cast(list[object], tags)  # cast-ok: list checked above; elements are filtered below
     return [tag for tag in tag_values if isinstance(tag, str)]
 
 
@@ -579,7 +579,11 @@ def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
         _tags_from_metadata_value(request_body.get("metadata")) if metadata_variable_name == "litellm_metadata" else []
     )
     root_tags: Final[object] = request_body.get("tags")
-    root_tag_values: Final = cast(list[object], root_tags) if isinstance(root_tags, list) else []
+    root_tag_values: Final = (
+        cast(list[object], root_tags)  # cast-ok: list checked by the condition; elements are filtered below
+        if isinstance(root_tags, list)
+        else []
+    )
     return [
         *metadata_tags,
         *caller_metadata_tags,
