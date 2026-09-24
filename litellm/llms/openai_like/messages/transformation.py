@@ -10,6 +10,7 @@ from litellm.llms.openai_like.dynamic_config import (
     apply_service_tier_as_completion_window,
     service_tier_as_completion_window_enabled,
     service_tier_completion_window_drop,
+    validate_caller_completion_window,
 )
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.secret_managers.main import get_secret_str
@@ -202,7 +203,10 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
                 key: request_kwargs[key] for key in passthrough_keys if key in request_kwargs
             },
         }
-        translated: Final = apply_service_tier_as_completion_window(merged)
+        validate_caller_completion_window(request_kwargs, self._provider, model if isinstance(model, str) else "")
+        translated: Final = apply_service_tier_as_completion_window(
+            merged, self._provider, model if isinstance(model, str) else ""
+        )
         return {  # mutable-ok: matches dict-typed base signature
             key: value for key, value in translated.items() if key not in ("service_tier", "extra_body")
         }

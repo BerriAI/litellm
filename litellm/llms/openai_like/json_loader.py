@@ -9,6 +9,9 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm._logging import verbose_logger
+from litellm.types.utils import ServiceTier
+
+COMPLETION_WINDOWS: Final = frozenset(("asap", ServiceTier.FLEX.value, ServiceTier.BALANCED.value))
 
 
 class SimpleProviderConfig:

@@ -29,6 +29,26 @@ def _providers_json() -> dict:
 
 
 class TestProvidersJsonConsistency:
+    def test_every_slug_is_in_openai_compatible_providers(self):
+        from litellm.constants import openai_compatible_providers
+
+        missing = sorted(set(_providers_json()) - set(openai_compatible_providers))
+        assert missing == [
+            "abliteration",
+            "aihubmix",
+            "assemblyai",
+            "charity_engine",
+            "crusoe",
+            "empiriolabs",
+            "gmi",
+            "llamagate",
+            "neosantara",
+            "sarvam",
+            "scaleway",
+            "veniceai",
+            "xiaomi_mimo",
+        ]
+
     def test_every_slug_is_an_llm_provider_enum_member(self):
         from litellm import LlmProviders
 

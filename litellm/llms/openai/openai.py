@@ -872,6 +872,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         raise e
         except OpenAIError as e:
             raise e
+        except litellm.UnsupportedParamsError:
+            raise
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
@@ -1150,7 +1152,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             ) as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
                 if isinstance(e, OpenAIError):
                     raise e
-
+                if isinstance(e, litellm.UnsupportedParamsError):
+                    raise
                 error_headers = getattr(e, "headers", None)
                 status_code = getattr(e, "status_code", 500)
                 error_response = getattr(e, "response", None)

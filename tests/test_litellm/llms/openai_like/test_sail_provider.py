@@ -3,6 +3,7 @@
 import io
 import json
 import wave
+from typing import Final
 
 import pytest
 import respx
@@ -831,6 +832,56 @@ class TestSailWireAndBillingConsistency:
         assert body["metadata"] == {"completion_window": "balanced"}
         assert response._hidden_params["response_cost"] == pytest.approx(self._expected_cost("_balanced"))
 
+    @pytest.mark.parametrize(
+        "completion_kwargs,expected_suffix",
+        [
+            ({"service_tier": "flex"}, "_flex"),
+            ({"service_tier": "balanced"}, "_balanced"),
+            ({"extra_body": {"metadata": {"completion_window": "flex"}}}, "_flex"),
+        ],
+        ids=["tier_flex", "tier_balanced", "extra_body_window"],
+    )
+    @pytest.mark.respx()
+    def test_standalone_completion_cost_bills_by_wire_window(
+        self, respx_mock: respx.Router, completion_kwargs: dict, expected_suffix: str
+    ):
+        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
+
+        response = litellm.completion(model=MODEL, messages=[{"role": "user", "content": "hi"}], **completion_kwargs)
+
+        standalone_cost = litellm.completion_cost(completion_response=response, model=MODEL)
+        assert standalone_cost == pytest.approx(response._hidden_params["response_cost"])
+        assert standalone_cost == pytest.approx(self._expected_cost(expected_suffix))
+        assert standalone_cost != pytest.approx(self._expected_cost(""))
+
+    @pytest.mark.respx()
+    def test_standalone_completion_cost_matches_logged_cost_on_openai(self, respx_mock: respx.Router):
+        respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+            json={
+                "id": "chatcmpl-openai",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4.1-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+            }
+        )
+
+        response = litellm.completion(
+            model="openai/gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}], service_tier="flex"
+        )
+
+        assert response._hidden_params["response_cost"] > 0
+        assert litellm.completion_cost(completion_response=response) == pytest.approx(
+            response._hidden_params["response_cost"]
+        )
+
     def test_window_override_applies_when_provider_inferred_from_model(self):
         rates = litellm.model_cost[MODEL]
         prompt_tokens, completion_tokens = 1000, 200
@@ -853,18 +904,16 @@ class TestSailWireAndBillingConsistency:
     @pytest.mark.parametrize(
         "optional_params,expected_window",
         [
-            ({"service_tier": "default", "background": True}, None),
+            ({"service_tier": "default", "background": True}, "asap"),
+            ({"service_tier": "priority", "background": True}, "asap"),
             ({"service_tier": "flex", "background": True}, "flex"),
         ],
-        ids=["background_asap_suppressed", "background_flex_kept"],
+        ids=["background_default_emits_asap", "background_priority_emits_asap", "background_flex_kept"],
     )
-    def test_background_suppresses_asap_window(self, optional_params: dict, expected_window: str | None):
+    def test_background_keeps_mapped_window(self, optional_params: dict, expected_window: str):
         body = _sail_chat_body(optional_params)
         assert "service_tier" not in body
-        if expected_window is None:
-            assert "completion_window" not in body.get("metadata", {})
-        else:
-            assert body["metadata"]["completion_window"] == expected_window
+        assert body["metadata"]["completion_window"] == expected_window
 
     @pytest.mark.respx()
     def test_vendor_kwarg_folds_into_request_body(self, respx_mock: respx.Router):
@@ -1026,6 +1075,81 @@ _UNKNOWN_TIER_MESSAGE = (
     "Supported values: auto, default, flex, balanced, priority. "
     "To drop unsupported params set litellm.drop_params=True"
 )
+
+
+def _bad_window_message(window: object) -> str:
+    return (
+        f"litellm.UnsupportedParamsError: sail does not support completion_window {window!r}. "
+        "Supported values: asap, flex, balanced"
+    )
+
+
+_INVALID_WINDOW_VALUES: Final = pytest.mark.parametrize(
+    "window", ("", None, 0, "fast"), ids=["empty", "none", "zero", "fast"]
+)
+
+
+def _window_kwargs(shape: str, window: object, with_tier: bool) -> dict:
+    kwargs = (
+        {"extra_body": {"metadata": {"completion_window": window}}}
+        if shape == "extra_body"
+        else {"metadata": {"completion_window": window}}
+    )
+    return {**kwargs, **({"service_tier": "flex"} if with_tier else {})}
+
+
+class TestSailCallerCompletionWindowRejected:
+    @_INVALID_WINDOW_VALUES
+    @pytest.mark.parametrize("with_tier", (False, True), ids=["no_tier", "with_tier"])
+    @pytest.mark.respx()
+    def test_chat_invalid_caller_window_raises_400(self, respx_mock: respx.Router, window: object, with_tier: bool):
+        with pytest.raises(litellm.UnsupportedParamsError) as exc:
+            litellm.completion(model=MODEL, messages=_MESSAGES, **_window_kwargs("extra_body", window, with_tier))
+
+        assert str(exc.value) == _bad_window_message(window)
+        assert respx_mock.calls.call_count == 0
+
+    @pytest.mark.parametrize(
+        "window,shape",
+        [
+            *[(w, "metadata") for w in ("", "fast")],
+            *[(w, "extra_body") for w in ("", None, 0, "fast")],
+        ],
+        ids=[
+            "metadata_empty",
+            "metadata_fast",
+            "extra_body_empty",
+            "extra_body_none",
+            "extra_body_zero",
+            "extra_body_fast",
+        ],
+    )
+    @pytest.mark.parametrize("with_tier", (False, True), ids=["no_tier", "with_tier"])
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_responses_invalid_caller_window_raises_400(
+        self, respx_mock: respx.Router, window: object, shape: str, with_tier: bool
+    ):
+        with pytest.raises(litellm.UnsupportedParamsError) as exc:
+            await litellm.aresponses(model=MODEL, input="hi", **_window_kwargs(shape, window, with_tier))
+
+        assert str(exc.value) == _bad_window_message(window)
+        assert respx_mock.calls.call_count == 0
+
+    @_INVALID_WINDOW_VALUES
+    @pytest.mark.parametrize("with_tier", (False, True), ids=["no_tier", "with_tier"])
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_messages_invalid_caller_window_raises_400(
+        self, respx_mock: respx.Router, window: object, with_tier: bool
+    ):
+        with pytest.raises(litellm.UnsupportedParamsError) as exc:
+            await litellm.anthropic_messages(
+                model=MODEL, messages=_MESSAGES, max_tokens=50, **_window_kwargs("extra_body", window, with_tier)
+            )
+
+        assert str(exc.value) == _bad_window_message(window)
+        assert respx_mock.calls.call_count == 0
 
 
 class TestSailUnknownServiceTierRejected:

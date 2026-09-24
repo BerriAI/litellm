@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
     from litellm.types.router import GenericLiteLLMParams
 
-from .json_loader import SimpleProviderConfig
+from .json_loader import COMPLETION_WINDOWS, SimpleProviderConfig
 
 _SERVICE_TIER_TO_COMPLETION_WINDOW: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -34,17 +34,54 @@ _SERVICE_TIER_TO_COMPLETION_WINDOW: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _completion_window_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
+def _completion_window_metadata_maps(
+    body: Mapping[str, object],
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    raw_metadata: Final = body.get("metadata")
+    raw_extra_body: Final = body.get("extra_body")
+    extra_body: Final[Mapping[str, object]] = (
+        raw_extra_body if isinstance(raw_extra_body, dict) else MappingProxyType({})
+    )
+    raw_extra_metadata: Final = extra_body.get("metadata")
+    return (
+        raw_metadata if isinstance(raw_metadata, dict) else MappingProxyType({}),
+        raw_extra_metadata if isinstance(raw_extra_metadata, dict) else MappingProxyType({}),
+    )
+
+
+def _caller_completion_window(body: Mapping[str, object]) -> object:
+    metadata, extra_metadata = _completion_window_metadata_maps(body)
+    if "completion_window" in extra_metadata:
+        return extra_metadata.get("completion_window")
+    return metadata.get("completion_window")
+
+
+def validate_caller_completion_window(body: Mapping[str, object], provider: SimpleProviderConfig, model: str) -> None:
+    metadata, extra_metadata = _completion_window_metadata_maps(body)
+    if "completion_window" not in extra_metadata and "completion_window" not in metadata:
+        return
+    caller_window: Final = _caller_completion_window(body)
+    if isinstance(caller_window, str) and caller_window in COMPLETION_WINDOWS:
+        return
+    raise litellm.UnsupportedParamsError(
+        status_code=400,
+        message=(
+            f"{provider.slug} does not support completion_window {caller_window!r}. "
+            "Supported values: asap, flex, balanced"
+        ),
+        model=model,
+        llm_provider=provider.slug,
+    )
 
 
 def apply_service_tier_as_completion_window(
-    body: Mapping[str, object],
+    body: Mapping[str, object], provider: SimpleProviderConfig, model: str
 ) -> dict[str, object]:  # mutable-ok: transform_request returns a plain dict
     service_tier: Final = body.get("service_tier")
     mapped_window: Final[str | None] = (
         _SERVICE_TIER_TO_COMPLETION_WINDOW.get(service_tier.lower()) if isinstance(service_tier, str) else None
     )
+    validate_caller_completion_window(body, provider, model)
     raw_metadata: Final = body.get("metadata")
     metadata: Final[Mapping[str, object]] = raw_metadata if isinstance(raw_metadata, dict) else MappingProxyType({})
     raw_extra_body: Final = body.get("extra_body")
@@ -55,12 +92,15 @@ def apply_service_tier_as_completion_window(
     extra_metadata: Final[Mapping[str, object]] = (
         raw_extra_metadata if isinstance(raw_extra_metadata, dict) else MappingProxyType({})
     )
-    caller_window: Final[str | None] = _completion_window_str(
+    caller_window_present: Final = "completion_window" in extra_metadata or "completion_window" in metadata
+    caller_window: Final = (
         extra_metadata.get("completion_window")
-    ) or _completion_window_str(metadata.get("completion_window"))
-    window: Final[str | None] = caller_window or mapped_window
+        if "completion_window" in extra_metadata
+        else metadata.get("completion_window")
+    )
+    window: Final = caller_window if caller_window_present else mapped_window
     new_body: Final = MappingProxyType({key: value for key, value in body.items() if key != "service_tier"})
-    if window is None or (caller_window is None and window == "asap" and body.get("background") is True):
+    if window is None:
         return dict(new_body)  # mutable-ok: transform_request returns a plain dict
     windowed_metadata: Final = {**metadata, "completion_window": window}  # mutable-ok: nested wire dict
     merged: Final = {**new_body, "metadata": windowed_metadata}  # mutable-ok: transform_request returns a plain dict
@@ -210,7 +250,7 @@ def create_config_class(provider: SimpleProviderConfig):
                 headers=dict(headers),  # mutable-ok: base signature requires dict
             )
             if service_tier_as_completion_window_enabled(provider):
-                return apply_service_tier_as_completion_window(body)
+                return apply_service_tier_as_completion_window(body, provider, model)
             return body
 
         def merge_extra_body(
@@ -267,6 +307,8 @@ def create_config_class(provider: SimpleProviderConfig):
             drop_service_tier: Final = service_tier_completion_window_drop(
                 provider, non_default_params.get("service_tier"), model, drop_params
             )
+            if service_tier_as_completion_window_enabled(provider):
+                validate_caller_completion_window(non_default_params, provider, model)
             params_to_map: Final = (
                 {  # mutable-ok: drop_params strips the tier into a fresh dict
                     key: value for key, value in non_default_params.items() if key != "service_tier"
@@ -346,7 +388,7 @@ def _json_responses_request_body(
         headers=headers,
     )
     if service_tier_as_completion_window_enabled(provider):
-        return apply_service_tier_as_completion_window(body)
+        return apply_service_tier_as_completion_window(body, provider, model)
     return body
 
 
@@ -362,6 +404,8 @@ def _json_responses_map_params(
     mapped: Final = OpenAILikeResponsesConfig.map_openai_params(
         config, response_api_optional_params=params, model=model, drop_params=drop_params
     )
+    if service_tier_as_completion_window_enabled(provider):
+        validate_caller_completion_window(params, provider, model)
     if service_tier_completion_window_drop(provider, params.get("service_tier"), model, drop_params):
         return {  # mutable-ok: drop_params strips the tier into a fresh dict
             key: value for key, value in mapped.items() if key != "service_tier"
@@ -432,6 +476,12 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             extra_body: Mapping[str, object] | None,
         ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
             if service_tier_as_completion_window_enabled(provider):
+                raw_model: Final = request.get("model")
+                validate_caller_completion_window(
+                    {**request, **({"extra_body": extra_body} if extra_body else {})},
+                    provider,
+                    raw_model if isinstance(raw_model, str) else "",
+                )
                 return _merge_extra_body_keeping_metadata(request, extra_body)
             return super().merge_extra_body(request, extra_body)
 

@@ -77,7 +77,7 @@ from litellm.llms.openai.cost_calculation import (
 from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
 )
-from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.openai_like.json_loader import COMPLETION_WINDOWS, JSONProviderRegistry
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -971,9 +971,16 @@ def _completion_window_value(metadata: object) -> str | None:
     if not isinstance(metadata, dict):
         return None
     window: Final[object] = metadata.get("completion_window")
-    if isinstance(window, str) and window in ("asap", ServiceTier.FLEX.value, ServiceTier.BALANCED.value):
+    if isinstance(window, str) and window in COMPLETION_WINDOWS:
         return window
     return None
+
+
+def _hidden_optional_params(completion_response: object) -> Mapping[str, object] | None:
+    if not isinstance(completion_response, BaseModel) or not hasattr(completion_response, "_hidden_params"):
+        return None
+    params: Final[object] = completion_response._hidden_params.get("optional_params")
+    return params if isinstance(params, Mapping) else None
 
 
 def _provider_bills_by_completion_window(custom_llm_provider: str | None) -> bool:
@@ -1416,8 +1423,11 @@ def completion_cost(
         rerank_billed_units: RerankBilledUnits | None = None
 
         # Extract service_tier from optional_params if not provided directly
-        if service_tier is None and optional_params is not None:
-            service_tier = _normalize_service_tier(optional_params.get("service_tier"))
+        window_params: Final[Mapping[str, object] | None] = (
+            optional_params if optional_params is not None else _hidden_optional_params(completion_response)
+        )
+        if service_tier is None and window_params is not None:
+            service_tier = _normalize_service_tier(window_params.get("service_tier"))
 
         service_tier = _normalize_service_tier(service_tier)
 
@@ -1563,7 +1573,7 @@ def completion_cost(
                         )
                 service_tier = _service_tier_billed_by_completion_window(
                     service_tier=service_tier,
-                    optional_params=optional_params,
+                    optional_params=window_params,
                     custom_llm_provider=custom_llm_provider,
                 )
                 if CostCalculatorUtils._call_type_has_image_response(call_type) and isinstance(
