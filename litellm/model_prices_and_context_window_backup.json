@@ -70438,6 +70438,34 @@
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
+    "wandb/deepseek-ai/DeepSeek-V4.1-Flash": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "wandb",
+        "max_input_tokens": 1049000,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 6.5e-07,
+        "source": "https://wandb.ai/site/pricing/tokens/",
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "wandb/google/gemma-4-26B-A4B-it": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "wandb",
+        "max_input_tokens": 262000,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-07,
+        "source": "https://wandb.ai/site/pricing/tokens/",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "wandb/zai-org/GLM-5.3-Flash": {
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 1.5e-07,
