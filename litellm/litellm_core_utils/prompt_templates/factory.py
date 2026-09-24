@@ -446,7 +446,7 @@ def _render_chat_template(env, chat_template: str, bos_token: str, eos_token: st
 
 
 async def _afetch_and_extract_template(
-    model: str, chat_template: Any | None, get_config_fn, get_template_fn
+    model: str, chat_template: str | None, get_config_fn, get_template_fn
 ) -> tuple[str, str, str]:
     """
     Async version: Fetch template and tokens from HuggingFace.
@@ -500,7 +500,7 @@ async def _afetch_and_extract_template(
 
 
 def _fetch_and_extract_template(
-    model: str, chat_template: Any | None, get_config_fn, get_template_fn
+    model: str, chat_template: str | None, get_config_fn, get_template_fn
 ) -> tuple[str, str, str]:
     """
     Sync version: Fetch template and tokens from HuggingFace.
