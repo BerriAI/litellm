@@ -56,7 +56,7 @@ class DatabricksTool(TypedDict):
 
 class DatabricksMessage(TypedDict, total=False):
     role: Required[str]
-    content: Required[AllDatabricksContentValues]
+    content: ReadOnly[AllDatabricksContentValues | None]
     tool_calls: list[DatabricksTool] | None
     reasoning_content: ReadOnly[str | None]
     reasoning: ReadOnly[str | None]
