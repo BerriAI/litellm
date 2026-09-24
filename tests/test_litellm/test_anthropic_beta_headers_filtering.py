@@ -458,6 +458,21 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["dangerous-tool-use-2026-09-03"]
 
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle"])
+    def test_per_turn_control_forwarded(self, provider):
+        """Claude Code sends per-turn-control-2026-07-01 together with a
+        mid-conversation `role: system` message that carries a message-level
+        `output_config` (e.g. an effort change). Bedrock Invoke accepts that
+        message only when the beta is present and otherwise answers
+        "messages.N.output_config: Extra inputs are not permitted", so dropping
+        the header (previously mapped to null) turned every such turn into a 400."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["per-turn-control-2026-07-01"],
+            provider=provider,
+        )
+
+        assert filtered == ["per-turn-control-2026-07-01"]
+
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
         for provider in [

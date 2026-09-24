@@ -124,7 +124,7 @@
     "mcp-servers-2025-12-04": null,
     "output-128k-2025-02-19": null,
     "structured-output-2024-03-01": null,
-    "per-turn-control-2026-07-01": null,
+    "per-turn-control-2026-07-01": "per-turn-control-2026-07-01",
     "prompt-caching-scope-2026-01-05": null,
     "skills-2025-10-02": null,
     "structured-outputs-2025-11-13": null,
