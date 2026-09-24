@@ -44,6 +44,28 @@ else:
 NOVA_CANVAS_CONTROL_MODES: Final[tuple[str, ...]] = ("CANNY_EDGE", "SEGMENTATION")
 
 
+def _resolve_edit_image_b64(
+    image: FileTypes | None,
+    condition_image_b64: str | None,
+    task_type: str | None,
+) -> str:
+    """Base64 image for the task body: the multipart ``image`` wins; ``conditionImage``
+    (already encoded) backs TEXT_IMAGE when no multipart file was sent."""
+    if image is not None:
+        return _file_types_to_b64(image)
+    if condition_image_b64 is not None and task_type != "TEXT_IMAGE":
+        raise ValueError(
+            "Amazon Nova Canvas conditionImage is only supported with "
+            f"taskType=TEXT_IMAGE (conditioned editing); got taskType={task_type!r}."
+        )
+    if task_type != "TEXT_IMAGE" or condition_image_b64 is None:
+        raise ValueError(
+            "Nova Canvas image edit requires an image input. Pass the multipart "
+            "`image` file, or a `conditionImage` for taskType=TEXT_IMAGE."
+        )
+    return condition_image_b64
+
+
 def _nova_canvas_task_body(
     *,
     image_b64: str,
@@ -308,6 +330,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             "outPaintingMode",
             "controlMode",
             "controlStrength",
+            "conditionImage",
             "imageGenerationConfig",
         ]
 
@@ -371,7 +394,15 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         headers: dict,
     ) -> tuple[dict, Any]:
         op: Final = dict(image_edit_optional_request_params)
-        image_b64: Final = _file_types_to_b64(image)
+        # conditionImage: alternative source for the TEXT_IMAGE condition image
+        # for callers that cannot send a multipart `image` file (e.g. plain JSON
+        # bodies). When both are supplied the multipart `image` field wins.
+        condition_image_raw: Final = op.pop("conditionImage", None)
+        condition_image_b64: Final[str | None] = (
+            _file_types_to_b64(condition_image_raw) if condition_image_raw is not None else None
+        )
+        task_type: Final = op.pop("taskType", None)
+        image_b64: Final[str] = _resolve_edit_image_b64(image, condition_image_b64, task_type)
 
         mask_raw: Final = op.pop("mask", None)
         mask_b64: str | None = None
@@ -410,7 +441,6 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         if seed is not None:
             image_generation_config["seed"] = seed
 
-        task_type: Final = op.pop("taskType", None)
         if (prompt is None or prompt == "") and task_type in (
             "INPAINTING",
             "OUTPAINTING",
@@ -427,6 +457,16 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         control_mode: Final = op.pop("controlMode", None)
         control_strength: Final = op.pop("controlStrength", None)
         style: Final = op.pop("style", None)
+        if (
+            control_mode is not None or control_strength is not None or style is not None
+        ) and task_type != "TEXT_IMAGE":
+            # Conditioning fields only exist on textToImageParams (TEXT_IMAGE);
+            # any other resolved task type would silently drop them.
+            raise ValueError(
+                "Amazon Nova Canvas controlMode/controlStrength/style are only supported "
+                f"with taskType=TEXT_IMAGE (conditioned editing); resolved taskType={task_type!r} "
+                "would silently drop them. Set taskType=TEXT_IMAGE to use them."
+            )
 
         body: Final = _nova_canvas_task_body(
             image_b64=image_b64,
