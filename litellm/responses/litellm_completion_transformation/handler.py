@@ -94,7 +94,7 @@ class LiteLLMCompletionTransformationHandler:
                     transformed_response=responses_api_response,
                     logging_obj=kwargs.get("logging_obj"),
                     custom_llm_provider=custom_llm_provider,
-                    litellm_metadata=kwargs.get("litellm_metadata", {}),
+                    litellm_metadata=kwargs.get("litellm_metadata"),
                 )
 
             return responses_api_response
@@ -151,7 +151,7 @@ class LiteLLMCompletionTransformationHandler:
                     transformed_response=responses_api_response,
                     logging_obj=kwargs.get("logging_obj"),
                     custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
-                    litellm_metadata=kwargs.get("litellm_metadata", {}),
+                    litellm_metadata=kwargs.get("litellm_metadata"),
                 )
 
             return responses_api_response

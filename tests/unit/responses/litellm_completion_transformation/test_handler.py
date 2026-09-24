@@ -314,3 +314,39 @@ def test_sync_fallback_wraps_converted_stream_as_synthetic_stream(converted_stre
     events = list(response)
     assert len(events) > 0
     assert getattr(events[-1], "type", None) == "response.completed"
+
+
+def test_mock_responses_streaming_iterator_validation_and_config_branches():
+    import httpx
+
+    from litellm.responses.streaming_iterator import MockResponsesAPIStreamingIterator
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    with pytest.raises(ValueError, match="Either transformed_response or both"):
+        MockResponsesAPIStreamingIterator()
+
+    class _MockConfig:
+        def transform_response_api_response(self, **kwargs):
+            return ResponsesAPIResponse(
+                id="resp_cfg_test",
+                created_at=1,
+                status="completed",
+                model="test-model",
+                object="response",
+                output=[],
+            )
+
+    class _MockLoggingObj:
+        def __init__(self):
+            self.model_call_details = {"litellm_params": {"api_key": "fake"}}
+
+    logging_obj = _MockLoggingObj()
+    iterator = MockResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="gpt-4o",
+        responses_api_provider_config=_MockConfig(),
+        logging_obj=logging_obj,
+    )
+    events = list(iterator)
+    assert len(events) > 0
+    assert getattr(events[-1], "type", None) == "response.completed"

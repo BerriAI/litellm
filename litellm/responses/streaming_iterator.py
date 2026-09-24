@@ -314,9 +314,9 @@ class BaseResponsesAPIStreamingIterator:
         # This matches the stream wrapper in litellm/litellm_core_utils/streaming_handler.py
         _model_call_details: Final = getattr(self.logging_obj, "model_call_details", None)
         _optional_params: Final = (
-            _typed_gets_litellm_params(_model_call_details.get)("litellm_params", {})
+            _typed_gets_litellm_params(_model_call_details.get)("litellm_params", {})  # mutable-ok: fallback dict
             if isinstance(_model_call_details, dict)
-            else {}
+            else {}  # mutable-ok: fallback empty mapping
         )
         _api_base: Final = get_api_base(
             model=model or "",
@@ -1140,17 +1140,9 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 raw_response=response,
                 logging_obj=logging_obj,
             )
-        elif response is not None:
-            from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-
-            transformed: Final = OpenAIResponsesAPIConfig().transform_response_api_response(
-                model=model,
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
         else:
             raise ValueError(
-                "Either transformed_response or response must be provided to MockResponsesAPIStreamingIterator"
+                "Either transformed_response or both responses_api_provider_config and response must be provided to MockResponsesAPIStreamingIterator"
             )
         super().__init__(
             response=response or httpx.Response(200),
