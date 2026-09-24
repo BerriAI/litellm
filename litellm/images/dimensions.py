@@ -1,15 +1,23 @@
+import base64
 import os
 import struct
-from collections.abc import Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from io import BytesIO
 from typing import IO, Final, cast
 
+from httpx._types import RequestFiles  # pyright: ignore[reportPrivateImportUsage]  # same source the base transform classes use
+
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.token_counter import get_image_type
 from litellm.types.llms.openai import FileTypes
+from litellm.types.utils import ImageResponse
 
 _HEADER_READ_SIZE: Final = 32
+_IMAGE_SIGNATURE_BYTES: Final = 12
+_DATA_URI_PREFIX: Final = "data:"
+_EMBEDDED_IMAGE_MAX_DEPTH: Final = 4
+_IMAGE_SIGNATURES: Final = frozenset({"png", "jpeg", "webp", "gif"})
 
 _JPEG_SOF_MARKERS: Final = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
 _JPEG_MAX_SEGMENTS: Final = 1024
@@ -52,27 +60,119 @@ def total_reference_pixels(images: Sequence[FileTypes]) -> int | None:
     return sum(size.pixels for size in dimensions)
 
 
+def uploaded_reference_pixels(
+    files: RequestFiles | None,
+    json_body: Mapping[str, object] | None,
+) -> int | None:
+    """Pixels across the image-bearing parts a request actually sends.
+
+    Multipart requests carry image content under ``files``; JSON requests embed base64 inside
+    ``json_body`` (e.g. FLUX ``input_image`` fields). Measuring the outgoing payload instead of the
+    caller's arguments keeps billing aligned with what the provider meters when a transform filters
+    images out or adds parts of its own (masks, single-image providers). All-or-nothing, ``0`` when
+    nothing image-bearing is sent.
+    """
+    parts: Final = _file_parts(files) + tuple(_embedded_image_values(json_body or {}))
+    if not parts:
+        return 0
+    return total_reference_pixels(parts)
+
+
+def _file_parts(files: RequestFiles | None) -> tuple[FileTypes, ...]:
+    if files is None:
+        return ()
+    if isinstance(files, Mapping):
+        return tuple(files.values())
+    return tuple(files)
+
+
+def _file_content(part: FileTypes) -> object:
+    """The payload bytes of an httpx file part: (field, (name, content, type, headers?)) unwraps twice."""
+    unwrapped: Final = part[1] if isinstance(part, tuple) else part
+    return unwrapped[1] if isinstance(unwrapped, tuple) else unwrapped
+
+
 def read_image_dimensions(image: FileTypes) -> ImageDimensions | None:
+    """Measure one image file's pixel dimensions; ``None`` when unmeasurable, never raises.
+
+    Seekable content is measured from offset 0 (the bytes an upload sends) with the stream position
+    restored afterward. Strings are read as embedded base64 or data-URI image content; a filesystem
+    path does not decode to an image signature and still returns ``None``.
+    """
     try:
         content: Final = cast(
             "IO[bytes] | bytes | str | os.PathLike[str] | None",
-            image[1] if isinstance(image, tuple) else image,
+            _file_content(image),
         )
-        if content is None or isinstance(content, (str, os.PathLike)):
+        if content is None:
             return None
+        if isinstance(content, (str, os.PathLike)):
+            embedded: Final = _decoded_image_bytes(os.fspath(content))
+            if embedded is None:
+                return None
+            return _dimensions_from_stream(BytesIO(embedded))
         stream = BytesIO(content) if isinstance(content, (bytes, bytearray, memoryview)) else content
-        if not stream.seekable():
-            return None
-        position = stream.tell()
-        try:
-            dimensions = _header_dimensions(stream, position)
-        finally:
-            stream.seek(position)
-        if dimensions is None or dimensions.width <= 0 or dimensions.height <= 0:
-            return None
-        return dimensions
+        return _dimensions_from_stream(stream)
     except Exception:  # noqa: BLE001  # an odd stream or malformed file must fall back, never raise
         return None
+
+
+def with_reference_pixels(response: ImageResponse, reference_pixels: int | None) -> ImageResponse:
+    if reference_pixels is not None:
+        response.set_reference_pixels(reference_pixels)
+    return response
+
+
+def _dimensions_from_stream(stream: IO[bytes]) -> ImageDimensions | None:
+    if not stream.seekable():
+        return None
+    position: Final = stream.tell()
+    try:
+        dimensions = _header_dimensions(stream, 0)
+    finally:
+        stream.seek(position)
+    if dimensions is None or dimensions.width <= 0 or dimensions.height <= 0:
+        return None
+    return dimensions
+
+
+def _decoded_image_bytes(text: str) -> bytes | None:
+    """The image bytes a string carries, when it is base64 or data-URI encoded image content."""
+    payload: Final = text.partition(",")[2] if text.startswith(_DATA_URI_PREFIX) else text
+    if len(payload) < _IMAGE_SIGNATURE_BYTES:
+        return None
+    try:
+        head: Final = base64.b64decode(payload[:64])
+        if not _is_image_signature(head):
+            return None
+        return base64.b64decode(payload)
+    except ValueError:  # binascii.Error subclasses ValueError; undecodable fields are not images
+        return None
+
+
+def _embedded_image_values(value: object, depth: int = 0) -> Iterator[bytes]:
+    if depth > _EMBEDDED_IMAGE_MAX_DEPTH:
+        return
+    if isinstance(value, str):
+        decoded: Final = _decoded_image_bytes(value)
+        if decoded is not None:
+            yield decoded
+    elif isinstance(value, (bytes, bytearray, memoryview)):
+        raw: Final = bytes(value)
+        if _is_image_signature(raw[:_HEADER_READ_SIZE]):
+            yield raw
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _embedded_image_values(item, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _embedded_image_values(item, depth + 1)
+
+
+def _is_image_signature(head: bytes) -> bool:
+    return len(head) >= _IMAGE_SIGNATURE_BYTES and (
+        get_image_type(head) in _IMAGE_SIGNATURES or head[:2] == b"BM"
+    )
 
 
 def _header_dimensions(stream: IO[bytes], position: int) -> ImageDimensions | None:

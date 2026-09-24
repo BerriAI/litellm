@@ -3851,6 +3851,57 @@ def _echo_json_transport(captured):
     return httpx.MockTransport(handle)
 
 
+def _fixed_json_transport():
+    return httpx.MockTransport(lambda request: httpx.Response(200, json={"transformed_by": "sync"}))
+
+
+class _ImageEditForwardingConfig(_ImageEditRecordingConfig):
+    """Uploads the caller's images inside the JSON body, like the FLUX.2 transform."""
+
+    def _forwarded_images(self, image):
+        images = image if isinstance(image, list) else [image]
+        return [
+            base64.b64encode(item if isinstance(item, bytes) else item[1]).decode()
+            for item in images
+            if item is not None
+        ]
+
+    def transform_image_edit_request(
+        self, model, prompt, image, image_edit_optional_request_params, litellm_params, headers
+    ):
+        self.transform_calls.append("sync")
+        return {"transformed_by": "sync", "image": self._forwarded_images(image)}, []
+
+    async def async_transform_image_edit_request(
+        self, model, prompt, image, image_edit_optional_request_params, litellm_params, headers
+    ):
+        self.transform_calls.append("async")
+        return {"transformed_by": "async", "image": self._forwarded_images(image)}, []
+
+
+class _ImageEditMultipartConfig(_ImageEditRecordingConfig):
+    """Uploads the caller's images as multipart file parts, like the MAI transform."""
+
+    def use_multipart_form_data(self):
+        return True
+
+    def _file_parts_for(self, image):
+        images = image if isinstance(image, list) else [image]
+        return [("image", ("image.png", item, "image/png")) for item in images if item is not None]
+
+    def transform_image_edit_request(
+        self, model, prompt, image, image_edit_optional_request_params, litellm_params, headers
+    ):
+        self.transform_calls.append("sync")
+        return {"transformed_by": "sync"}, self._file_parts_for(image)
+
+    async def async_transform_image_edit_request(
+        self, model, prompt, image, image_edit_optional_request_params, litellm_params, headers
+    ):
+        self.transform_calls.append("async")
+        return {"transformed_by": "async"}, self._file_parts_for(image)
+
+
 async def test_async_image_edit_handler_awaits_the_async_transform():
     config = _ImageEditRecordingConfig()
     captured = {}
@@ -3918,7 +3969,7 @@ def test_image_edit_handler_stamps_measured_reference_pixels():
         model="edit-model",
         image=[_tiny_png(4, 2), _tiny_png(1, 1)],
         prompt="add a hat",
-        image_edit_provider_config=_ImageEditRecordingConfig(),
+        image_edit_provider_config=_ImageEditForwardingConfig(),
         image_edit_optional_request_params={},
         custom_llm_provider="openai",
         litellm_params=GenericLiteLLMParams(),
@@ -3939,7 +3990,7 @@ async def test_async_image_edit_handler_stamps_measured_reference_pixels():
         model="edit-model",
         image=_tiny_png(4, 2),
         prompt="add a hat",
-        image_edit_provider_config=_ImageEditRecordingConfig(),
+        image_edit_provider_config=_ImageEditForwardingConfig(),
         image_edit_optional_request_params={},
         custom_llm_provider="openai",
         litellm_params=GenericLiteLLMParams(),
@@ -3951,15 +4002,55 @@ async def test_async_image_edit_handler_stamps_measured_reference_pixels():
     assert response.reference_pixels == 8
 
 
+def test_image_edit_handler_bills_every_multipart_reference_it_uploads():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_fixed_json_transport())
+
+    response = BaseLLMHTTPHandler().image_edit_handler(
+        model="edit-model",
+        image=[_tiny_png(4, 2), _tiny_png(1, 1)],
+        prompt="add a hat",
+        image_edit_provider_config=_ImageEditMultipartConfig(),
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert response.reference_pixels == 4 * 2 + 1 * 1
+
+
+def test_image_edit_handler_does_not_bill_references_the_transform_dropped():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_fixed_json_transport())
+
+    response = BaseLLMHTTPHandler().image_edit_handler(
+        model="edit-model",
+        image=[_tiny_png(4, 2), _tiny_png(1, 1)],
+        prompt="add a hat",
+        image_edit_provider_config=_ImageEditRecordingConfig(),
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert response.reference_pixels == 0
+
+
 def test_image_edit_handler_leaves_reference_pixels_unset_when_unmeasurable():
     client = HTTPHandler()
-    client.client = httpx.Client(transport=_echo_json_transport({}))
+    client.client = httpx.Client(transport=_fixed_json_transport())
 
     response = BaseLLMHTTPHandler().image_edit_handler(
         model="edit-model",
         image=b"not-an-image",
         prompt="add a hat",
-        image_edit_provider_config=_ImageEditRecordingConfig(),
+        image_edit_provider_config=_ImageEditMultipartConfig(),
         image_edit_optional_request_params={},
         custom_llm_provider="openai",
         litellm_params=GenericLiteLLMParams(),

@@ -33,7 +33,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
-from litellm.images.dimensions import total_reference_pixels
+from litellm.images.dimensions import uploaded_reference_pixels, with_reference_pixels
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
@@ -381,12 +381,6 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
         for callback in callbacks
         if callable(getattr(callback, "enforce_project_io_token_quota_for_frame", None))
     )
-
-
-def _with_reference_pixels(response: ImageResponse, reference_pixels: int | None) -> ImageResponse:
-    if reference_pixels is not None:
-        response.set_reference_pixels(reference_pixels)
-    return response
 
 
 class BaseLLMHTTPHandler:
@@ -6888,7 +6882,6 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        reference_pixels: Final = total_reference_pixels(image if isinstance(image, list) else [image])
         data, files = image_edit_provider_config.transform_image_edit_request(
             model=model,
             image=image,
@@ -6898,6 +6891,7 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
         data = image_edit_provider_config.finalize_image_edit_request_data(data, api_base)
+        reference_pixels: Final = uploaded_reference_pixels(files, data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -6936,7 +6930,7 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return _with_reference_pixels(
+        return with_reference_pixels(
             image_edit_provider_config.transform_image_edit_response(
                 model=model,
                 raw_response=response,
@@ -6991,7 +6985,6 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        reference_pixels: Final = total_reference_pixels(image if isinstance(image, list) else [image])
         data, files = await image_edit_provider_config.async_transform_image_edit_request(
             model=model,
             image=image,
@@ -7001,6 +6994,7 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
         data = image_edit_provider_config.finalize_image_edit_request_data(data, api_base)
+        reference_pixels: Final = uploaded_reference_pixels(files, data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -7039,7 +7033,7 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return _with_reference_pixels(
+        return with_reference_pixels(
             image_edit_provider_config.transform_image_edit_response(
                 model=model,
                 raw_response=response,
@@ -7121,6 +7115,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
             headers=headers,
         )
+        reference_pixels: Final = uploaded_reference_pixels(None, data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -7170,7 +7165,7 @@ class BaseLLMHTTPHandler:
             encoding=None,
         )
 
-        return model_response
+        return with_reference_pixels(model_response, reference_pixels)
 
     async def async_image_generation_handler(
         self,
@@ -7228,6 +7223,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
             headers=headers,
         )
+        reference_pixels: Final = uploaded_reference_pixels(None, data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -7277,7 +7273,7 @@ class BaseLLMHTTPHandler:
             encoding=None,
         )
 
-        return model_response
+        return with_reference_pixels(model_response, reference_pixels)
 
     ###### VIDEO GENERATION HANDLER ######
     def video_generation_handler(

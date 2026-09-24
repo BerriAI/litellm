@@ -20,7 +20,7 @@ def _rate(table: ModelInfo, key: str) -> float | None:
 def _generated_pixels(optional_params: Mapping[str, object] | None, size: str | None) -> int:
     width: Final = optional_params.get("width") if optional_params else None
     height: Final = optional_params.get("height") if optional_params else None
-    if isinstance(width, int) and isinstance(height, int):
+    if type(width) is int and type(height) is int and width > 0 and height > 0:
         return width * height
     match: Final = _SIZE_PATTERN.fullmatch(size or "")
     return int(match[1]) * int(match[2]) if match else 0
@@ -58,7 +58,7 @@ def cost_calculator(
     num_images: Final = n if n is not None else len(image_response.data or ())
     generated_cost: Final = _generated_cost(resolved, num_images, _generated_pixels(optional_params, size))
     per_pixel: Final = _rate(resolved, "input_cost_per_pixel") or 0.0
-    reference_cost: Final = per_pixel * (image_response.reference_pixels or 0)
+    reference_cost: Final = per_pixel * max(image_response.reference_pixels or 0, 0)
     return generated_cost + reference_cost
 
 

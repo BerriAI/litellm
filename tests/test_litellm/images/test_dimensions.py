@@ -1,3 +1,4 @@
+import base64
 import io
 import struct
 import zlib
@@ -7,7 +8,12 @@ from typing import Any, Final, cast
 import pytest
 from PIL import Image
 
-from litellm.images.dimensions import ImageDimensions, read_image_dimensions, total_reference_pixels
+from litellm.images.dimensions import (
+    ImageDimensions,
+    read_image_dimensions,
+    total_reference_pixels,
+    uploaded_reference_pixels,
+)
 
 CAT_JPEG: Final = Path(__file__).parents[2] / "e2e" / "llm_translation" / "fixtures" / "cat.jpg"
 JPEG_SOI: Final = b"\xff\xd8"
@@ -165,6 +171,11 @@ def _dims(width: int, height: int) -> ImageDimensions:
             _dims(640, 480),
             id="bmp-coreheader",
         ),
+        pytest.param(
+            b"BM" + bytes(12) + struct.pack("<I", 108) + struct.pack("<ii", 640, 480) + bytes(6),
+            _dims(640, 480),
+            id="bmp-v4header",
+        ),
         pytest.param(b"II*\x00" + bytes(28), None, id="unknown-format"),
     ),
 )
@@ -201,10 +212,41 @@ def test_read_image_dimensions_reads_png_jpeg_webp_headers_and_keeps_position(in
     assert layouts == (b"VP8 ", b"VP8L", b"VP8X")
 
     for image, expected in cases:
-        stream: Final = io.BytesIO(bytes(initial_position) + image)
+        stream: Final = io.BytesIO(image)
         stream.seek(initial_position)
+        # uploads rewind seekable parts to offset 0, so a mid-file cursor still measures the whole image
         assert read_image_dimensions(stream) == _dims(*expected), image[:16]
         assert stream.tell() == initial_position, image[:16]
+
+
+def test_read_image_dimensions_returns_none_when_stream_content_is_not_an_image():
+    stream: Final = io.BytesIO(bytes(5) + _png(1024, 1024))
+    stream.seek(5)
+
+    assert read_image_dimensions(stream) is None
+    assert stream.tell() == 5
+
+
+def test_read_image_dimensions_reads_base64_and_data_uri_strings():
+    png_b64: Final = base64.b64encode(_png(512, 256)).decode()
+
+    assert read_image_dimensions(png_b64) == _dims(512, 256)
+    assert read_image_dimensions(f"data:image/png;base64,{png_b64}") == _dims(512, 256)
+    assert read_image_dimensions(("ref.png", png_b64)) == _dims(512, 256)
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "/tmp/nonexistent.png",
+        "",
+        "the quick brown fox",
+        base64.b64encode(b"not an image body").decode(),
+        "data:text/plain;base64," + base64.b64encode(b"still not an image").decode(),
+    ),
+)
+def test_read_image_dimensions_returns_none_for_non_image_strings(text: str):
+    assert read_image_dimensions(text) is None
 
 
 def test_read_image_dimensions_returns_none_on_truncated_jpeg_and_keeps_position():
@@ -292,3 +334,40 @@ def test_total_reference_pixels_returns_none_when_any_reference_is_unmeasurable(
     assert total_reference_pixels([_png(64, 64), _gif(b"GIF89a", 100, 50)]) == 64 * 64 + 100 * 50
     assert total_reference_pixels([_png(64, 64), io.BytesIO(b"image"), CAT_JPEG.read_bytes()]) is None
     assert total_reference_pixels([]) == 0
+
+
+def test_uploaded_reference_pixels_measures_the_uploaded_set_not_the_requested_set():
+    png_b64: Final = base64.b64encode(_png(64, 64)).decode()
+    jpeg_b64: Final = base64.b64encode(CAT_JPEG.read_bytes()).decode()
+
+    # a transform that keeps only the first image (MAI) bills only what it sends
+    assert uploaded_reference_pixels({"image[]": ("ref.png", _png(64, 64))}, {"prompt": "hi"}) == 64 * 64
+    # FLUX.2 embeds each reference as a base64 field in the JSON body
+    assert uploaded_reference_pixels(
+        [],
+        {"model": "FLUX.2-flex", "prompt": "blend", "input_image": png_b64, "input_image_2": jpeg_b64, "n": 2},
+    ) == 64 * 64 + 512 * 512
+    # an extra file part a transform adds itself (a mask) is uploaded and metered too
+    assert uploaded_reference_pixels(
+        {"image": ("edit.png", _png(64, 64)), "mask": ("mask.png", _png(10, 10))}, {"prompt": "cut"}
+    ) == 64 * 64 + 10 * 10
+
+
+def test_uploaded_reference_pixels_skips_non_image_fields_and_nested_bodies():
+    png_b64: Final = base64.b64encode(_png(64, 64)).decode()
+    jpeg_b64: Final = base64.b64encode(CAT_JPEG.read_bytes()).decode()
+
+    assert uploaded_reference_pixels(
+        {"image": ("edit.png", _png(64, 64))},
+        {"model": "m", "prompt": "hi", "size": "1024x1024", "extra": {"nested": jpeg_b64}, "refs": [png_b64]},
+    ) == 64 * 64 + 512 * 512 + 64 * 64
+    assert uploaded_reference_pixels(None, {"prompt": "hi", "model": "m"}) == 0
+    assert uploaded_reference_pixels(None, None) == 0
+
+
+def test_uploaded_reference_pixels_returns_none_when_any_uploaded_part_is_unmeasurable():
+    png_b64: Final = base64.b64encode(_png(64, 64)).decode()
+    truncated_png_b64: Final = base64.b64encode(_png(64, 64)[:16]).decode()
+
+    assert uploaded_reference_pixels({"image": io.BytesIO(b"not an image")}, None) is None
+    assert uploaded_reference_pixels(None, {"input_image": png_b64, "input_image_2": truncated_png_b64}) is None

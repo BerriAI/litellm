@@ -1,4 +1,6 @@
+import base64
 import json
+import struct
 import traceback
 from typing import Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -376,6 +378,43 @@ def test_azure_image_generation_v1_api_version_uses_v1_route(api_version):
     assert url == f"https://my-resource.openai.azure.com/openai/v1/images/generations?api-version={api_version}"
     data = {"model": "gpt-image-1", "prompt": "x"}
     assert azure_deployment_image_generation_json_body(url, data) == data
+
+
+_PNG_1024X1024: bytes = (
+    b"\x89PNG\r\n\x1a\n"
+    + struct.pack(">I", 13)
+    + b"IHDR"
+    + struct.pack(">IIBBBBB", 1024, 1024, 8, 2, 0, 0, 0)
+)
+
+
+def test_azure_ai_image_generation_meters_extra_body_reference_images():
+    """extra_body fields flattened into the JSON body are metered: base64 reference images a
+    caller adds through extra_body reach the provider, so they are billed like edit references."""
+    png_base64: str = base64.b64encode(_PNG_1024X1024).decode()
+    mock_http_response = MagicMock()
+    mock_http_response.status_code = 200
+    mock_http_response.json.return_value = {"data": [{"b64_json": "aW1n"}]}
+
+    with patch.object(HTTPHandler, "post", return_value=mock_http_response):
+        response = AzureChatCompletion().image_generation(
+            prompt="Blend the references",
+            timeout=60.0,
+            optional_params={
+                "n": 1,
+                "size": "1024x1024",
+                "extra_body": {"input_image": png_base64, "input_image_2": png_base64},
+            },
+            logging_obj=MagicMock(),
+            headers={},
+            model="FLUX.2-flex",
+            api_key="test-api-key",
+            api_base="https://example.services.ai.azure.com",
+            api_version="preview",
+            litellm_params={},
+        )
+
+    assert response.reference_pixels == 2 * 1024 * 1024
 
 
 def test_azure_image_generation_dated_api_version_uses_deployment_route():

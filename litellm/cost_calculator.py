@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
+    _DEPLOYMENT_PRICING_KEYS,  # pyright: ignore[reportPrivateUsage]  # declared-pricing key set shared with sibling calculators
     _generic_cost_per_character,
     _get_regional_uplift_multiplier,
     _get_service_tier_cost_key,
@@ -2020,7 +2021,12 @@ def _deployment_model_info(
     litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
     if litellm_params is None:
         return None
-    return next(
+    declared: Final = {
+        key: value
+        for key in _DEPLOYMENT_PRICING_KEYS
+        if (value := litellm_params.get(key)) is not None
+    }
+    nested: Final = next(
         (
             model_info
             for metadata_key in ("metadata", "litellm_metadata")
@@ -2028,6 +2034,8 @@ def _deployment_model_info(
         ),
         None,
     )
+    merged: Final = {**(nested or {}), **declared}
+    return cast(ModelInfo, merged) if merged else None
 
 
 def _ocr_model_info(
