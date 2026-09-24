@@ -37,9 +37,9 @@ if TYPE_CHECKING:
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
-    def __init__(self) -> None:
+    def __init__(self, authenticator: Authenticator | None = None) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
+        self.authenticator = authenticator if authenticator is not None else Authenticator()
 
     @property
     def custom_llm_provider(self) -> LlmProviders:

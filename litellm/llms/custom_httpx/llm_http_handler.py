@@ -2687,6 +2687,7 @@ class BaseLLMHTTPHandler:
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
+        caller_requested_stream: Final = bool(stream)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -2761,8 +2762,20 @@ class BaseLLMHTTPHandler:
                     stream=stream,
                     **body_kwargs,
                 )
-                if fake_stream is True:
-                    return MockResponsesAPIStreamingIterator(
+                if caller_requested_stream:
+                    if fake_stream is True:
+                        return MockResponsesAPIStreamingIterator(
+                            response=response,
+                            model=model,
+                            logging_obj=logging_obj,
+                            responses_api_provider_config=responses_api_provider_config,
+                            litellm_metadata=litellm_metadata,
+                            custom_llm_provider=custom_llm_provider,
+                            request_data=request_context,
+                            call_type=CallTypes.responses.value,
+                        )
+
+                    return SyncResponsesAPIStreamingIterator(
                         response=response,
                         model=model,
                         logging_obj=logging_obj,
@@ -2772,17 +2785,7 @@ class BaseLLMHTTPHandler:
                         request_data=request_context,
                         call_type=CallTypes.responses.value,
                     )
-
-                return SyncResponsesAPIStreamingIterator(
-                    response=response,
-                    model=model,
-                    logging_obj=logging_obj,
-                    responses_api_provider_config=responses_api_provider_config,
-                    litellm_metadata=litellm_metadata,
-                    custom_llm_provider=custom_llm_provider,
-                    request_data=request_context,
-                    call_type=CallTypes.responses.value,
-                )
+                response.read()
             else:
                 response = sync_httpx_client.post(
                     url=api_base,
@@ -2875,6 +2878,7 @@ class BaseLLMHTTPHandler:
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
+        caller_requested_stream: Final = bool(stream)
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -2950,8 +2954,21 @@ class BaseLLMHTTPHandler:
                     **body_kwargs,
                 )
 
-                if fake_stream is True:
-                    return MockResponsesAPIStreamingIterator(
+                if caller_requested_stream:
+                    if fake_stream is True:
+                        return MockResponsesAPIStreamingIterator(
+                            response=response,
+                            model=model,
+                            logging_obj=logging_obj,
+                            responses_api_provider_config=responses_api_provider_config,
+                            litellm_metadata=litellm_metadata,
+                            custom_llm_provider=custom_llm_provider,
+                            request_data=request_context,
+                            call_type=CallTypes.responses.value,
+                        )
+
+                    # Return the streaming iterator
+                    return ResponsesAPIStreamingIterator(
                         response=response,
                         model=model,
                         logging_obj=logging_obj,
@@ -2961,18 +2978,7 @@ class BaseLLMHTTPHandler:
                         request_data=request_context,
                         call_type=CallTypes.responses.value,
                     )
-
-                # Return the streaming iterator
-                return ResponsesAPIStreamingIterator(
-                    response=response,
-                    model=model,
-                    logging_obj=logging_obj,
-                    responses_api_provider_config=responses_api_provider_config,
-                    litellm_metadata=litellm_metadata,
-                    custom_llm_provider=custom_llm_provider,
-                    request_data=request_context,
-                    call_type=CallTypes.responses.value,
-                )
+                await response.aread()
             else:
                 response = await async_httpx_client.post(
                     url=api_base,
