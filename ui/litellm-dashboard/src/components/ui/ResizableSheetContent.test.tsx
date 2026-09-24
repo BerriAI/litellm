@@ -74,4 +74,30 @@ describe("ResizableSheetContent", () => {
     expect(sheetContent().style.getPropertyValue("--sheet-width")).toBe("72%");
     expect(sep).toHaveAttribute("aria-valuenow", "72");
   });
+
+  it("announces the rendered width when the 720px floor overrides the stored percentage", () => {
+    localStorage.setItem("k", "40");
+    Object.defineProperty(window, "innerWidth", { value: 1000, configurable: true, writable: true });
+    render(
+      <Sheet open>
+        <ResizableSheetContent storageKey="k">
+          <SheetTitle>t</SheetTitle>
+        </ResizableSheetContent>
+      </Sheet>,
+    );
+
+    const sep = screen.getByRole("separator");
+    expect(sep).toHaveAttribute("aria-valuenow", "72");
+    expect(sep).toHaveAttribute("aria-valuemin", "72");
+
+    Object.defineProperty(window, "innerWidth", { value: 2000, configurable: true, writable: true });
+    fireEvent(window, new Event("resize"));
+    expect(sep).toHaveAttribute("aria-valuenow", "40");
+    expect(sep).toHaveAttribute("aria-valuemin", "40");
+
+    Object.defineProperty(window, "innerWidth", { value: 800, configurable: true, writable: true });
+    fireEvent(window, new Event("resize"));
+    expect(sep).toHaveAttribute("aria-valuenow", "90");
+    expect(localStorage.getItem("k")).toBe("40");
+  });
 });

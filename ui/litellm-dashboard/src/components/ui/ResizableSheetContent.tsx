@@ -20,9 +20,13 @@ function clampWidth(value: number, min: number) {
   return Math.min(100, Math.max(min, value));
 }
 
-function effectiveMinPercent(minWidthPercent: number) {
-  if (typeof window === "undefined") return minWidthPercent;
-  return Math.min(100, Math.max(minWidthPercent, (MIN_WIDTH_PX / window.innerWidth) * 100));
+function effectiveMinPercent(minWidthPercent: number, viewportWidth: number) {
+  if (!viewportWidth) return minWidthPercent;
+  return Math.min(100, Math.max(minWidthPercent, (MIN_WIDTH_PX / viewportWidth) * 100));
+}
+
+function readViewportWidth() {
+  return typeof window === "undefined" ? 0 : window.innerWidth;
 }
 
 function readStoredWidth(storageKey: string, defaultWidthPercent: number, minWidthPercent: number) {
@@ -44,12 +48,21 @@ function ResizableSheetContent({
   const widthRef = React.useRef(width);
   const lastNonFullWidthRef = React.useRef(defaultWidthPercent);
   const cleanupRef = React.useRef<(() => void) | null>(null);
+  const [viewportWidth, setViewportWidth] = React.useState(readViewportWidth);
   const isFull = width >= 100;
+  const minPercent = effectiveMinPercent(minWidthPercent, viewportWidth);
+  const renderedWidth = clampWidth(width, minPercent);
 
   React.useEffect(() => () => cleanupRef.current?.(), []);
 
+  React.useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   const applyWidth = (next: number, persist: boolean) => {
-    const clamped = clampWidth(next, effectiveMinPercent(minWidthPercent));
+    const clamped = clampWidth(next, effectiveMinPercent(minWidthPercent, window.innerWidth));
     widthRef.current = clamped;
     setWidth(clamped);
     if (persist) setLocalStorageItem(storageKey, String(clamped));
@@ -103,7 +116,7 @@ function ResizableSheetContent({
     }
     if (event.key === "End") {
       event.preventDefault();
-      applyWidth(effectiveMinPercent(minWidthPercent), true);
+      applyWidth(effectiveMinPercent(minWidthPercent, window.innerWidth), true);
     }
   };
 
@@ -125,8 +138,8 @@ function ResizableSheetContent({
         data-slot="sheet-resize-handle"
         className="absolute inset-y-0 left-0 hidden w-1.5 cursor-col-resize touch-none select-none hover:bg-border focus-visible:bg-border focus-visible:outline-none sm:block"
         tabIndex={0}
-        aria-valuenow={Math.round(width)}
-        aria-valuemin={Math.round(effectiveMinPercent(minWidthPercent))}
+        aria-valuenow={Math.round(renderedWidth)}
+        aria-valuemin={Math.round(minPercent)}
         aria-valuemax={100}
         onPointerDown={onPointerDown}
         onKeyDown={onKeyDown}
