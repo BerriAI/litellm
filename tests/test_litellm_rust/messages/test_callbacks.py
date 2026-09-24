@@ -89,27 +89,45 @@ async def test_native_messages_pre_call_body_edit_reaches_the_provider(messages_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "error_type", "expected"),
+    [
+        (400, "invalid_request_error", litellm.BadRequestError),
+        (401, "authentication_error", litellm.AuthenticationError),
+        (403, "permission_error", litellm.PermissionDeniedError),
+    ],
+)
 async def test_native_messages_provider_error_reaches_caller_and_failure_callbacks_as_one_public_error(
-    messages_server: RecordingServer,
+    messages_server: RecordingServer, status: int, error_type: str, expected: type[litellm.APIError]
 ) -> None:
     messages_server.enqueue(
-        ResponseSpec(body={"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}}, status=400)
+        ResponseSpec(
+            body={"type": "error", "error": {"type": error_type, "message": "rejected upstream"}}, status=status
+        )
     )
     observed: Final = []
 
     class Observe(CustomLogger):
         def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-            observed.append(("sync", kwargs["exception"]))
+            observed.append(("sync", kwargs["exception"], kwargs["standard_logging_object"]["error_information"]))
 
         async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-            observed.append(("async", kwargs["exception"]))
+            observed.append(("async", kwargs["exception"], kwargs["standard_logging_object"]["error_information"]))
 
-    with pytest.raises(litellm.BadRequestError) as raised:
+    with pytest.raises(expected) as raised:
         await litellm.anthropic.messages.acreate(**arguments(messages_server, callbacks=[Observe()]))
 
     assert_served_natively(messages_server)
-    assert [phase for phase, _ in observed] == ["sync", "async"]
-    assert all(error is raised.value for _, error in observed)
+    assert raised.value.status_code == status
+    assert raised.value.llm_provider == "anthropic"
+    assert "AnthropicException" in raised.value.message
+    assert f'"{error_type}"' in raised.value.message
+    assert [phase for phase, _, _ in observed] == ["sync", "async"]
+    assert all(error is raised.value for _, error, _ in observed)
+    assert all(
+        (info["error_class"], info["llm_provider"], info["error_code"]) == (expected.__name__, "anthropic", str(status))
+        for _, _, info in observed
+    )
 
 
 def sse_payload() -> bytes:

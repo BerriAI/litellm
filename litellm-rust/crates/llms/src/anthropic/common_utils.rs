@@ -1224,6 +1224,7 @@ mod tests {
     #[rstest]
     #[case::with_results(json!([{"type": "web_search_result", "url": "u", "title": "Rome", "snippet": "s", "page_age": null}]))]
     #[case::without_results(json!([]))]
+    #[case::failed_search(json!({"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"}))]
     fn flatten_unencrypted_web_search_results_is_idempotent(#[case] results: Value) {
         let input = replayed_search_turn(results);
         let once = apply(flatten_unencrypted_web_search_results, input.clone());

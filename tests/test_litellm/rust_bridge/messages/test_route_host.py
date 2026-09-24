@@ -72,6 +72,25 @@ def test_drop_params_merges_the_global_flag_with_the_request(
 
 
 @pytest.mark.parametrize(
+    ("global_flag", "env", "expected"),
+    [
+        (False, "false", False),
+        (True, "false", True),
+        (False, "true", True),
+        (False, "TRUE", True),
+        (False, "1", False),
+    ],
+)
+def test_reasoning_auto_summary_follows_the_global_flag_or_the_env_var(
+    monkeypatch: pytest.MonkeyPatch, global_flag: bool, env: str, expected: bool
+) -> None:
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", global_flag)
+    monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", env)
+
+    assert route_host.shaping("anthropic/not-a-real-model", None, {})["reasoning_auto_summary"] is expected
+
+
+@pytest.mark.parametrize(
     ("configured", "expected"),
     [
         (["tools[*].input_examples", 3, "metadata.user_id"], ("tools[*].input_examples", "metadata.user_id")),

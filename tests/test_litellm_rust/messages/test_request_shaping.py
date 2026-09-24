@@ -141,17 +141,39 @@ async def test_replayed_history_is_sanitized_before_it_reaches_the_provider(
 
 
 @pytest.mark.asyncio
-async def test_feature_betas_merge_into_the_forwarded_beta_header(messages_server: RecordingServer) -> None:
+@pytest.mark.parametrize(
+    ("feature", "expected"),
+    [
+        pytest.param(
+            {"output_format": {"type": "json_schema", "schema": {"type": "object"}}},
+            "structured-outputs-2025-11-13,web-search-2025-03-05",
+            id="structured_output",
+        ),
+        pytest.param(
+            {
+                "messages": [
+                    *MESSAGES,
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": "# Environment"}],
+                        "output_config": {"effort": "high"},
+                    },
+                ]
+            },
+            "per-turn-control-2026-07-01,web-search-2025-03-05",
+            id="per_turn_control",
+        ),
+    ],
+)
+async def test_feature_betas_merge_into_the_forwarded_beta_header(
+    messages_server: RecordingServer, feature: dict[str, object], expected: str
+) -> None:
     await litellm.anthropic.messages.acreate(
-        **arguments(
-            messages_server,
-            output_format={"type": "json_schema", "schema": {"type": "object"}},
-            extra_headers={"anthropic-beta": "web-search-2025-03-05"},
-        )
+        **arguments(messages_server, extra_headers={"anthropic-beta": "web-search-2025-03-05"}, **feature)
     )
 
     _, headers = sent(messages_server)
-    assert headers["anthropic-beta"] == "structured-outputs-2025-11-13,web-search-2025-03-05"
+    assert headers["anthropic-beta"] == expected
 
 
 @pytest.mark.asyncio
@@ -233,5 +255,70 @@ async def test_non_string_metadata_user_id_is_rejected_before_the_provider_call(
 
     with pytest.raises(litellm.BadRequestError, match=r"metadata\.user_id must be a string"):
         await litellm.anthropic.messages.acreate(**arguments(messages_server, metadata={"user_id": 123}))
+
+    assert messages_server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_only_known_request_fields_with_a_value_reach_the_wire(messages_server: RecordingServer) -> None:
+    await litellm.anthropic.messages.acreate(
+        **arguments(
+            messages_server,
+            system="be brief",
+            stop_sequences=["###"],
+            temperature=None,
+            top_p=None,
+            not_a_messages_field="dropped",
+        )
+    )
+
+    body, _ = sent(messages_server)
+    assert body == {
+        "model": "claude-sonnet-5",
+        "messages": list(MESSAGES),
+        "max_tokens": 8192,
+        "system": "be brief",
+        "stop_sequences": ["###"],
+        "stream": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_safeguards_and_client_betas_reach_anthropic_and_safeguard_results_reach_the_caller(
+    messages_server: RecordingServer,
+) -> None:
+    safeguards: Final = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    safeguard_results: Final = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
+    messages_server.enqueue(ResponseSpec(body={**MESSAGES_RESPONSE, "safeguard_results": safeguard_results}))
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        **arguments(
+            messages_server,
+            safeguards=safeguards,
+            extra_headers={"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"},
+        )
+    )
+
+    body, headers = sent(messages_server)
+    assert body["safeguards"] == safeguards
+    assert headers["anthropic-beta"] == "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"
+    assert response["safeguard_results"] == safeguard_results
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(["not a message", {"role": "user", "content": "hi"}], id="bare_string_message"),
+        pytest.param([{"role": "user", "content": [{"type": "text", "text": 123}]}], id="non_string_text"),
+    ],
+)
+async def test_messages_anthropic_would_reject_are_a_bad_request_without_a_provider_call(
+    messages_server: RecordingServer, messages: list[object]
+) -> None:
+    messages_server.expected_requests = 0
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.anthropic.messages.acreate(**arguments(messages_server, messages=messages))
 
     assert messages_server.requests == []
