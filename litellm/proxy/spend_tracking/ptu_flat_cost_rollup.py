@@ -454,16 +454,17 @@ async def run_ptu_flat_cost_rollup(
             scanned_ids=loaded.scanned_ids,
         )
 
+    models_processed: Final = len(frozenset(model.model_id for model in ptu_models))
     verbose_proxy_logger.info(
         "PTU rollup for %s: %d PTU models processed, %d rows written, %d rows failed",
         date_str,
-        len(ptu_models),
+        models_processed,
         rows_written,
         rows_failed,
     )
     return RollupResult(
         day=day,
-        models_processed=len(ptu_models),
+        models_processed=models_processed,
         rows_written=rows_written,
         rows_failed=rows_failed,
         lapsed=_lapsed_models(ptu_models, run_started),

@@ -11,6 +11,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Final, List, Optional
+from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
@@ -20,6 +21,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.azure_ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -36,6 +38,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
@@ -4726,8 +4729,8 @@ async def test_async_data_generator_releases_counter_when_wrapped_v3():
     from the outer generator: the counter returns to 0 (not -1), proving the
     nested hook does not also refund and there is no double decrement.
     """
-    from litellm.integrations.custom_logger import CustomLogger
     import litellm.proxy.proxy_server as proxy_server
+    from litellm.integrations.custom_logger import CustomLogger
 
     class _PassthroughIteratorOverride(CustomLogger):
         async def async_post_call_streaming_iterator_hook(
@@ -7157,14 +7160,14 @@ async def test_success_tpm_accounting_keeps_the_admission_target_after_an_alias_
 # --- a team's PTU share on a shared Azure provisioned deployment ---------------------------
 
 
-def _ptu_ceiling_for(team_id: str, model_group: str, tpm_limit: int, ratio: float):
+def _ptu_ceiling_for(team_id: str, model_group: str, tpm_limit: int, ratio: float, cached_ratio: float = 0.0):
     calls: list[tuple[str, str]] = []
 
     def resolve(requested_team: str, requested_group: str) -> PTUTeamCeiling | None:
         calls.append((requested_team, requested_group))
         if (requested_team, requested_group) != (team_id, model_group):
             return None
-        return PTUTeamCeiling(tpm_limit=tpm_limit, output_to_input_ratio=ratio)
+        return PTUTeamCeiling(tpm_limit=tpm_limit, output_to_input_ratio=ratio, cached_input_ratio=cached_ratio)
 
     return resolve, calls
 
@@ -7177,12 +7180,16 @@ def _ptu_request(model: str = "test-model") -> dict:
 async def test_a_teams_ptu_share_is_a_hard_tpm_ceiling_on_the_shared_model():
     cache = DualCache()
     resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+    )
     key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
 
     await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=_ptu_request(), call_type="acompletion")
     with pytest.raises(HTTPException) as exc:
-        await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=_ptu_request(), call_type="acompletion")
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=_ptu_request(), call_type="acompletion"
+        )
 
     assert exc.value.status_code == 429
     assert "model_per_team_ptu" in str(exc.value.detail)
@@ -7193,7 +7200,9 @@ async def test_a_teams_ptu_share_is_a_hard_tpm_ceiling_on_the_shared_model():
 async def test_a_ptu_ceiling_on_one_model_leaves_the_teams_other_models_alone():
     cache = DualCache()
     resolve, calls = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+    )
     key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
 
     for _ in range(3):
@@ -7208,28 +7217,102 @@ async def test_a_ptu_ceiling_on_one_model_leaves_the_teams_other_models_alone():
 async def test_a_team_without_a_share_and_a_key_without_a_team_get_no_ptu_ceiling():
     cache = DualCache()
     resolve, calls = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+    )
     other_team = UserAPIKeyAuth(api_key=hash_token("sk-other"), team_id="u")
     no_team = UserAPIKeyAuth(api_key=hash_token("sk-no-team"))
 
     for _ in range(3):
-        await handler.async_pre_call_hook(user_api_key_dict=other_team, cache=cache, data=_ptu_request(), call_type="acompletion")
-        await handler.async_pre_call_hook(user_api_key_dict=no_team, cache=cache, data=_ptu_request(), call_type="acompletion")
+        for caller in (other_team, no_team):
+            await handler.async_pre_call_hook(
+                user_api_key_dict=caller, cache=cache, data=_ptu_request(), call_type="acompletion"
+            )
 
     assert set(calls) == {("u", "test-model")}
 
 
+def _shared_ptu_router(model_group: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "base_model": "azure/gpt-4.1",
+                    "ptu_count": 1,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"t": 1},
+                },
+            }
+        ]
+    )
+
+
+def _two_thirds_of_a_ptu_minute() -> dict:
+    return {**_ptu_request(), "max_tokens": AZURE_PTU_CAPACITY["gpt-4.1"].input_tpm_per_ptu * 2 // 3}
+
+
+@pytest.mark.asyncio
+async def test_the_proxy_router_turns_a_teams_share_into_its_ceiling_when_attribution_is_on(monkeypatch):
+    """With no resolver injected the ceiling comes from the proxy router's own deployments: one
+    PTU of gpt-4.1 a minute, so two requests each reserving two thirds of it are one too many."""
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+
+    with patch("litellm.proxy.proxy_server.llm_router", _shared_ptu_router("test-model")):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=_two_thirds_of_a_ptu_minute(), call_type="acompletion"
+        )
+        with pytest.raises(HTTPException) as exc:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=key, cache=cache, data=_two_thirds_of_a_ptu_minute(), call_type="acompletion"
+            )
+
+    assert exc.value.status_code == 429
+    assert "model_per_team_ptu" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_the_proxy_router_sets_no_ceiling_while_attribution_is_off(monkeypatch):
+    monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+
+    with patch("litellm.proxy.proxy_server.llm_router", _shared_ptu_router("test-model")):
+        for _ in range(3):
+            await handler.async_pre_call_hook(
+                user_api_key_dict=key, cache=cache, data=_two_thirds_of_a_ptu_minute(), call_type="acompletion"
+            )
+
+    assert not any("model_per_team_ptu" in cache_key for cache_key in cache.in_memory_cache.cache_dict)
+
+
 def _ptu_success_kwargs() -> dict:
     return {
-        "standard_logging_object": {"metadata": {"user_api_key_hash": hash_token("sk-ptu"), "user_api_key_team_id": "t"}},
-        "litellm_params": {"metadata": {"model_group": "test-model", "user_api_key_metadata": {}, "user_api_key_team_metadata": {}}},
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": hash_token("sk-ptu"), "user_api_key_team_id": "t"}
+        },
+        "litellm_params": {
+            "metadata": {"model_group": "test-model", "user_api_key_metadata": {}, "user_api_key_team_metadata": {}}
+        },
         "model": "test-model",
     }
 
 
 def _ptu_response(usage: Usage) -> ModelResponse:
     return ModelResponse(
-        id="ptu-share", object="chat.completion", created=int(datetime.now().timestamp()), model="test-model", usage=usage, choices=[]
+        id="ptu-share",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="test-model",
+        usage=usage,
+        choices=[],
     )
 
 
@@ -7273,6 +7356,59 @@ def test_cached_input_is_not_charged_to_the_ptu_counter():
     )
 
     assert _ptu_increment(handler, ops) == 60 + 4 * 50
+
+
+def test_cached_input_is_charged_at_the_models_cached_ratio():
+    """40 of the 100 input tokens were cache reads; at a tenth each they are 4 normalized tokens
+    beside the 60 uncached ones and the 200 for 50 outputs at 4:1."""
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0, cached_ratio=0.1)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), ptu_team_ceiling_resolver=resolve
+    )
+    response = _ptu_response(
+        Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=40),
+        )
+    )
+
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs=_ptu_success_kwargs(), response_obj=response, rate_limit_type="output"
+    )
+
+    assert _ptu_increment(handler, ops) == 60 + 4 + 4 * 50
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_is_settled_even_after_the_teams_share_is_gone():
+    """The share can be removed between admission and completion; the reserved tokens still
+    come off the counter instead of standing in the window."""
+    ceiling: dict[str, PTUTeamCeiling | None] = {
+        "current": PTUTeamCeiling(tpm_limit=500, output_to_input_ratio=4.0, cached_input_ratio=0.0)
+    }
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache),
+        ptu_team_ceiling_resolver=lambda _team, _group: ceiling["current"],
+    )
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+
+    await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=_ptu_request(), call_type="acompletion")
+    stash = get_request_stash()
+    assert stash is not None
+    assert ("model_per_team_ptu", "t:test-model") in stash.reserved_scopes
+    assert stash.reserved_tokens > 150
+
+    ceiling["current"] = None
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs=_ptu_success_kwargs(),
+        response_obj=_ptu_response(Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)),
+        rate_limit_type="total",
+    )
+
+    assert _ptu_increment(handler, ops) == 150 - stash.reserved_tokens
 
 
 def test_usage_that_only_reports_a_total_charges_that_total_to_the_ptu_counter():

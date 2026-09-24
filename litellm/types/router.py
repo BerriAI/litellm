@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Lite
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -260,7 +260,7 @@ class ModelInfo(MirroredPricingParams):
     cost_per_ptu_per_hour: float | None = None
     ptu_effective_from: datetime.datetime | None = None
     ptu_effective_to: datetime.datetime | None = None
-    ptu_shares: Mapping[str, int] | None = None
+    ptu_shares: Mapping[str, StrictInt] | None = None
 
     # when tag-based routing's "!" or "&" constraints eliminate every deployment
     # in this model group, fall back to the default-tagged pool instead of

@@ -20,6 +20,7 @@ _DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 class PTUTeamCeiling:
     tpm_limit: int
     output_to_input_ratio: float
+    cached_input_ratio: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,8 +56,8 @@ def team_ptu_ceiling(deployments: Sequence[Mapping[str, object]], team_id: str) 
     up to, else None when the team holds no share on a deployment with a known sizing row.
 
     Two shared deployments of different models in one group are weighted by the larger
-    output ratio, which over-counts output on the cheaper one rather than under-counting it
-    on the dearer one.
+    output and cached-input ratios, which over-counts those tokens on the cheaper one rather
+    than under-counting them on the dearer one.
     """
     priced: Final = tuple(
         (shares[team_id], capacity)
@@ -70,6 +71,22 @@ def team_ptu_ceiling(deployments: Sequence[Mapping[str, object]], team_id: str) 
     return PTUTeamCeiling(
         tpm_limit=sum(share * capacity.input_tpm_per_ptu for share, capacity in priced),
         output_to_input_ratio=max(capacity.output_to_input_ratio for _, capacity in priced),
+        cached_input_ratio=max(capacity.cached_input_ratio for _, capacity in priced),
+    )
+
+
+def model_group_deployments(deployments: Sequence[_DeploymentT], model_group: str) -> tuple[_DeploymentT, ...]:
+    """Every deployment serving ``model_group``: by its own name, or by the public name a
+    team-scoped deployment keeps in ``model_info.team_public_model_name`` after the router
+    renames it to a unique internal one."""
+    return tuple(
+        deployment
+        for deployment in deployments
+        if deployment.get("model_name") == model_group
+        or (
+            isinstance(model_info := deployment.get("model_info"), Mapping)
+            and model_info.get("team_public_model_name") == model_group
+        )
     )
 
 

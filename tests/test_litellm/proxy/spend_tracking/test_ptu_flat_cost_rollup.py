@@ -2119,7 +2119,10 @@ async def test_rollup_splits_a_shared_deployments_flat_cost_by_share():
     result = await run_ptu_flat_cost_rollup(prisma, target_date=DAY)
 
     assert result.rows_written == 2
-    created = {call.kwargs["data"]["create"]["team_id"]: call.kwargs["data"]["create"] for call in table.upsert.await_args_list}
+    assert result.models_processed == 1
+    created = {
+        call.kwargs["data"]["create"]["team_id"]: call.kwargs["data"]["create"] for call in table.upsert.await_args_list
+    }
     assert created["team-a"]["ptu_flat_cost"] == pytest.approx(720.0)
     assert created["team-b"]["ptu_flat_cost"] == pytest.approx(480.0)
     assert sum(row["ptu_flat_cost"] for row in created.values()) == pytest.approx(50 * 1.0 * 24)

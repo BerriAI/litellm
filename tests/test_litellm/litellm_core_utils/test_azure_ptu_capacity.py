@@ -55,8 +55,9 @@ def test_a_deployment_prefers_its_declared_base_model_over_its_deployment_name()
 
 def test_a_deployment_falls_back_to_its_litellm_model_when_no_base_model_is_declared():
     assert deployment_ptu_capacity({"litellm_params": {"model": "azure/gpt-4o"}}) is AZURE_PTU_CAPACITY["gpt-4o"]
-    assert deployment_ptu_capacity({"model_info": {"base_model": ""}, "litellm_params": {"model": "azure/gpt-4o"}}) is (
-        AZURE_PTU_CAPACITY["gpt-4o"]
+    assert (
+        deployment_ptu_capacity({"model_info": {"base_model": ""}, "litellm_params": {"model": "azure/gpt-4o"}})
+        is (AZURE_PTU_CAPACITY["gpt-4o"])
     )
 
 
@@ -72,9 +73,9 @@ def test_output_is_weighted_by_the_models_ratio_and_uncached_input_counts_in_ful
 
 def test_cached_input_is_free_unless_the_row_prices_it():
     assert normalized_tokens(_ROW, prompt_tokens=100, completion_tokens=0, cache_read_tokens=60) == pytest.approx(40.0)
-    assert normalized_tokens(_CACHED_ROW, prompt_tokens=100, completion_tokens=0, cache_read_tokens=60) == pytest.approx(
-        46.0
-    )
+    assert normalized_tokens(
+        _CACHED_ROW, prompt_tokens=100, completion_tokens=0, cache_read_tokens=60
+    ) == pytest.approx(46.0)
 
 
 def test_cached_input_never_exceeds_the_prompt_and_negatives_count_as_zero():

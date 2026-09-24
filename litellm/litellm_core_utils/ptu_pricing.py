@@ -6,13 +6,14 @@ together because they have to agree: a deployment the rollup declines to charge 
 router prices at zero serves its traffic for free.
 """
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from types import MappingProxyType
 from typing import Final
 
-from litellm.secret_managers.main import get_secret_bool
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import ModelInfo
 from litellm.types.utils import AzureSpillover, CustomPricingLiteLLMParams, MirroredPricingParams
 
@@ -22,8 +23,12 @@ AZURE_SPILLOVER_FROM_HEADER: Final = "x-ms-spillover-from-deployment"
 
 
 def is_ptu_cost_attribution_enabled() -> bool:
-    """Whether PTU flat-cost attribution is turned on for this process."""
-    return get_secret_bool(PTU_COST_ATTRIBUTION_ENV_VAR, False) is True
+    """Whether PTU flat-cost attribution is turned on for this process.
+
+    Read from the environment alone: the router and the rate limiter ask on every request,
+    and ``get_secret`` would forward each of those reads to a configured secret manager.
+    """
+    return str_to_bool(os.environ.get(PTU_COST_ATTRIBUTION_ENV_VAR)) is True
 
 
 PTU_ZEROED_PRICING_FIELDS: Final = tuple(f for f in MirroredPricingParams.model_fields if f != "tiered_pricing") + (
@@ -148,12 +153,28 @@ def parsed_ptu_shares(raw: object) -> Mapping[str, int] | None:
     """
     if not isinstance(raw, Mapping) or not raw:
         return None
-    entries: Final = tuple((str(team_id), share) for team_id, share in raw.items())
-    if any(
-        not team_id or isinstance(share, bool) or not isinstance(share, int) or share <= 0 for team_id, share in entries
-    ):
+    entries: Final = tuple(
+        (team_id, share)
+        for team_id, share in raw.items()
+        if isinstance(team_id, str) and team_id and isinstance(share, int) and not isinstance(share, bool) and share > 0
+    )
+    if len(entries) != len(raw):
         return None
     return MappingProxyType(dict(entries))
+
+
+def _parsed_ptu_count(model_info: Mapping[str, object]) -> int | None:
+    """``ptu_count`` as the whole number of reserved units within bounds, else None."""
+    raw: Final = model_info.get("ptu_count")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    if isinstance(raw, float) and not raw.is_integer():
+        return None
+    try:
+        count: Final = int(raw)
+    except (ValueError, OverflowError):
+        return None
+    return count if 0 < count <= ModelInfo.MAX_PTU_COUNT else None
 
 
 def _declared_shares(model_info: Mapping[str, object], ptu_count: int) -> Mapping[str, int] | None:
@@ -229,9 +250,8 @@ def _ptu_holder_error(model_info: Mapping[str, object], model_name: str | None) 
     shares: Final = parsed_ptu_shares(raw_shares)
     if shares is None:
         return _named("ptu_shares must map at least one team_id to a positive whole number of PTUs", model_name)
-    try:
-        ptu_count: Final = int(str(model_info.get("ptu_count")))
-    except ValueError:
+    ptu_count: Final = _parsed_ptu_count(model_info)
+    if ptu_count is None:
         return None
     allocated: Final = sum(shares.values())
     if allocated != ptu_count:
@@ -246,16 +266,13 @@ def ptu_terms(model_info: Mapping[str, object]) -> PTUTerms | None:
     present but unparseable bound would read as no bound and widen the window to the whole
     day, so either one leaves the deployment unpriced until the config is fixed.
     """
-    ptu_count: Final = model_info.get("ptu_count")
+    ptu_count_int: Final = _parsed_ptu_count(model_info)
     cost_per_hour: Final = model_info.get("cost_per_ptu_per_hour")
-    if ptu_count is None or cost_per_hour is None:
+    if ptu_count_int is None or isinstance(cost_per_hour, bool) or not isinstance(cost_per_hour, (int, float, str)):
         return None
     try:
-        ptu_count_int: Final = int(ptu_count)
         cost_per_hour_float: Final = float(cost_per_hour)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if not 0 < ptu_count_int <= ModelInfo.MAX_PTU_COUNT:
+    except (ValueError, OverflowError):
         return None
     if not 0 <= cost_per_hour_float <= ModelInfo.MAX_COST_PER_PTU_PER_HOUR:
         return None

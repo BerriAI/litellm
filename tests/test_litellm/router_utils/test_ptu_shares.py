@@ -6,6 +6,7 @@ from litellm.litellm_core_utils.azure_ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.router_utils.ptu_shares import (
     PTUTeamCeiling,
     filter_ptu_shared_deployments,
+    model_group_deployments,
     model_group_ptu_capacity,
     ptu_capacity_warning,
     team_ptu_ceiling,
@@ -13,6 +14,7 @@ from litellm.router_utils.ptu_shares import (
 
 _GPT41: Final = AZURE_PTU_CAPACITY["gpt-4.1"]
 _GPT4O: Final = AZURE_PTU_CAPACITY["gpt-4o"]
+_GPT6SOL: Final = AZURE_PTU_CAPACITY["gpt-6-sol"]
 _SHARES: Final = {"team-a": 30, "team-b": 20}
 
 
@@ -77,7 +79,9 @@ def test_a_single_team_deployment_and_a_malformed_share_map_are_not_filtered_her
 def test_a_share_converts_to_the_models_input_tpm_per_ptu():
     ceiling: Final = team_ptu_ceiling([_shared()], "team-a")
     assert ceiling == PTUTeamCeiling(
-        tpm_limit=30 * _GPT41.input_tpm_per_ptu, output_to_input_ratio=_GPT41.output_to_input_ratio
+        tpm_limit=30 * _GPT41.input_tpm_per_ptu,
+        output_to_input_ratio=_GPT41.output_to_input_ratio,
+        cached_input_ratio=_GPT41.cached_input_ratio,
     )
 
 
@@ -87,6 +91,32 @@ def test_shares_across_deployments_add_up_and_the_larger_output_ratio_wins():
     assert ceiling is not None
     assert ceiling.tpm_limit == 30 * _GPT41.input_tpm_per_ptu + 10 * _GPT4O.input_tpm_per_ptu
     assert ceiling.output_to_input_ratio == max(_GPT41.output_to_input_ratio, _GPT4O.output_to_input_ratio)
+
+
+def test_the_larger_cached_input_ratio_wins_across_deployments():
+    """A team sharing two models is weighted by the one that charges more for cache reads,
+    whichever order the deployments come in."""
+    gpt6sol: Final = _shared(model="azure/gpt-6-sol", shares={"team-a": 10}, deployment_id="shared-6")
+    ceiling: Final = team_ptu_ceiling([_shared(), gpt6sol], "team-a")
+    assert ceiling is not None
+    assert _GPT41.cached_input_ratio < _GPT6SOL.cached_input_ratio
+    assert ceiling.cached_input_ratio == _GPT6SOL.cached_input_ratio
+
+
+def test_a_group_is_served_by_name_or_by_a_team_scoped_deployments_public_name():
+    """A deployment registered for one team is renamed to a unique internal name and keeps
+    the name callers use in ``team_public_model_name``."""
+    team_scoped: Final = {
+        "model_name": "gpt-4.1-ptu-3f9c1b",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {"id": "team-scoped", "team_id": "team-a", "team_public_model_name": "gpt-4.1-ptu"},
+    }
+    other: Final = {"model_name": "other", "litellm_params": {"model": "azure/gpt-4o"}, "model_info": {"id": "other"}}
+    deployments: Final = [team_scoped, _OPEN, other]
+    served: Final = model_group_deployments(deployments, "gpt-4.1-ptu")
+    assert [d["model_info"]["id"] for d in served] == ["team-scoped", "open"]
+    assert model_group_deployments(deployments, "gpt-4.1-ptu-3f9c1b") == (team_scoped,)
+    assert model_group_deployments(deployments, "missing") == ()
 
 
 def test_no_share_or_no_sizing_row_sets_no_ceiling():
@@ -112,4 +142,5 @@ def test_a_reserved_deployment_without_a_sizing_row_is_warned_about_by_name():
 def test_a_sized_reservation_and_an_unreserved_deployment_raise_no_warning():
     assert ptu_capacity_warning("gpt-4.1-ptu", _shared()) is None
     assert ptu_capacity_warning("gpt-4.1-ptu", _single_team()) is None
-    assert ptu_capacity_warning("gpt-4.1-ptu", {**_OPEN, "litellm_params": {"model": "azure/my-ptu-deployment"}}) is None
+    unsized_open: Final = {**_OPEN, "litellm_params": {"model": "azure/my-ptu-deployment"}}
+    assert ptu_capacity_warning("gpt-4.1-ptu", unsized_open) is None

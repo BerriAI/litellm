@@ -31,3 +31,15 @@ def test_reads_the_env_var_on_every_call(monkeypatch):
 
     monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
     assert is_ptu_cost_attribution_enabled() is True
+
+
+def test_reads_the_process_environment_and_never_a_secret_manager(monkeypatch):
+    """The flag is checked on every request and every rollup, so it never costs a round trip to
+    a hosted secret manager even when one is configured for reads."""
+
+    def refuse(*args: object, **kwargs: object) -> object:
+        raise AssertionError("secret manager consulted")
+
+    monkeypatch.setattr("litellm.secret_managers.main.get_secret", refuse)
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+    assert is_ptu_cost_attribution_enabled() is True

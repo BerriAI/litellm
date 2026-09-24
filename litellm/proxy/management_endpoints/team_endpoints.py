@@ -201,7 +201,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
-from litellm.router_utils.ptu_shares import model_group_ptu_capacity
+from litellm.router_utils.ptu_shares import model_group_deployments, model_group_ptu_capacity
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
@@ -6670,7 +6670,9 @@ def _with_ptu_consumption(
         return activity
     return attach_ptu_hours(
         activity,
-        lambda model_group: model_group_ptu_capacity(llm_router.get_model_list(model_name=model_group) or ()),
+        lambda model_group: model_group_ptu_capacity(
+            model_group_deployments(llm_router.get_model_list() or (), model_group)
+        ),
     )
 
 

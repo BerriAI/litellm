@@ -395,8 +395,13 @@ def test_a_single_team_reservation_holds_the_whole_count_under_that_team():
             {"ptu_shares": {"team-a": 50.5, "team-b": 49.5}},
             "ptu_shares must map at least one team_id to a positive whole number of PTUs",
         ),
-        ({"ptu_shares": {"team-a": True}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
+        (
+            {"ptu_shares": {"team-a": True}},
+            "ptu_shares must map at least one team_id to a positive whole number of PTUs",
+        ),
         ({"ptu_shares": {"": 100}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
+        ({"ptu_shares": {None: 100}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
+        ({"ptu_shares": {1: 100}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
         ({"ptu_shares": ["team-a"]}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
         ({"ptu_shares": {"team-a": 60, "team-b": 30}}, "ptu_shares must add up to ptu_count (90 of 100 allocated)"),
         ({"ptu_shares": {"team-a": 60, "team-b": 50}}, "ptu_shares must add up to ptu_count (110 of 100 allocated)"),
@@ -408,6 +413,8 @@ def test_a_single_team_reservation_holds_the_whole_count_under_that_team():
         "fractional share",
         "boolean share",
         "blank team",
+        "null team",
+        "numeric team",
         "not a mapping",
         "shares short of the count",
         "shares over the count",
@@ -416,6 +423,20 @@ def test_a_single_team_reservation_holds_the_whole_count_under_that_team():
 def test_an_incoherent_split_names_its_reason_and_reserves_nothing(override, expected):
     assert ptu_config_error({**_SHARED, **override}) == expected
     assert ptu_terms({**_SHARED, **override}) is None
+
+
+def test_a_whole_count_written_as_a_float_is_checked_against_the_shares_all_the_same():
+    assert ptu_config_error({**_SHARED, "ptu_count": 100.0, "ptu_shares": {"team-a": 60, "team-b": 30}}) == (
+        "ptu_shares must add up to ptu_count (90 of 100 allocated)"
+    )
+    terms = ptu_terms({**_SHARED, "ptu_count": 100.0})
+    assert terms is not None
+    assert terms.ptu_count == 100
+
+
+def test_a_fractional_count_reserves_nothing():
+    assert ptu_terms({**_VALID, "ptu_count": 100.5}) is None
+    assert ptu_terms({**_SHARED, "ptu_count": 100.5}) is None
 
 
 def test_the_split_is_named_after_the_deployment_when_the_caller_supplies_one():

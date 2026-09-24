@@ -15,7 +15,15 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
+
+
+class NormalizedTokenWeights(Protocol):
+    @property
+    def output_to_input_ratio(self) -> float: ...
+
+    @property
+    def cached_input_ratio(self) -> float: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,13 +98,13 @@ def deployment_ptu_capacity(deployment: Mapping[str, object]) -> PTUCapacity | N
 
 
 def normalized_tokens(
-    capacity: PTUCapacity, *, prompt_tokens: int, completion_tokens: int, cache_read_tokens: int = 0
+    weights: NormalizedTokenWeights, *, prompt_tokens: int, completion_tokens: int, cache_read_tokens: int = 0
 ) -> float:
     """Azure's normalized token count for one request: uncached input in full, cached input
     at the model's cached ratio, output weighted by the output-to-input ratio."""
     cached: Final = min(max(cache_read_tokens, 0), max(prompt_tokens, 0))
     uncached: Final = max(prompt_tokens, 0) - cached
-    return uncached + capacity.cached_input_ratio * cached + capacity.output_to_input_ratio * max(completion_tokens, 0)
+    return uncached + weights.cached_input_ratio * cached + weights.output_to_input_ratio * max(completion_tokens, 0)
 
 
 def ptu_hours(capacity: PTUCapacity, normalized: float) -> float:

@@ -33,6 +33,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.azure_ptu_capacity import normalized_tokens
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -65,7 +66,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     response_has_hidden_params,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.router_utils.ptu_shares import PTUTeamCeiling, team_ptu_ceiling
+from litellm.router_utils.ptu_shares import PTUTeamCeiling, model_group_deployments, team_ptu_ceiling
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import (
@@ -95,6 +96,17 @@ _REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
+class _ReconciledUsage:
+    prompt_tokens: int
+    completion_tokens: int
+    cached_tokens: int
+
+    @property
+    def billable_input_tokens(self) -> int:
+        return max(0, self.prompt_tokens - self.cached_tokens)
+
+
+@dataclass(frozen=True, slots=True)
 class RateLimitedModel:
     requested: str
     group: str
@@ -119,7 +131,7 @@ def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -
 
     if llm_router is None or not is_ptu_cost_attribution_enabled():
         return None
-    return team_ptu_ceiling(llm_router.get_model_list(model_name=model_group) or (), team_id)
+    return team_ptu_ceiling(model_group_deployments(llm_router.get_model_list() or (), model_group), team_id)
 
 
 def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
@@ -430,9 +442,6 @@ _AUDIO_BYTES_PER_TOKEN: Final = 1600
 # on the same project+model simultaneously without colliding on cache keys.
 PROJECT_ITPM_DESCRIPTOR_KEY: Final = "model_per_project_itpm"
 PROJECT_OTPM_DESCRIPTOR_KEY: Final = "model_per_project_otpm"
-# Descriptor "key" for a team's PTU share of a shared Azure provisioned deployment,
-# counted in Azure normalized tokens (output weighted by the model's ratio) so it
-# never collides with the raw-token "model_per_team" counter on the same team+model.
 PTU_TEAM_DESCRIPTOR_KEY: Final = "model_per_team_ptu"
 # How long an acquired slot counts toward the in-flight total before it is
 # considered leaked (worker crashed without any release callback firing) and
@@ -4200,20 +4209,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 return max(0, total_tokens), 0, True
         return None
 
-    def _resolve_io_token_reconcile_usage(
-        self,
-        response_obj: object,
-    ) -> tuple[int, int, bool]:
-        """
-        Resolve ``(billable_input_tokens, completion_tokens, usage_resolved)``
-        for ITPM/OTPM reconciliation. Cache-read tokens are excluded from
-        billable input -- Bedrock Mantle doesn't count them toward ITPM --
-        but they're untouched everywhere else (cost/usage logging still sees
-        the full prompt token count).
-        """
+    def _resolve_reconciled_usage(self, response_obj: object) -> _ReconciledUsage | None:
+        """The prompt, completion, and cache-read token counts a response reports, else None
+        when it reports no usage at all. Cache-read tokens stay inside ``prompt_tokens`` here;
+        each consumer decides what they cost it."""
         rerank_usage: Final = self._resolve_rerank_token_usage(response_obj)
         if rerank_usage is not None:
-            return rerank_usage
+            return _ReconciledUsage(prompt_tokens=rerank_usage[0], completion_tokens=rerank_usage[1], cached_tokens=0)
 
         usage: Final = self._response_usage(response_obj)
 
@@ -4226,8 +4228,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else 0
             )
             if prompt_tokens == 0 and completion_tokens == 0:
-                return 0, 0, False
-            return max(0, prompt_tokens - cached_tokens), completion_tokens, True
+                return None
+            return _ReconciledUsage(
+                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, cached_tokens=cached_tokens
+            )
 
         if isinstance(usage, ResponseAPIUsage):
             response_input_tokens: Final = usage.input_tokens or 0
@@ -4236,8 +4240,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 usage.input_tokens_details.cached_tokens or 0 if usage.input_tokens_details is not None else 0
             )
             if response_input_tokens == 0 and response_output_tokens == 0:
-                return 0, 0, False
-            return max(0, response_input_tokens - response_cached_tokens), response_output_tokens, True
+                return None
+            return _ReconciledUsage(
+                prompt_tokens=response_input_tokens,
+                completion_tokens=response_output_tokens,
+                cached_tokens=response_cached_tokens,
+            )
 
         if isinstance(usage, Mapping):
             raw_prompt_tokens: Final = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
@@ -4252,10 +4260,30 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             mapped_cached_tokens: Final = raw_cached_tokens if isinstance(raw_cached_tokens, int) else 0
             if mapped_prompt_tokens == 0 and mapped_completion_tokens == 0:
-                return 0, 0, False
-            return max(0, mapped_prompt_tokens - mapped_cached_tokens), mapped_completion_tokens, True
+                return None
+            return _ReconciledUsage(
+                prompt_tokens=mapped_prompt_tokens,
+                completion_tokens=mapped_completion_tokens,
+                cached_tokens=mapped_cached_tokens,
+            )
 
-        return 0, 0, False
+        return None
+
+    def _resolve_io_token_reconcile_usage(
+        self,
+        response_obj: object,
+    ) -> tuple[int, int, bool]:
+        """
+        Resolve ``(billable_input_tokens, completion_tokens, usage_resolved)``
+        for ITPM/OTPM reconciliation. Cache-read tokens are excluded from
+        billable input -- Bedrock Mantle doesn't count them toward ITPM --
+        but they're untouched everywhere else (cost/usage logging still sees
+        the full prompt token count).
+        """
+        usage: Final = self._resolve_reconciled_usage(response_obj)
+        if usage is None:
+            return 0, 0, False
+        return usage.billable_input_tokens, usage.completion_tokens, True
 
     def _build_io_token_reservation_ops(
         self,
@@ -4617,27 +4645,37 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reserved_tokens: int,
         total_tokens: int,
     ) -> Sequence[RedisPipelineIncrementOperation]:
-        """Settle the team's PTU counter in Azure normalized tokens: uncached input in full plus
-        output weighted by the model's output-to-input ratio, the way Azure sizes a PTU.
+        """Settle the team's PTU counter in Azure normalized tokens: uncached input in full,
+        cached input at the model's cached ratio, output weighted by its output-to-input
+        ratio, the way Azure sizes a PTU.
 
         The pre-call reservation was raw estimated tokens, so this is the same reconcile as the
-        other TPM scopes with a weighted actual; when usage cannot be resolved it charges the raw
-        total the other scopes charge.
+        other TPM scopes with a weighted actual; when usage cannot be resolved, or the ceiling
+        is gone since the reservation was taken, it charges the raw total the other scopes
+        charge so the reservation is never left standing.
         """
         team_id: Final = standard_logging_metadata.get("user_api_key_team_id")
         if reconcile_model is None or not isinstance(team_id, str) or not team_id:
             return ()
+        scope: Final = (PTU_TEAM_DESCRIPTOR_KEY, f"{team_id}:{reconcile_model.group}")
         ceiling: Final = self._ptu_team_ceiling_resolver(team_id, reconcile_model.group)
-        if ceiling is None:
+        if ceiling is None and scope not in reserved_scopes:
             return ()
-        billable_input, completion_tokens, usage_resolved = self._resolve_io_token_reconcile_usage(response_obj)
+        usage: Final = self._resolve_reconciled_usage(response_obj)
         normalized: Final = (
-            billable_input + round(ceiling.output_to_input_ratio * completion_tokens)
-            if usage_resolved
+            round(
+                normalized_tokens(
+                    ceiling,
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    cache_read_tokens=usage.cached_tokens,
+                )
+            )
+            if ceiling is not None and usage is not None
             else total_tokens
         )
         return self._build_reservation_aware_tpm_ops(
-            targets=((PTU_TEAM_DESCRIPTOR_KEY, f"{team_id}:{reconcile_model.group}"),),
+            targets=(scope,),
             reserved_scopes=reserved_scopes,
             actual_tokens=normalized,
             reserved_tokens=reserved_tokens,

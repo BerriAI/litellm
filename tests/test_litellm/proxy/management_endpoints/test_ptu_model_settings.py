@@ -9,31 +9,30 @@ from unittest.mock import patch as patch_ctx
 import pytest
 from fastapi import HTTPException
 
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.ptu_pricing import ptu_terms
+from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.proxy._types import (
     LiteLLM_ProxyModelTable,
     LitellmUserRoles,
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.litellm_core_utils.ptu_pricing import ptu_terms
 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _PTU_ZEROED_PRICING_FIELDS,
     _SEARCH_CONTEXT_SIZES,
     _is_nonzero_price,
     _merged_ptu_model_info,
-    _update_team_model_in_db,
     _ptu_priced_deployment,
     _ptu_zeroed_pricing,
     _raise_if_ptu_cost_attribution_disabled,
+    _update_team_model_in_db,
     _validate_ptu_model_info,
     add_new_model,
     update_db_model,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
-from litellm.types.utils import PromptTokensDetailsWrapper
 from litellm.router import Router
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
@@ -43,7 +42,7 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
 )
-from litellm.types.utils import Usage
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 
 async def _passthrough_row(update_data):
@@ -114,6 +113,18 @@ def test_model_info_allows_partial_delta_for_patch():
     info = ModelInfo(id="x", ptu_count=5)
     assert info.ptu_count == 5
     assert info.cost_per_ptu_per_hour is None
+
+
+@pytest.mark.parametrize("share", [True, "2", 2.0])
+def test_model_info_rejects_a_share_that_is_not_a_whole_number(share):
+    with pytest.raises(ValueError, match="ptu_shares"):
+        ModelInfo(id="x", ptu_shares={"team-a": share})
+
+
+def test_model_info_keeps_whole_number_shares_and_refuses_a_fractional_count():
+    assert ModelInfo(id="x", ptu_shares={"team-a": 2}).ptu_shares == {"team-a": 2}
+    with pytest.raises(ValueError, match="ptu_count"):
+        ModelInfo(id="x", ptu_count=100.5)
 
 
 def test_validate_helper_no_ptu_is_noop():
