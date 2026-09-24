@@ -131,7 +131,7 @@ def _paginated_table(repository: BaseRepository[_TableRowT]) -> _PaginatedPrisma
     """View a repository's prisma table through the pagination surface budget metrics need."""
     return cast(
         _PaginatedPrismaTable[_TableRowT],
-        repository.table,  # cast-ok: prisma rows carry the budget columns the domain model declares
+        repository.table,
     )
 
 
