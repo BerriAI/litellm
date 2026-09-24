@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import uuid
@@ -11,10 +12,11 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import psutil
 import pytest
 from pydantic import JsonValue
 
-from tests.integration._support.client import JSON_OBJECT, gateway_from_environment, object_value
+from tests.integration._support.client import JSON_OBJECT, eventually, gateway_from_environment, object_value
 from tests.integration._support.process import OwnedProxy, owned_proxy_process
 from tests.integration._support.upstream import delete_scenario, register_scenario
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, SseResponse
@@ -75,6 +77,7 @@ def test_chat_completions_serves_without_the_grpc_stack(proxy_without_grpc_stack
         httpx.Client(base_url=owned.gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
         model: Final = scenario.model()
+        upstream.get("/__observations").raise_for_status()
         response: Final = owned.gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -197,3 +200,35 @@ def test_messages_and_responses_serve_without_the_grpc_stack(proxy_without_grpc_
             assert block["type"] == "text" and block["text"] == "served without grpc", messages.text
     finally:
         delete_scenario(handle)
+
+
+def _worker_gone(pid: int) -> bool:
+    if not psutil.pid_exists(pid):
+        return True
+    return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+
+
+def test_surviving_worker_keeps_serving_without_the_grpc_stack(proxy_without_grpc_stack: OwnedProxy) -> None:
+    owned: Final = proxy_without_grpc_stack
+    launcher: Final = psutil.Process(owned.process.pid)
+    children: Final = launcher.children(recursive=True)
+    workers: Final = tuple(child for child in children if any("spawn_main" in arg for arg in child.cmdline()))
+    assert len(workers) == 2, [(child.pid, child.name(), child.cmdline()) for child in children]
+    killed, survivor = workers
+    os.kill(killed.pid, signal.SIGKILL)
+    eventually(lambda: _worker_gone(killed.pid), lambda gone: gone, seconds=30)
+    with owned.gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        responses: Final = tuple(
+            owned.gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": f"surviving worker {attempt}"}]},
+            )
+            for attempt in range(5)
+        )
+        bodies: Final = tuple(JSON_OBJECT.validate_json(response.content) for response in responses)
+        for response, body in zip(responses, bodies):
+            assert response.status_code == 200, response.text
+            assert isinstance(body["id"], str) and body["id"].startswith("chatcmpl-"), response.text
+    assert psutil.pid_exists(survivor.pid) and psutil.Process(survivor.pid).is_running()
