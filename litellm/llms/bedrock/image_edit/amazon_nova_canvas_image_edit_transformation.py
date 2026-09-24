@@ -56,6 +56,7 @@ def _nova_canvas_task_body(
     out_painting_mode: str | None,
     control_mode: str | None = None,
     control_strength: float | None = None,
+    style: str | None = None,
 ) -> dict[str, object]:
     """Build InvokeModel body task section (without imageGenerationConfig)."""
     if task_type == "BACKGROUND_REMOVAL":
@@ -90,9 +91,20 @@ def _nova_canvas_task_body(
         # generated image via textToImageParams.conditionImage. SEGMENTATION
         # controlMode derives a segmentation mask from the condition image;
         # CANNY_EDGE (the AWS default) follows its prominent contours.
+        if mask_b64 is not None:
+            # AWS TEXT_IMAGE has no mask field; fail fast instead of silently
+            # dropping the caller's mask.
+            raise ValueError(
+                "Amazon Nova Canvas TEXT_IMAGE (conditioned editing) does not support a "
+                "mask. Use INPAINTING or OUTPAINTING for mask-based editing workflows."
+            )
         if control_mode is not None and control_mode not in NOVA_CANVAS_CONTROL_MODES:
             raise ValueError(
                 f"Unsupported Amazon Nova Canvas controlMode: {control_mode!r}. Use one of {NOVA_CANVAS_CONTROL_MODES}."
+            )
+        if control_strength is not None and not 0.0 <= control_strength <= 1.0:
+            raise ValueError(
+                f"Amazon Nova Canvas controlStrength must be between 0.0 and 1.0; got {control_strength!r}."
             )
         t2i_params: Final[dict[str, object]] = {  # mutable-ok: optional conditioned-editing keys are set below
             "text": text,
@@ -104,6 +116,8 @@ def _nova_canvas_task_body(
             t2i_params["controlMode"] = control_mode
         if control_strength is not None:
             t2i_params["controlStrength"] = control_strength
+        if style is not None:
+            t2i_params["style"] = style
         return {  # mutable-ok: InvokeModel JSON body is a plain dict
             "taskType": "TEXT_IMAGE",
             "textToImageParams": t2i_params,
@@ -280,6 +294,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             "cfgScale",
             "seed",
             "quality",
+            "style",
             "taskType",
             "maskPrompt",
             "outPaintingMode",
@@ -391,6 +406,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         if (prompt is None or prompt == "") and task_type in (
             "INPAINTING",
             "OUTPAINTING",
+            "TEXT_IMAGE",
         ):
             raise ValueError(
                 f"Amazon Nova Canvas {task_type} requires a text prompt. Pass a non-empty `prompt` in your request."
@@ -402,6 +418,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         out_painting_mode: Final = op.pop("outPaintingMode", None)
         control_mode: Final = op.pop("controlMode", None)
         control_strength: Final = op.pop("controlStrength", None)
+        style: Final = op.pop("style", None)
 
         body: Final = _nova_canvas_task_body(
             image_b64=image_b64,
@@ -414,6 +431,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             out_painting_mode=out_painting_mode,
             control_mode=control_mode,
             control_strength=control_strength,
+            style=style,
         )
 
         # BACKGROUND_REMOVAL InvokeModel body must not include imageGenerationConfig (AWS rejects it).
