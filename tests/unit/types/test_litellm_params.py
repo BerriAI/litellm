@@ -10,9 +10,10 @@ from pydantic import BaseModel
 from litellm.litellm_core_utils.get_litellm_params import (
     get_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # untyped legacy carrier
 )
+from litellm.types import litellm_params
+from litellm.types import utils as types_utils
 from litellm.types.litellm_params import (
     ADDRESSED_RESPONSE_ID_FIELD,
-    KWARG_ARTIFACTS,
     LITELLM_OWNED_ROOTS,
     TRUSTED_CALLBACK_VARS_FIELD,
     ConnectionSettings,
@@ -125,7 +126,6 @@ OPTION_NAMES: Final = (
     "base_model",
     "max_budget",
     "budget_duration",
-    "data_residency",
     "id",
     "metadata",
     "litellm_metadata",
@@ -181,6 +181,7 @@ AGENTIC_LOOP_STATE_NAMES: Final = (
 INTERNAL_STATE_NAMES: Final = (
     "litellm_call_id",
     "completion_call_id",
+    "data_residency",
     "litellm_logging_obj",
     "preset_cache_key",
     "cache_key",
@@ -424,8 +425,9 @@ def test_root_declares_exactly_the_names_that_live_on_its_object(root: type) -> 
     assert frozenset(owned_wire_names(root)) == frozenset(DECLARED_BY_ROOT[root])
 
 
-def test_kwarg_artifacts_are_the_four_names_with_no_field() -> None:
-    assert KWARG_ARTIFACTS == ARTIFACT_NAMES
+@pytest.mark.parametrize("constant", ("TRUSTED_CALLBACK_VARS_FIELD", "ADDRESSED_RESPONSE_ID_FIELD"))
+def test_types_utils_still_exports_the_field_constant(constant: str) -> None:
+    assert types_utils.__dict__[constant] is litellm_params.__dict__[constant]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
