@@ -1,6 +1,6 @@
 import json
-from functools import reduce
 from collections.abc import Callable, Mapping, Sequence
+from functools import reduce
 from typing import Literal
 
 import httpx
@@ -104,6 +104,28 @@ def test_environment_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     assert guardrail.api_key == "env-key"
     assert guardrail.api_url == "https://guard.example.com/applyGuardrails"
     assert guardrail.app_name == "env-app"
+
+
+def test_secret_manager_configuration_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.secret_managers import main as secrets
+
+    monkeypatch.delenv("TMV1_API_KEY", raising=False)
+    monkeypatch.delenv("TRENDAI_AI_GUARD_BASE_URL", raising=False)
+    monkeypatch.setattr(litellm, "secret_manager_client", object())
+    monkeypatch.setattr(litellm, "_key_management_settings", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+    monkeypatch.setattr(secrets, "_should_read_secret_from_secret_manager", lambda: True)
+    managed = {
+        "TMV1_API_KEY": "managed-key",
+        "TRENDAI_AI_GUARD_BASE_URL": "https://managed.example.com",
+    }
+    monkeypatch.setattr(secrets, "get_secret_from_manager", lambda **kwargs: managed[kwargs["secret_name"]])
+
+    guardrail = TrendAIGuardrail(guardrail_name="trendai", event_hook=GuardrailEventHooks.pre_call)
+
+    assert guardrail.api_key == "managed-key"
+    assert guardrail.api_url == "https://managed.example.com/applyGuardrails"
 
 
 def test_explicit_configuration_takes_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -326,6 +348,23 @@ async def test_request_redaction_is_split_back_across_multipart_user_content() -
 
     assert scanned == ["card 4111 ok"]
     assert result["texts"] == ["card ", "#### ok"]
+
+
+@pytest.mark.asyncio
+async def test_request_scans_text_slots_from_normalized_message_parts() -> None:
+    respond, scanned = _engine(redact={"a@b.com": "[EMAIL]"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        result, _ = await _apply(
+            _guardrail(async_handler=client),
+            {
+                "texts": ["mail a@b.com"],
+                "structured_messages": [{"role": "user", "content": [{"type": "input_text", "text": "mail a@b.com"}]}],
+            },
+            "request",
+        )
+
+    assert scanned == ["mail a@b.com"]
+    assert result["texts"] == ["mail [EMAIL]"]
 
 
 @pytest.mark.asyncio

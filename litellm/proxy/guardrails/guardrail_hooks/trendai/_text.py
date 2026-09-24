@@ -3,36 +3,12 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE.txt in this directory.
 
 from collections.abc import Iterator, Sequence
-from typing import Final, Literal
+from typing import Final
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-
+from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts
 from litellm.types.llms.openai import AllMessageValues
 
 from ._models import TrendAIRequestPrompt, TrendAITextWindow
-
-
-class _TextPart(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    type: Literal["text"]
-    text: str
-
-
-class _OtherPart(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    type: str
-
-
-class _UserMessage(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    role: str
-    content: str | tuple[_TextPart | _OtherPart, ...] | None = None
-
-
-_MESSAGES: Final = TypeAdapter(tuple[_UserMessage, ...])
 
 
 def utf8_windows(content: str, *, chunk_size_bytes: int, overlap_chars: int) -> tuple[TrendAITextWindow, ...]:
@@ -85,23 +61,11 @@ def apply_window_redaction(content: str, window: TrendAITextWindow, redacted: st
     return f"{content[: window.start]}{merged}{content[end:]}"
 
 
-def _text_parts(content: str | tuple[_TextPart | _OtherPart, ...] | None) -> tuple[str, ...] | None:
-    if content is None:
-        return None
-    if isinstance(content, str):
-        return (content,)
-    return tuple(part.text for part in content if isinstance(part, _TextPart))
-
-
 def _last_user_text_parts(structured_messages: Sequence[AllMessageValues]) -> tuple[str, ...] | None:
-    try:
-        messages: Final = _MESSAGES.validate_python(structured_messages)
-    except ValidationError:
-        return None
-    last_user_message: Final = next((message for message in reversed(messages) if message.role == "user"), None)
-    if last_user_message is None:
-        return None
-    return _text_parts(last_user_message.content)
+    last_user_message: Final = next(
+        (message for message in reversed(structured_messages) if message.get("role") == "user"), None
+    )
+    return message_slot_texts(last_user_message) if last_user_message is not None else None
 
 
 def _last_occurrence(texts: Sequence[str], parts: Sequence[str]) -> int | None:
