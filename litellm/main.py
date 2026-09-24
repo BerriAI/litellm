@@ -125,6 +125,7 @@ from litellm.types.completion import (
     _CompletionDispatchContext,
     _CompletionDispatchResult,
 )
+from litellm.types.litellm_params import RetryStrategy
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -6025,9 +6026,7 @@ def completion_with_retries(*args, **kwargs):
     # reset retries in .completion()
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
-    retry_strategy: Final[Literal["exponential_backoff_retry", "constant_retry"]] = kwargs.pop(
-        "retry_strategy", "constant_retry"
-    )
+    retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
     original_function: Final = kwargs.pop("original_function", completion)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.Retrying(
@@ -6053,7 +6052,7 @@ async def acompletion_with_retries(*args, **kwargs):
     num_retries: Final = kwargs.pop("num_retries", 3)
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
-    retry_strategy: Final = kwargs.pop("retry_strategy", "constant_retry")
+    retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
     original_function: Final = kwargs.pop("original_function", completion)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.AsyncRetrying(
@@ -6081,9 +6080,7 @@ def responses_with_retries(*args, **kwargs):
     # reset retries in .responses()
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
-    retry_strategy: Final[Literal["exponential_backoff_retry", "constant_retry"]] = kwargs.pop(
-        "retry_strategy", "constant_retry"
-    )
+    retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
     original_function: Final = kwargs.pop("original_function", responses)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.Retrying(
@@ -6110,7 +6107,7 @@ async def aresponses_with_retries(*args, **kwargs):
     num_retries: Final = kwargs.pop("num_retries", 3)
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
-    retry_strategy: Final = kwargs.pop("retry_strategy", "constant_retry")
+    retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
     original_function: Final = kwargs.pop("original_function", aresponses)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.AsyncRetrying(

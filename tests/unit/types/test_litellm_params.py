@@ -1,17 +1,18 @@
 import inspect
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import astuple, dataclass, field, fields
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, TypeAlias, cast, get_type_hints
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.caching.caching import Cache
 from litellm.litellm_core_utils.get_litellm_params import (
     get_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # untyped legacy carrier
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types import litellm_params
 from litellm.types import utils as types_utils
 from litellm.types.litellm_params import (
@@ -23,8 +24,11 @@ from litellm.types.litellm_params import (
     wire,
     wire_names,
 )
+from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 from litellm.types.router import CredentialLiteLLMParams, RouterConfig, UpdateRouterConfig
 from litellm.types.utils import (
+    CustomPricingLiteLLMParams,
+    StandardCallbackDynamicParams,
     agentic_loop_internal_litellm_params,
     all_litellm_params,
     bedrock_batch_litellm_params,
@@ -223,150 +227,9 @@ BEDROCK_BATCH_NAMES: Final = (
 
 ARTIFACT_NAMES: Final = ("self", "use_client", "model_config", "rust")
 
-CALLBACK_VAR_NAMES: Final = (
-    "langfuse_public_key",
-    "langfuse_secret",
-    "langfuse_secret_key",
-    "langfuse_host",
-    "langfuse_environment",
-    "langfuse_span_scope",
-    "langfuse_prompt_version",
-    "gcs_bucket_name",
-    "gcs_path_service_account",
-    "langsmith_api_key",
-    "langsmith_project",
-    "langsmith_base_url",
-    "langsmith_sampling_rate",
-    "langsmith_tenant_id",
-    "humanloop_api_key",
-    "arize_api_key",
-    "arize_space_key",
-    "arize_space_id",
-    "arize_success_sampling_rate",
-    "arize_error_sampling_rate",
-    "posthog_api_key",
-    "posthog_api_url",
-    "wandb_api_key",
-    "weave_project_id",
-    "dd_api_key",
-    "dd_site",
-    "dd_agent_host",
-    "dd_agent_port",
-    "newrelic_api_key",
-    "newrelic_region",
-    "turn_off_message_logging",
-    "litellm_disabled_callbacks",
-)
+CALLBACK_VAR_NAMES: Final = tuple(StandardCallbackDynamicParams.__annotations__)
 
-PRICING_NAMES: Final = (
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "input_cost_per_character",
-    "output_cost_per_character",
-    "cache_read_input_token_cost",
-    "cache_creation_input_token_cost",
-    "tiered_pricing",
-    "input_cost_per_second",
-    "output_cost_per_second",
-    "output_cost_per_second_1080p",
-    "output_cost_per_second_480p",
-    "output_cost_per_second_720p",
-    "output_cost_per_second_768p",
-    "output_cost_per_second_2k",
-    "output_cost_per_second_4k",
-    "output_cost_per_image_512",
-    "output_cost_per_image_1024",
-    "output_cost_per_image_1536",
-    "input_cost_per_pixel",
-    "output_cost_per_pixel",
-    "input_cost_per_token_flex",
-    "input_cost_per_token_priority",
-    "input_cost_per_token_ultrafast",
-    "cache_creation_input_token_cost_above_1hr",
-    "cache_creation_input_token_cost_above_200k_tokens",
-    "cache_creation_input_token_cost_above_272k_tokens",
-    "cache_creation_input_token_cost_above_272k_tokens_priority",
-    "cache_creation_input_token_cost_above_272k_tokens_flex",
-    "cache_creation_input_token_cost_flex",
-    "cache_creation_input_token_cost_priority",
-    "cache_creation_input_token_cost_ultrafast",
-    "cache_creation_input_audio_token_cost",
-    "cache_read_input_token_cost_flex",
-    "cache_read_input_token_cost_priority",
-    "cache_read_input_token_cost_ultrafast",
-    "cache_read_input_token_cost_above_200k_tokens",
-    "cache_read_input_token_cost_above_200k_tokens_priority",
-    "cache_read_input_token_cost_above_272k_tokens_priority",
-    "cache_read_input_token_cost_above_272k_tokens_flex",
-    "cache_read_input_token_cost_batches",
-    "cache_read_input_token_cost_above_272k_tokens_batches",
-    "cache_creation_input_token_cost_batches",
-    "cache_creation_input_token_cost_above_272k_tokens_batches",
-    "cache_read_input_audio_token_cost",
-    "cache_read_input_image_token_cost",
-    "input_cost_per_character_above_128k_tokens",
-    "input_cost_per_audio_token",
-    "input_cost_per_token_cache_hit",
-    "input_cost_per_token_above_128k_tokens",
-    "input_cost_per_token_above_200k_tokens",
-    "input_cost_per_token_above_200k_tokens_priority",
-    "input_cost_per_token_above_272k_tokens_priority",
-    "input_cost_per_token_above_272k_tokens_flex",
-    "input_cost_per_token_above_272k_tokens_batches",
-    "input_cost_per_query",
-    "input_cost_per_image",
-    "input_cost_per_image_above_128k_tokens",
-    "input_cost_per_audio_per_second",
-    "input_cost_per_audio_per_second_above_128k_tokens",
-    "input_cost_per_video_per_second",
-    "input_cost_per_video_per_second_above_128k_tokens",
-    "input_cost_per_video_per_second_above_15s_interval",
-    "input_cost_per_video_per_second_above_8s_interval",
-    "input_cost_per_audio_token_batches",
-    "input_cost_per_image_token_batches",
-    "input_cost_per_token_batches",
-    "input_cost_per_video_token_batches",
-    "output_cost_per_token_batches",
-    "output_cost_per_token_flex",
-    "output_cost_per_token_priority",
-    "output_cost_per_token_ultrafast",
-    "output_cost_per_audio_token",
-    "output_cost_per_token_above_128k_tokens",
-    "output_cost_per_token_above_200k_tokens",
-    "output_cost_per_token_above_200k_tokens_priority",
-    "output_cost_per_token_above_272k_tokens_priority",
-    "output_cost_per_token_above_272k_tokens_flex",
-    "output_cost_per_token_above_272k_tokens_batches",
-    "output_cost_per_character_above_128k_tokens",
-    "output_cost_per_image",
-    "output_cost_per_image_token",
-    "output_cost_per_video_token",
-    "output_cost_per_reasoning_token",
-    "output_cost_per_reasoning_token_flex",
-    "output_cost_per_reasoning_token_priority",
-    "output_cost_per_video_per_second",
-    "output_cost_per_audio_per_second",
-    "search_context_cost_per_query",
-    "google_maps_grounding_cost_per_query",
-    "citation_cost_per_token",
-    "cache_read_input_token_cost_above_272k_tokens",
-    "cache_read_input_token_cost_above_512k_tokens",
-    "input_cost_per_image_token",
-    "input_cost_per_video_token",
-    "input_cost_per_token_above_272k_tokens",
-    "input_cost_per_token_above_512k_tokens",
-    "output_cost_per_token_above_272k_tokens",
-    "output_cost_per_token_above_512k_tokens",
-    "output_vector_size",
-    "ocr_cost_per_page",
-    "ocr_cost_per_page_batches",
-    "ocr_cost_per_credit",
-    "annotation_cost_per_page",
-    "annotation_cost_per_page_batches",
-    "regional_processing_uplift_multiplier_eu",
-    "regional_processing_uplift_multiplier_us",
-    "regional_endpoint_uplift_multiplier",
-)
+PRICING_NAMES: Final = tuple(CustomPricingLiteLLMParams.model_fields)
 
 OWNED_NAMES: Final = (
     *CONNECTION_NAMES,
@@ -429,6 +292,8 @@ def test_caching_groups_is_a_flat_sequence_of_model_groups_that_share_one_cache_
 
 def test_all_litellm_params_is_exactly_the_owned_inventory() -> None:
     assert frozenset(all_litellm_params) == frozenset(OWNED_NAMES)
+    assert tuple(all_litellm_params) == OWNED_NAMES
+    assert frozenset(ARTIFACT_NAMES).isdisjoint(DECLARED_NAMES)
 
 
 def test_every_owned_name_has_exactly_one_owner() -> None:
@@ -550,6 +415,158 @@ TYPED_CONFIG_MODELS: Final[Mapping[str, tuple[type[BaseModel], ...]]] = MappingP
 )
 
 DECLARED_NAMES: Final = frozenset(name for root in LITELLM_OWNED_ROOTS for name in owned_wire_names(root))
+
+TYPE_NAMESPACE: Final[Mapping[str, object]] = {
+    **litellm_params.__dict__,
+    "ProviderClient": object,
+    "ProviderSpecificHeader": object,
+    "ClientSession": object,
+    "AsyncAzureOpenAI": object,
+    "AsyncOpenAI": object,
+    "AzureOpenAI": object,
+    "OpenAI": object,
+    "AsyncHTTPHandler": object,
+    "HTTPHandler": object,
+    "ConfigurableClientsideParamsCustomAuth": object,
+    "RetryPolicy": object,
+    "DeploymentTypedDict": object,
+    "DynamicCacheControl": object,
+    "ChatCompletionUserMessage": object,
+    "ChatCompletionAssistantMessage": object,
+    "MockResponse": object,
+    "ModelResponse": object,
+    "ModelResponseStream": object,
+    "Logging": object,
+    "CompactionState": object,
+    "RouterWeights": object,
+    "AttemptedFallbackTargets": object,
+    "SecretFields": object,
+}
+TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
+    **TYPE_NAMESPACE,
+    "Logging": Logging,
+    "SecretFields": SecretFields,
+}
+
+LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
+    litellm_params.ProviderConnection: {"api_key": "k", "request_timeout": 1.5},
+    litellm_params.BedrockBatchConnection: {"aws_batch_role_arn": "arn", "bedrock_tags": ({"k": "v"},)},
+    litellm_params.DispatchOptions: {"custom_llm_provider": "openai"},
+    litellm_params.RoutingOptions: {
+        "fallbacks": [{"model": "gpt-4o", "api_key": "k", "temperature": 0}],
+        "num_retries": 2,
+        "retry_strategy": "constant_retry",
+        "routing_strategy": "simple-shuffle",
+    },
+    litellm_params.DeploymentOptions: {"model_info": {"region": "us"}, "rpm": 2},
+    litellm_params.SpecializedRouterOptions: {"adaptive_router_default_model": "gpt-4o"},
+    litellm_params.CachingOptions: {"ttl": 30.0, "caching_groups": (("gpt-4o", "gpt-4o-mini"),)},
+    litellm_params.CostOptions: {"max_budget": 10.0},
+    litellm_params.ObservabilityOptions: {"metadata": {"request": "test"}, "no_log": True},
+    litellm_params.AgenticLoopOptions: {"max_agentic_loops": 2},
+    litellm_params.GuardrailOptions: {"guardrails": ("default",)},
+    litellm_params.PromptOptions: {"prompt_id": "prompt", "prompt_variables": {"name": "value"}},
+    litellm_params.ResponseOptions: {"stream_chunk_size": 64},
+    litellm_params.MockOptions: {"mock_timeout": True},
+    litellm_params.CallState: {
+        "completion_call_id": "call",
+        "model_alias_map": {"alias": "gpt-4o"},
+        "data_residency": "us",
+    },
+    litellm_params.AgenticLoopState: {"api_surface": "chat_completions", "depth": 1},
+    litellm_params.RouterState: {"fallback_depth": 1},
+    litellm_params.ProxyRequestState: {
+        "proxy_server_request": {"path": "/chat/completions"},
+        "trusted_callback_vars": {"dd_api_key": "k"},
+    },
+    litellm_params.EntrypointState: {"acompletion": True},
+}
+
+LEAF_BAD_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
+    litellm_params.ProviderConnection: {"api_key": 1},
+    litellm_params.BedrockBatchConnection: {"aws_batch_role_arn": 1},
+    litellm_params.DispatchOptions: {"custom_llm_provider": 1},
+    litellm_params.RoutingOptions: {"num_retries": "2"},
+    litellm_params.DeploymentOptions: {"rpm": "2"},
+    litellm_params.SpecializedRouterOptions: {"auto_router_max_input_chars": "2"},
+    litellm_params.CachingOptions: {"ttl": "30"},
+    litellm_params.CostOptions: {"max_budget": "10"},
+    litellm_params.ObservabilityOptions: {"verbose": "true"},
+    litellm_params.AgenticLoopOptions: {"max_agentic_loops": "2"},
+    litellm_params.GuardrailOptions: {"guardrails": (1,)},
+    litellm_params.PromptOptions: {"prompt_id": 1},
+    litellm_params.ResponseOptions: {"stream_chunk_size": "64"},
+    litellm_params.MockOptions: {"mock_timeout": "true"},
+    litellm_params.CallState: {"completion_call_id": 1},
+    litellm_params.AgenticLoopState: {"depth": "1"},
+    litellm_params.RouterState: {"fallback_depth": "1"},
+    litellm_params.ProxyRequestState: {"proxy_server_request": "request"},
+    litellm_params.EntrypointState: {"acompletion": "true"},
+}
+
+INVALID_LITERAL_SAMPLES: Final[tuple[tuple[type, Mapping[str, object]], ...]] = (
+    (litellm_params.RoutingOptions, {"retry_strategy": "linear"}),
+    (litellm_params.AgenticLoopState, {"api_surface": "batches"}),
+)
+
+
+def _leaf_id(value: object) -> str:
+    return value.__name__ if isinstance(value, type) else ""
+
+
+def _strict_leaf_adapter(leaf: type) -> TypeAdapter[object]:
+    leaf_type: Final = cast(type[object], leaf)
+    adapter: TypeAdapter[object] = TypeAdapter(leaf_type, module="litellm.types.litellm_params")
+    adapter.rebuild(_types_namespace=TYPE_NAMESPACE)
+    return adapter
+
+
+def _leaf_instance(leaf: type, sample: Mapping[str, object]) -> object:
+    constructor: Final = cast(Callable[..., object], leaf)
+    return constructor(**sample)
+
+
+def _strict_leaf_validation(leaf: type, instance: object) -> object:
+    result: Final = _strict_leaf_adapter(leaf).validate_python(instance, strict=True)
+    values: Final = cast(
+        tuple[object, ...],
+        astuple(instance),  # pyright: ignore[reportArgumentType]  # dataclass verified by callers
+    )
+    hints: Final[Mapping[str, object]] = cast(
+        Mapping[str, object], get_type_hints(type(instance), localns=TYPE_HINT_NAMESPACE)
+    )
+    for field_info, value in zip(fields(leaf), values, strict=True):
+        field_adapter: TypeAdapter[object] = TypeAdapter[object](
+            hints[field_info.name],
+            config=ConfigDict(arbitrary_types_allowed=True),
+        )
+        field_adapter.validate_python(value, strict=True)
+    return result
+
+
+@pytest.mark.parametrize("leaf,sample", LEAF_SAMPLES.items(), ids=_leaf_id)
+def test_every_owned_leaf_accepts_a_strict_reader_shaped_sample(leaf: type, sample: Mapping[str, object]) -> None:
+    instance: Final = _leaf_instance(leaf, sample)
+    result: Final = _strict_leaf_validation(leaf, instance)
+
+    assert result == instance
+    assert frozenset(sample) <= frozenset(field.name for field in fields(leaf))
+
+
+@pytest.mark.parametrize("leaf,sample", LEAF_BAD_SAMPLES.items(), ids=_leaf_id)
+def test_every_owned_leaf_rejects_a_strict_wrong_typed_sample(leaf: type, sample: Mapping[str, object]) -> None:
+    instance: Final = _leaf_instance(leaf, sample)
+
+    with pytest.raises(ValidationError):
+        _strict_leaf_validation(leaf, instance)
+
+
+@pytest.mark.parametrize("leaf,sample", INVALID_LITERAL_SAMPLES, ids=_leaf_id)
+def test_owned_leaf_literals_reject_unknown_values(leaf: type, sample: Mapping[str, object]) -> None:
+    instance: Final = _leaf_instance(leaf, sample)
+
+    with pytest.raises(ValidationError):
+        _strict_leaf_validation(leaf, instance)
 
 
 NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
