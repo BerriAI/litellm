@@ -914,13 +914,27 @@ class AmazonNovaCanvasImageGenerationConfig(TypedDict, total=False):
 class AmazonNovaCanvasTextToImageParams(TypedDict, total=False):
     """
     Params for Amazon Nova Canvas Text to Image API
+
+    conditionImage + controlMode + controlStrength enable conditioned editing
+    (SEGMENTATION derives a segmentation mask from the condition image;
+    CANNY_EDGE follows its prominent contours — the AWS default).
     """
 
     text: str
     negativeText: str
     controlStrength: float
-    controlMode: Literal["CANNY_EDIT", "SEGMENTATION"]
+    controlMode: Literal["CANNY_EDGE", "SEGMENTATION"]
     conditionImage: str
+    style: Literal[
+        "3D_ANIMATED_FAMILY_FILM",
+        "DESIGN_SKETCH",
+        "FLAT_VECTOR_ILLUSTRATION",
+        "GRAPHIC_NOVEL_ILLUSTRATION",
+        "MAXIMALISM",
+        "MIDCENTURY_RETRO",
+        "PHOTOREALISM",
+        "SOFT_DIGITAL_PAINTING",
+    ]
 
 
 class AmazonNovaCanvasTextToImageRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):

@@ -4,6 +4,9 @@ Amazon Nova Canvas image edit on Bedrock (InvokeModel).
 Maps OpenAI-style image edit (image + prompt, optional mask) to Nova Canvas task types:
 - With mask: INPAINTING (inPaintingParams per AWS docs)
 - Without mask: IMAGE_VARIATION (imageVariationParams)
+- TEXT_IMAGE: conditioned editing — the input image conditions layout via
+  textToImageParams.conditionImage + controlMode (CANNY_EDGE | SEGMENTATION) +
+  controlStrength (issue #39552)
 
 Refs:
 - https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
@@ -38,6 +41,9 @@ else:
     LiteLLMLoggingObj = Any
 
 
+NOVA_CANVAS_CONTROL_MODES: Final[tuple[str, ...]] = ("CANNY_EDGE", "SEGMENTATION")
+
+
 def _nova_canvas_task_body(
     *,
     image_b64: str,
@@ -48,6 +54,8 @@ def _nova_canvas_task_body(
     task_type: str | None,
     mask_prompt: str | None,
     out_painting_mode: str | None,
+    control_mode: str | None = None,
+    control_strength: float | None = None,
 ) -> dict[str, object]:
     """Build InvokeModel body task section (without imageGenerationConfig)."""
     if task_type == "BACKGROUND_REMOVAL":
@@ -77,6 +85,29 @@ def _nova_canvas_task_body(
             "taskType": "OUTPAINTING",
             "outPaintingParams": out_params,
         }
+    if task_type == "TEXT_IMAGE":
+        # Conditioned editing: the input image guides layout/composition of the
+        # generated image via textToImageParams.conditionImage. SEGMENTATION
+        # controlMode derives a segmentation mask from the condition image;
+        # CANNY_EDGE (the AWS default) follows its prominent contours.
+        if control_mode is not None and control_mode not in NOVA_CANVAS_CONTROL_MODES:
+            raise ValueError(
+                f"Unsupported Amazon Nova Canvas controlMode: {control_mode!r}. Use one of {NOVA_CANVAS_CONTROL_MODES}."
+            )
+        t2i_params: Final[dict[str, object]] = {
+            "text": text,
+            "conditionImage": image_b64,
+        }
+        if negative_text is not None:
+            t2i_params["negativeText"] = negative_text
+        if control_mode is not None:
+            t2i_params["controlMode"] = control_mode
+        if control_strength is not None:
+            t2i_params["controlStrength"] = control_strength
+        return {
+            "taskType": "TEXT_IMAGE",
+            "textToImageParams": t2i_params,
+        }
     # Honour explicit IMAGE_VARIATION even when a mask is present (mask is ignored
     # for this task type; callers use INPAINTING when they want mask semantics).
     if task_type == "IMAGE_VARIATION":
@@ -98,6 +129,7 @@ def _nova_canvas_task_body(
             raise ValueError(
                 f"Unsupported Amazon Nova Canvas taskType: {task_type!r}. "
                 "Use BACKGROUND_REMOVAL, OUTPAINTING, IMAGE_VARIATION, INPAINTING, "
+                "TEXT_IMAGE (conditioned editing via conditionImage/controlMode), "
                 "or omit taskType for automatic routing (mask → INPAINTING, else IMAGE_VARIATION)."
             )
     if mask_b64 is not None or mask_prompt is not None or task_type == "INPAINTING":
@@ -251,6 +283,8 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             "taskType",
             "maskPrompt",
             "outPaintingMode",
+            "controlMode",
+            "controlStrength",
             "imageGenerationConfig",
         ]
 
@@ -366,6 +400,8 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         similarity_strength: Final = op.pop("similarityStrength", None)
         mask_prompt: Final = op.pop("maskPrompt", None)
         out_painting_mode: Final = op.pop("outPaintingMode", None)
+        control_mode: Final = op.pop("controlMode", None)
+        control_strength: Final = op.pop("controlStrength", None)
 
         body: Final = _nova_canvas_task_body(
             image_b64=image_b64,
@@ -376,6 +412,8 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             task_type=task_type,
             mask_prompt=mask_prompt,
             out_painting_mode=out_painting_mode,
+            control_mode=control_mode,
+            control_strength=control_strength,
         )
 
         # BACKGROUND_REMOVAL InvokeModel body must not include imageGenerationConfig (AWS rejects it).

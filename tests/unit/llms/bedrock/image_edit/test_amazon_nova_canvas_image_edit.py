@@ -388,7 +388,7 @@ def test_transform_request_unknown_task_type_raises():
             model="amazon.nova-canvas-v1:0",
             prompt="x",
             image=img,
-            image_edit_optional_request_params={"taskType": "TEXT_IMAGE"},
+            image_edit_optional_request_params={"taskType": "NOT_A_REAL_TASK_TYPE"},
             litellm_params={},  # type: ignore[arg-type]
             headers={},
         )
@@ -408,6 +408,122 @@ def test_transform_request_background_removal():
     )
     assert body["taskType"] == "BACKGROUND_REMOVAL"
     assert "image" in body["backgroundRemovalParams"]
+
+
+def test_transform_request_text_image_segmentation():
+    """taskType TEXT_IMAGE + controlMode SEGMENTATION conditions via conditionImage (issue #39552)."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"cond-bytes")
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="a city street in the same layout",
+        image=img,
+        image_edit_optional_request_params={
+            "taskType": "TEXT_IMAGE",
+            "controlMode": "SEGMENTATION",
+            "controlStrength": 0.7,
+        },
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["taskType"] == "TEXT_IMAGE"
+    t2i = body["textToImageParams"]
+    assert t2i["text"] == "a city street in the same layout"
+    assert t2i["conditionImage"] == base64.b64encode(b"cond-bytes").decode("utf-8")
+    assert t2i["controlMode"] == "SEGMENTATION"
+    assert t2i["controlStrength"] == 0.7
+
+
+def test_transform_request_text_image_canny_edge():
+    """taskType TEXT_IMAGE + controlMode CANNY_EDGE keeps canny conditioning."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"cond-bytes")
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="follow the edges",
+        image=img,
+        image_edit_optional_request_params={
+            "taskType": "TEXT_IMAGE",
+            "controlMode": "CANNY_EDGE",
+        },
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["taskType"] == "TEXT_IMAGE"
+    t2i = body["textToImageParams"]
+    assert t2i["controlMode"] == "CANNY_EDGE"
+    assert t2i["conditionImage"]
+    assert "controlStrength" not in t2i
+
+
+def test_transform_request_text_image_defaults_omit_control_fields():
+    """Without controlMode/controlStrength only conditionImage is set (AWS defaults apply)."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"cond")
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="same composition",
+        image=img,
+        image_edit_optional_request_params={"taskType": "TEXT_IMAGE"},
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["taskType"] == "TEXT_IMAGE"
+    t2i = body["textToImageParams"]
+    assert t2i["conditionImage"]
+    assert "controlMode" not in t2i
+    assert "controlStrength" not in t2i
+    assert "negativeText" not in t2i
+
+
+def test_transform_request_text_image_forwards_negative_text_and_igc():
+    """TEXT_IMAGE forwards negativeText and allows imageGenerationConfig."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"cond")
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="restyle",
+        image=img,
+        image_edit_optional_request_params={
+            "taskType": "TEXT_IMAGE",
+            "controlMode": "SEGMENTATION",
+            "negativeText": "blurry",
+            "size": "1024x1024",
+            "seed": 7,
+        },
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["textToImageParams"]["negativeText"] == "blurry"
+    assert body["imageGenerationConfig"]["width"] == 1024
+    assert body["imageGenerationConfig"]["height"] == 1024
+    assert body["imageGenerationConfig"]["seed"] == 7
+
+
+def test_transform_request_text_image_invalid_control_mode_raises():
+    """Unknown controlMode fails fast instead of hitting AWS with a bad payload."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"cond")
+    with pytest.raises(ValueError, match="Unsupported Amazon Nova Canvas controlMode"):
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt="restyle",
+            image=img,
+            image_edit_optional_request_params={
+                "taskType": "TEXT_IMAGE",
+                "controlMode": "CANNY_EDIT",
+            },
+            litellm_params={},  # type: ignore[arg-type]
+            headers={},
+        )
+
+
+def test_get_supported_openai_params_includes_conditioning_fields():
+    """controlMode/controlStrength are advertised for TEXT_IMAGE conditioned editing."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    supported = config.get_supported_openai_params("amazon.nova-canvas-v1:0")
+    assert "controlMode" in supported
+    assert "controlStrength" in supported
 
 
 def test_transform_request_background_removal_omits_image_generation_config():
