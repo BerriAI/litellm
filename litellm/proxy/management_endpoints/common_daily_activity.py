@@ -1113,6 +1113,7 @@ def _export_base_row(
         team_alias=_export_team_alias(entity_metadata_field, entity_id),
         model=record.model,
         spend=metrics.spend,
+        flat_cost=_reported_flat_cost(record),
         api_requests=metrics.api_requests,
         successful_requests=metrics.successful_requests,
         failed_requests=metrics.failed_requests,

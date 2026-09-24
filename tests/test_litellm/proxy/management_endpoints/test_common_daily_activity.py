@@ -3103,3 +3103,73 @@ async def test_export_models_rolls_up_per_team_and_model(
         ("claude", 5.0, 1),
         ("gpt-5", 5.0, 2),
     ]
+
+
+@pytest.mark.asyncio
+async def test_export_daily_reports_ptu_flat_cost_on_the_team_row(
+    _aggregated_postgresql: psycopg.Connection, ptu_cost_attribution_enabled
+):
+    """The CSV the dashboard hands to finance must match the client-side export,
+    which shows flat cost columns once any PTU spend exists for the day."""
+    from litellm.proxy.management_endpoints.team_endpoints import _team_export_csv
+
+    _seed_daily_team_spend(
+        _aggregated_postgresql,
+        [
+            _team_spend_row("row-1", "team-1", "key-1", 2.0),
+            _team_spend_row("row-ptu", "team-1", PTU_SENTINEL_API_KEY, 0.0, ptu_flat_cost=240.0),
+        ],
+    )
+
+    rows = await get_daily_activity_export_rows(
+        prisma_client=_export_prisma(_aggregated_postgresql),
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        api_key=None,
+        exclude_entity_ids=None,
+        timezone_offset_minutes=None,
+        export_type="daily",
+    )
+
+    assert len(rows) == 1
+    assert rows[0].flat_cost == pytest.approx(240.0)
+    header: Final = _team_export_csv("daily", rows).splitlines()[0]
+    assert "Spend ($),Flat Cost ($),Total Cost ($)" in header
+    record: Final = _team_export_csv("daily", rows).splitlines()[1].split(",")
+    spend_index: Final = header.split(",").index("Spend ($)")
+    assert record[spend_index : spend_index + 3] == ["2.0000", "240.0000", "242.0000"]
+
+
+@pytest.mark.asyncio
+async def test_export_csv_omits_flat_cost_columns_when_no_ptu_spend_exists(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    from litellm.proxy.management_endpoints.team_endpoints import _team_export_csv
+
+    _seed_daily_team_spend(
+        _aggregated_postgresql,
+        [_team_spend_row("row-1", "team-1", "key-1", 2.0)],
+    )
+
+    rows = await get_daily_activity_export_rows(
+        prisma_client=_export_prisma(_aggregated_postgresql),
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        api_key=None,
+        exclude_entity_ids=None,
+        timezone_offset_minutes=None,
+        export_type="daily",
+    )
+
+    assert rows[0].flat_cost == 0.0
+    header: Final = _team_export_csv("daily", rows).splitlines()[0]
+    assert "Flat Cost" not in header
+    assert "Total Cost" not in header

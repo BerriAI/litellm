@@ -16983,3 +16983,36 @@ def test_team_export_csv_omits_key_columns_for_the_plain_daily_scope():
         "5",
         "4",
     ]
+
+
+def test_team_export_csv_escapes_formula_aliases_and_keeps_dash_placeholder():
+    import csv
+    import io
+
+    from litellm.proxy.management_endpoints.team_endpoints import _team_export_csv
+    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+
+    row: Final = TeamDailyActivityExportRow(
+        date="2026-06-01",
+        team_id="team-1",
+        team_alias='=HYPERLINK("http://evil.example","x")',
+        key_alias="@cmd",
+        user_id=None,
+        user_email=None,
+        spend=1.5,
+        api_requests=2,
+        successful_requests=2,
+        failed_requests=0,
+        total_tokens=30,
+        prompt_tokens=20,
+        completion_tokens=10,
+        cache_read_input_tokens=5,
+        cache_creation_input_tokens=4,
+    )
+
+    record: Final = next(csv.DictReader(io.StringIO(_team_export_csv("daily_with_keys", (row,)))))
+
+    assert record["Team"] == "'=HYPERLINK(\"http://evil.example\",\"x\")"
+    assert record["Key Alias"] == "'@cmd"
+    assert record["User ID"] == "-"
+    assert record["User Email"] == "-"

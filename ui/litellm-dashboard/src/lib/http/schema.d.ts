@@ -42798,6 +42798,11 @@ export interface components {
             total_api_requests: number;
             /** Total Failed Requests */
             total_failed_requests: number;
+            /**
+             * Total Flat Cost
+             * @default 0
+             */
+            total_flat_cost: number;
             /** Total Spend */
             total_spend: number;
             /** Total Successful Requests */
@@ -42827,6 +42832,11 @@ export interface components {
             date: string;
             /** Failed Requests */
             failed_requests: number;
+            /**
+             * Flat Cost
+             * @default 0
+             */
+            flat_cost: number;
             /** Key Alias */
             key_alias?: string | null;
             /** Keys */

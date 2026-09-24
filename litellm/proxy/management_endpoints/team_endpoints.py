@@ -6850,18 +6850,24 @@ def _export_csv_headers(export_type: TeamDailyActivityExportType) -> tuple[str, 
     return (*base, *_EXPORT_CSV_METRIC_HEADERS)
 
 
+def _csv_safe(value: str) -> str:
+    return "'" + value if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
+
+
 def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:
     return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
         "Date": row.date,
-        "Team": row.team_alias or "-",
+        "Team": _csv_safe(row.team_alias) if row.team_alias else "-",
         "Team ID": row.team_id,
-        "Key Alias": row.key_alias or "-",
+        "Key Alias": _csv_safe(row.key_alias) if row.key_alias else "-",
         "Key ID": row.api_key or "-",
-        "User ID": row.user_id or "-",
-        "User Email": row.user_email or "-",
+        "User ID": _csv_safe(row.user_id) if row.user_id else "-",
+        "User Email": _csv_safe(row.user_email) if row.user_email else "-",
         "Keys": row.keys,
-        "Model": row.model or "-",
+        "Model": _csv_safe(row.model) if row.model else "-",
         "Spend ($)": f"{row.spend:.4f}",
+        "Flat Cost ($)": f"{row.flat_cost:.4f}",
+        "Total Cost ($)": f"{row.spend + row.flat_cost:.4f}",
         "Requests": row.api_requests,
         "Successful Requests": row.successful_requests,
         "Failed Requests": row.failed_requests,
@@ -6876,7 +6882,13 @@ def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:
 
 
 def _team_export_csv(export_type: TeamDailyActivityExportType, rows: Sequence[TeamDailyActivityExportRow]) -> str:
-    headers: Final = _export_csv_headers(export_type)
+    base_headers: Final = _export_csv_headers(export_type)
+    spend_index: Final = base_headers.index("Spend ($)") + 1
+    headers: Final = (
+        (*base_headers[:spend_index], "Flat Cost ($)", "Total Cost ($)", *base_headers[spend_index:])
+        if sum(row.flat_cost for row in rows) > 0
+        else base_headers
+    )
     buffer: Final = io.StringIO()
     writer: Final = csv.DictWriter(buffer, fieldnames=headers, extrasaction="ignore")
     writer.writeheader()
@@ -6954,6 +6966,7 @@ async def get_team_daily_activity_export(
         end_date=end_date,
         team_ids=list(scope.team_ids) if scope.team_ids else None,  # mutable-ok: response model field type
         total_spend=sum(row.spend for row in rows),
+        total_flat_cost=sum(row.flat_cost for row in rows),
         total_api_requests=sum(row.api_requests for row in rows),
         total_successful_requests=sum(row.successful_requests for row in rows),
         total_failed_requests=sum(row.failed_requests for row in rows),

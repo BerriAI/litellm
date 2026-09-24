@@ -270,6 +270,7 @@ class TeamDailyActivityExportRow(BaseModel):
     keys: int | None = None
     model: str | None = None
     spend: float
+    flat_cost: float = 0.0
     api_requests: int
     successful_requests: int
     failed_requests: int
@@ -287,6 +288,7 @@ class TeamDailyActivityExportMetadata(BaseModel):
     end_date: str
     team_ids: list[str] | None
     total_spend: float
+    total_flat_cost: float = 0.0
     total_api_requests: int
     total_successful_requests: int
     total_failed_requests: int
