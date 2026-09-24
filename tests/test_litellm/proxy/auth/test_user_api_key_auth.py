@@ -7855,6 +7855,30 @@ async def test_temp_budget_increase_applied_for_cached_key():
     assert cached_after.max_budget == 2.0
 
 
+async def _authenticate_and_authorize(mock_request, api_key):
+    """Builder then the single common_checks gate, the same sequence user_api_key_auth runs."""
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+
+    request_data = {"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hi"}]}
+    auth_obj = await _user_api_key_auth_builder(
+        request=mock_request,
+        api_key=f"Bearer {api_key}",
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        request_data=request_data,
+    )
+    recovered = await _authorize_authenticated_request(
+        user_api_key_auth_obj=auth_obj,
+        request=mock_request,
+        request_data=request_data,
+        route="/v1/messages",
+        api_key=f"Bearer {api_key}",
+    )
+    return recovered or auth_obj
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "team_member_spend, expect_blocked",
@@ -7868,7 +7892,7 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
     """A team member counter sitting exactly at the cap (where a resized reservation
     lands it) must be rejected by the cached-key auth path like every other budget check."""
     from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_auth_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
     from litellm.proxy.utils import hash_token
 
     api_key = "sk-team-member-exact-cap"
@@ -7898,7 +7922,7 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
         value=LiteLLM_UserTable(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER),
     )
     await user_api_key_cache.async_set_cache(
-        key=team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+        key=team_membership_reservation_cache_key(team_id=team_id, user_id=user_id),
         value=LiteLLM_TeamMembership(
             user_id=user_id,
             team_id=team_id,
@@ -7920,15 +7944,7 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     async def _auth():
-        return await _user_api_key_auth_builder(
-            request=mock_request,
-            api_key=f"Bearer {api_key}",
-            azure_api_key_header="",
-            anthropic_api_key_header=None,
-            google_ai_studio_api_key_header=None,
-            azure_apim_header=None,
-            request_data={"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hi"}]},
-        )
+        return await _authenticate_and_authorize(mock_request, api_key)
 
     with (
         patch(  # test-quality-ok: the builder reads proxy settings from module globals, no injection seam
@@ -7973,7 +7989,10 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
     """The team's team_member_max_budget_alert_emails thresholds fire from the cached-key auth path,
     including on the request that trips the hard cap, and stay silent below the lowest threshold."""
     from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_auth_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        team_membership_auth_cache_key,
+        team_membership_reservation_cache_key,
+    )
     from litellm.proxy.utils import hash_token
 
     api_key = "sk-team-member-alert-thresholds"
@@ -7998,7 +8017,11 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
     )
     await user_api_key_cache.async_set_cache(
         key=f"team_id:{team_id}",
-        value=LiteLLM_TeamTableCachedObj(team_id=team_id),
+        value=LiteLLM_TeamTableCachedObj(
+            team_id=team_id,
+            team_alias="platform",
+            metadata={"team_member_max_budget_alert_emails": alert_emails},
+        ),
     )
     await user_api_key_cache.async_set_cache(
         key=user_id,
@@ -8006,16 +8029,20 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
             user_id=user_id, user_email="member@example.com", user_role=LitellmUserRoles.INTERNAL_USER
         ),
     )
-    await user_api_key_cache.async_set_cache(
-        key=team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
-        value=LiteLLM_TeamMembership(
-            user_id=user_id,
-            team_id=team_id,
-            spend=team_member_spend,
-            budget_id="budget-alert-thresholds",
-            litellm_budget_table=LiteLLM_BudgetTable(max_budget=2.4),
-        ),
+    membership = LiteLLM_TeamMembership(
+        user_id=user_id,
+        team_id=team_id,
+        spend=team_member_spend,
+        budget_id="budget-alert-thresholds",
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=2.4),
     )
+    # A live proxy holds the row under both keys, so any second team-member check in the
+    # auth flow would find it too and send a duplicate alert.
+    for membership_cache_key in (
+        team_membership_reservation_cache_key(team_id=team_id, user_id=user_id),
+        team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+    ):
+        await user_api_key_cache.async_set_cache(key=membership_cache_key, value=membership)
 
     mock_request = MagicMock()
     mock_request.url.path = "/v1/messages"
@@ -8030,15 +8057,7 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
     proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock(return_value=None)
 
     async def _auth():
-        return await _user_api_key_auth_builder(
-            request=mock_request,
-            api_key=f"Bearer {api_key}",
-            azure_api_key_header="",
-            anthropic_api_key_header=None,
-            google_ai_studio_api_key_header=None,
-            azure_apim_header=None,
-            request_data={"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hi"}]},
-        )
+        return await _authenticate_and_authorize(mock_request, api_key)
 
     with (
         patch(  # test-quality-ok: the builder reads proxy settings from module globals, no injection seam
@@ -8089,7 +8108,7 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
     """A member over their permanent cap is admitted while a temp_budget_increase is unexpired
     and blocked again once it expires, on the cached-key auth path."""
     from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
-    from litellm.proxy.common_utils.user_api_key_cache import team_membership_auth_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
     from litellm.proxy.utils import hash_token
 
     api_key = "sk-team-member-temp-budget"
@@ -8119,7 +8138,7 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
         value=LiteLLM_UserTable(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER),
     )
     await user_api_key_cache.async_set_cache(
-        key=team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+        key=team_membership_reservation_cache_key(team_id=team_id, user_id=user_id),
         value=LiteLLM_TeamMembership(
             user_id=user_id,
             team_id=team_id,
@@ -8145,15 +8164,7 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     async def _auth():
-        return await _user_api_key_auth_builder(
-            request=mock_request,
-            api_key=f"Bearer {api_key}",
-            azure_api_key_header="",
-            anthropic_api_key_header=None,
-            google_ai_studio_api_key_header=None,
-            azure_apim_header=None,
-            request_data={"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hi"}]},
-        )
+        return await _authenticate_and_authorize(mock_request, api_key)
 
     with (
         patch(  # test-quality-ok: the builder reads proxy settings from module globals, no injection seam
