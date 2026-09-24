@@ -2162,7 +2162,8 @@ def test_continued_trace_keeps_the_generation_version():
 
 
 def test_new_trace_version_takes_precedence_over_the_generation_version():
-    """v4 has one ``version`` for the trace and its root observation; ``trace_version`` wins as in v2."""
+    """v4 has one ``langfuse.version`` per span, so unlike v2's separate trace and generation fields only one
+    value can survive; ``trace_version`` wins, matching the v4 SDK, whose propagated attributes overwrite a span's own."""
     rig = _steering_logger()
 
     captured_trace_params, _, span = _emit(rig, metadata={"trace_version": "trace-1", "version": "gen-7"})
