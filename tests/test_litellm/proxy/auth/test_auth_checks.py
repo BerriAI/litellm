@@ -1886,6 +1886,112 @@ async def test_can_key_call_model_honors_key_alias():
     assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
 
 
+def test_can_object_call_model_global_alias_wins_over_key_alias(monkeypatch):
+    """The global alias rewrite wins at dispatch, so a colliding key alias must not grant access."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"foo": "bar"})
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"foo": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+def test_can_object_call_model_key_alias_matches_global_rewritten_name(monkeypatch):
+    """A key alias on the globally rewritten name resolves the same way the request chain does."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"foo": "bar"})
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_can_user_call_model_honors_key_alias():
+    """A personal-scope key alias resolves to its target before the user allowlist check."""
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+
+    user_object = LiteLLM_UserTable(user_id="test-user", models=["gpt-4o-mini"])
+
+    assert (
+        await can_user_call_model(
+            model="mistral-7b",
+            llm_router=None,
+            user_object=user_object,
+            key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_user_call_model(
+            model="mistral-7b",
+            llm_router=None,
+            user_object=user_object,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.user_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_honors_key_alias():
+    """A key alias resolves against the member allowlist, not just the raw alias name."""
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+
+    membership = LiteLLM_TeamMembership(
+        user_id="alice",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["gpt-4o-mini"]),
+    )
+
+    await _check_team_member_model_access(
+        model="mistral-7b",
+        team_object=LiteLLM_TeamTable(team_id="team-a"),
+        valid_token=UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a"),
+        llm_router=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=MagicMock(),
+        team_membership=membership,
+        team_membership_loaded=True,
+        key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_team_member_model_access(
+            model="mistral-7b",
+            team_object=LiteLLM_TeamTable(team_id="team-a"),
+            valid_token=UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a"),
+            llm_router=None,
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=MagicMock(),
+            team_membership=membership,
+            team_membership_loaded=True,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
 def test_can_object_call_model_access_via_underlying_model_only():
     """
     Test that a key can access a model via underlying model even when using an alias.

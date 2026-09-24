@@ -723,6 +723,7 @@ async def _run_project_checks(
             model=_model,
             project_object=project_object,
             llm_router=llm_router,
+            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
         )
 
     if not skip_budget_checks:
@@ -1029,6 +1030,7 @@ async def common_checks(
                     valid_token=valid_token,
                     team_object=team_object,
                     llm_router=llm_router,
+                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                 ):
                     raise
 
@@ -1045,6 +1047,7 @@ async def common_checks(
                 proxy_logging_obj=proxy_logging_obj,
                 team_membership=loaded_team_membership,
                 team_membership_loaded=team_membership_loaded,
+                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
     # Require trace id for agent keys when agent has require_trace_id_on_calls_by_agent
@@ -1083,6 +1086,7 @@ async def common_checks(
                 model=_model,
                 llm_router=llm_router,
                 user_object=user_object,
+                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
     # 1.1 - 2.2 - 3.0.2 - 3.0.3: Project checks (blocked, model access, budget)
@@ -4399,7 +4403,9 @@ def _can_object_call_model(
             else None
         )
     )
-    key_alias_target: Final = key_model_aliases.get(model) if key_model_aliases is not None else None
+    key_alias_target: Final = (
+        key_model_aliases.get(litellm.model_alias_map.get(model, model)) if key_model_aliases is not None else None
+    )
     potential_models: Final = (
         *((model, compaction_parent) if compaction_parent is not None else (model,)),
         *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
@@ -4498,12 +4504,18 @@ async def _check_agent_caller_model_access(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
         )
         return
     caller_user: Final = await load_user(valid_token)
     if caller_user is None:
         return
-    await can_user_call_model(model=model, llm_router=llm_router, user_object=caller_user)
+    await can_user_call_model(
+        model=model,
+        llm_router=llm_router,
+        user_object=caller_user,
+        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+    )
 
 
 def _model_in_team_aliases(model: str, team_model_aliases: dict[str, str] | None = None) -> bool:
@@ -4934,6 +4946,7 @@ async def can_key_call_resolved_model(
                 valid_token=valid_token,
                 team_object=team_object,
                 llm_router=llm_router,
+                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             ):
                 raise
 
@@ -4946,6 +4959,7 @@ async def can_key_call_resolved_model(
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
     if valid_token.project_id is not None:
@@ -4960,6 +4974,7 @@ async def can_key_call_resolved_model(
                 model=model,
                 project_object=project_object,
                 llm_router=llm_router,
+                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
 
@@ -5080,6 +5095,7 @@ async def _key_access_group_grants_model(
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
     llm_router: Router | None,
+    key_model_aliases: Mapping[str, str] | None = None,
 ) -> bool:
     """
     Returns True if the key's `access_group_ids` expand to models that grant
@@ -5100,6 +5116,7 @@ async def _key_access_group_grants_model(
             models=authorized_models,
             team_model_aliases=valid_token.team_model_aliases if valid_token else None,
             team_id=valid_token.team_id if valid_token else None,
+            key_model_aliases=key_model_aliases,
             object_type="key",
         )
         return True
@@ -5111,6 +5128,7 @@ def can_project_access_model(
     model: str | list[str],
     project_object: LiteLLM_ProjectTable,
     llm_router: Router | None,
+    key_model_aliases: Mapping[str, str] | None = None,
 ) -> Literal[True]:
     """
     Returns True if the project can access a specific model.
@@ -5121,6 +5139,7 @@ def can_project_access_model(
         model=model,
         llm_router=llm_router,
         models=project_object.models if project_object else [],
+        key_model_aliases=key_model_aliases,
         object_type="project",
     )
 
@@ -5129,6 +5148,7 @@ async def can_user_call_model(
     model: str | list[str],
     llm_router: Router | None,
     user_object: LiteLLM_UserTable | None,
+    key_model_aliases: Mapping[str, str] | None = None,
 ) -> Literal[True]:
     if user_object is None:
         return True
@@ -5150,6 +5170,7 @@ async def can_user_call_model(
         model=model,
         llm_router=llm_router,
         models=user_object.models,
+        key_model_aliases=key_model_aliases,
         object_type="user",
     )
 
@@ -5704,6 +5725,7 @@ async def _check_team_member_model_access(
     proxy_logging_obj: ProxyLogging,
     team_membership: LiteLLM_TeamMembership | None = None,
     team_membership_loaded: bool = False,
+    key_model_aliases: Mapping[str, str] | None = None,
 ) -> None:
     """
     Check if a team member's per-member model scope allows access to the requested model.
@@ -5739,6 +5761,7 @@ async def _check_team_member_model_access(
             models=member_allowed_models,
             object_type="team",
             team_id=team_object.team_id,
+            key_model_aliases=key_model_aliases,
         )
     except ProxyException:
         internal_message: Final = (
