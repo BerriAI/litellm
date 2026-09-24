@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use crate::responses_usage::ChatUsage;
+use crate::wire::lax_int;
 
 pub fn fast_speed_multiplier(model_info: &Value, usage: &ChatUsage) -> f64 {
     if usage.extra.get("speed").and_then(Value::as_str) != Some("fast") {
@@ -20,7 +21,7 @@ pub fn get_anthropic_web_search_requests_from_response(response: &Value) -> Opti
 pub fn get_web_search_requests(server_tool_use: Option<&Value>) -> Option<i64> {
     server_tool_use?
         .get("web_search_requests")
-        .and_then(Value::as_i64)
+        .and_then(lax_int)
 }
 
 pub fn get_web_search_requests_from_usage(usage: &ChatUsage) -> Option<i64> {

@@ -1,12 +1,13 @@
 #![allow(clippy::disallowed_types)]
 // mirrors: test_litellm/test_cost_calculator.py::test_cost_per_token_duplicate_openai_prefix_matches_model_cost
+// mirrors: test_litellm/test_utils.py::test_check_provider_match_azure_ai_allows_openai_and_azure
 use litellm_cost::cost_calculator::{cost_per_token, cost_per_token_for_call};
 use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog, check_provider_match};
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
 use serde_json::json;
@@ -208,4 +209,58 @@ fn model_info_catalog_applies_xai_inclusive_threshold_policy() {
     .unwrap();
     assert!((actual.0 - 128_000.0 * 5e-6).abs() < 1e-12);
     assert!((actual.1 - 10.0 * 7e-6).abs() < 1e-12);
+}
+
+#[rstest]
+#[case::no_requested_provider(Some("gemini"), None, true)]
+#[case::empty_requested_provider(Some("gemini"), Some(""), true)]
+#[case::entry_without_provider(None, Some("openai"), true)]
+#[case::same_provider(Some("openai"), Some("openai"), true)]
+#[case::different_provider(Some("gemini"), Some("openai"), false)]
+#[case::vertex_family(Some("vertex_ai-language-models"), Some("vertex_ai"), true)]
+#[case::vertex_family_is_one_way(Some("vertex_ai"), Some("vertex_ai-language-models"), false)]
+#[case::fireworks_family(Some("fireworks_ai-embedding-models"), Some("fireworks_ai"), true)]
+#[case::bedrock_family(Some("bedrock_converse"), Some("bedrock"), true)]
+#[case::litellm_proxy_matches_anything(Some("anthropic"), Some("litellm_proxy"), true)]
+#[case::azure_ai_falls_back_to_azure(Some("azure"), Some("azure_ai"), true)]
+#[case::azure_ai_falls_back_to_openai(Some("openai"), Some("azure_ai"), true)]
+#[case::azure_does_not_fall_back_to_azure_ai(Some("azure_ai"), Some("azure"), false)]
+#[case::github_reuses_any_entry(Some("openai"), Some("github"), true)]
+fn check_provider_match_follows_python(
+    #[case] entry_provider: Option<&str>,
+    #[case] requested: Option<&str>,
+    #[case] expected: bool,
+) {
+    let model_info = json!({"litellm_provider": entry_provider});
+    assert_eq!(check_provider_match(&model_info, requested), expected);
+}
+
+#[rstest]
+#[case::matching_provider(Some("gemini"), Some("gemini/gemini-x"))]
+#[case::no_provider(None, Some("gemini/gemini-x"))]
+#[case::mismatched_provider(Some("openai"), None)]
+fn select_model_key_skips_entries_owned_by_another_provider(
+    #[case] provider: Option<&str>,
+    #[case] expected: Option<&str>,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "gemini/gemini-x".to_owned(),
+        json!({"litellm_provider": "gemini", "input_cost_per_token": 1e-6}),
+    )]));
+    assert_eq!(
+        catalog.select_model_key("gemini/gemini-x", provider, None),
+        expected
+    );
+}
+
+#[rstest]
+fn select_model_key_lets_vertex_ai_beta_use_vertex_entries() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "vertex_ai/gemini-x".to_owned(),
+        json!({"litellm_provider": "vertex_ai-language-models"}),
+    )]));
+    assert_eq!(
+        catalog.select_model_key("vertex_ai/gemini-x", Some("vertex_ai_beta"), None),
+        Some("vertex_ai/gemini-x")
+    );
 }

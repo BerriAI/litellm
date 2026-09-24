@@ -1,10 +1,16 @@
-use serde_json::Value;
+use std::borrow::Cow;
+
+use serde_json::{Value, json};
 
 use crate::anthropic_cost::{
     get_anthropic_web_search_requests_from_response, get_cost_for_anthropic_web_search,
     get_web_search_requests_from_usage,
 };
-use crate::gemini_cost::{cost_per_google_maps_grounding_request, cost_per_web_search_request};
+use crate::catalog::ModelInfoCatalog;
+use crate::gemini_cost::{
+    cost_per_google_maps_grounding_request, cost_per_web_search_request,
+    google_maps_grounding_requests,
+};
 use crate::groq_cost::cost_per_web_search_request as groq_web_search_cost;
 use crate::provider::LlmProviders;
 use crate::responses_usage::ChatUsage;
@@ -13,7 +19,7 @@ use crate::tool_call_cost_tracking::{
     extract_token_counts, get_cost_for_code_interpreter, get_cost_for_computer_use,
     get_cost_for_file_search, get_cost_for_vector_store, get_cost_for_web_search,
     response_object_includes_file_search_call, response_object_includes_web_search_call,
-    safe_convert_to_int,
+    safe_convert_to_int, usage_reports_server_side_web_search_calls,
 };
 use crate::wire::is_truthy;
 
@@ -27,108 +33,160 @@ pub struct BuiltInToolCostRequest<'a> {
     pub defaults: DefaultToolRates,
 }
 
-fn server_tool_count(usage: &ChatUsage, key: &str) -> Option<u64> {
-    usage
-        .extra
-        .get("server_tool_use")
-        .and_then(|tools| tools.get(key))
-        .and_then(Value::as_u64)
-}
-
 fn usage_reports_web_search(usage: &ChatUsage) -> bool {
     usage
         .prompt_tokens_details
         .as_ref()
         .and_then(|details| details.web_search_requests)
         .is_some()
-        || server_tool_count(usage, "web_search_requests").is_some()
-        || usage
-            .extra
-            .get("server_side_tool_usage_details")
-            .and_then(|details| details.get("web_search_calls"))
-            .and_then(Value::as_u64)
-            .is_some_and(|calls| calls > 0)
+        || get_web_search_requests_from_usage(usage).is_some()
+        || usage_reports_server_side_web_search_calls(
+            usage.extra.get("server_side_tool_usage_details"),
+        )
 }
 
-fn web_search_requests(request: BuiltInToolCostRequest<'_>) -> Option<u64> {
-    request
-        .usage
-        .and_then(|usage| server_tool_count(usage, "web_search_requests"))
-        .or_else(|| {
-            request
-                .response
-                .get("usage")
-                .and_then(|usage| usage.get("server_tool_use"))
-                .and_then(|tools| tools.get("web_search_requests"))
-                .and_then(Value::as_u64)
-        })
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ResolvedModelInfo<'a> {
+    pub model_info: Option<&'a Value>,
+    pub provider: Option<&'a str>,
 }
 
-fn context_rate(model_info: &Value) -> f64 {
-    model_info
-        .get("search_context_cost_per_query")
-        .and_then(|rates| rates.get("search_context_size_medium"))
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0)
-}
-
-fn provider_web_search_cost(
-    request: BuiltInToolCostRequest<'_>,
-    model_info: &Value,
-) -> Option<f64> {
-    let provider = request.provider?;
-    let usage = request.usage;
-    match provider {
-        "gemini" => usage.map(|usage| cost_per_web_search_request(usage, model_info)),
-        "anthropic" => match usage.and_then(get_web_search_requests_from_usage) {
-            Some(_) => Some(get_cost_for_anthropic_web_search(Some(model_info), usage)),
-            None => get_anthropic_web_search_requests_from_response(request.response)
-                .map(|count| context_rate(model_info) * count as f64),
+pub fn resolve_model_info<'a>(
+    catalog: &'a ModelInfoCatalog,
+    model: &str,
+    provider: Option<&'a str>,
+    region: Option<&str>,
+) -> ResolvedModelInfo<'a> {
+    let litellm_provider =
+        |model_info: &'a Value| model_info.get("litellm_provider").and_then(Value::as_str);
+    if let Some(direct) = catalog.entry(model, provider, region) {
+        return ResolvedModelInfo {
+            model_info: Some(direct),
+            provider: provider
+                .filter(|provider| !provider.is_empty())
+                .or_else(|| litellm_provider(direct)),
+        };
+    }
+    let by_prefix = model
+        .contains('/')
+        .then(|| catalog.entry(model, None, None))
+        .flatten();
+    match by_prefix {
+        Some(by_prefix) => ResolvedModelInfo {
+            model_info: Some(by_prefix),
+            provider: litellm_provider(by_prefix),
         },
-        "perplexity" => Some(0.0),
-        "xai" => usage.map(|usage| {
-            crate::xai_cost::cost_per_web_search_request(
-                usage,
-                model_info,
-                request.defaults.xai_web_search_per_call,
-            )
-        }),
-        "groq" => usage.map(|usage| {
-            groq_web_search_cost(
-                usage,
-                model_info,
-                request.defaults.groq_browser_open_per_call,
-            )
-        }),
-        provider if provider.starts_with("vertex_ai") => {
+        None => ResolvedModelInfo {
+            model_info: None,
+            provider,
+        },
+    }
+}
+
+pub fn get_cost_for_web_search_request(
+    provider: &str,
+    usage: &ChatUsage,
+    model_info: &Value,
+    defaults: DefaultToolRates,
+) -> Option<f64> {
+    match provider.parse::<LlmProviders>().ok() {
+        Some(LlmProviders::GEMINI) => Some(cost_per_web_search_request(usage, model_info)),
+        Some(LlmProviders::ANTHROPIC) => Some(get_cost_for_anthropic_web_search(
+            Some(model_info),
+            Some(usage),
+        )),
+        _ if provider.starts_with(LlmProviders::VERTEX_AI.as_str()) => {
             let is_claude = model_info
                 .get("key")
                 .and_then(Value::as_str)
                 .is_some_and(|key| key.to_ascii_lowercase().contains("claude"));
-            if is_claude {
-                web_search_requests(request).map(|count| context_rate(model_info) * count as f64)
+            Some(if is_claude {
+                get_cost_for_anthropic_web_search(Some(model_info), Some(usage))
             } else {
-                usage.map(|usage| cost_per_web_search_request(usage, model_info))
-            }
+                cost_per_web_search_request(usage, model_info)
+            })
         }
+        Some(LlmProviders::PERPLEXITY) => Some(0.0),
+        Some(LlmProviders::XAI) => Some(crate::xai_cost::cost_per_web_search_request(
+            usage,
+            model_info,
+            defaults.xai_web_search_per_call,
+        )),
+        Some(LlmProviders::GROQ) => Some(groq_web_search_cost(
+            usage,
+            model_info,
+            defaults.groq_browser_open_per_call,
+        )),
         _ => None,
     }
 }
 
-fn maps_cost(request: BuiltInToolCostRequest<'_>, model_info: Option<&Value>) -> f64 {
-    let supports_maps = LlmProviders::GEMINI.matches(request.provider)
-        || request
-            .provider
-            .is_some_and(|provider| provider.starts_with("vertex_ai"));
-    if !supports_maps {
-        return 0.0;
+pub fn get_cost_for_google_maps_grounding_request(
+    provider: &str,
+    usage: &ChatUsage,
+    model_info: &Value,
+) -> Option<f64> {
+    (LlmProviders::GEMINI.matches(Some(provider))
+        || provider.starts_with(LlmProviders::VERTEX_AI.as_str()))
+    .then(|| cost_per_google_maps_grounding_request(usage, model_info))
+}
+
+fn usage_with_anthropic_web_search<'a>(
+    usage: Option<&'a ChatUsage>,
+    response: &Value,
+    kind: ResponseKind,
+) -> Option<Cow<'a, ChatUsage>> {
+    if usage.is_some_and(|usage| get_web_search_requests_from_usage(usage).is_some()) {
+        return usage.map(Cow::Borrowed);
     }
-    match (request.usage, model_info) {
-        (Some(usage), Some(model_info)) => {
-            cost_per_google_maps_grounding_request(usage, model_info)
-        }
+    let from_response = (kind == ResponseKind::Anthropic)
+        .then(|| get_anthropic_web_search_requests_from_response(response))
+        .flatten();
+    let Some(web_search_requests) = from_response else {
+        return usage.map(Cow::Borrowed);
+    };
+    let base = usage.cloned().unwrap_or_default();
+    let extra = base
+        .extra
+        .into_iter()
+        .filter(|(key, _)| key != "server_tool_use")
+        .chain([(
+            "server_tool_use".to_owned(),
+            json!({"web_search_requests": web_search_requests}),
+        )])
+        .collect();
+    Some(Cow::Owned(ChatUsage { extra, ..base }))
+}
+
+fn maps_cost(usage: Option<&ChatUsage>, resolved: ResolvedModelInfo<'_>) -> f64 {
+    let Some(usage) = usage.filter(|usage| google_maps_grounding_requests(Some(usage)).is_some())
+    else {
+        return 0.0;
+    };
+    match resolved {
+        ResolvedModelInfo {
+            model_info: Some(model_info),
+            provider: Some(provider),
+        } => get_cost_for_google_maps_grounding_request(provider, usage, model_info).unwrap_or(0.0),
         _ => 0.0,
     }
+}
+
+fn web_search_cost(request: BuiltInToolCostRequest<'_>, resolved: ResolvedModelInfo<'_>) -> f64 {
+    let usage =
+        usage_with_anthropic_web_search(request.usage, request.response, request.response_kind);
+    let routed = match (resolved.model_info, usage.as_deref(), resolved.provider) {
+        (Some(model_info), Some(usage), Some(provider)) => {
+            get_cost_for_web_search_request(provider, usage, model_info, request.defaults)
+        }
+        _ => None,
+    };
+    routed.unwrap_or_else(|| {
+        get_cost_for_web_search(
+            request.params.get("web_search_options"),
+            resolved.model_info,
+        ) * count_web_search_calls(request.response, request.response_kind) as f64
+    })
 }
 
 fn file_search_cost(request: BuiltInToolCostRequest<'_>, model_info: Option<&Value>) -> f64 {
@@ -179,24 +237,23 @@ fn azure_assistant_cost(request: BuiltInToolCostRequest<'_>, model_info: Option<
 }
 
 pub fn get_cost_for_built_in_tools(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    region: Option<&str>,
     request: BuiltInToolCostRequest<'_>,
-    model_info: Option<&Value>,
 ) -> f64 {
-    let maps = maps_cost(request, model_info);
+    let resolved = resolve_model_info(catalog, model, request.provider, region);
+    let maps = maps_cost(request.usage, resolved);
     let web_search =
         response_object_includes_web_search_call(request.response, request.response_kind, None)
             || (request.response_kind != ResponseKind::Responses
                 && request.usage.is_some_and(usage_reports_web_search));
     if web_search {
-        let routed =
-            model_info.and_then(|model_info| provider_web_search_cost(request, model_info));
-        let fallback =
-            get_cost_for_web_search(request.params.get("web_search_options"), model_info)
-                * count_web_search_calls(request.response, request.response_kind) as f64;
-        return maps + routed.unwrap_or(fallback);
+        return maps + web_search_cost(request, resolved);
     }
+    let direct = catalog.entry(model, request.provider, region);
     if response_object_includes_file_search_call(request.response, request.response_kind) {
-        return maps + file_search_cost(request, model_info);
+        return maps + file_search_cost(request, direct);
     }
-    maps + azure_assistant_cost(request, model_info)
+    maps + azure_assistant_cost(request, direct)
 }

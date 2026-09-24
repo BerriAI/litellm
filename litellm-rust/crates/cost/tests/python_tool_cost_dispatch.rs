@@ -2,11 +2,27 @@
 
 // mirrors: test_litellm/litellm_core_utils/llm_cost_calc/test_tool_call_cost_tracking.py::test_get_cost_for_built_in_tools_web_search
 
+use std::collections::HashMap;
+
+use jiff::Timestamp;
+use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::cost_calculator::{BuiltInToolCharge, CompletionCostRequest};
 use litellm_cost::tool_call_cost_tracking::{DefaultToolRates, ResponseKind};
 use litellm_cost::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
 use serde_json::{Value, json};
+
+fn priced(request: BuiltInToolCostRequest<'_>, model_info: Option<&Value>) -> f64 {
+    let provider = request.provider.expect("tests price a provider");
+    let catalog = ModelInfoCatalog::new(
+        model_info
+            .map(|info| (format!("{provider}/model"), info.clone()))
+            .into_iter()
+            .collect(),
+    );
+    get_cost_for_built_in_tools(&catalog, "model", None, request)
+}
 
 fn defaults() -> DefaultToolRates {
     DefaultToolRates {
@@ -42,7 +58,7 @@ fn get_cost_for_built_in_tools_adds_gemini_search_and_maps(
         "search_context_cost_per_query": {"search_context_size_medium": 0.01},
         "google_maps_grounding_cost_per_query": 0.02
     });
-    let actual = get_cost_for_built_in_tools(
+    let actual = priced(
         BuiltInToolCostRequest {
             response: &json!({"choices": []}),
             response_kind: ResponseKind::Chat,
@@ -62,7 +78,7 @@ fn get_cost_for_built_in_tools_prefers_reported_responses_search_count() {
         "output": [{"type": "web_search_call"}, {"type": "web_search_call"}],
         "tool_usage": {"web_search": {"num_requests": 1}}
     });
-    let actual = get_cost_for_built_in_tools(
+    let actual = priced(
         BuiltInToolCostRequest {
             response: &response,
             response_kind: ResponseKind::Responses,
@@ -79,7 +95,7 @@ fn get_cost_for_built_in_tools_prefers_reported_responses_search_count() {
 #[rstest]
 fn get_cost_for_built_in_tools_reads_anthropic_raw_web_search_usage() {
     let response = json!({"usage": {"server_tool_use": {"web_search_requests": 2}}});
-    let actual = get_cost_for_built_in_tools(
+    let actual = priced(
         BuiltInToolCostRequest {
             response: &response,
             response_kind: ResponseKind::Anthropic,
@@ -106,7 +122,7 @@ fn get_cost_for_built_in_tools_uses_xai_reported_cost_or_search_calls(
         "cost": reported,
         "server_side_tool_usage_details": {"web_search_calls": 2}
     }));
-    let actual = get_cost_for_built_in_tools(
+    let actual = priced(
         BuiltInToolCostRequest {
             response: &json!({"choices": []}),
             response_kind: ResponseKind::Chat,
@@ -127,7 +143,7 @@ fn get_cost_for_built_in_tools_prices_groq_search_and_browser_open() {
         "completion_tokens": 2,
         "server_tool_use": {"web_search_requests": 2, "browser_open_requests": 3}
     }));
-    let actual = get_cost_for_built_in_tools(
+    let actual = priced(
         BuiltInToolCostRequest {
             response: &json!({"choices": []}),
             response_kind: ResponseKind::Chat,
@@ -143,7 +159,7 @@ fn get_cost_for_built_in_tools_prices_groq_search_and_browser_open() {
 
 #[rstest]
 fn get_cost_for_built_in_tools_prices_file_search_before_assistant_features() {
-    let actual = get_cost_for_built_in_tools(
+    let actual = priced(
         BuiltInToolCostRequest {
             response: &json!({"output": [{"type": "file_search_call"}]}),
             response_kind: ResponseKind::Responses,
@@ -162,7 +178,7 @@ fn get_cost_for_built_in_tools_prices_file_search_before_assistant_features() {
 
 #[rstest]
 fn get_cost_for_built_in_tools_adds_azure_assistant_features() {
-    let actual = get_cost_for_built_in_tools(
+    let actual = priced(
         BuiltInToolCostRequest {
             response: &json!({"output": []}),
             response_kind: ResponseKind::Responses,
@@ -226,8 +242,167 @@ fn model_info_catalog_completion_cost_dispatches_built_in_tools() {
     .unwrap();
     assert!((actual.total - (100.0 * 2e-6 + 50.0 * 4e-6 + 2.0 * 0.01)).abs() < 1e-12);
 }
-use std::collections::HashMap;
 
-use jiff::Timestamp;
-use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
-use litellm_cost::cost_calculator::{BuiltInToolCharge, CompletionCostRequest};
+fn gemini_catalog() -> ModelInfoCatalog {
+    ModelInfoCatalog::new(HashMap::from([(
+        "gemini/gemini-x".to_owned(),
+        json!({
+            "litellm_provider": "gemini",
+            "web_search_billing_unit": "per_query",
+            "search_context_cost_per_query": {"search_context_size_medium": 0.014},
+            "google_maps_grounding_cost_per_query": 0.0125
+        }),
+    )]))
+}
+
+#[rstest]
+#[case::no_provider(None)]
+#[case::provider_the_entry_does_not_belong_to(Some("openai"))]
+fn get_cost_for_built_in_tools_adopts_the_provider_of_the_resolved_entry(
+    #[case] provider: Option<&str>,
+) {
+    let usage = usage(&json!({
+        "prompt_tokens": 10,
+        "completion_tokens": 2,
+        "prompt_tokens_details": {"web_search_requests": 3, "google_maps_grounding_requests": 2}
+    }));
+    let actual = get_cost_for_built_in_tools(
+        &gemini_catalog(),
+        "gemini/gemini-x",
+        None,
+        BuiltInToolCostRequest {
+            response: &json!({"choices": []}),
+            response_kind: ResponseKind::Chat,
+            usage: Some(&usage),
+            provider,
+            params: &json!({}),
+            defaults: defaults(),
+        },
+    );
+    assert!((actual - (3.0 * 0.014 + 2.0 * 0.0125)).abs() < 1e-12);
+}
+
+fn cited_chat_response() -> Value {
+    json!({"choices": [{"message": {"annotations": [{"type": "url_citation"}]}}]})
+}
+
+#[rstest]
+fn anthropic_usage_without_a_search_count_bills_nothing_instead_of_the_per_call_price() {
+    let usage = usage(&json!({"prompt_tokens": 10, "completion_tokens": 2}));
+    let actual = priced(
+        BuiltInToolCostRequest {
+            response: &cited_chat_response(),
+            response_kind: ResponseKind::Chat,
+            usage: Some(&usage),
+            provider: Some("anthropic"),
+            params: &json!({}),
+            defaults: defaults(),
+        },
+        Some(&json!({"search_context_cost_per_query": {"search_context_size_medium": 0.01}})),
+    );
+    assert_eq!(actual, 0.0);
+}
+
+#[rstest]
+#[case::with_usage(true, 0.0)]
+#[case::without_usage(false, 0.01)]
+fn perplexity_search_is_free_only_when_usage_reaches_the_router(
+    #[case] with_usage: bool,
+    #[case] expected: f64,
+) {
+    let usage = usage(&json!({"prompt_tokens": 10, "completion_tokens": 2}));
+    let actual = priced(
+        BuiltInToolCostRequest {
+            response: &cited_chat_response(),
+            response_kind: ResponseKind::Chat,
+            usage: with_usage.then_some(&usage),
+            provider: Some("perplexity"),
+            params: &json!({}),
+            defaults: defaults(),
+        },
+        Some(&json!({"search_context_cost_per_query": {"search_context_size_medium": 0.01}})),
+    );
+    assert_eq!(actual, expected);
+}
+
+#[rstest]
+#[case::per_prompt(json!("per_prompt"), 0.01)]
+#[case::unset(json!(null), 0.01)]
+#[case::empty(json!(""), 0.01)]
+#[case::per_query(json!("per_query"), 0.03)]
+#[case::unrecognized(json!("per_request"), 0.03)]
+fn gemini_bills_one_search_only_for_per_prompt_units(
+    #[case] billing_unit: Value,
+    #[case] expected: f64,
+) {
+    let usage = usage(&json!({
+        "prompt_tokens": 10,
+        "completion_tokens": 2,
+        "prompt_tokens_details": {"web_search_requests": 3}
+    }));
+    let actual = priced(
+        BuiltInToolCostRequest {
+            response: &json!({"choices": []}),
+            response_kind: ResponseKind::Chat,
+            usage: Some(&usage),
+            provider: Some("gemini"),
+            params: &json!({}),
+            defaults: defaults(),
+        },
+        Some(&json!({
+            "web_search_billing_unit": billing_unit,
+            "search_context_cost_per_query": {"search_context_size_medium": 0.01}
+        })),
+    );
+    assert!((actual - expected).abs() < 1e-12);
+}
+
+#[rstest]
+#[case::string_count(json!("3"), 0.03)]
+#[case::integral_float_count(json!(2.0), 0.02)]
+#[case::null_count_is_not_a_search(json!(null), 0.0)]
+fn raw_anthropic_search_counts_are_coerced_like_pydantic(
+    #[case] requests: Value,
+    #[case] expected: f64,
+) {
+    let response = json!({"usage": {"server_tool_use": {"web_search_requests": requests}}});
+    let actual = priced(
+        BuiltInToolCostRequest {
+            response: &response,
+            response_kind: ResponseKind::Anthropic,
+            usage: None,
+            provider: Some("anthropic"),
+            params: &json!({}),
+            defaults: defaults(),
+        },
+        Some(&json!({"search_context_cost_per_query": {"search_context_size_medium": 0.01}})),
+    );
+    assert!((actual - expected).abs() < 1e-12);
+}
+
+#[rstest]
+#[case::integer(json!(1), 0.015)]
+#[case::boolean_counts_as_one_call(json!(true), 0.015)]
+#[case::float_is_not_an_int(json!(1.0), 0.0)]
+fn xai_server_side_search_calls_follow_python_isinstance_int(
+    #[case] calls: Value,
+    #[case] expected: f64,
+) {
+    let usage = usage(&json!({
+        "prompt_tokens": 10,
+        "completion_tokens": 2,
+        "server_side_tool_usage_details": {"web_search_calls": calls}
+    }));
+    let actual = priced(
+        BuiltInToolCostRequest {
+            response: &json!({"choices": []}),
+            response_kind: ResponseKind::Chat,
+            usage: Some(&usage),
+            provider: Some("xai"),
+            params: &json!({}),
+            defaults: defaults(),
+        },
+        Some(&json!({"search_context_cost_per_query": {"search_context_size_medium": 0.015}})),
+    );
+    assert!((actual - expected).abs() < 1e-12);
+}

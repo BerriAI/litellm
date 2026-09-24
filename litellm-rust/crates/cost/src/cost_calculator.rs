@@ -513,16 +513,6 @@ pub fn responses_ws_token_cost_by_tier(
         .sum()
 }
 
-pub fn built_in_tool_cost(
-    catalog: &ModelInfoCatalog,
-    model: &str,
-    provider: Option<&str>,
-    region: Option<&str>,
-    request: BuiltInToolCostRequest<'_>,
-) -> f64 {
-    get_cost_for_built_in_tools(request, catalog.entry(model, provider, region))
-}
-
 pub fn completion_cost(
     catalog: &ModelInfoCatalog,
     request: CompletionCostRequest<'_>,
@@ -530,10 +520,9 @@ pub fn completion_cost(
     let (prompt, output) = cost_per_token(catalog, request.token)?;
     let built_in_tools = match request.built_in_tools {
         BuiltInToolCharge::Provided(cost) => cost,
-        BuiltInToolCharge::FromResponse(tool_request) => built_in_tool_cost(
+        BuiltInToolCharge::FromResponse(tool_request) => get_cost_for_built_in_tools(
             catalog,
             request.token.model,
-            request.token.provider,
             request.token.region,
             tool_request,
         ),

@@ -1,6 +1,10 @@
 use serde_json::Value;
 
+use crate::anthropic_cost::{
+    get_anthropic_web_search_requests_from_response, get_web_search_requests,
+};
 use crate::provider::LlmProviders;
+use crate::wire::{lax_int, py_float, py_int};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DefaultToolRates {
@@ -23,23 +27,11 @@ pub enum ResponseKind {
 }
 
 fn number(value: Option<&Value>) -> Option<f64> {
-    match value? {
-        Value::Number(value) => value.as_f64(),
-        Value::String(value) => value.parse().ok(),
-        _ => None,
-    }
+    value.and_then(py_float)
 }
 
 pub fn safe_convert_to_int(value: Option<&Value>) -> Option<i64> {
-    match value? {
-        Value::Number(value) => value.as_i64().or_else(|| {
-            value
-                .as_f64()
-                .and_then(|value| value.is_finite().then_some(value as i64))
-        }),
-        Value::String(value) => value.parse::<i64>().ok(),
-        _ => None,
-    }
+    value.and_then(py_int)
 }
 
 pub fn extract_file_search_params(file_search: &Value) -> (Option<f64>, Option<f64>) {
@@ -115,11 +107,7 @@ pub fn response_object_includes_web_search_call(
     usage: Option<&Value>,
 ) -> bool {
     if kind == ResponseKind::Anthropic
-        && response
-            .get("usage")
-            .and_then(|usage| usage.get("server_tool_use"))
-            .and_then(|tools| tools.get("web_search_requests"))
-            .is_some()
+        && get_anthropic_web_search_requests_from_response(response).is_some()
     {
         return true;
     }
@@ -133,23 +121,24 @@ pub fn response_object_includes_web_search_call(
     }
 }
 
+pub fn usage_reports_server_side_web_search_calls(details: Option<&Value>) -> bool {
+    match details.and_then(|details| details.get("web_search_calls")) {
+        Some(Value::Bool(flag)) => *flag,
+        Some(Value::Number(calls)) => calls.as_i64().is_some_and(|calls| calls > 0),
+        _ => false,
+    }
+}
+
 fn usage_reports_web_search(usage: Option<&Value>) -> bool {
     let Some(usage) = usage else {
         return false;
     };
-    usage
-        .get("server_tool_use")
-        .and_then(|tools| tools.get("web_search_requests"))
-        .is_some()
+    get_web_search_requests(usage.get("server_tool_use")).is_some()
         || usage
             .get("prompt_tokens_details")
             .and_then(|details| details.get("web_search_requests"))
-            .is_some()
-        || usage
-            .get("server_side_tool_usage_details")
-            .and_then(|details| details.get("web_search_calls"))
-            .and_then(Value::as_i64)
-            .is_some_and(|calls| calls > 0)
+            .is_some_and(|requests| !requests.is_null())
+        || usage_reports_server_side_web_search_calls(usage.get("server_side_tool_usage_details"))
 }
 
 pub fn count_web_search_calls(response: &Value, kind: ResponseKind) -> u64 {
@@ -160,7 +149,8 @@ pub fn count_web_search_calls(response: &Value, kind: ResponseKind) -> u64 {
         .get("tool_usage")
         .and_then(|usage| usage.get("web_search"))
         .and_then(|search| search.get("num_requests"))
-        .and_then(Value::as_u64)
+        .and_then(lax_int)
+        .and_then(|requests| u64::try_from(requests).ok())
     {
         return reported;
     }

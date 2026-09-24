@@ -63,12 +63,32 @@ pub enum CostCall<'a> {
     },
 }
 
-fn select_model_key<'a, T>(
-    entries: &'a HashMap<String, T>,
+pub fn check_provider_match(model_info: &Value, provider: Option<&str>) -> bool {
+    let Some(provider) = provider.filter(|provider| !provider.is_empty()) else {
+        return true;
+    };
+    let Some(entry_provider) = model_info.get("litellm_provider").and_then(Value::as_str) else {
+        return true;
+    };
+    entry_provider == provider
+        || (provider == "vertex_ai" && entry_provider.starts_with("vertex_ai"))
+        || (provider == "fireworks_ai" && entry_provider.starts_with("fireworks_ai"))
+        || (provider.starts_with("bedrock") && entry_provider.starts_with("bedrock"))
+        || provider == "litellm_proxy"
+        || (provider == "azure_ai" && matches!(entry_provider, "azure" | "openai"))
+        || provider == "github"
+}
+
+fn select_model_key<'a>(
+    entries: &'a HashMap<String, Value>,
     model: &str,
     provider: Option<&str>,
     region: Option<&str>,
 ) -> Option<&'a str> {
+    let match_provider = provider.map(|provider| match provider {
+        "vertex_ai_beta" => "vertex_ai",
+        provider => provider,
+    });
     let normalized = match provider {
         Some(provider) => {
             let prefix = format!("{provider}/");
@@ -106,6 +126,7 @@ fn select_model_key<'a, T>(
         .find_map(|candidate| {
             entries
                 .get_key_value(candidate)
+                .filter(|(_, model_info)| check_provider_match(model_info, match_provider))
                 .map(|(key, _)| key.as_str())
         })
 }

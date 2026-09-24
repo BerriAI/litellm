@@ -17,6 +17,17 @@ use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
 use serde_json::{Value, json};
 
+fn priced(request: BuiltInToolCostRequest<'_>, model_info: Option<&Value>) -> f64 {
+    let provider = request.provider.expect("tests price a provider");
+    let catalog = ModelInfoCatalog::new(
+        model_info
+            .map(|info| (format!("{provider}/model"), info.clone()))
+            .into_iter()
+            .collect(),
+    );
+    get_cost_for_built_in_tools(&catalog, "model", None, request)
+}
+
 fn usage(value: &Value) -> litellm_cost::responses_usage::ChatUsage {
     get_usage_object(&json!({"usage": value})).unwrap().unwrap()
 }
@@ -91,7 +102,10 @@ fn get_anthropic_web_search_requests_from_response_reads_nested_usage(
 #[case(json!({"web_search_requests": 0}), Some(0))]
 #[case(json!({"web_search_requests": 3}), Some(3))]
 #[case(json!({}), None)]
-#[case(json!({"web_search_requests": "3"}), None)]
+#[case(json!({"web_search_requests": "3"}), Some(3))]
+#[case(json!({"web_search_requests": 2.0}), Some(2))]
+#[case(json!({"web_search_requests": 2.5}), None)]
+#[case(json!({"web_search_requests": null}), None)]
 fn get_web_search_requests_reads_serialized_server_tool_use(
     #[case] server_tool_use: Value,
     #[case] expected: Option<i64>,
@@ -114,7 +128,7 @@ fn get_cost_for_anthropic_web_search_prices_server_tool_requests() {
         get_cost_for_anthropic_web_search(Some(&model_info), None),
         0.0
     );
-    let dispatched = get_cost_for_built_in_tools(
+    let dispatched = priced(
         BuiltInToolCostRequest {
             response: &json!({}),
             response_kind: ResponseKind::Anthropic,

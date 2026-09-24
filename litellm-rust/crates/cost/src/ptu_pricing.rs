@@ -2,7 +2,7 @@ use jiff::Timestamp;
 use jiff::civil::{Date, DateTime};
 use serde_json::{Map, Value, json};
 
-use crate::wire::is_truthy;
+use crate::wire::{is_truthy, py_float, py_int};
 
 pub const PTU_COST_ATTRIBUTION_ENV_VAR: &str = "LITELLM_ENABLE_PTU_COST_ATTRIBUTION";
 pub const AZURE_SPILLOVER_HEADER: &str = "x-ms-is-spilled-over";
@@ -173,24 +173,6 @@ fn py_str(value: &Value) -> String {
         },
         Value::String(text) => text.clone(),
         other => other.to_string(),
-    }
-}
-
-fn py_int(value: &Value) -> Option<i64> {
-    match value {
-        Value::Number(number) => Some(number.as_f64()?.trunc() as i64),
-        Value::Bool(flag) => Some(i64::from(*flag)),
-        Value::String(text) => text.trim().parse::<i64>().ok(),
-        _ => None,
-    }
-}
-
-fn py_float(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(number) => number.as_f64(),
-        Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
-        Value::String(text) => text.trim().parse::<f64>().ok(),
-        _ => None,
     }
 }
 

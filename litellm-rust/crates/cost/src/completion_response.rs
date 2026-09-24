@@ -14,7 +14,7 @@ use crate::completion_cost::{
 };
 use crate::completion_input::{CompletionInputRequest, PreparedCompletionInput, ResponseKind};
 use crate::cost_calculator::{
-    built_in_tool_cost, cost_per_token, cost_per_token_for_call, default_video_cost_calculator,
+    cost_per_token, cost_per_token_for_call, default_video_cost_calculator,
     handle_realtime_stream_cost_calculation,
 };
 use crate::custom_pricing::{CustomPricing, cost_from_chat_usage};
@@ -32,7 +32,7 @@ use crate::realtime_cost::{
 use crate::responses_usage::ChatUsage;
 use crate::speech_cost::count_characters;
 use crate::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
-use crate::tool_cost_dispatch::BuiltInToolCostRequest;
+use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
 
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltInToolCostConfig<'a> {
@@ -508,10 +508,9 @@ fn config_driven_tool_cost(
     let Some(response) = request.input.model_selection.response else {
         return 0.0;
     };
-    built_in_tool_cost(
+    get_cost_for_built_in_tools(
         catalog,
         model,
-        provider,
         region,
         BuiltInToolCostRequest {
             response,

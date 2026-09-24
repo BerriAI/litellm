@@ -83,6 +83,55 @@ pub fn is_truthy(value: &Value) -> bool {
     }
 }
 
+fn python_int_literal(text: &str) -> Option<i64> {
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    let well_formed = digits
+        .split('_')
+        .all(|group| !group.is_empty() && group.bytes().all(|byte| byte.is_ascii_digit()));
+    if !well_formed {
+        return None;
+    }
+    text.replace('_', "").parse().ok()
+}
+
+pub fn py_int(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(number) => number.as_i64().or_else(|| {
+            number
+                .as_f64()
+                .map(f64::trunc)
+                .filter(|float| float.abs() < i64::MAX as f64)
+                .map(|float| float as i64)
+        }),
+        Value::Bool(flag) => Some(i64::from(*flag)),
+        Value::String(text) => python_int_literal(text.trim()),
+        _ => None,
+    }
+}
+
+pub fn py_float(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+pub fn lax_int(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(number) => number.as_i64().or_else(|| {
+            number
+                .as_f64()
+                .filter(|float| float.fract() == 0.0 && float.abs() < i64::MAX as f64)
+                .map(|float| float as i64)
+        }),
+        Value::Bool(flag) => Some(i64::from(*flag)),
+        Value::String(text) => python_int_literal(text.trim()),
+        _ => None,
+    }
+}
+
 pub fn rate(value: Option<&Value>) -> Rate {
     match value {
         None => Rate::Missing,
@@ -836,6 +885,52 @@ mod tests {
                 .iter()
                 .map(|(key, value)| (key.to_string(), value.clone())),
         ))
+    }
+
+    #[rstest]
+    #[case(serde_json::json!(3), Some(3))]
+    #[case(serde_json::json!(3.9), Some(3))]
+    #[case(serde_json::json!(-3.9), Some(-3))]
+    #[case(serde_json::json!(true), Some(1))]
+    #[case(serde_json::json!(" 12 "), Some(12))]
+    #[case(serde_json::json!("1_0"), Some(10))]
+    #[case(serde_json::json!("3.5"), None)]
+    #[case(serde_json::json!(null), None)]
+    #[case(serde_json::json!({}), None)]
+    fn py_int_follows_python_int(#[case] value: Value, #[case] expected: Option<i64>) {
+        assert_eq!(py_int(&value), expected);
+    }
+
+    #[rstest]
+    #[case(serde_json::json!(2), Some(2.0))]
+    #[case(serde_json::json!(0.25), Some(0.25))]
+    #[case(serde_json::json!(false), Some(0.0))]
+    #[case(serde_json::json!(" 0.5 "), Some(0.5))]
+    #[case(serde_json::json!("abc"), None)]
+    #[case(serde_json::json!(null), None)]
+    #[case(serde_json::json!([1]), None)]
+    fn py_float_follows_python_float(#[case] value: Value, #[case] expected: Option<f64>) {
+        assert_eq!(py_float(&value), expected);
+    }
+
+    #[rstest]
+    #[case(serde_json::json!(3), Some(3))]
+    #[case(serde_json::json!(-1), Some(-1))]
+    #[case(serde_json::json!(2.0), Some(2))]
+    #[case(serde_json::json!(2.5), None)]
+    #[case(serde_json::json!(true), Some(1))]
+    #[case(serde_json::json!("3"), Some(3))]
+    #[case(serde_json::json!(" 3 "), Some(3))]
+    #[case(serde_json::json!("-4"), Some(-4))]
+    #[case(serde_json::json!("1_000"), Some(1000))]
+    #[case(serde_json::json!("1__000"), None)]
+    #[case(serde_json::json!("_1"), None)]
+    #[case(serde_json::json!("3.0"), None)]
+    #[case(serde_json::json!("x"), None)]
+    #[case(serde_json::json!(null), None)]
+    #[case(serde_json::json!([3]), None)]
+    fn lax_int_follows_pydantic_lax_int(#[case] value: Value, #[case] expected: Option<i64>) {
+        assert_eq!(lax_int(&value), expected);
     }
 
     #[rstest]
