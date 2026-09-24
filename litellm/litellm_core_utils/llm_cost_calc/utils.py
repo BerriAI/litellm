@@ -4,7 +4,7 @@
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone, tzinfo
+from datetime import date, datetime, timezone, tzinfo
 from types import MappingProxyType
 from typing import Final, Literal, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -492,10 +492,23 @@ def _as_window_strings(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _is_iso_date(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 10:
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _as_date_strings(value: object) -> tuple[str, ...]:
     if isinstance(value, str) or not isinstance(value, Sequence):
         return ()
-    return tuple(entry for entry in value if isinstance(entry, str))
+    entries: Final = tuple(value)
+    if not entries or not all(_is_iso_date(entry) for entry in entries):
+        return ()
+    return entries
 
 
 def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None = None) -> bool:

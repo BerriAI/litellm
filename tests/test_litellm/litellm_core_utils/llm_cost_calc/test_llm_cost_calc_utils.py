@@ -724,6 +724,22 @@ def test_is_off_peak_ignores_malformed_override_dates():
         )
 
 
+def test_is_off_peak_disables_rules_with_partially_malformed_override_dates():
+    """One bad entry disables the whole override_dates list: a rule whose dates do not all
+    parse never applies on any date, so the flat hours decide alone."""
+    from datetime import datetime, timezone
+
+    peak_instant = datetime(2026, 3, 4, 12, 0, tzinfo=timezone.utc)
+    for bad in (["2026-03-04", 20260304], ["2026-03-04", "2026-3-5"]):
+        block = {
+            "hours_utc": "00:30-01:00",
+            "windows": [{"hours_utc": "00:00-00:00", "override_dates": bad}],
+        }
+        assert _is_off_peak(block, peak_instant) is False, (
+            f"override_dates={bad!r} must disable its rule, leaving only the closed flat window"
+        )
+
+
 def test_is_off_peak_without_override_dates_is_unchanged():
     """The plain DeepSeek windows with no override_dates bill a holiday peak hour at
     standard rates."""
