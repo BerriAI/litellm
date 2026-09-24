@@ -9775,8 +9775,8 @@ def get_litellm_model_info(model: dict = {}):
         live_model_info: Final = litellm.get_model_info(
             configured_model,
             custom_llm_provider=provider,
-            api_base=credentials.get("api_base", litellm_params.get("api_base")),
-            api_key=credentials.get("api_key", litellm_params.get("api_key")),
+            api_base=litellm_params.get("api_base") or credentials.get("api_base"),
+            api_key=litellm_params.get("api_key") or credentials.get("api_key"),
             discover_model_info=True,
         )
         return {
@@ -15052,13 +15052,19 @@ async def model_info_v2(
 
     # Fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     # This must happen before teamId filtering so that direct_access and access_via_team_ids are populated
-    for i, _model in enumerate(all_models):
-        all_models[i] = await asyncio.to_thread(
-            _enrich_model_info_with_litellm_data,
-            model=_model,
-            debug=debug if debug is not None else False,
-            llm_router=llm_router,
+    all_models = list(
+        await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    _enrich_model_info_with_litellm_data,
+                    model=_model,
+                    debug=debug if debug is not None else False,
+                    llm_router=llm_router,
+                )
+                for _model in all_models
+            )
         )
+    )
 
     # Apply teamId filter if provided
     if teamId is not None and teamId.strip():
@@ -15838,10 +15844,13 @@ async def model_info_v1(
         all_models = _filter_models_to_user_accessible(all_models)
 
     all_models = [
-        _translate_model_name_for_response(
-            await asyncio.to_thread(_enrich_model_info_with_litellm_data, model=model, llm_router=llm_router)
+        _translate_model_name_for_response(model)
+        for model in await asyncio.gather(
+            *(
+                asyncio.to_thread(_enrich_model_info_with_litellm_data, model=model, llm_router=llm_router)
+                for model in all_models
+            )
         )
-        for model in all_models
     ]
 
     if teamId is not None and teamId.strip():

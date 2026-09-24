@@ -402,8 +402,9 @@ def test_model_info_routes_refresh_discovered_context_below_explicit_config(
         assert "api_key" not in deployment["litellm_params"]
         assert "endpoint-secret" not in result.text
     assert request.call_count == 3
+    chat_api_base = model_list[0]["litellm_params"]["api_base"]
     for call in request.call_args_list:
-        assert call.kwargs["url"] == "https://vllm.example/v1/models"
+        assert call.kwargs["url"] == f"{chat_api_base}/models"
         assert call.kwargs["headers"] == {"Authorization": "Bearer endpoint-secret"}
 
 
@@ -424,6 +425,32 @@ async def test_model_info_discovery_runs_outside_the_event_loop(app, auth_as, co
     assert response.status_code == 200
     assert len(lookup_threads) == 1
     assert lookup_threads[0] != event_loop_thread
+
+
+@pytest.mark.parametrize("path", ["/v1/model/info", "/v2/model/info"])
+def test_model_info_list_routes_enrich_deployments_concurrently(client, auth_as, monkeypatch, mock_prisma, path):
+    model_list = [
+        {"model_name": name, "litellm_params": {"model": f"hosted_vllm/{name}"}, "model_info": {"id": name}}
+        for name in ("slow-a", "slow-b")
+    ]
+    both_lookups_started = threading.Barrier(2, timeout=5)
+
+    def enrich(model, **kwargs):
+        both_lookups_started.wait()
+        return model
+
+    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", enrich)
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=model_list))
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma if path == "/v2/model/info" else None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    with auth_as():
+        result = client.get(path)
+
+    assert result.status_code == 200, result.text
+    assert [deployment["model_info"]["id"] for deployment in result.json()["data"]] == ["slow-a", "slow-b"]
 
 
 def _enriched_model_info(monkeypatch, litellm_params: dict, model_info: dict) -> dict:

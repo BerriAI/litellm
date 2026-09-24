@@ -6387,7 +6387,7 @@ def get_model_info(
     - api_base (str | null): the deployment endpoint used for provider-scoped discovery.
     - api_key (str | null): the deployment credential used for provider-scoped discovery.
     - discover_model_info (bool): opt in to a synchronous, uncached vLLM metadata lookup; defaults to False.
-      Explicit api_base never inherits an ambient API key. Discovery overlays context only, not output limits.
+      Discovery overlays context only, not output limits.
 
     Returns:
         dict: A dictionary containing the following information:

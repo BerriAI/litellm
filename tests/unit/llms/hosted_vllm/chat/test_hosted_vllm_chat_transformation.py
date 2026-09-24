@@ -458,17 +458,16 @@ def test_vllm_model_info_ignores_non_positive_or_non_integer_context(
     )
 
 
-def test_vllm_explicit_base_never_receives_an_ambient_key(monkeypatch) -> None:
+def test_vllm_explicit_base_uses_the_same_environment_key_as_chat(monkeypatch) -> None:
     request = MagicMock(return_value=_model_list_response({"id": "model"}))
-    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "ambient-secret")
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "env-secret")
     monkeypatch.setattr(litellm.module_level_client, "get", request)
+    api_base = "https://operator-supplied.example/v1"
 
-    VLLMModelInfo(provider="hosted_vllm").get_model_info(
-        model="hosted_vllm/model",
-        api_base="https://operator-supplied.example/v1",
-    )
+    VLLMModelInfo(provider="hosted_vllm").get_model_info(model="hosted_vllm/model", api_base=api_base)
 
-    assert dict(request.call_args.kwargs["headers"]) == {}
+    _, chat_api_key = HostedVLLMChatConfig()._get_openai_compatible_provider_info(api_base=api_base, api_key=None)
+    assert request.call_args.kwargs["headers"] == {"Authorization": f"Bearer {chat_api_key}"}
 
 
 def test_hosted_vllm_model_info_uses_provider_environment(monkeypatch) -> None:

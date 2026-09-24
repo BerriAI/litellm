@@ -88,9 +88,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
     def _query_models(self, api_base: str | None, api_key: str | None) -> httpx.Response:
         resolved_api_base: Final = self._get_discovery_api_base(api_base)
         environment_variable: Final = "HOSTED_VLLM_API_KEY" if self._provider == "hosted_vllm" else "VLLM_API_KEY"
-        resolved_api_key: Final = (
-            api_key if api_key is not None or api_base is not None else get_secret_str(environment_variable)
-        )
+        resolved_api_key: Final = api_key or get_secret_str(environment_variable)
         headers: Final = {"Authorization": f"Bearer {resolved_api_key}"} if resolved_api_key else {}
         response: Final = litellm.module_level_client.get(
             url=_add_path_to_api_base(resolved_api_base, "/v1/models"),
