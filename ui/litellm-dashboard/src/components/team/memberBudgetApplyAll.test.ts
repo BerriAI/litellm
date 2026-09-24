@@ -7,9 +7,15 @@ import {
 } from "./memberBudgetApplyAll";
 
 describe("customBudgetMemberUserIds", () => {
-  it("returns only members whose budget_source is custom", () => {
+  const customRow = (user_id: string | null, max_budget: number | null = 50) => ({
+    user_id,
+    budget_source: "custom",
+    litellm_budget_table: { max_budget },
+  });
+
+  it("returns only members whose budget_source is custom with a private cap", () => {
     const memberships = [
-      { user_id: "u-custom", budget_source: "custom" },
+      customRow("u-custom"),
       { user_id: "u-default", budget_source: "team_default" },
       { user_id: "u-none", budget_source: "none" },
     ];
@@ -17,11 +23,23 @@ describe("customBudgetMemberUserIds", () => {
     expect(customBudgetMemberUserIds(memberships)).toEqual(["u-custom"]);
   });
 
-  it("skips a custom-budget row that carries no user_id", () => {
+  it("skips a custom row whose cap is null since it already inherits the default", () => {
+    const memberships = [customRow("u-rate-limits-only", null), customRow("u-custom")];
+
+    expect(customBudgetMemberUserIds(memberships)).toEqual(["u-custom"]);
+  });
+
+  it("skips a custom row that has no budget table at all", () => {
     const memberships = [
-      { user_id: null, budget_source: "custom" },
-      { user_id: "u-custom", budget_source: "custom" },
+      { user_id: "u-no-table", budget_source: "custom", litellm_budget_table: null },
+      customRow("u-custom"),
     ];
+
+    expect(customBudgetMemberUserIds(memberships)).toEqual(["u-custom"]);
+  });
+
+  it("skips a custom-budget row that carries no user_id", () => {
+    const memberships = [customRow(null), customRow("u-custom")];
 
     expect(customBudgetMemberUserIds(memberships)).toEqual(["u-custom"]);
   });

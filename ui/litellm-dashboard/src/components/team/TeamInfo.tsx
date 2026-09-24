@@ -896,7 +896,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
     toast.success("Team settings updated successfully");
     setIsEditing(false);
-    fetchTeamInfo();
+    await fetchTeamInfo();
   };
 
   const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {

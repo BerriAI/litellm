@@ -2978,7 +2978,10 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
     premiumUser: false,
   };
 
-  const customBudgetMembership = (userId: string, maxBudget = 50): TeamData["team_memberships"][number] => ({
+  const customBudgetMembership = (
+    userId: string,
+    maxBudget: number | null = 50,
+  ): TeamData["team_memberships"][number] => ({
     user_id: userId,
     team_id: "123",
     budget_id: `budget-${userId}`,
@@ -3001,11 +3004,12 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
   const openEditorWithCustomMembers = async (
     user: ReturnType<typeof userEvent.setup>,
     userIds: string[] = ["user-custom@x.com"],
+    maxBudget: number | null = 50,
   ) => {
     const data = createMockTeamData({
       team_member_budget_table: { max_budget: 10, budget_duration: null, tpm_limit: null, rpm_limit: null },
     }) as TeamData;
-    data.team_memberships = userIds.map((id) => customBudgetMembership(id));
+    data.team_memberships = userIds.map((id) => customBudgetMembership(id, maxBudget));
     vi.mocked(networking.teamInfoCall).mockResolvedValue(data);
     vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
@@ -3140,6 +3144,18 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
 
     await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
     expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].team_member_budget).toBe(10);
+    expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument();
+    expect(bulkUpdatePOST).not.toHaveBeenCalled();
+  });
+
+  it("saves directly when a custom member's cap is null and already inherits the default", async () => {
+    const user = userEvent.setup({ delay: null });
+    const input = await openEditorWithCustomMembers(user, ["user-limits-only@x.com"], null);
+
+    await submitNewDefault(user, input, "20");
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].team_member_budget).toBe(20);
     expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument();
     expect(bulkUpdatePOST).not.toHaveBeenCalled();
   });
