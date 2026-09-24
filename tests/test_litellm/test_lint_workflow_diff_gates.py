@@ -21,6 +21,10 @@ def _scoped_root(pathspec: str) -> str:
     return re.sub(r"^:\([^)]*\)", "", pathspec).split("*", 1)[0]
 
 
+def _gate_rooted_at(root: str) -> tuple[str, ...]:
+    return next(gate for gate in GATES if _scoped_root(gate[0]) == root)
+
+
 def _changed_files_selected_by(tmp_path: Path, pathspecs: tuple[str, ...], files: tuple[str, ...]) -> frozenset[str]:
     _git(tmp_path, "init", "-q", "-b", "main")
     _git(tmp_path, "config", "user.email", "t@t")
@@ -54,3 +58,21 @@ def test_diff_gate_selects_top_level_and_nested_python_files_only(tmp_path: Path
         (top_level, nested, f"{root}notes.md", "elsewhere/top_level_module.py", "elsewhere/pkg/nested_module.py"),
     )
     assert selected == frozenset({top_level, nested})
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    (
+        "tests/e2e/claude_code/cron_vm/install_claude_code.sh",
+        "pyproject.toml",
+        "uv.lock",
+        ".github/workflows/test-linting.yml",
+    ),
+)
+def test_claude_code_gate_also_fires_on_its_installer_dependency_manifests_and_workflow(
+    tmp_path: Path, trigger: str
+) -> None:
+    selected = _changed_files_selected_by(
+        tmp_path, _gate_rooted_at("tests/e2e/claude_code/"), (trigger, "elsewhere/pyproject.toml", "tests/e2e/notes.md")
+    )
+    assert selected == frozenset({trigger})
