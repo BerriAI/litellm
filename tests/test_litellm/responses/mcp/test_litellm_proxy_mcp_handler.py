@@ -1,12 +1,15 @@
+import importlib
 import subprocess
 import sys
 import textwrap
 import types
+from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
-import importlib
+from mcp.types import CallToolResult, TextContent
+from openai.types.responses.tool_param import Mcp
 
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.responses import main as responses_main
@@ -14,10 +17,9 @@ from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_modul
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
-from typing import Any, cast
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import ModelResponse
 from litellm.types.responses.main import OutputFunctionToolCall
+from litellm.types.utils import ModelResponse
 
 
 class _DummyMCPResult:
@@ -492,6 +494,157 @@ async def test_execute_tool_calls_threads_logging_obj_into_call_tool(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=None)
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    result = CallToolResult(
+        content=[TextContent(type="text", text="SECRET-1234")],
+        structuredContent={"result": "SECRET-1234"},
+        isError=False,
+    )
+    fake_manager = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        call_tool=AsyncMock(return_value=result),
+        _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="[REDACTED]")], is_error=True))
+    logging_obj.async_success_handler = AsyncMock()
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
+
+    tool_name = "deepwiki-read_wiki_structure"
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+    )
+
+    assert results == [{"tool_call_id": "call-1", "result": "[REDACTED]", "name": tool_name}]
+    assert logging_obj.async_success_handler.await_args.kwargs["result"].content[0].text == "[REDACTED]"
+    assert logging_obj.async_success_handler.await_args.kwargs["result"].structured_content is None
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_returns_proxy_result_without_logging(monkeypatch):
+    result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=lambda response, **_: response)
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj)
+    )
+
+    fake_manager = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        call_tool=AsyncMock(return_value=result),
+        _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (None, None))
+
+    tool_name = "deepwiki-read_wiki_structure"
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+    )
+
+    assert results == [{"tool_call_id": "call-1", "result": "ok", "name": tool_name}]
+    proxy_logging_obj.post_mcp_call_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypatch):
+    result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=lambda response, **_: response)
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj)
+    )
+
+    fake_manager = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        call_tool=AsyncMock(return_value=result),
+        _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"request_id": "request-1"}
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(return_value=result)
+    logging_obj.async_success_handler = AsyncMock()
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
+
+    tool_name = "deepwiki-read_wiki_structure"
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+    )
+
+    assert results == [{"tool_call_id": "call-1", "result": "ok", "name": tool_name}]
+    assert proxy_logging_obj.post_mcp_call_hook.await_args.kwargs["request_data"] == logging_obj.model_call_details
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["post_call_hook", "success_handler"])
+async def test_execute_tool_calls_continues_when_post_call_logging_fails(monkeypatch, failure_stage: str):
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=None)
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+    fake_manager = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        call_tool=AsyncMock(return_value=result),
+        _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.post_call = MagicMock()
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(
+        side_effect=RuntimeError("hook failed") if failure_stage == "post_call_hook" else None,
+        return_value=result,
+    )
+    logging_obj.async_success_handler = AsyncMock(
+        side_effect=RuntimeError("success logging failed") if failure_stage == "success_handler" else None
+    )
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
+
+    tool_name = "deepwiki-read_wiki_structure"
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+    )
+
+    assert results == [{"tool_call_id": "call-1", "result": "ok", "name": tool_name}]
+
+
+@pytest.mark.asyncio
 async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch):
     """
     Regression test for 872e5b98...:
@@ -724,6 +877,178 @@ def test_extract_tool_call_details_still_prefers_openai_arguments():
     assert arguments == '{"city": "Paris"}'
 
 
+def _registered(
+    server_id: str,
+    name: str,
+    alias: str | None = None,
+    server_name: str | None = None,
+    access_groups: list[str] | None = None,
+):
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        alias=alias,
+        server_name=server_name,
+        transport=MCPTransport.http,
+        access_groups=access_groups,
+    )
+
+
+async def _no_toolset(_: str) -> bool:
+    return False
+
+
+ZAPIER_TOOL: Mcp = {
+    "type": "mcp",
+    "server_label": "zapier",
+    "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+    "require_approval": "never",
+}
+EXPLICIT_GATEWAY_TOOL = {"type": "mcp", "server_label": "github", "server_url": "litellm_proxy/mcp/github"}
+FUNCTION_TOOL = {"type": "function", "name": "get_weather", "parameters": {}}
+
+
+@pytest.mark.asyncio
+async def test_gateway_served_names_matches_alias_server_name_name_access_group_and_toolset():
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names
+
+    servers = (
+        _registered("id-1", "github-name", alias="github", server_name="github-server", access_groups=["prod-group"]),
+        _registered("id-2", "deepwiki"),
+    )
+
+    async def toolset_exists(name: str) -> bool:
+        return name == "my-toolset"
+
+    served = await _gateway_served_names(
+        {"github", "github-server", "github-name", "deepwiki", "prod-group", "my-toolset", "mcp", "nope"},
+        servers=lambda: servers,
+        toolset_exists=toolset_exists,
+    )
+
+    assert served == {"github", "github-server", "github-name", "deepwiki", "prod-group", "my-toolset"}
+
+
+@pytest.mark.asyncio
+async def test_gateway_served_names_matches_server_id_short_prefix_and_alias_case_like_the_gateway():
+    from litellm.proxy._experimental.mcp_server.utils import compute_short_server_prefix
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names
+
+    server_id = "0b9ae4ca-1bd2-4faa-b183-7dd812597e3b"
+    short_prefix = compute_short_server_prefix(server_id)
+    servers = (_registered(server_id, "github-name", alias="github", access_groups=["prod-group"]),)
+
+    served = await _gateway_served_names(
+        {server_id, short_prefix, "GitHub", "PROD-GROUP", "nope"}, servers=lambda: servers, toolset_exists=_no_toolset
+    )
+
+    assert served == {server_id, short_prefix, "GitHub"}
+
+
+@pytest.mark.asyncio
+async def test_routes_through_gateway_flags_explicit_and_served_tools_only():
+    served_tool = {"type": "mcp", "server_label": "github", "server_url": "http://localhost:4000/mcp/github"}
+
+    async def served_names(names):
+        assert names == {"github", "mcp"}
+        return frozenset({"github"})
+
+    flags = await LiteLLM_Proxy_MCP_Handler.routes_through_gateway(
+        [ZAPIER_TOOL, EXPLICIT_GATEWAY_TOOL, served_tool, FUNCTION_TOOL], served_names=served_names
+    )
+
+    assert flags == (False, True, True, False)
+
+
+@pytest.mark.asyncio
+async def test_split_mcp_tools_leaves_external_mcp_path_urls_for_the_provider():
+
+    async def served_names(names):
+        assert names == {"mcp"}
+        return frozenset()
+
+    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(
+        [ZAPIER_TOOL, EXPLICIT_GATEWAY_TOOL, FUNCTION_TOOL], served_names=served_names
+    )
+
+    assert gateway_tools == [EXPLICIT_GATEWAY_TOOL]
+    assert other_tools == [ZAPIER_TOOL, FUNCTION_TOOL]
+
+
+@pytest.mark.asyncio
+async def test_split_mcp_tools_repoints_served_proxy_urls_at_the_gateway():
+    served_tool = {
+        "type": "mcp",
+        "server_label": "toolset",
+        "server_url": "http://localhost:4000/mcp/my-toolset",
+        "require_approval": "never",
+        "allowed_tools": ["get_me"],
+    }
+    unserved_tool = {"type": "mcp", "server_label": "typo", "server_url": "http://localhost:4000/mcp/githb"}
+
+    async def served_names(names):
+        return frozenset({"my-toolset"})
+
+    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(
+        [served_tool, unserved_tool], served_names=served_names
+    )
+
+    assert gateway_tools == [{**served_tool, "server_url": "litellm_proxy/mcp/my-toolset"}]
+    assert other_tools == [unserved_tool]
+
+
+@pytest.mark.asyncio
+async def test_split_mcp_tools_skips_resolution_when_nothing_points_at_the_proxy():
+    async def served_names(names):
+        raise AssertionError("no lookup expected")
+
+    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(
+        [EXPLICIT_GATEWAY_TOOL, FUNCTION_TOOL], served_names=served_names
+    )
+
+    assert gateway_tools == [EXPLICIT_GATEWAY_TOOL]
+    assert other_tools == [FUNCTION_TOOL]
+
+
+def test_should_use_gateway_still_triggers_on_http_mcp_path():
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([ZAPIER_TOOL]) is True
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([EXPLICIT_GATEWAY_TOOL]) is True
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([FUNCTION_TOOL]) is False
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(None) is False
+
+
+@pytest.mark.asyncio
+async def test_aresponses_api_with_mcp_forwards_unserved_external_mcp_tool_to_the_provider(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.responses import main as responses_main
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(prisma_client=None))
+    monkeypatch.setattr(global_mcp_server_manager, "get_registry", lambda: {})
+    provider_tools: list[object] = []
+
+    def fake_provider(**kwargs: object) -> object:
+        request_params = cast(dict[str, object], kwargs["response_api_optional_request_params"])
+        provider_tools.append(request_params.get("tools"))
+
+        async def respond() -> ResponsesAPIResponse:
+            return ResponsesAPIResponse(id="resp_zapier", created_at=0, output=[])
+
+        return respond()
+
+    monkeypatch.setattr(responses_main.base_llm_http_handler, "response_api_handler", fake_provider)
+
+    response = await responses_main.aresponses_api_with_mcp(
+        input="Reply with the single word ok.", model="openai/gpt-4.1", tools=[ZAPIER_TOOL]
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert provider_tools == [[ZAPIER_TOOL]]
+
+
 def _response_with_reasoning_and_tool_call() -> Any:
     """A first-turn response as a reasoning model returns it: reasoning item, then a function call."""
     return ResponsesAPIResponse(
@@ -901,9 +1226,12 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         )
 
     async def fake_process(**kwargs: Any) -> tuple[list[Any], dict[str, str]]:
+        assert kwargs["raw_headers"] == {"x-app-id": "follow-up-caller"}
         return ([], {"foo": "litellm_proxy"})
 
     async def fake_execute(**kwargs: Any) -> list[dict[str, Any]]:
+        assert kwargs["guardrail_context"]["metadata"]["guardrails"] == ("block-all",)
+        assert kwargs["guardrail_context"]["model"] == "gpt-5"
         return [{"tool_call_id": "call-1", "name": "foo", "result": "done"}]
 
     monkeypatch.setattr(responses_main, "aresponses", fake_aresponses)
@@ -917,6 +1245,8 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         input="hi",
         model="gpt-5",
         tools=[{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
+        litellm_metadata={"guardrails": ["block-all"]},
+        secret_fields={"raw_headers": {"x-app-id": "follow-up-caller"}},
         store=store,
         previous_response_id=caller_previous_response_id,
     )
@@ -929,3 +1259,39 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         item for item in follow_up_call["input"] if isinstance(item, dict) and item.get("type") == "reasoning"
     ]
     assert bool(reasoning_items) is (store is False)
+
+
+@pytest.mark.asyncio
+async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+
+    headers: Final = {
+        "x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a",
+        "x-mcp-deepwiki-authorization": "upstream-sentinel", "authorization": "proxy-sentinel",
+    }
+    manager: Final = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        get_allowed_mcp_servers=AsyncMock(return_value=[]),
+        get_mcp_servers_from_ids=MagicMock(return_value=[]),
+    )
+    logger: Final = MagicMock(model_call_details={})
+    logger.async_success_handler = AsyncMock()
+    setup: Final = MagicMock(return_value=(logger, None))
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[]))
+    monkeypatch.setattr(operations, "function_setup", setup)
+    response: Final = ResponsesAPIResponse(
+        id="resp_test", created_at=1234567891, model="test-model", object="response",
+        status="completed", output=[], parallel_tool_calls=False, tool_choice="auto", tools=[],
+    )
+    monkeypatch.setattr(responses_main, "aresponses", AsyncMock(return_value=response))
+    result: Final = await responses_main.aresponses_api_with_mcp(
+        input="hi", model="test-model", tools=[{"type": "mcp", "server_url": "litellm_proxy"}],
+        secret_fields={"raw_headers": headers},
+    )
+    assert result is response
+    logger.async_success_handler.assert_awaited_once()
+    logged: Final = setup.call_args.kwargs["metadata"]["headers"]
+    assert logged == {"x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a"}
+    assert headers["x-mcp-deepwiki-authorization"] == "upstream-sentinel"

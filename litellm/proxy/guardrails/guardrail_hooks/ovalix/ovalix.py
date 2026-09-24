@@ -16,9 +16,10 @@ import time
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple
 
 import httpx
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -121,6 +122,10 @@ def _coerce_bool(value: bool | str) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
 class OvalixGuardrailMissingSecrets(Exception):
     """Raised when required Ovalix config (API base, key, application/checkpoint IDs) is missing."""
 
@@ -172,7 +177,7 @@ class OvalixGuardrail(CustomGuardrail):
         enable_routing_cache: bool | None = None,
         fail_if_no_application: bool | None = None,
         supported_event_hooks: list[GuardrailEventHooks] | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ):
         self._tracker_api_base = tracker_api_base or os.environ.get("OVALIX_TRACKER_API_BASE")
         self._tracker_api_key = tracker_api_key or os.environ.get("OVALIX_TRACKER_API_KEY")

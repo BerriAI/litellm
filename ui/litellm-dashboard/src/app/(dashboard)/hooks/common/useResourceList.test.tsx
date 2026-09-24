@@ -152,6 +152,28 @@ describe("useResourceList", () => {
     await waitFor(() => expect(lastCall().page_size).toBe(25));
   });
 
+  it("reports loading while a new search request is still pending", async () => {
+    let resolveSecond: ((value: ResourceListPage<Row>) => void) | undefined;
+    const fetchPage = vi.fn((query: ResourceListQuery) => {
+      calls.push(query);
+      if (calls.length === 1) return Promise.resolve(page([{ id: "a" }], 3));
+      return new Promise<ResourceListPage<Row>>((resolve) => {
+        resolveSecond = resolve;
+      });
+    });
+    const { result } = renderList({ fetchPage });
+    await waitFor(() => expect(result.current.rows).toEqual([{ id: "a" }]));
+    expect(result.current.isLoading).toBe(false);
+
+    act(() => result.current.onSearchChange("zzz"));
+    await waitFor(() => expect(lastCall().q).toBe("zzz"));
+    expect(result.current.isLoading).toBe(true);
+
+    act(() => resolveSecond?.(page([], 0)));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.rows).toEqual([]);
+  });
+
   it("surfaces a failed page as an error instead of empty rows", async () => {
     const fetchPage = vi.fn(() => Promise.reject(new Error("boom")));
     const { result } = renderList({ fetchPage });

@@ -416,3 +416,52 @@ async def test_async_realtime_ws_url_has_no_ssl():
 
         # Verify ssl is None for ws:// URLs (the fix for issue #19222)
         assert called_kwargs["ssl"] is None
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_upstream_handshake_refusal_sends_error_event_then_policy_close():
+    from typing import cast
+
+    from websockets.datastructures import Headers
+    from websockets.exceptions import InvalidStatus
+    from websockets.http11 import Response
+
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+    from litellm.types.realtime import RealtimeErrorEvent
+
+    handler = OpenAIRealtime()
+    model = "gpt-realtime"
+
+    sent: list[str] = []
+    closed: list[tuple[int, str | None]] = []
+
+    class RecordingClientWebSocket:
+        scope: dict[str, list[tuple[bytes, bytes]]] = {"headers": []}
+
+        async def send_text(self, data: str) -> None:
+            sent.append(data)
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            closed.append((code, reason))
+
+    dummy_websocket = RecordingClientWebSocket()
+    dummy_logging_obj = MagicMock()
+
+    refused = InvalidStatus(Response(401, "Unauthorized", Headers()))
+
+    with patch("websockets.connect", side_effect=refused):
+        await handler.async_realtime(  # pyright: ignore[reportUnknownMemberType]  # handler's websocket param is Any
+            model=model,
+            websocket=dummy_websocket,
+            logging_obj=dummy_logging_obj,
+            api_base="https://api.openai.com/",
+            api_key="bad-key",
+            query_params={"model": model},
+        )
+
+    assert len(sent) == 1
+    event = cast(RealtimeErrorEvent, json.loads(sent[0]))
+    assert event["type"] == "error"
+    assert event["error"]["type"] == "server_error"
+    assert "401" in event["error"]["message"]
+    assert closed and closed[0][0] == 1008

@@ -652,7 +652,7 @@ async def test_structured_content_is_masked_alongside_content():
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
     assert returned.content[0].text == "email <EMAIL_ADDRESS>"
-    assert returned.structuredContent == {"contact": {"email": "<EMAIL_ADDRESS>"}, "balance": 42.0}
+    assert returned.structured_content == {"contact": {"email": "<EMAIL_ADDRESS>"}, "balance": 42.0}
 
 
 @pytest.mark.asyncio
@@ -673,7 +673,7 @@ async def test_value_present_only_in_structured_content_is_masked():
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
     assert "jane@example.com" in guardrail.seen_texts
-    assert returned.structuredContent == {"records": [{"email": "<EMAIL_ADDRESS>"}]}
+    assert returned.structured_content == {"records": [{"email": "<EMAIL_ADDRESS>"}]}
     assert returned.content[0].text == "lookup complete"
 
 
@@ -690,7 +690,7 @@ async def test_structured_content_without_a_match_is_untouched():
 
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
-    assert returned.structuredContent == {"record_id": "C-1001", "balance": 42.0, "active": True, "note": None}
+    assert returned.structured_content == {"record_id": "C-1001", "balance": 42.0, "active": True, "note": None}
 
 
 @pytest.mark.asyncio
@@ -798,4 +798,4 @@ async def test_clean_structured_content_keys_do_not_block():
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
     assert returned.content[0].text == "email <EMAIL_ADDRESS>"
-    assert returned.structuredContent == {"record_id": "C-1001", "balance": 42.0, "count": 3}
+    assert returned.structured_content == {"record_id": "C-1001", "balance": 42.0, "count": 3}

@@ -15,6 +15,7 @@ import databricksLogo from "../../public/assets/logos/databricks.svg";
 import deepgramLogo from "../../public/assets/logos/deepgram.png";
 import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
 import deepseekLogo from "../../public/assets/logos/deepseek.svg";
+import edenaiLogo from "../../public/assets/logos/edenai.svg";
 import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
 import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
 import featherlessLogo from "../../public/assets/logos/featherless.svg";
@@ -80,10 +81,12 @@ export enum Providers {
   SageMaker = "AWS SageMaker",
   Azure = "Azure",
   Azure_AI_Studio = "Azure AI Foundry (Studio)",
+  Azure_Speech = "Azure AI Speech",
   AZURE_TEXT = "Azure Text",
   BASETEN = "Baseten",
   BYTEZ = "Bytez",
   Cerebras = "Cerebras",
+  CHATGPT = "ChatGPT Subscription",
   CLARIFAI = "Clarifai",
   CLOUDFLARE = "Cloudflare",
   CODESTRAL = "Codestral",
@@ -101,6 +104,7 @@ export enum Providers {
   Deepseek = "Deepseek",
   DOCKER_MODEL_RUNNER = "Docker Model Runner",
   DOTPROMPT = "Dotprompt",
+  EDENAI = "Eden AI",
   ElevenLabs = "ElevenLabs",
   EMPOWER = "Empower",
   FalAI = "Fal AI",
@@ -150,7 +154,7 @@ export enum Providers {
   PETALS = "Petals",
   PG_VECTOR = "Pg Vector",
   PREDIBASE = "Predibase",
-  Qwen_AI_Platform = "Qwen AI Platform",
+  Qwen_AI_Platform = "Qianwen AI Platform",
   QwenCloud = "QwenCloud",
   RECRAFT = "Recraft",
   REPLICATE = "Replicate",
@@ -192,12 +196,14 @@ export const provider_map: Record<string, string> = {
   AUTO_ROUTER: "auto_router",
   Azure: "azure",
   Azure_AI_Studio: "azure_ai",
+  Azure_Speech: "azure_speech",
   AZURE_TEXT: "azure_text",
   BASETEN: "baseten",
   Bedrock: "bedrock",
   BedrockMantle: "bedrock_mantle",
   BYTEZ: "bytez",
   Cerebras: "cerebras",
+  CHATGPT: "chatgpt",
   CLARIFAI: "clarifai",
   CLOUDFLARE: "cloudflare",
   CODESTRAL: "codestral",
@@ -215,6 +221,7 @@ export const provider_map: Record<string, string> = {
   Deepseek: "deepseek",
   DOCKER_MODEL_RUNNER: "docker_model_runner",
   DOTPROMPT: "dotprompt",
+  EDENAI: "edenai",
   ElevenLabs: "elevenlabs",
   EMPOWER: "empower",
   FalAI: "fal_ai",
@@ -308,12 +315,14 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.AssemblyAI]: assemblyaiSmallLogo.src,
   [Providers.Azure]: microsoftAzureLogo.src,
   [Providers.Azure_AI_Studio]: microsoftAzureLogo.src,
+  [Providers.Azure_Speech]: microsoftAzureLogo.src,
   [Providers.AZURE_TEXT]: microsoftAzureLogo.src,
   [Providers.BASETEN]: basetenLogo.src,
   [Providers.Bedrock]: bedrockLogo.src,
   [Providers.BedrockMantle]: bedrockLogo.src,
   [Providers.SageMaker]: bedrockLogo.src,
   [Providers.Cerebras]: cerebrasLogo.src,
+  [Providers.CHATGPT]: openaiSmallLogo.src,
   [Providers.CLOUDFLARE]: cloudflareLogo.src,
   [Providers.CODESTRAL]: mistralLogo.src,
   [Providers.Cohere]: cohereLogo.src,
@@ -325,6 +334,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Deepseek]: deepseekLogo.src,
   [Providers.Deepgram]: deepgramLogo.src,
   [Providers.DeepInfra]: deepinfraLogo.src,
+  [Providers.EDENAI]: edenaiLogo.src,
   [Providers.ElevenLabs]: elevenlabsLogo.src,
   [Providers.FalAI]: falAiLogo.src,
   [Providers.FEATHERLESS_AI]: featherlessLogo.src,
@@ -424,10 +434,13 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Anthropic]: "claude-3-opus",
   [Providers.Azure]: "my-deployment",
   [Providers.Azure_AI_Studio]: "azure_ai/command-r-plus",
+  [Providers.Azure_Speech]: "azure_speech/short-audio",
   [Providers.Bedrock]: "claude-3-opus",
+  [Providers.CHATGPT]: "chatgpt/gpt-5.4",
   [Providers.Cognition]: "cognition/swe-1.7",
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
+  [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
@@ -449,7 +462,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
   return providerPlaceholderMap[resolvedProvider] ?? "gpt-3.5-turbo";
 };
 
-export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
+export const getProviderModels = (provider: string, modelMap: any): Array<string> => {
   let providerKey = provider;
   let custom_llm_provider = provider_map[providerKey];
 

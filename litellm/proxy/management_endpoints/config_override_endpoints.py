@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -143,6 +144,8 @@ HASHICORP_ENV_VAR_MAPPING: Final[dict[str, str]] = {
     "client_key": "HCP_VAULT_CLIENT_KEY",
     "vault_cert_role": "HCP_VAULT_CERT_ROLE",
     "vault_namespace": "HCP_VAULT_NAMESPACE",
+    "vault_login_namespace": "HCP_VAULT_LOGIN_NAMESPACE",
+    "vault_secret_namespace": "HCP_VAULT_SECRET_NAMESPACE",
     "vault_mount_name": "HCP_VAULT_MOUNT_NAME",
     "vault_path_prefix": "HCP_VAULT_PATH_PREFIX",
 }
@@ -627,9 +630,8 @@ async def test_hashicorp_vault_connection(
     try:
         async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.SecretManager)
         lookup_url: Final = f"{client.vault_addr}/v1/auth/token/lookup-self"
-        if client.vault_namespace:
-            headers["X-Vault-Namespace"] = client.vault_namespace
-        response: Final = await async_client.get(lookup_url, headers=headers)
+        lookup_headers: Final[Mapping[str, str]] = MappingProxyType({**headers, **client._get_login_headers()})
+        response: Final = await async_client.get(lookup_url, headers=lookup_headers)
         response.raise_for_status()
     except Exception as e:
         raise HTTPException(
@@ -794,9 +796,7 @@ async def get_cyberark_config(
 
     field_schema: Final = _build_field_schema(CyberArkConfig)
 
-    db_record: Final = await _config_overrides_table(prisma_client).find_unique(
-        where={"config_type": "cyberark"}
-    )  # mutable-ok: prisma where clause
+    db_record: Final = await _config_overrides_table(prisma_client).find_unique(where={"config_type": "cyberark"})
 
     if db_record is not None and db_record.config_value is not None:
         config_data: Final = _parse_config_value(db_record.config_value)
@@ -858,9 +858,7 @@ async def delete_cyberark_config(
 
     deleted = False  # rebind-ok: set true once the DB row is removed
     try:
-        await _config_overrides_table(prisma_client).delete(
-            where={"config_type": "cyberark"}
-        )  # mutable-ok: prisma where clause
+        await _config_overrides_table(prisma_client).delete(where={"config_type": "cyberark"})
         deleted = True  # rebind-ok: set true once the DB row is removed
     except RecordNotFoundError:
         verbose_proxy_logger.debug("No existing CyberArk config record to delete")

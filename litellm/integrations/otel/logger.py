@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from opentelemetry.context import Context, attach, get_current
 from opentelemetry.sdk._logs import LoggerProvider
@@ -16,9 +16,12 @@ from opentelemetry.trace import (
     Span,
     Tracer,
     get_current_span,
+    get_tracer_provider,
     set_span_in_context,
     use_span,
 )
+from opentelemetry.trace import TracerProvider as ApiTracerProvider
+from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
@@ -31,6 +34,7 @@ from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
     auth_metadata,
+    metadata_from_request_data,
     model_from_request_data,
 )
 from litellm.integrations.otel.model.payloads import (
@@ -52,8 +56,8 @@ from litellm.integrations.otel.plumbing.context import (
     request_root_http_route,
     request_root_span,
     resolve_mcp_span_context,
-    resolve_parent_context,
     resolve_request_span_context,
+    resolve_service_span_context,
     set_request_baggage,
     set_request_root_span,
 )
@@ -63,6 +67,7 @@ from litellm.integrations.otel.plumbing.metrics import (
     create_genai_metrics,
 )
 from litellm.integrations.otel.plumbing.providers import (
+    attach_tenant_fan_out,
     build_tracer_provider,
     get_event_logger,
     get_meter,
@@ -85,6 +90,7 @@ if TYPE_CHECKING:
     )
 
 LITELLM_TRACER_NAME: Final = "litellm"
+_published_v2_provider: ApiTracerProvider | None = None
 
 
 def _span_error_from_exception(
@@ -135,6 +141,10 @@ def _request_trace_links(context: Context | None) -> tuple[Link, ...] | None:
     return (Link(anchor),) if anchor.is_valid else None
 
 
+class _CustomLoggerOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class _LLMCallSpan:
     """The state carried from the ``pre_call`` boundary to span close.
 
@@ -174,13 +184,15 @@ class OpenTelemetryV2(CustomLogger):
         tracer_provider: TracerProvider | None = None,
         logger_provider: LoggerProvider | None = None,
         meter_provider: "MeterProvider | None" = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomLoggerOptions],
     ) -> None:
         super().__init__(**kwargs)
         self.config: OpenTelemetryV2Config = config or OpenTelemetryV2Config(**kwargs)
         self.callback_name = callback_name
         self._tracer_provider: TracerProvider = (
-            tracer_provider if tracer_provider is not None else build_tracer_provider(self.config)
+            tracer_provider
+            if tracer_provider is not None
+            else build_tracer_provider(self.config, tenant_overrides=True)
         )
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
         self._metrics_recorder = self._init_metrics(meter_provider)
@@ -194,6 +206,11 @@ class OpenTelemetryV2(CustomLogger):
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
         self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
+
+    @property
+    def tracer_provider(self) -> TracerProvider:
+        """The provider this logger emits through, read-only to its callers."""
+        return self._tracer_provider
 
     def _init_metrics(self, meter_provider: "MeterProvider | None") -> "GenAIMetricRecorder | None":
         """Create the six GenAI histograms when metrics are enabled, else ``None``.
@@ -223,7 +240,7 @@ class OpenTelemetryV2(CustomLogger):
         provider: Final = resolve_logger_provider(self.config, logger_provider)
         if provider is None:
             return None
-        return GenAIEventRecorder(get_event_logger(provider, LITELLM_TRACER_NAME))
+        return GenAIEventRecorder(get_event_logger(provider, LITELLM_TRACER_NAME), provider.resource)
 
     # ====================================================================== #
     #  Proxy global registration
@@ -543,6 +560,8 @@ class OpenTelemetryV2(CustomLogger):
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             request_route=request_root_http_route(),
+            trace=call.trace,
+            session_id=call.session_id,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
@@ -652,14 +671,17 @@ class OpenTelemetryV2(CustomLogger):
         # rides along and the call nests under whatever request phase is active —
         # e.g. a DB lookup under the live ``auth`` span), falling back to the
         # server span the proxy threaded as ``parent_otel_span``. A background
-        # service call has neither, so it starts its own root trace.
-        parent_context: Final = resolve_parent_context(threaded=parent_otel_span)
+        # service call has neither, so it starts its own root trace, as does one
+        # that finished after the request span ended (linked back to it).
+        end_time_ns: Final = to_ns(end_time)
+        parent_context, links = resolve_service_span_context(threaded=parent_otel_span, end_time_ns=end_time_ns)
         return self._emitter.emit(
             role,
             data,
             parent_context=parent_context,
             start_time_ns=to_ns(start_time),
-            end_time_ns=to_ns(end_time),
+            end_time_ns=end_time_ns,
+            links=links,
         )
 
     # ====================================================================== #
@@ -667,7 +689,12 @@ class OpenTelemetryV2(CustomLogger):
     #  / errors are the FastAPI instrumentor's job, so we don't touch it here.
     # ====================================================================== #
 
-    def seed_request_identity(self, user_api_key_dict: object, model: str | None = None) -> None:
+    def seed_request_identity(
+        self,
+        user_api_key_dict: object,
+        model: str | None = None,
+        request_metadata: Mapping[str, object] | None = None,
+    ) -> None:
         """Attach request-identity Baggage to the current context + server span.
 
         Seeding identity into Baggage makes **every** span emitted afterwards for
@@ -679,7 +706,7 @@ class OpenTelemetryV2(CustomLogger):
         isn't determined yet, which is correct.
         """
         try:
-            identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict)
+            identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict, request_metadata)
             bag: Final = promoted_baggage(
                 identity,
                 model,
@@ -731,6 +758,7 @@ class OpenTelemetryV2(CustomLogger):
         self.seed_request_identity(
             user_api_key_dict,
             model=model_from_request_data(data),
+            request_metadata=metadata_from_request_data(data),
         )
         return data
 
@@ -863,10 +891,31 @@ def publish_global_otel_v2_provider(
     ``opentelemetry.trace.set_tracer_provider``) are injected so the publish step is
     unit-testable without reading or mutating real global OTel state. Returns the
     logger whose provider was published.
+
+    The published provider is also the one that fans spans out to key/team
+    destinations, because it is the only provider the whole request tree passes
+    through; see :func:`attach_tenant_fan_out`. It is remembered for
+    :func:`fan_out_provider` because neither the OTel global (``set_tracer_provider``
+    keeps the first provider it was ever handed) nor
+    ``proxy_server.open_telemetry_logger`` (a legacy v1 logger can hold that slot)
+    reliably leads back to it.
     """
+    global _published_v2_provider
     logger: Final = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
-    set_global_provider(logger._tracer_provider)
+    attach_tenant_fan_out(logger.tracer_provider, *_v2_configs(in_memory_loggers, logger))
+    set_global_provider(logger.tracer_provider)
+    _published_v2_provider = logger.tracer_provider  # rebind-ok: startup records the one provider carrying the fan-out
     return logger
+
+
+def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") -> tuple[OpenTelemetryV2Config, ...]:
+    """Every v2 logger's config, the published logger's first.
+
+    Each preset keeps its own provider and exporters, so the accounts the operator
+    writes to are spread over all of them, not held by the published logger alone.
+    """
+    others: Final = tuple(cb.config for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2) and cb is not logger)
+    return (logger.config, *others)
 
 
 def _registered_v2_logger() -> "OpenTelemetryV2 | None":
@@ -904,6 +953,25 @@ def seed_request_identity(user_api_key_dict: object, model: str | None = None) -
         logger.seed_request_identity(user_api_key_dict, model=model)
 
 
+def fan_out_provider() -> ApiTracerProvider:
+    """The provider :func:`publish_global_otel_v2_provider` gave the tenant fan-out.
+
+    Read off the publish itself, not the OTel global and not the registered logger:
+    the global keeps whichever provider claimed it first (auto-instrumentation, a
+    legacy logger), and the registered slot can hold a v1 logger while the publish
+    picked a v2 one from ``_in_memory_loggers``. Either detour lands on a provider
+    with no fan-out and drops every destination at auth.
+    """
+    published: Final = _published_v2_provider
+    if published is not None:
+        return published
+    logger: Final = _registered_v2_logger()
+    if logger is not None:
+        attach_tenant_fan_out(logger.tracer_provider, logger.config)
+        return logger.tracer_provider
+    return get_tracer_provider()
+
+
 @contextmanager
 def phase_span(name: str) -> "Iterator[Span | None]":
     logger: Final = _registered_v2_logger()
@@ -933,8 +1001,8 @@ def build_otel_v2_logger(
 
 
 def _logger_class(config: OpenTelemetryV2Config) -> type[OpenTelemetryV2]:
-    if "langfuse" not in config.mapper_names or not config.capture_span_content:
+    if "langfuse" not in config.mapper_names:
         return OpenTelemetryV2
-    from litellm.integrations.otel.langfuse_logger import LangfuseOpenTelemetryV2
+    from litellm.integrations.otel.langfuse_logger import LangfuseContentOpenTelemetryV2, LangfuseOpenTelemetryV2
 
-    return LangfuseOpenTelemetryV2
+    return LangfuseContentOpenTelemetryV2 if config.capture_span_content else LangfuseOpenTelemetryV2

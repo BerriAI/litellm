@@ -4,6 +4,7 @@ import { MCPTool } from "../mcp_tools/types";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPAccessGroups } from "../../app/(dashboard)/hooks/mcpServers/useMCPAccessGroups";
 import { useMCPToolsets } from "../../app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import McpCrudPermissionPanel from "../mcp_tools/McpCrudPermissionPanel";
 import { classifyToolOp } from "../../utils/mcpToolCrudClassification";
@@ -12,6 +13,7 @@ import {
   EffectiveMcpServer,
   McpGrantSource,
   applyToolPermissionWrite,
+  emptyMcpAccessGroups,
   mcpAllowedToolsFor,
   resolveEffectiveMcpServers,
 } from "./effectiveMcpServers";
@@ -55,7 +57,13 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   onChange,
   disabled = false,
 }) => {
-  const { data: allServers = [], isError: serversFailed, isLoading: serversLoading } = useMCPServers();
+  const {
+    data: allServers = [],
+    isError: serversFailed,
+    isLoading: serversLoading,
+    isSuccess: serversLoaded,
+  } = useMCPServers();
+  const { data: populatedAccessGroups = [], isSuccess: accessGroupsLoaded } = useMCPAccessGroups();
   const { data: toolsets = [], isError: toolsetsFailed, isLoading: toolsetsLoading } = useMCPToolsets();
   const [serverTools, setServerTools] = useState<Record<string, MCPTool[]>>({});
   const [loadingTools, setLoadingTools] = useState<Record<string, boolean>>({});
@@ -180,6 +188,18 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
           </p>
         </div>
       )}
+
+      {serversLoaded &&
+        accessGroupsLoaded &&
+        emptyMcpAccessGroups(allServers, populatedAccessGroups, selectedAccessGroups).map((group) => (
+          <div key={group} className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <p className="text-sm text-yellow-800 font-medium">Access group &quot;{group}&quot; has 0 servers</p>
+            <p className="text-sm text-yellow-700 mt-1">
+              No MCP server lists this group, so it grants nothing. A server defined in config.yaml joins a group
+              through its <code>access_groups</code> key; <code>mcp_access_groups</code> is ignored there
+            </p>
+          </div>
+        ))}
 
       {toolsetsFailed && selectedToolsets.length > 0 && (
         <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">

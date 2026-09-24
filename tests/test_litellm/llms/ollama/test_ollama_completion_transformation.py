@@ -1,10 +1,15 @@
+import base64
+import io
 import json
+import sys
 from litellm._uuid import uuid
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
-
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
@@ -409,6 +414,163 @@ class TestOllamaConfig:
         )
         assert result.choices[0]["finish_reason"] == "stop"
 
+    def _transform(
+        self, response_json: dict[str, object], request_data: dict[str, object] | None = None
+    ) -> ModelResponse:
+        config = OllamaConfig()
+
+        raw_response = MagicMock()
+        raw_response.json.return_value = response_json
+
+        mock_encoding = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        return config.transform_response(
+            model="gpt-oss:120b",
+            raw_response=raw_response,
+            model_response=ModelResponse(
+                id="test_id",
+                choices=[{"message": Message(content="")}],
+            ),
+            logging_obj=MagicMock(),
+            request_data=request_data or {},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+    def test_transform_response_with_thinking_field(self):
+        """`/api/generate` returns reasoning in a top-level `thinking` field, which must
+        reach `reasoning_content` instead of being dropped."""
+        result = self._transform(
+            {
+                "response": "OK",
+                "thinking": 'We need to reply with exactly "OK".',
+                "prompt_eval_count": 15,
+                "eval_count": 8,
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == 'We need to reply with exactly "OK".'
+        assert result.choices[0]["message"].content == "OK"
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_with_thinking_field_and_empty_response(self):
+        """A model that spends its whole turn reasoning leaves `response` empty; the
+        reasoning still has to be surfaced rather than billed and discarded."""
+        result = self._transform(
+            {
+                "response": "",
+                "thinking": "Entire turn went into reasoning.",
+                "eval_count": 96,
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "Entire turn went into reasoning."
+        assert result.choices[0]["message"].content == ""
+
+    def test_transform_response_thinking_field_wins_over_inline_tags(self):
+        """When both shapes are present the field wins, matching the `ollama_chat` transport."""
+        result = self._transform(
+            {
+                "response": "<think>inline</think>Answer",
+                "thinking": "from field",
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "from field"
+        assert result.choices[0]["message"].content == "<think>inline</think>Answer"
+
+    def test_transform_response_json_mode_non_json_text_with_thinking_field(self):
+        """JSON mode falls back to text handling when the payload is not JSON, so the
+        `thinking` field has to be picked up on that path too."""
+        result = self._transform(
+            {
+                "response": "not valid json",
+                "thinking": "reasoning in json mode",
+            },
+            request_data={"format": "json"},
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "reasoning in json mode"
+        assert result.choices[0]["message"].content == "not valid json"
+
+    def test_transform_response_empty_thinking_field_falls_back_to_tags(self):
+        """An empty `thinking` field must not mask inline `<think>` tags."""
+        result = self._transform(
+            {
+                "response": "<think>inline reasoning</think>Answer",
+                "thinking": "",
+            }
+        )
+
+        assert result.choices[0]["message"].reasoning_content == "inline reasoning"
+        assert result.choices[0]["message"].content == "Answer"
+
+    def test_transform_response_json_mode_valid_json_keeps_thinking_field(self):
+        """A valid JSON `response` is returned as content, and the reasoning that came
+        with it must not be dropped."""
+        result = self._transform(
+            {
+                "response": '{"answer": 42}',
+                "thinking": "reasoned before answering in json",
+            },
+            request_data={"format": "json"},
+        )
+
+        assert result.choices[0]["message"].content == '{"answer": 42}'
+        assert result.choices[0]["message"].reasoning_content == "reasoned before answering in json"
+        assert result.choices[0]["finish_reason"] == "stop"
+
+    def test_transform_response_json_mode_function_call_keeps_thinking_field(self):
+        """A JSON `response` shaped like a function call becomes a tool call, and the
+        reasoning behind the call must survive alongside it."""
+        result = self._transform(
+            {
+                "response": '{"name": "get_weather", "arguments": {"city": "Paris"}}',
+                "thinking": "the user wants weather, so call the tool",
+            },
+            request_data={"format": "json"},
+        )
+
+        message = result.choices[0]["message"]
+        assert message.tool_calls is not None
+        assert message.tool_calls[0].function.name == "get_weather"
+        assert message.reasoning_content == "the user wants weather, so call the tool"
+        assert result.choices[0]["finish_reason"] == "tool_calls"
+
+    def test_transform_response_json_mode_empty_response_keeps_thinking_field(self):
+        """In JSON mode a model that spends its whole turn reasoning leaves `response`
+        empty; the reasoning must still come back instead of a blank message."""
+        result = self._transform(
+            {
+                "response": "",
+                "thinking": "all of the tokens went into reasoning",
+            },
+            request_data={"format": "json"},
+        )
+
+        assert result.choices[0]["message"].content == ""
+        assert result.choices[0]["message"].reasoning_content == "all of the tokens went into reasoning"
+
+    def test_transform_response_null_response_keeps_content_null(self):
+        """Ollama sends `response: null` when the reply carries no text; that stays null
+        rather than becoming an empty string, while `thinking` is still surfaced."""
+        result = self._transform({"response": None, "thinking": "reasoning only"})
+
+        assert result.choices[0]["message"].content is None
+        assert result.choices[0]["message"].reasoning_content == "reasoning only"
+
+    def test_transform_response_malformed_reasoning_fields_do_not_crash(self):
+        """A reply whose `response` and `thinking` are not strings must still produce a
+        response instead of raising, with no reasoning invented."""
+        result = self._transform({"response": 5, "thinking": ["not", "a", "string"]})
+
+        assert result.choices[0]["message"].reasoning_content is None
+        assert result.choices[0]["message"].content == ""
+        assert result.choices[0]["finish_reason"] == "stop"
+
 
 class TestOllamaTextCompletionResponseIterator:
     def test_chunk_parser_with_thinking_field(self):
@@ -502,3 +664,114 @@ class TestOllamaTextCompletionResponseIterator:
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["total_tokens"] == 15
+
+
+async def test_ollama_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
+    image_url = f"https://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "model": "llava",
+                "response": "Green",
+                "done": True,
+                "prompt_eval_count": 1,
+                "eval_count": 1,
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="ollama/llava",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+        api_base="http://ollama.example:11434",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    assert captured["body"]["images"] == [async_only_image_fetch.base64_png]
+
+
+def _image_base64(image_format: str) -> str:
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (4, 4), "green").save(buffer, image_format)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def _transform_image_request(image_base64: str, mime_subtype: str) -> dict:
+    return OllamaConfig().transform_request(
+        model="llava",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/{mime_subtype};base64,{image_base64}"},
+                    },
+                ],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+def test_transform_request_sends_png_and_jpeg_images_without_pillow(
+    image_format: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image_base64 = _image_base64(image_format)
+    monkeypatch.setitem(sys.modules, "PIL", None)
+
+    data = _transform_image_request(image_base64, image_format.lower())
+
+    assert data["images"] == [image_base64]
+
+
+def test_transform_request_without_pillow_says_how_to_convert_other_image_formats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gif_base64 = _image_base64("GIF")
+    monkeypatch.setitem(sys.modules, "PIL", None)
+
+    with pytest.raises(Exception, match="pip install Pillow"):
+        _transform_image_request(gif_base64, "gif")
+
+
+def test_transform_request_reencodes_other_image_formats_as_jpeg() -> None:
+    from PIL import Image
+
+    data = _transform_image_request(_image_base64("GIF"), "gif")
+
+    (encoded,) = data["images"]
+    assert Image.open(io.BytesIO(base64.b64decode(encoded))).format == "JPEG"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [base64.b64encode(b"not an image").decode("utf-8"), "abc"],
+    ids=["decodable_but_not_an_image", "invalid_base64"],
+)
+def test_transform_request_leaves_unreadable_images_untouched(payload: str) -> None:
+    data = _transform_image_request(payload, "png")
+
+    assert data["images"] == [payload]

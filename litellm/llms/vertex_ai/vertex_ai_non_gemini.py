@@ -64,7 +64,7 @@ def _get_client_from_cache(client_cache_key: str):
     return litellm.in_memory_llm_clients_cache.get_cache(client_cache_key)
 
 
-def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
+def _set_client_in_cache(client_cache_key: str, vertex_llm_model: object):
     litellm.in_memory_llm_clients_cache.set_cache(
         key=client_cache_key,
         value=vertex_llm_model,

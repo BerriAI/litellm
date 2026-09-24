@@ -1,8 +1,10 @@
 import asyncio
+import contextlib
 import json
 import time
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from enum import Enum
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, get_args
 from uuid import uuid4
@@ -10,11 +12,14 @@ from uuid import uuid4
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
+from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_api_usage as _blocked_responses_api_usage,
@@ -30,6 +35,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
 )
+from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
     ResponsesAPIOptionalRequestParams,
@@ -42,6 +48,20 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 router: Final = APIRouter()
+
+_ResponseDocSchemas = dict[int | str, dict[str, Any]]  # pyright: ignore[reportExplicitAny]  # fastapi's responses kwarg
+
+RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponsesAPIResponse}}
+RESPONSES_API_CREATE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {
+    200: {
+        "model": ResponsesAPIResponse,
+        "content": {
+            "text/event-stream": {"schema": {"type": "string", "description": "Server sent events when stream=true"}}
+        },
+    }
+}
+DELETE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": DeleteResponseResult}}
+RESPONSE_ITEM_LIST_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponseItemList}}
 
 _user_api_key_auth_dep: Final = Depends(user_api_key_auth)
 _RESPONSES_TAGS: Final[list[str | Enum]] = ["responses"]  # mutable-ok: fastapi's route signature requires list tags
@@ -92,11 +112,7 @@ def _normalize_tool_dialect(
     tools: Final = data.get("tools")
     tool_choice: Final = data.get("tool_choice")
     normalized_tools: Final = (
-        [
-            _convert_tool_envelope(tool, to_chat=to_chat) for tool in tools
-        ]  # mutable-ok: body's tools stays a plain JSON list
-        if isinstance(tools, list)
-        else tools
+        [_convert_tool_envelope(tool, to_chat=to_chat) for tool in tools] if isinstance(tools, list) else tools
     )
     normalized_choice: Final = _convert_tool_envelope(tool_choice, to_chat=to_chat)
     if normalized_tools == tools and normalized_choice == tool_choice:
@@ -180,16 +196,19 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     "/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/openai/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 async def responses_api(
     request: Request,
@@ -243,6 +262,7 @@ async def responses_api(
         version,
     )
 
+    native_data_generator: Final = partial(select_data_generator, responses_stream_errors=True)
     data = await _read_request_body(request=request)
 
     # Check if polling via cache should be used for this request
@@ -291,6 +311,7 @@ async def responses_api(
                 route_type="aresponses",
                 llm_router=llm_router,
             )
+            raise_if_required_body_param_missing(route_type="aresponses", data=data)
         except Exception as e:
             raise await processor._handle_llm_api_exception(
                 e=e,
@@ -329,7 +350,7 @@ async def responses_api(
                 llm_router=llm_router,
                 proxy_config=proxy_config,
                 proxy_logging_obj=proxy_logging_obj,
-                select_data_generator=select_data_generator,
+                select_data_generator=native_data_generator,
                 user_model=user_model,
                 user_temperature=user_temperature,
                 user_request_timeout=user_request_timeout,
@@ -355,7 +376,7 @@ async def responses_api(
             llm_router=llm_router,
             general_settings=general_settings,
             proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
+            select_data_generator=native_data_generator,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -661,16 +682,19 @@ async def cursor_chat_completions(
     "/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 @router.get(
     "/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 @router.get(
     "/openai/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 async def get_response(
     response_id: str,
@@ -774,16 +798,19 @@ async def get_response(
     "/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=DELETE_RESPONSE_SCHEMAS,
 )
 @router.delete(
     "/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=DELETE_RESPONSE_SCHEMAS,
 )
 @router.delete(
     "/openai/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=DELETE_RESPONSE_SCHEMAS,
 )
 async def delete_response(
     response_id: str,
@@ -880,16 +907,19 @@ async def delete_response(
     "/v1/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSE_ITEM_LIST_SCHEMAS,
 )
 @router.get(
     "/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSE_ITEM_LIST_SCHEMAS,
 )
 @router.get(
     "/openai/v1/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSE_ITEM_LIST_SCHEMAS,
 )
 async def get_response_input_items(
     response_id: str,
@@ -1289,7 +1319,8 @@ async def cancel_response(
 
 async def _read_ws_model_from_first_frame(
     websocket: WebSocket,
-) -> tuple | None:
+    query_model: str | None = None,
+) -> tuple[str, str] | None:
     """Read the first WS frame and return (model, raw_message), or None on error.
 
     Sends an appropriate error frame and closes the socket before returning None.
@@ -1338,7 +1369,7 @@ async def _read_ws_model_from_first_frame(
         await websocket.close(code=1008, reason="Invalid first message")
         return None
 
-    model: Final = _extract_model_from_first_ws_event(first_event)
+    model: Final = query_model or _extract_model_from_first_ws_event(first_event)
     if not model:
         await websocket.send_text(
             json.dumps(
@@ -1357,7 +1388,7 @@ async def _read_ws_model_from_first_frame(
     return model, first_message
 
 
-def _extract_model_from_first_ws_event(first_event: Any) -> str | None:
+def _extract_model_from_first_ws_event(first_event: object) -> str | None:
     """Extract model from a response.create WS event, handling flat and nested formats.
 
     Flat:   {"type": "response.create", "model": "gpt-4o", ...}
@@ -1367,6 +1398,38 @@ def _extract_model_from_first_ws_event(first_event: Any) -> str | None:
         return None
     nested: Final = first_event.get("response")
     return (nested.get("model") if isinstance(nested, dict) else None) or first_event.get("model")
+
+
+class _ResponseCreateRoutingHints(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    input: str | Sequence[object] | None = None
+    previous_response_id: str | None = None
+    response: "_ResponseCreateRoutingHints | None" = None
+
+
+def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, object]:
+    try:
+        frame: Final = _ResponseCreateRoutingHints.model_validate_json(first_message)
+    except ValidationError:
+        return EMPTY_MAPPING
+    nested: Final = frame.response or frame
+    hints: Final = {
+        "input": frame.input if nested.input is None else nested.input,
+        "previous_response_id": (
+            frame.previous_response_id if nested.previous_response_id is None else nested.previous_response_id
+        ),
+    }
+    return MappingProxyType({key: value for key, value in hints.items() if value is not None})
+
+
+def _responses_ws_failure_frame(failure: Exception) -> str:
+    raw_status: Final = getattr(failure, "status_code", None)
+    status: Final = raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else 500
+    error_type: Final = (
+        "rate_limit_exceeded" if status == 429 else "invalid_request_error" if 400 <= status < 500 else "server_error"
+    )
+    return json.dumps({"type": "error", "status": status, "error": {"type": error_type, "message": str(failure)}})
 
 
 async def _enforce_responses_ws_first_frame_model_auth(
@@ -1455,19 +1518,16 @@ async def responses_websocket_endpoint(
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
 
-    first_message: str | None = None
-    if not model:
-        result: Final = await _read_ws_model_from_first_frame(websocket)
-        if result is None:
-            return
-        model, first_message = result
+    result: Final = await _read_ws_model_from_first_frame(websocket, query_model=model)
+    if result is None:
+        return
+    resolved_model, first_message = result
 
     data: dict[str, object] = {
-        "model": model,
+        "model": resolved_model,
         "websocket": websocket,
+        "first_message": first_message,
     }
-    if first_message is not None:
-        data["first_message"] = first_message
 
     # Construct a synthetic Request for pre-call processing
     headers_list: Final = list(websocket.scope.get("headers") or [])
@@ -1480,7 +1540,7 @@ async def responses_websocket_endpoint(
     request: Final = Request(scope=scope)
     request._url = websocket.url
 
-    _body_bytes: Final = json.dumps({"model": model}).encode()
+    _body_bytes: Final = json.dumps({"model": resolved_model}).encode()
 
     async def return_body():
         return _body_bytes
@@ -1490,10 +1550,10 @@ async def responses_websocket_endpoint(
     # Phase 1: pre-call processing (auth, guardrails, rate limits)
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        if first_message is not None:
+        if not model:
             await _enforce_responses_ws_first_frame_model_auth(
                 request=request,
-                model=model,
+                model=resolved_model,
                 user_api_key_dict=user_api_key_dict,
                 llm_router=llm_router,
             )
@@ -1512,7 +1572,7 @@ async def responses_websocket_endpoint(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            model=model,
+            model=resolved_model,
             route_type="_aresponses_websocket",
         )
     except Exception as e:
@@ -1534,16 +1594,31 @@ async def responses_websocket_endpoint(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
+    routed_data: Final = dict(
+        data, user_api_key_dict=user_api_key_dict, **_routing_hints_from_first_ws_frame(first_message)
+    )
     # Phase 2: route to upstream provider
     try:
-        data["user_api_key_dict"] = user_api_key_dict
         llm_call: Final = await route_request(
-            data=data,
+            data=routed_data,
             route_type="_aresponses_websocket",
             llm_router=llm_router,
             user_model=user_model,
         )
-        await llm_call
-    except Exception:
+        failure: Final = await llm_call
+        if isinstance(failure, Exception):
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=failure,
+                request_data=routed_data,
+            )
+    except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket error")
+        with contextlib.suppress(Exception):
+            await websocket.send_text(_responses_ws_failure_frame(e))
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=routed_data,
+        )
         await websocket.close(code=1011, reason="Internal server error")

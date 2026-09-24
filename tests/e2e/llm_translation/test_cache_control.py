@@ -13,7 +13,13 @@ Each case asserts the feature actually happened, not just a 200. Coverage matrix
   call, so a never-seen prefix must come back cached on its very first call
   (Gemini's implicit caching cannot hit a cold prefix), the cached count must
   cover the marked block, and the spend row must be billed below the uncached
-  price of the prompt.
+  price of the cached tokens. Vertex's cache create is nondeterministic:
+  identical bodies come back 200 or with the minimum-token 400 ("The cached
+  content is of 1 tokens"), in failure bursts of 45 seconds and more, so up to
+  eight never-seen prefixes are tried with a pause after each rejection. The
+  billing check prices the cached tokens rather than prompt_tokens, which
+  Vertex reports inclusive of the cached prefix on some calls and exclusive
+  of it on others.
 - Anthropic (claude-haiku-4-5, direct): the same ``cache_control`` prefix over
   the OpenAI-compatible route; the second call must report cache-read tokens > 0.
 - OpenAI (gpt-5.6): automatic prompt caching needs no request marker, so the
@@ -24,7 +30,7 @@ service_tier lives in test_provider_features_e2e.py.
 
 The provider-native cache_control request shape is not expressible with the
 shared ``ChatBody`` (whose content is a plain string), so the cacheable body is
-built from the typed content blocks shared in ``endpoints_client.py``.
+built from the typed content blocks shared in ``models.py``.
 """
 
 from __future__ import annotations
@@ -38,20 +44,20 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, UnknownApiError, unwrap
-from endpoints_client import CacheControl, RichMessage, TextBlock
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, Usage
+from models import CacheControl, ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, RichMessage, TextBlock, Usage
 from passthrough_client import PassthroughClient
 import os
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 BEDROCK_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_MODEL = "vertex_ai/gemini-2.5-flash"
 ANTHROPIC_MODEL = "anthropic/claude-haiku-4-5-20251001"
 OPENAI_MODEL = "openai/gpt-5.6"
 VERTEX_CACHE_TTL: Final = "300s"
-VERTEX_COLD_CALL_ATTEMPTS: Final = 3
+VERTEX_COLD_CALL_ATTEMPTS: Final = 8
+VERTEX_COLD_CALL_PAUSE_SECONDS: Final = 15.0
 VERTEX_MINIMUM_CACHED_TOKENS: Final = 1024
 CACHED_SHARE_OF_PROMPT: Final = 0.9
 VERTEX_CACHE_REJECTION_MARKER: Final = "minimum token count to start explicit caching"
@@ -157,26 +163,36 @@ def _cold_cache_call(send: Callable[[str], Result[ChatResponse]]) -> ChatRespons
             return unwrap(result)
 
 
+def _first_engaged_cold_call(send: Callable[[str], Result[ChatResponse]]) -> ChatResponse | None:
+    for attempt in range(1, VERTEX_COLD_CALL_ATTEMPTS + 1):
+        candidate = _cold_cache_call(send)
+        if candidate is not None and _cached_read_tokens(candidate.usage) >= VERTEX_MINIMUM_CACHED_TOKENS:
+            return candidate
+        if attempt < VERTEX_COLD_CALL_ATTEMPTS:
+            print(
+                f"cache_control: vertex did not engage the cache on cold attempt {attempt}/{VERTEX_COLD_CALL_ATTEMPTS}; "
+                f"pausing {VERTEX_COLD_CALL_PAUSE_SECONDS}s before the next never-seen prefix",
+                flush=True,
+            )
+            time.sleep(VERTEX_COLD_CALL_PAUSE_SECONDS)
+    return None
+
+
 def _first_cold_call_reads_cache(model: str, send: Callable[[str], Result[ChatResponse]]) -> ChatResponse:
-    completion: Final = next(
-        (
-            candidate
-            for candidate in (_cold_cache_call(send) for _ in range(VERTEX_COLD_CALL_ATTEMPTS))
-            if candidate is not None and _cached_read_tokens(candidate.usage) >= VERTEX_MINIMUM_CACHED_TOKENS
-        ),
-        None,
-    )
+    completion: Final = _first_engaged_cold_call(send)
     assert completion is not None, (
-        f"{model}: {VERTEX_COLD_CALL_ATTEMPTS} never-seen prompts marked with cache_control were each either "
-        f"rejected by Vertex's minimum-token check or served with fewer than {VERTEX_MINIMUM_CACHED_TOKENS} "
-        "cached tokens on their first call; explicit context caching did not engage"
+        f"{model}: {VERTEX_COLD_CALL_ATTEMPTS} never-seen prompts marked with cache_control, spread over "
+        f"{VERTEX_COLD_CALL_PAUSE_SECONDS * (VERTEX_COLD_CALL_ATTEMPTS - 1):.0f}s, were each either rejected by "
+        f"Vertex's minimum-token check or served with fewer than {VERTEX_MINIMUM_CACHED_TOKENS} cached tokens on "
+        "their first call; explicit context caching did not engage"
     )
     assert completion.choices, f"{model}: cached call returned no choices: {completion}"
     usage: Final = completion.usage
     cached: Final = _cached_read_tokens(usage)
-    assert usage and usage.prompt_tokens and cached >= CACHED_SHARE_OF_PROMPT * usage.prompt_tokens, (
-        f"{model}: only {cached} of {usage.prompt_tokens if usage else None} prompt tokens were served from the "
-        "cache; the cache_control block was not cached whole"
+    assert usage and usage.prompt_tokens, f"{model}: cached completion carried no prompt_tokens: {usage}"
+    assert cached >= CACHED_SHARE_OF_PROMPT * usage.prompt_tokens, (
+        f"{model}: only {cached} of {usage.prompt_tokens} prompt tokens were served from the cache; the "
+        "cache_control block was not cached whole"
     )
     return completion
 
@@ -197,10 +213,11 @@ def _assert_billed_below_uncached_prompt(client: PassthroughClient, model: str, 
     assert row.prompt_tokens == usage.prompt_tokens, (
         f"{model}: spend row prompt_tokens {row.prompt_tokens} != response prompt_tokens {usage.prompt_tokens}"
     )
-    uncached_prompt_cost: Final = usage.prompt_tokens * _input_rate(client, model)
-    assert row.spend is not None and row.spend < uncached_prompt_cost, (
-        f"{model}: spend {row.spend} is not below the uncached price of the prompt alone ({uncached_prompt_cost} for "
-        f"{usage.prompt_tokens} tokens); cache-read pricing was not applied"
+    cached: Final = _cached_read_tokens(usage)
+    uncached_read_cost: Final = cached * _input_rate(client, model)
+    assert row.spend is not None and row.spend < uncached_read_cost, (
+        f"{model}: spend {row.spend} is not below the uncached price of the {cached} tokens read from the cache "
+        f"({uncached_read_cost}); cache-read pricing was not applied"
     )
 
 
