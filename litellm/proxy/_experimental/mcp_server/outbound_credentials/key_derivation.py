@@ -19,12 +19,10 @@ from litellm.proxy.common_utils.fips import is_fips_mode
 LEGACY_KDF_GRACE_ENV_VAR: Final = "LITELLM_MCP_LEGACY_KDF_GRACE"
 DERIVED_KEY_BYTES: Final = 32
 
-# scrypt work factors (RFC 7914). n=2**15 with r=8/p=1 costs ~50ms and ~32MB per derivation.
+# RFC 7914 work factors of the pre-rotation derivation; maxmem is twice the working set.
 _SCRYPT_N: Final = 2**15
 _SCRYPT_R: Final = 8
 _SCRYPT_P: Final = 1
-# scrypt's working-set is ~128 * N * r * p bytes; cap at twice that so the maxmem ceiling scales
-# with every work factor and a future p or r bump does not trip "memory limit exceeded".
 _SCRYPT_MAXMEM: Final = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
 
 

@@ -36,6 +36,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     SessionPrincipal,
     SessionRotatedPublicKey,
     SessionSigningKeys,
+    SessionTokenOpenError,
     is_session_refresh_token,
     is_session_token,
     open_session_refresh_token,
@@ -249,13 +250,7 @@ def resolve_session_bearer(
         return SessionBearerInvalid()
     if not is_session_token(candidate):
         return NotSessionBearer()
-    opened = open_session_token(candidate, keys, now)
-    if (
-        not isinstance(opened, OpenedSessionToken)
-        and not isinstance(opened, SessionExpired)
-        and legacy_keys is not None
-    ):
-        opened = open_session_token(candidate, legacy_keys, now)
+    opened: Final = open_session_credential_with_legacy(open_session_token, candidate, keys, legacy_keys, now)
     if isinstance(opened, OpenedSessionToken):
         return SessionBearerAdmitted(principal=opened.principal)
     return SessionBearerInvalid(expired=isinstance(opened, SessionExpired))
@@ -283,6 +278,23 @@ class SessionRefreshInvalid(BaseModel):
 SessionRefreshResult: TypeAlias = SessionRefreshOpened | SessionRefreshInvalid
 
 
+def open_session_credential_with_legacy(
+    open_token: Callable[[str, SessionSigningKeys, datetime], OpenedSessionToken | SessionTokenOpenError],
+    token: str,
+    keys: SessionSigningKeys,
+    legacy_keys: SessionKeys | None,
+    now: datetime,
+) -> OpenedSessionToken | SessionTokenOpenError:
+    """Open a session credential under the active keys, then under the legacy keys when
+    grace supplied them. An :class:`OpenedSessionToken` or :class:`SessionExpired` under
+    the active keys is final: expiry must still report as expiry, so only a signature or
+    format failure falls through to the legacy derivation."""
+    primary: Final = open_token(token, keys, now)
+    if isinstance(primary, (OpenedSessionToken, SessionExpired)) or legacy_keys is None:
+        return primary
+    return open_token(token, legacy_keys, now)
+
+
 def open_session_refresh_bearer(
     refresh_value: str,
     keys: SessionSigningKeys,
@@ -303,13 +315,7 @@ def open_session_refresh_bearer(
     candidate: Final = _strip_bearer(refresh_value)
     if not is_session_refresh_token(candidate):
         return SessionRefreshInvalid()
-    opened = open_session_refresh_token(candidate, keys, now)
-    if (
-        not isinstance(opened, OpenedSessionToken)
-        and not isinstance(opened, SessionExpired)
-        and legacy_keys is not None
-    ):
-        opened = open_session_refresh_token(candidate, legacy_keys, now)
+    opened: Final = open_session_credential_with_legacy(open_session_refresh_token, candidate, keys, legacy_keys, now)
     if not isinstance(opened, OpenedSessionToken):
         return SessionRefreshInvalid()
     if opened.principal.client_id != expected_client_id:

@@ -68,6 +68,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
     SessionSigningConfigError,
     active_session_signing_keys,
     legacy_session_keys_from_master_key,
+    open_session_credential_with_legacy,
     open_session_refresh_bearer,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
@@ -76,11 +77,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     MintedSessionToken,
     OpenedSessionToken,
     SessionAudience,
-    SessionExpired,
     SessionKeys,
     SessionPrincipal,
     SessionSigningKeys,
-    SessionTokenOpenError,
     is_session_refresh_token,
     is_session_token,
     mint_session_refresh_token,
@@ -1483,19 +1482,6 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
     return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
 
 
-def _open_with_legacy(
-    open_token: Callable[[str, SessionSigningKeys, datetime], OpenedSessionToken | SessionTokenOpenError],
-    token: str,
-    keys: SessionSigningKeys,
-    legacy_keys: SessionKeys | None,
-    now: datetime,
-) -> OpenedSessionToken | SessionTokenOpenError:
-    opened: Final = open_token(token, keys, now)
-    if isinstance(opened, OpenedSessionToken) or isinstance(opened, SessionExpired) or legacy_keys is None:
-        return opened
-    return open_token(token, legacy_keys, now)
-
-
 def _inactive_introspection_response() -> Response:
     """RFC 7662 section 2.2: any token the gateway cannot vouch for, whatever the reason
     (wrong family, bad signature, expired, revoked, or a deactivated user), answers 200
@@ -1556,9 +1542,9 @@ async def introspect_gateway_token(
     now: Final = datetime.now(timezone.utc)
     legacy_keys: Final = legacy_session_keys_from_master_key(master_key, keys)
     if is_session_token(token):
-        opened = _open_with_legacy(open_session_token, token, keys, legacy_keys, now)
+        opened = open_session_credential_with_legacy(open_session_token, token, keys, legacy_keys, now)
     elif is_session_refresh_token(token):
-        opened = _open_with_legacy(open_session_refresh_token, token, keys, legacy_keys, now)
+        opened = open_session_credential_with_legacy(open_session_refresh_token, token, keys, legacy_keys, now)
     else:
         return _inactive_introspection_response()
     if not isinstance(opened, OpenedSessionToken):

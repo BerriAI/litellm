@@ -10,7 +10,10 @@ through the consumer; and no path leaks the upstream token in a repr.
 
 import hashlib
 import hmac
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
+from typing import Final
 
 import pytest
 from pydantic import SecretStr
@@ -29,13 +32,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
     open_bridge_refresh_envelope,
     resolve_bridge_envelope,
 )
-from litellm.proxy._experimental.mcp_server.outbound_credentials.key_derivation import (
-    LEGACY_KDF_GRACE_ENV_VAR,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
-    session_keys_from_master_key,
-)
-from litellm.proxy.common_utils.fips import FIPS_MODE_ENV_VAR
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
     ENVELOPE_PREFIX,
     EnvelopeIdentity,
@@ -47,6 +43,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     key_hash_identity,
     mint_envelope,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.key_derivation import (
+    LEGACY_KDF_GRACE_ENV_VAR,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+    session_keys_from_master_key,
+)
+from litellm.proxy.common_utils.fips import FIPS_MODE_ENV_VAR
 
 _NOW = datetime(2026, 7, 9, 12, 0, 0, tzinfo=timezone.utc)
 _MASTER_KEY = "sk-master-key-for-derivation-tests-0123456789"
@@ -332,11 +335,11 @@ def test_is_bridge_envelope_shaped_rejects_non_envelope_bearer():
 def _rfc5869(ikm: bytes, info: bytes) -> bytes:
     """Independent RFC 5869 HKDF-SHA256, hand-written on hmac/hashlib so a wrong KDF
     construction in the product cannot agree with it."""
-    prk = hmac.new(b"\x00" * 32, ikm, hashlib.sha256).digest()
+    prk: Final = hmac.new(b"\x00" * 32, ikm, hashlib.sha256).digest()
     return hmac.new(prk, info + b"\x01", hashlib.sha256).digest()[:32]
 
 
-def _environ(values: dict[str, str]):
+def _environ(values: Mapping[str, str]) -> Callable[[str], str | None]:
     return values.get
 
 
@@ -353,7 +356,7 @@ def _legacy_keys(master_key: str) -> EnvelopeKeys:
 
 
 def test_envelope_key_derivation_matches_an_independent_rfc5869_vector():
-    keys = envelope_keys_from_master_key("sk-1234")
+    keys: Final = envelope_keys_from_master_key("sk-1234")
     assert keys.signing_key.get_secret_value() == _rfc5869(b"sk-1234", b"litellm-mcp-bridge:envelope-signing:").hex()
     assert (
         keys.encryption_key.get_secret_value() == _rfc5869(b"sk-1234", b"litellm-mcp-bridge:envelope-encryption:").hex()
@@ -363,34 +366,38 @@ def test_envelope_key_derivation_matches_an_independent_rfc5869_vector():
 
 
 def test_session_key_derivation_matches_an_independent_rfc5869_vector():
-    keys = session_keys_from_master_key("sk-1234")
+    keys: Final = session_keys_from_master_key("sk-1234")
     assert keys.signing_key.get_secret_value() == _rfc5869(b"sk-1234", b"litellm-mcp-gateway:session-signing:").hex()
     assert keys.signing_key.get_secret_value() == "511f07b16ceeb5fba1660033785d4b9a4a6e80c749a51d639a688c287671a0e6"
 
 
 def test_the_three_derived_keys_are_pairwise_distinct():
-    envelope = envelope_keys_from_master_key(_MASTER_KEY)
-    session = session_keys_from_master_key(_MASTER_KEY)
-    derived = {
-        envelope.signing_key.get_secret_value(),
-        envelope.encryption_key.get_secret_value(),
-        session.signing_key.get_secret_value(),
-    }
+    envelope: Final = envelope_keys_from_master_key(_MASTER_KEY)
+    session: Final = session_keys_from_master_key(_MASTER_KEY)
+    derived: Final = frozenset(
+        (
+            envelope.signing_key.get_secret_value(),
+            envelope.encryption_key.get_secret_value(),
+            session.signing_key.get_secret_value(),
+        )
+    )
     assert len(derived) == 3
 
 
 def test_new_envelopes_open_under_the_hkdf_keys_with_no_legacy_fallback():
-    keys = envelope_keys_from_master_key(_MASTER_KEY)
-    result = resolve_bridge_envelope(_sealed_token(keys), keys, _NOW, _SERVER_ID)
+    keys: Final = envelope_keys_from_master_key(_MASTER_KEY)
+    result: Final = resolve_bridge_envelope(_sealed_token(keys), keys, _NOW, _SERVER_ID)
     assert isinstance(result, BridgeEnvelopeAdmitted)
 
 
 def test_legacy_envelope_opens_during_the_grace_window():
-    legacy = _legacy_keys(_MASTER_KEY)
-    token = _sealed_token(legacy)
-    grace = legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ({LEGACY_KDF_GRACE_ENV_VAR: "true"}))
+    legacy: Final = _legacy_keys(_MASTER_KEY)
+    token: Final = _sealed_token(legacy)
+    grace: Final = legacy_envelope_keys_from_master_key(
+        _MASTER_KEY, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "true"}))
+    )
     assert grace == legacy
-    result = resolve_bridge_envelope(
+    result: Final = resolve_bridge_envelope(
         token, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID, legacy_keys=grace
     )
     assert isinstance(result, BridgeEnvelopeAdmitted)
@@ -398,32 +405,36 @@ def test_legacy_envelope_opens_during_the_grace_window():
 
 
 def test_legacy_envelope_is_invalid_without_grace():
-    token = _sealed_token(_legacy_keys(_MASTER_KEY))
-    assert legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ({})) is None
-    result = resolve_bridge_envelope(token, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID)
+    token: Final = _sealed_token(_legacy_keys(_MASTER_KEY))
+    assert legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ(MappingProxyType({}))) is None
+    result: Final = resolve_bridge_envelope(token, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID)
     assert isinstance(result, BridgeEnvelopeInvalid)
 
 
 def test_grace_is_disabled_under_fips():
-    grace = legacy_envelope_keys_from_master_key(
+    grace: Final = legacy_envelope_keys_from_master_key(
         _MASTER_KEY,
-        environ=_environ({LEGACY_KDF_GRACE_ENV_VAR: "true", FIPS_MODE_ENV_VAR: "true"}),
+        environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "true", FIPS_MODE_ENV_VAR: "true"})),
     )
     assert grace is None
 
 
-@pytest.mark.parametrize("value", ["yes", "1", "on", "TRUE ", "True"])
+@pytest.mark.parametrize("value", ("yes", "1", "on", "TRUE ", "True"))
 def test_grace_is_enabled_only_by_case_insensitive_true(value: str):
-    result = legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ({LEGACY_KDF_GRACE_ENV_VAR: value}))
-    expected = value.strip().lower() == "true"
+    result: Final = legacy_envelope_keys_from_master_key(
+        _MASTER_KEY, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: value}))
+    )
+    expected: Final = value.strip().lower() == "true"
     assert (result is not None) is expected
 
 
 def test_legacy_refresh_envelope_opens_during_grace():
-    legacy = _legacy_keys(_MASTER_KEY)
-    refresh = _sealed_refresh(legacy)
-    grace = legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ({LEGACY_KDF_GRACE_ENV_VAR: "true"}))
-    result = open_bridge_refresh_envelope(
+    legacy: Final = _legacy_keys(_MASTER_KEY)
+    refresh: Final = _sealed_refresh(legacy)
+    grace: Final = legacy_envelope_keys_from_master_key(
+        _MASTER_KEY, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "true"}))
+    )
+    result: Final = open_bridge_refresh_envelope(
         refresh, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID, legacy_keys=grace
     )
     assert isinstance(result, BridgeRefreshOpened)
@@ -431,6 +442,6 @@ def test_legacy_refresh_envelope_opens_during_grace():
 
 
 def test_legacy_refresh_envelope_is_invalid_without_grace():
-    refresh = _sealed_refresh(_legacy_keys(_MASTER_KEY))
-    result = open_bridge_refresh_envelope(refresh, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID)
+    refresh: Final = _sealed_refresh(_legacy_keys(_MASTER_KEY))
+    result: Final = open_bridge_refresh_envelope(refresh, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID)
     assert isinstance(result, BridgeRefreshInvalid)

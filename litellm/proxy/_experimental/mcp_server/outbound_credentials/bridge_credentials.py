@@ -21,6 +21,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     EnvelopeIdentity,
     EnvelopeKeys,
     EnvelopeMintError,
+    EnvelopeOpenError,
     OpenedEnvelope,
     OpenedRefreshEnvelope,
     RefreshCredential,
@@ -131,6 +132,34 @@ class BridgeRefreshInvalid(BaseModel):
 BridgeRefreshResult: TypeAlias = BridgeRefreshOpened | BridgeRefreshInvalid
 
 
+def _open_envelope_with_fallback(
+    candidate: str,
+    keys: EnvelopeKeys,
+    legacy_keys: EnvelopeKeys | None,
+    now: datetime,
+) -> OpenedEnvelope | EnvelopeOpenError:
+    """Open an access envelope under the active keys, then under the legacy keys when
+    grace supplied them."""
+    primary: Final = open_envelope(candidate, keys, now)
+    if isinstance(primary, OpenedEnvelope) or legacy_keys is None:
+        return primary
+    return open_envelope(candidate, legacy_keys, now)
+
+
+def _open_refresh_envelope_with_fallback(
+    candidate: str,
+    keys: EnvelopeKeys,
+    legacy_keys: EnvelopeKeys | None,
+    now: datetime,
+) -> OpenedRefreshEnvelope | EnvelopeOpenError:
+    """Open a refresh envelope under the active keys, then under the legacy keys when
+    grace supplied them."""
+    primary: Final = open_refresh_envelope(candidate, keys, now)
+    if isinstance(primary, OpenedRefreshEnvelope) or legacy_keys is None:
+        return primary
+    return open_refresh_envelope(candidate, legacy_keys, now)
+
+
 def open_bridge_refresh_envelope(
     refresh_value: str,
     keys: EnvelopeKeys,
@@ -151,9 +180,7 @@ def open_bridge_refresh_envelope(
     candidate: Final = _strip_bearer(refresh_value)
     if not is_refresh_envelope(candidate):
         return BridgeRefreshInvalid()
-    opened = open_refresh_envelope(candidate, keys, now)
-    if not isinstance(opened, OpenedRefreshEnvelope) and legacy_keys is not None:
-        opened = open_refresh_envelope(candidate, legacy_keys, now)
+    opened: Final = _open_refresh_envelope_with_fallback(candidate, keys, legacy_keys, now)
     if not isinstance(opened, OpenedRefreshEnvelope):
         return BridgeRefreshInvalid()
     if opened.identity.server_id != expected_server_id:
@@ -237,9 +264,7 @@ def resolve_bridge_envelope(
         return BridgeEnvelopeInvalid()
     if not is_envelope(candidate):
         return NotBridgeEnvelope()
-    opened = open_envelope(candidate, keys, now)
-    if not isinstance(opened, OpenedEnvelope) and legacy_keys is not None:
-        opened = open_envelope(candidate, legacy_keys, now)
+    opened: Final = _open_envelope_with_fallback(candidate, keys, legacy_keys, now)
     if not isinstance(opened, OpenedEnvelope):
         return BridgeEnvelopeInvalid()
     if opened.identity.server_id != expected_server_id:
