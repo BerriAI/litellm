@@ -302,21 +302,22 @@ def test_transform_to_invoke_model_format_leaves_clean_anthropic_body_unchanged(
     config = BedrockCountTokensConfig()
     request = {
         "model": "us.anthropic.claude-sonnet-4-6",
-        "system": "be brief",
         "messages": [
             {"role": "user", "content": [{"type": "text", "text": "hi"}]},
             {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
         ],
+        "system": "be brief",
     }
 
     body = _decoded_invoke_body(config.transform_anthropic_to_bedrock_count_tokens(request))
 
     assert body == {
-        "system": "be brief",
         "messages": request["messages"],
+        "system": "be brief",
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
     }
+    assert list(body) == ["messages", "system", "anthropic_version", "max_tokens"]
 
 
 def test_transform_anthropic_to_bedrock_request_string_content_still_uses_converse():

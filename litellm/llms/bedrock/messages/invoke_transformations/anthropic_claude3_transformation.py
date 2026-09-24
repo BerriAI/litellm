@@ -652,18 +652,23 @@ class AmazonAnthropicClaudeMessagesConfig(
                     sanitized.offenders,
                     model,
                 )
-                anthropic_messages_request["messages"] = list(sanitized.messages)  # mutable-ok: outbound JSON array
+                anthropic_messages_request["messages"] = list(  # rebind-ok: out-param  # mutable-ok: json
+                    sanitized.messages
+                )
         thinking: Final = anthropic_messages_request.get("thinking")
+        if not isinstance(thinking, dict):
+            return
         normalized_thinking: Final = normalize_bedrock_invoke_thinking_display(
             thinking, supported_display_values=self.BEDROCK_INVOKE_SUPPORTED_THINKING_DISPLAY_VALUES
         )
-        if normalized_thinking is not thinking:
-            verbose_logger.warning(
-                "Bedrock Invoke: mapping unsupported thinking.display %r to 'summarized' for model=%s",
-                thinking.get("display") if isinstance(thinking, dict) else thinking,
-                model,
-            )
-            anthropic_messages_request["thinking"] = normalized_thinking
+        if normalized_thinking is thinking:
+            return
+        verbose_logger.warning(
+            "Bedrock Invoke: mapping unsupported thinking.display %r to 'summarized' for model=%s",
+            thinking.get("display"),
+            model,
+        )
+        anthropic_messages_request["thinking"] = normalized_thinking  # rebind-ok: out-param
 
     def _strip_unsupported_bedrock_invoke_fields(
         self,

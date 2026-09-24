@@ -208,8 +208,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             else messages
         )
         body_data: Final = {  # mutable-ok: outbound JSON body, defaults are set below like before
-            **{k: v for k, v in request_data.items() if k not in ("model", "messages")},  # mutable-ok: spread source
-            **({"messages": sanitized_messages} if "messages" in request_data else {}),  # mutable-ok: spread source
+            k: (sanitized_messages if k == "messages" else v) for k, v in request_data.items() if k != "model"
         }
 
         if "messages" in body_data:

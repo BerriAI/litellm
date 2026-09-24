@@ -3558,9 +3558,17 @@ def test_bedrock_invoke_rejects_message_emptied_by_stripping():
     assert "messages[1]" in str(exc.value)
 
     already_empty: Final = _transform_for_bedrock_invoke(
-        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": []}, {"role": "user", "content": "go"}]
+        [
+            {"role": "user", "content": "hi", "output_config": {"effort": "low"}},
+            {"role": "assistant", "content": []},
+            {"role": "user", "content": [_TOOL_ADDITION_BLOCK, {"type": "text", "text": "go"}]},
+        ]
     )
-    assert already_empty["messages"][1]["content"] == []
+    assert already_empty["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": []},
+        {"role": "user", "content": [{"type": "text", "text": "go"}]},
+    ]
 
 
 def test_bedrock_invoke_maps_thinking_display_updates_to_summarized():

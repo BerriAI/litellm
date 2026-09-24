@@ -550,6 +550,38 @@ def test_strip_unsupported_output_config_keeps_format_drops_effort(local_model_c
     assert body["output_config"] == {"format": schema_format}
 
 
+def test_sanitize_bedrock_invoke_messages_forwards_malformed_entries_next_to_an_offender():
+    from litellm.llms.bedrock.common_utils import (
+        BEDROCK_INVOKE_UNSUPPORTED_CONTENT_BLOCK_TYPES,
+        BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_KEYS,
+        sanitize_bedrock_invoke_messages,
+    )
+
+    raw_string_block = "not a block dict"
+    non_dict_message = "not a message dict"
+    tool_addition = {"type": "tool_addition", "tool_reference": {"type": "tool_reference", "tool_name": "Read"}}
+    messages = [
+        {"role": "user", "content": [raw_string_block, {"type": "text", "text": "hi"}]},
+        non_dict_message,
+        {"role": "assistant", "content": [tool_addition, {"type": "text", "text": "ok"}]},
+    ]
+
+    sanitized = sanitize_bedrock_invoke_messages(
+        messages,
+        unsupported_keys=BEDROCK_INVOKE_UNSUPPORTED_MESSAGE_KEYS,
+        unsupported_block_types=BEDROCK_INVOKE_UNSUPPORTED_CONTENT_BLOCK_TYPES,
+    )
+
+    assert sanitized.offenders == ("messages[2].content[0] (type 'tool_addition')",)
+    assert sanitized.emptied == ()
+    assert list(sanitized.messages) == [
+        {"role": "user", "content": [raw_string_block, {"type": "text", "text": "hi"}]},
+        non_dict_message,
+        {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+    ]
+    assert sanitized.messages[1] is non_dict_message
+
+
 def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_map):
     """The legacy ``output_format`` wins over ``output_config.format`` when a
     request carries both, matching the pre-existing precedence."""
