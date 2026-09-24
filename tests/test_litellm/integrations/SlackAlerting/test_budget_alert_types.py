@@ -94,12 +94,4 @@ class TestTokenBudgetAlert:
         )
 
         assert alert.get_id(user_info) == "hashed_key"
-        assert alert.get_event_message(user_info) == "Key Budget: "
-
-    def test_get_event_message_labels_team_member_alerts(self):
-        alert = TokenBudgetAlert()
-        user_info = CallInfo(
-            spend=8.0, max_budget=10.0, user_id="member_1", team_id="team_a", event_group=Litellm_EntityType.TEAM_MEMBER
-        )
-
-        assert alert.get_event_message(user_info) == "Team Member Budget: "
+        assert alert.get_event_message() == "Key Budget: "

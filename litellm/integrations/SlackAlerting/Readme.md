@@ -15,7 +15,7 @@ The `budget_alert_types.py` module provides a flexible framework for handling di
 
 - `BaseBudgetAlertType`: An abstract base class with abstract methods that all alert types must implement:
   - `get_event_group()`: Returns the Litellm_EntityType for the alert
-  - `get_event_message(user_info)`: Returns the message prefix for the alert
+  - `get_event_message()`: Returns the message prefix for the alert
   - `get_id(user_info)`: Returns the ID to use for caching/tracking the alert
 
 Concrete implementations include:
@@ -36,7 +36,7 @@ budget_alert_class = get_budget_alert_type("user_budget")
 
 # Use the handler methods
 event_group = budget_alert_class.get_event_group()  # Returns Litellm_EntityType.USER
-event_message = budget_alert_class.get_event_message(user_info)  # Returns "User Budget: "
+event_message = budget_alert_class.get_event_message()  # Returns "User Budget: "
 cache_id = budget_alert_class.get_id(user_info)  # Returns user_id
 ```
 

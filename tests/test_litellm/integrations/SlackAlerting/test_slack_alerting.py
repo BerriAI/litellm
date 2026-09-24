@@ -67,6 +67,7 @@ class TestSlackAlerting(unittest.TestCase):
 
     def test_get_event_and_event_message_max_budget(self):
         event = None
+        event_message = get_budget_alert_type("user_budget").get_event_message()
 
         # Test case 1: When spend exceeds max_budget
         user_info = CallInfo(
@@ -75,33 +76,32 @@ class TestSlackAlerting(unittest.TestCase):
             soft_budget=None,
             event_group=Litellm_EntityType.KEY,
         )
-        event_message = get_budget_alert_type("user_budget").get_event_message(user_info)
         event, event_message = self.slack_alerting._get_event_and_event_message(
             user_info=user_info, event=event, event_message=event_message
         )
         self.assertEqual(event, "budget_crossed")
         self.assertTrue("Budget Crossed" in event_message)
 
+        event_message = get_budget_alert_type("user_budget").get_event_message()
         user_info = CallInfo(
             max_budget=100.0,
             spend=95.0,
             soft_budget=None,
             event_group=Litellm_EntityType.KEY,
         )
-        event_message = get_budget_alert_type("user_budget").get_event_message(user_info)
         event, event_message = self.slack_alerting._get_event_and_event_message(
             user_info=user_info, event=event, event_message=event_message
         )
         self.assertEqual(event, "threshold_crossed")
         self.assertEqual(event_message, "User Budget: 5% or less of budget remaining")
 
+        event_message = get_budget_alert_type("user_budget").get_event_message()
         user_info = CallInfo(
             max_budget=100.0,
             spend=85.0,
             soft_budget=None,
             event_group=Litellm_EntityType.KEY,
         )
-        event_message = get_budget_alert_type("user_budget").get_event_message(user_info)
         event, event_message = self.slack_alerting._get_event_and_event_message(
             user_info=user_info, event=event, event_message=event_message
         )
@@ -391,6 +391,33 @@ def _slack_alerting_with_env_resolution() -> SlackAlerting:
     slack_alerting: Final = SlackAlerting(alerting=["slack"], internal_usage_cache=DualCache())
     slack_alerting.periodic_started = True
     return slack_alerting
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_group, expected_prefix",
+    [
+        (Litellm_EntityType.TEAM_MEMBER, "Team Member Budget: Budget Crossed"),
+        (Litellm_EntityType.KEY, "Key Budget: Budget Crossed"),
+    ],
+)
+async def test_max_budget_alert_labels_team_member_budget(event_group, expected_prefix):
+    slack_alerting: Final = _slack_alerting_with_env_resolution()
+    slack_alerting.send_alert = AsyncMock()
+
+    await slack_alerting.budget_alerts(
+        type="max_budget_alert",
+        user_info=CallInfo(
+            spend=10.5,
+            max_budget=10.0,
+            token="hashed_key",
+            user_id="member_1",
+            team_id="team_a",
+            event_group=event_group,
+        ),
+    )
+
+    assert slack_alerting.send_alert.await_args.kwargs["message"].startswith(expected_prefix)
 
 
 @pytest.mark.asyncio

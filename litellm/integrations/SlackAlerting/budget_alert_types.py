@@ -8,7 +8,7 @@ class BaseBudgetAlertType(ABC):
     """Base class for different budget alert types"""
 
     @abstractmethod
-    def get_event_message(self, user_info: CallInfo) -> str:
+    def get_event_message(self) -> str:
         """Return the event message for this alert type"""
 
     @abstractmethod
@@ -17,7 +17,7 @@ class BaseBudgetAlertType(ABC):
 
 
 class ProxyBudgetAlert(BaseBudgetAlertType):
-    def get_event_message(self, user_info: CallInfo) -> str:
+    def get_event_message(self) -> str:
         return "Proxy Budget: "
 
     def get_id(self, user_info: CallInfo) -> str:
@@ -25,7 +25,7 @@ class ProxyBudgetAlert(BaseBudgetAlertType):
 
 
 class SoftBudgetAlert(BaseBudgetAlertType):
-    def get_event_message(self, user_info: CallInfo) -> str:
+    def get_event_message(self) -> str:
         return "Soft Budget Crossed: "
 
     def get_id(self, user_info: CallInfo) -> str:
@@ -35,7 +35,7 @@ class SoftBudgetAlert(BaseBudgetAlertType):
 
 
 class UserBudgetAlert(BaseBudgetAlertType):
-    def get_event_message(self, user_info: CallInfo) -> str:
+    def get_event_message(self) -> str:
         return "User Budget: "
 
     def get_id(self, user_info: CallInfo) -> str:
@@ -43,7 +43,7 @@ class UserBudgetAlert(BaseBudgetAlertType):
 
 
 class TeamBudgetAlert(BaseBudgetAlertType):
-    def get_event_message(self, user_info: CallInfo) -> str:
+    def get_event_message(self) -> str:
         return "Team Budget: "
 
     def get_id(self, user_info: CallInfo) -> str:
@@ -51,7 +51,7 @@ class TeamBudgetAlert(BaseBudgetAlertType):
 
 
 class OrganizationBudgetAlert(BaseBudgetAlertType):
-    def get_event_message(self, user_info: CallInfo) -> str:
+    def get_event_message(self) -> str:
         return "Organization Budget: "
 
     def get_id(self, user_info: CallInfo) -> str:
@@ -59,9 +59,7 @@ class OrganizationBudgetAlert(BaseBudgetAlertType):
 
 
 class TokenBudgetAlert(BaseBudgetAlertType):
-    def get_event_message(self, user_info: CallInfo) -> str:
-        if user_info.event_group == Litellm_EntityType.TEAM_MEMBER:
-            return "Team Member Budget: "
+    def get_event_message(self) -> str:
         return "Key Budget: "
 
     def get_id(self, user_info: CallInfo) -> str:
@@ -71,7 +69,7 @@ class TokenBudgetAlert(BaseBudgetAlertType):
 
 
 class ProjectedLimitExceededAlert(BaseBudgetAlertType):
-    def get_event_message(self, user_info: CallInfo) -> str:
+    def get_event_message(self) -> str:
         return "Key Budget: Projected Limit Exceeded"
 
     def get_id(self, user_info: CallInfo) -> str:
@@ -79,7 +77,7 @@ class ProjectedLimitExceededAlert(BaseBudgetAlertType):
 
 
 class ProjectBudgetAlert(BaseBudgetAlertType):
-    def get_event_message(self, user_info: CallInfo) -> str:
+    def get_event_message(self) -> str:
         return "Project Budget: "
 
     def get_id(self, user_info: CallInfo) -> str:
