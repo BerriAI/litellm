@@ -4721,8 +4721,8 @@ class BedrockConverseMessagesProcessor:
 
         candidates: Final = (model, get_bedrock_base_model(model))
         entries: Final = tuple(entry for c in candidates if (entry := litellm.model_cost.get(c)) is not None)
-        if entries:
-            return any(entry.get("supports_reasoning") is True for entry in entries)
+        if any(entry.get("supports_reasoning") is False for entry in entries):
+            return False
         return True
 
     @staticmethod

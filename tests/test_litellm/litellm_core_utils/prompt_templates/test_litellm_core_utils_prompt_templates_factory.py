@@ -375,17 +375,16 @@ def test_bedrock_converse_redacted_thinking_dropped_for_non_anthropic_model():
         )
         assert result[1]["content"] == [{"text": "answer"}]
 
-    registered_non_reasoning = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/custom-non-reasoning"
-    litellm.model_cost[registered_non_reasoning] = {"supports_reasoning": False}
-    try:
-        result = _bedrock_converse_messages_pt(
+    registered_non_reasoning: Final = (
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/custom-non-reasoning"
+    )
+    with patch.dict(litellm.model_cost, {registered_non_reasoning: {"supports_reasoning": False}}):
+        registered_result: Final = _bedrock_converse_messages_pt(
             messages=messages,
             model=registered_non_reasoning,
             llm_provider="bedrock_converse",
         )
-        assert result[1]["content"] == [{"text": "answer"}]
-    finally:
-        litellm.model_cost.pop(registered_non_reasoning, None)
+        assert registered_result[1]["content"] == [{"text": "answer"}]
 
 
 def test_bedrock_converse_preserves_reasoning_for_application_inference_profile():
@@ -415,6 +414,21 @@ def test_bedrock_converse_preserves_reasoning_for_application_inference_profile(
         assert assistant_blocks[0]["reasoningContent"]["reasoningText"]["signature"] == "sig_prof_1"
         assert assistant_blocks[1]["reasoningContent"]["redactedContent"] == "opaque_profile_data"
         assert assistant_blocks[2] == {"text": "profile response"}
+
+    partial_pricing_claude: Final = (
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/custom-claude-partial-pricing"
+    )
+    with patch.dict(litellm.model_cost, {partial_pricing_claude: {"input_cost_per_token": 0.003}}):
+        partial_result: Final = _bedrock_converse_messages_pt(
+            messages=messages,
+            model=partial_pricing_claude,
+            llm_provider="bedrock_converse",
+        )
+        partial_blocks: Final = partial_result[1]["content"]
+        assert len(partial_blocks) == 3
+        assert partial_blocks[0]["reasoningContent"]["reasoningText"]["signature"] == "sig_prof_1"
+        assert partial_blocks[1]["reasoningContent"]["redactedContent"] == "opaque_profile_data"
+        assert partial_blocks[2] == {"text": "profile response"}
 
 
 def test_bedrock_converse_unsigned_thinking_converted_to_text():
