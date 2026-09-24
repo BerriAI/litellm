@@ -2547,13 +2547,16 @@ class _LateAppendingPut:
         self.element = element
         self.fail_first = fail_first
         self.appended = False
+        self.failed_key: str | None = None
 
     async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         if not self.appended:
             self.appended = True
             self.logger.log_queue.append(self.element)
             if self.fail_first:
-                return _transient_failure_response()
+                self.failed_key = url
+        if url == self.failed_key:
+            return _transient_failure_response()
         return _ok_response()
 
 
@@ -2805,7 +2808,13 @@ async def test_events_appended_during_failed_flush_survive() -> None:
     with patch("asyncio.sleep", new_callable=AsyncMock):
         await logger.flush_queue()
 
-    assert [element.s3_object_key for element in logger.log_queue] == [late.s3_object_key]
+    assert [element.s3_object_key for element in logger.log_queue] == [first.s3_object_key, late.s3_object_key]
+    assert logger.log_queue[0].flush_attempts == 1
+
+    logger.async_httpx_client.put.failed_key = None
+    await logger.flush_queue()
+
+    assert logger.log_queue == []
 
 
 @pytest.mark.asyncio
@@ -3094,6 +3103,7 @@ def test_sync_upload_does_not_retry_403():
 
     response_403 = MagicMock()
     response_403.status_code = 403
+    response_403.text = "<Error><Code>AccessDenied</Code></Error>"
     response_403.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError("403", request=MagicMock(), response=response_403)
     )
