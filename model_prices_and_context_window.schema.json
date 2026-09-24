@@ -249,9 +249,9 @@
         },
         "deprecation_date": {
           "type": "string",
-          "description": "Date the provider deprecates the model, YYYY-MM-DD.",
           "format": "date",
-          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+          "description": "Date the provider deprecates the model, YYYY-MM-DD."
         },
         "gemini_audio_only_live": {
           "type": "boolean"
@@ -559,6 +559,16 @@
                       ]
                     },
                     "minItems": 1
+                  },
+                  "override_dates": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "date",
+                      "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
+                    },
+                    "minItems": 1,
+                    "description": "YYYY-MM-DD dates, read on weekday_timezone, on which this rule alone decides: weekdays and every other window are ignored. On any other date the rule does not apply, and malformed entries disable it."
                   }
                 },
                 "required": [
