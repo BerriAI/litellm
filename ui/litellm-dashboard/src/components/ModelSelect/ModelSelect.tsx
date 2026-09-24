@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/combobox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Organization, Team } from "../networking";
+import type { Team } from "@/components/key_team_helpers/key_list";
 import { splitWildcardModels } from "./modelUtils";
 
 const MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE = {
@@ -40,6 +40,7 @@ export const MODEL_SENTINEL_OPTIONS = [
 const MAX_VISIBLE_MODEL_CHIPS = 5;
 
 export interface ModelSelectProps {
+  id?: string;
   teamID?: string;
   organizationID?: string;
   options?: {
@@ -68,11 +69,18 @@ type ModelOptionGroup = {
 
 type FilterContextArgs = {
   allProxyModels: string[];
-  selectedTeam?: Team;
-  selectedOrganization?: Organization;
+  organizationID?: string;
+  organizationModels?: string[];
   userModels?: string[];
   options?: ModelSelectProps["options"];
 };
+
+const isUncappedModelCeiling = (organizationModels: string[]) =>
+  organizationModels.length === 0 || organizationModels.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value);
+
+// useTeam seeds from the team list, which omits organization_models; /team/info is the only source of the org ceiling.
+const isAwaitingOrganizationModels = (team: Team | undefined, isFetchingTeam: boolean) =>
+  isFetchingTeam && team !== undefined && team.organization_models === undefined;
 
 const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextArgs) => string[]> = {
   user: ({ allProxyModels, userModels, options }) => {
@@ -81,18 +89,10 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
     return [];
   },
 
-  team: ({ allProxyModels, selectedOrganization, userModels }) => {
-    if (selectedOrganization) {
-      if (
-        selectedOrganization.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
-        selectedOrganization.models.length === 0
-      ) {
-        return allProxyModels;
-      }
-      return allProxyModels.filter((model) => selectedOrganization.models.includes(model));
-    }
-
-    return allProxyModels ?? [];
+  team: ({ allProxyModels, organizationID, organizationModels }) => {
+    if (organizationModels === undefined) return organizationID ? [] : allProxyModels;
+    if (isUncappedModelCeiling(organizationModels)) return allProxyModels;
+    return allProxyModels.filter((model) => organizationModels.includes(model));
   },
 
   organization: ({ allProxyModels }) => {
@@ -107,7 +107,7 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
 const filterModels = (
   allProxyModels: ProxyModel[],
   ctx: ModelSelectProps,
-  extra: { selectedTeam?: Team; selectedOrganization?: Organization; userModels?: string[] },
+  extra: { organizationModels?: string[]; userModels?: string[] },
 ): string[] => {
   const deduplicatedProxyModels = Array.from(new Map(allProxyModels.map((m) => [m.id, m])).values()).map(
     (model) => model.id,
@@ -117,24 +117,31 @@ const filterModels = (
   const filterFn = contextFilters[ctx.context];
   if (!filterFn) return [];
 
-  return filterFn({ allProxyModels: deduplicatedProxyModels, ...extra, options: ctx.options });
+  const filterArgs: FilterContextArgs = {
+    allProxyModels: deduplicatedProxyModels,
+    organizationID: ctx.organizationID,
+    ...extra,
+    options: ctx.options,
+  };
+  return filterFn(filterArgs);
 };
 
 export const ModelSelect = (props: ModelSelectProps) => {
   const anchor = useComboboxAnchor();
-  const { teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
+  const { id, teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
-  const { data: team, isLoading: isLoadingTeam } = useTeam(teamID);
+  const { data: team, isLoading: isLoadingTeam, isFetching: isFetchingTeam } = useTeam(teamID);
   const { data: organization, isLoading: isLoadingOrganization } = useOrganization(organizationID);
   const { data: currentUser, isLoading: isCurrentUserLoading } = useCurrentUser();
 
   const isSpecialOption = (value: string) => MODEL_SENTINEL_OPTIONS.some((sv) => sv.value === value);
   const hasSpecialOptionSelected = value.some(isSpecialOption);
-  const isLoading = isLoadingAllProxyModels || isLoadingTeam || isLoadingOrganization || isCurrentUserLoading;
-  const organizationHasAllProxyModels =
-    organization?.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
-    organization?.models.length === 0;
+  const isTeamPending = isLoadingTeam || isAwaitingOrganizationModels(team, isFetchingTeam);
+  const isLoading = isLoadingAllProxyModels || isTeamPending || isLoadingOrganization || isCurrentUserLoading;
+  // The org's ceiling rides on /team/info, which a team admin may read; /organization/info 403s for them.
+  const organizationModels = team?.organization_models ?? organization?.models;
+  const organizationHasAllProxyModels = organizationModels !== undefined && isUncappedModelCeiling(organizationModels);
   const shouldShowAllProxyModels =
     showAllProxyModelsOverride || (organizationHasAllProxyModels && includeSpecialOptions) || context === "global";
 
@@ -158,8 +165,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
   };
 
   const filteredModels = filterModels(allProxyModels?.data ?? [], props, {
-    selectedTeam: team,
-    selectedOrganization: organization,
+    organizationModels,
     userModels: currentUser?.models,
   });
 
@@ -256,11 +262,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
               </>
             )}
           </ComboboxValue>
-          <ComboboxChipsInput
-            placeholder="Select Models"
-            aria-label="Select Models"
-            className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
-          />
+          <ComboboxChipsInput id={id} placeholder="Select Models" aria-label="Select Models" className="min-w-24" />
         </ComboboxChips>
         <ComboboxContent anchor={anchor}>
           <ComboboxEmpty>No models found</ComboboxEmpty>

@@ -1,13 +1,9 @@
 # Create server parameters for stdio connection
 import os
-import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
@@ -125,7 +121,7 @@ async def test_mcp_server_manager_https_server():
         print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
 
         # Verify result
-        assert result.isError is False
+        assert result.is_error is False
         assert len(result.content) == 1
         assert isinstance(result.content[0], TextContent)
         assert result.content[0].text == "Email sent successfully"
@@ -292,7 +288,7 @@ async def test_mcp_http_transport_call_tool_mock():
         )
 
         # Assertions
-        assert result.isError is False
+        assert result.is_error is False
         assert len(result.content) == 1
         # Type check before accessing text attribute
         assert isinstance(result.content[0], TextContent)
@@ -354,7 +350,7 @@ async def test_mcp_http_transport_call_tool_error_mock():
         )
 
         # Assertions for error case
-        assert result.isError is True
+        assert result.is_error is True
         assert len(result.content) == 1
         # Type check before accessing text attribute
         assert isinstance(result.content[0], TextContent)
@@ -365,11 +361,11 @@ async def test_mcp_http_transport_call_tool_error_mock():
 
 
 @pytest.mark.asyncio
-async def test_mcp_http_transport_tool_not_found():
+async def test_mcp_http_transport_tool_not_found(config_only_mcp_manager_factory):
     """Test calling a tool that doesn't exist"""
 
     # Create a fresh manager for testing
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
 
     # Load server config
     await test_manager.load_servers_from_config(
@@ -460,9 +456,15 @@ async def test_sse_mcp_handler_mock():
     """Test the SSE MCP handler functionality"""
     from litellm.proxy._types import UserAPIKeyAuth
 
-    # Mock the SSE session manager and its methods
-    mock_sse_session_manager = AsyncMock()
-    mock_sse_session_manager.handle_request = AsyncMock()
+    read_stream, write_stream = MagicMock(), MagicMock()
+
+    @asynccontextmanager
+    async def connect_sse(scope, receive, send):
+        yield read_stream, write_stream
+
+    mock_sse = MagicMock()
+    mock_sse.connect_sse.side_effect = connect_sse
+    run = AsyncMock()
 
     # Mock scope, receive, send with proper ASGI scope format
     mock_scope = {
@@ -487,13 +489,14 @@ async def test_sse_mcp_handler_mock():
     )
 
     with (
+        patch("litellm.proxy._experimental.mcp_server.server.server.run", run),
         patch(
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.sse_session_manager",
-            mock_sse_session_manager,
+            "litellm.proxy._experimental.mcp_server.server.sse",
+            mock_sse,
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
@@ -508,10 +511,8 @@ async def test_sse_mcp_handler_mock():
         # Call the handler
         await handle_sse_mcp(mock_scope, mock_receive, mock_send)
 
-        # Verify SSE session manager handle_request was called
-        mock_sse_session_manager.handle_request.assert_called_once_with(
-            mock_scope, mock_receive, mock_send
-        )
+        assert run.await_args.args[:2] == (read_stream, write_stream)
+        assert mock_sse.connect_sse.call_args.args[0]["path"] == "/mcp/sse"
 
 
 @pytest.mark.asyncio
@@ -549,7 +550,10 @@ async def test_sse_mcp_handler_propagates_passthrough_401():
             True,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.sse_session_manager",
+            "litellm.proxy._experimental.mcp_server.server.sse",
+        ) as transport,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.server.run",
             AsyncMock(),
         ),
         patch(
@@ -573,6 +577,7 @@ async def test_sse_mcp_handler_propagates_passthrough_401():
         with pytest.raises(HTTPException) as excinfo:
             await handle_sse_mcp(mock_scope, mock_receive, mock_send)
 
+    transport.connect_sse.assert_not_called()
     assert excinfo.value.status_code == 401
     assert excinfo.value.headers and "WWW-Authenticate" in excinfo.value.headers
 
@@ -800,7 +805,7 @@ async def test_list_tools_rest_api_success():
         ListMCPToolsRestAPIResponseObject(
             name="test_tool",
             description="A test tool",
-            inputSchema={"type": "object"},
+            input_schema={"type": "object"},
             mcp_info={"server_name": "test_server"},
         )
     ]
@@ -926,7 +931,7 @@ async def test_get_tools_from_mcp_servers():
         )
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
             mock_manager,
         ):
             # Test with specific servers
@@ -954,6 +959,7 @@ async def test_get_tools_from_mcp_servers():
                 extra_headers=None,
                 add_prefix=False,
                 raw_headers=None,
+                client_ip=None,
                 user_api_key_auth=None,
                 oauth2_headers=None,
             ):
@@ -970,7 +976,7 @@ async def test_get_tools_from_mcp_servers():
             )
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
             mock_manager_2,
         ):
             result = await _get_tools_from_mcp_servers(
@@ -1002,7 +1008,7 @@ async def test_get_tools_from_mcp_servers():
         )
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
             mock_manager,
         ):
             with patch(
@@ -1101,11 +1107,11 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_manager_access_groups_from_config():
+async def test_mcp_server_manager_access_groups_from_config(config_only_mcp_manager_factory):
     """
     Test that access_groups are loaded from config and can be resolved.
     """
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
     await test_manager.load_servers_from_config(
         {
             "config_server": {
@@ -1172,7 +1178,7 @@ async def test_mcp_server_manager_access_groups_from_config():
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_manager_config_integration_with_database():
+async def test_mcp_server_manager_config_integration_with_database(config_only_mcp_manager_factory):
     """
     Test that config-based servers properly integrate with database servers,
     specifically testing access_groups and description fields.
@@ -1180,7 +1186,7 @@ async def test_mcp_server_manager_config_integration_with_database():
     import datetime
     from litellm.proxy._types import LiteLLM_MCPServerTable
 
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
 
     # Test 1: Load config with access_groups and description
     await test_manager.load_servers_from_config(
@@ -1985,6 +1991,7 @@ async def test_get_tools_for_single_server():
             extra_headers=None,
             add_prefix=False,
             raw_headers=None,
+            client_ip=None,
             user_api_key_auth=None,
         )
 
@@ -2080,7 +2087,7 @@ async def test_rest_listing_hides_key_grants_dispatch_would_refuse():
     with patch(
         "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
     ) as mock_manager, patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
     ) as mock_server_manager, patch.object(
         MCPRequestHandler,
         "get_allowed_tools_for_server",
@@ -2169,7 +2176,7 @@ async def test_list_tool_rest_api_with_server_specific_auth():
                         ListMCPToolsRestAPIResponseObject(
                             name="send_email",
                             description="Send an email",
-                            inputSchema={"type": "object"},
+                            input_schema={"type": "object"},
                             mcp_info={"server_name": "zapier"},
                         )
                     ]
@@ -2263,7 +2270,7 @@ async def test_list_tool_rest_api_with_default_auth():
                         ListMCPToolsRestAPIResponseObject(
                             name="send_email",
                             description="Send an email",
-                            inputSchema={"type": "object"},
+                            input_schema={"type": "object"},
                             mcp_info={"server_name": "unknown_server"},
                         )
                     ]
@@ -2375,7 +2382,7 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                             ListMCPToolsRestAPIResponseObject(
                                 name="send_email",
                                 description="Send an email",
-                                inputSchema={"type": "object"},
+                                input_schema={"type": "object"},
                                 mcp_info={"server_name": "zapier"},
                             )
                         ],
@@ -2383,7 +2390,7 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                             ListMCPToolsRestAPIResponseObject(
                                 name="send_message",
                                 description="Send a message",
-                                inputSchema={"type": "object"},
+                                input_schema={"type": "object"},
                                 mcp_info={"server_name": "slack"},
                             )
                         ],
@@ -2477,7 +2484,7 @@ async def test_filter_tools_by_allowed_tools_integration():
 
     # Mock the global MCP server manager
     with patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
     ) as mock_manager:
         # Mock manager methods
         mock_manager.get_allowed_mcp_servers = AsyncMock(
@@ -2592,7 +2599,7 @@ async def test_filter_tools_by_disallowed_tools_integration():
 
     # Mock the global MCP server manager
     with patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
     ) as mock_manager:
         # Mock manager methods
         mock_manager.get_allowed_mcp_servers = AsyncMock(
@@ -2693,7 +2700,7 @@ async def test_filter_tools_no_restrictions_integration():
 
     # Mock the global MCP server manager
     with patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
     ) as mock_manager:
         # Mock manager methods
         mock_manager.get_allowed_mcp_servers = AsyncMock(
@@ -2815,15 +2822,16 @@ async def test_mcp_access_group_permission_intersection_integration():
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_manager_with_access_groups_integration():
+async def test_mcp_server_manager_with_access_groups_integration(config_only_mcp_manager_factory):
     """Integration test for MCPServerManager with access group filtering"""
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
+        MCPServerAccess,
     )
     from litellm.proxy._types import UserAPIKeyAuth
 
     # Create a test manager
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
 
     # Load servers with access groups
     await test_manager.load_servers_from_config(
@@ -2852,11 +2860,11 @@ async def test_mcp_server_manager_with_access_groups_integration():
     )
 
     # Mock the permission lookup to return staff access group
-    with patch.object(MCPRequestHandler, "get_allowed_mcp_servers") as mock_get_allowed:
-        mock_get_allowed.return_value = [
-            "staff-server-id",
-            "ops-server-id",
-        ]  # User has access to staff and ops
+    with patch.object(MCPRequestHandler, "get_mcp_server_access") as mock_get_allowed:  # test-quality-ok: manager resolver seam
+        mock_get_allowed.return_value = MCPServerAccess(
+            server_ids=("staff-server-id", "ops-server-id"),
+            scope="scoped",
+        )
 
         allowed_servers = await test_manager.get_allowed_mcp_servers(user_auth)
 
@@ -2866,13 +2874,13 @@ async def test_mcp_server_manager_with_access_groups_integration():
 
 
 @pytest.mark.asyncio
-async def test_get_allowed_mcp_servers_returns_registry_for_admin():
+async def test_get_allowed_mcp_servers_returns_registry_for_admin(config_only_mcp_manager_factory):
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
 
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
     await test_manager.load_servers_from_config(
         {
             "alpha_server": {
@@ -2901,13 +2909,14 @@ async def test_get_allowed_mcp_servers_returns_registry_for_admin():
 
 
 @pytest.mark.asyncio
-async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permissions():
+async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permissions(config_only_mcp_manager_factory):
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
+        MCPServerAccess,
     )
 
-    test_manager = MCPServerManager()
+    test_manager = config_only_mcp_manager_factory()
     await test_manager.load_servers_from_config(
         {
             "alpha_server": {
@@ -2927,9 +2936,9 @@ async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permi
     )
 
     with patch.object(
-        MCPRequestHandler, "get_allowed_mcp_servers", new_callable=AsyncMock
+        MCPRequestHandler, "get_mcp_server_access", new_callable=AsyncMock
     ) as mock_permission_lookup:
-        mock_permission_lookup.return_value = []
+        mock_permission_lookup.return_value = MCPServerAccess(server_ids=())
         allowed_servers = await test_manager.get_allowed_mcp_servers(user_auth)
 
     assert allowed_servers == []
@@ -2953,7 +2962,7 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
         mcp_info={"server_name": "test_server"},
     )
 
-    expected_response = [TextContent(type="text", text="ok")]
+    expected_response = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
 
     with (
         patch.object(
@@ -2972,10 +2981,10 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
             return_value=mock_server,
         ) as mock_get_server,
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_tool_registry"
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_tool_registry"
         ) as mock_tool_registry,
         patch(
-            "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+            "litellm.proxy._experimental.mcp_server.operations._handle_managed_mcp_tool",
             new_callable=AsyncMock,
         ) as mock_handle_managed,
         patch(
@@ -3029,7 +3038,7 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
         mcp_info={"server_name": "test_server"},
     )
 
-    expected_response = [TextContent(type="text", text="ok")]
+    expected_response = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
 
     with (
         patch.object(
@@ -3048,10 +3057,10 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
             return_value=mock_server,
         ) as mock_get_server,
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_tool_registry"
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_tool_registry"
         ) as mock_tool_registry,
         patch(
-            "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+            "litellm.proxy._experimental.mcp_server.operations._handle_managed_mcp_tool",
             new_callable=AsyncMock,
         ) as mock_handle_managed,
         patch(

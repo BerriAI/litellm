@@ -18,6 +18,7 @@ from prisma.errors import ClientNotConnectedError
 _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
     "prisma_client",
+    "llm_router",
 )
 
 
@@ -56,7 +57,10 @@ def pytest_runtest_setup(item):
 
     Without this, a leaked value (e.g. master_key set by a sibling test)
     flips the auth short-circuit in user_api_key_auth and causes unrelated
-    tests in the same xdist worker to return 401 instead of 200.
+    tests in the same xdist worker to return 401 instead of 200. A leaked
+    llm_router does the same to anything that reads the running router out
+    of sys.modules, such as the PTU rollup's deployment scan, which then
+    counts a sibling test's deployments as if the proxy owned them.
 
     This must be a hook pair, not an autouse fixture: an autouse fixture in
     the root conftest requests monkeypatch, so monkeypatch's undo stack
@@ -264,7 +268,17 @@ def create_proxy_test_client(
 
     # Set environment variables
     set_proxy_environment_variables(monkeypatch, database_url=database_url)
+    monkeypatch.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
 
     # Initialize proxy
     asyncio.run(initialize(config=config_fp, debug=init_options.get("debug", False)))
     return TestClient(app)
+
+
+@pytest.fixture
+def fresh_agent_read_through(monkeypatch):
+    from litellm.proxy.common_utils import registry_read_through
+
+    read_through = registry_read_through.RegistryReadThrough(resync=registry_read_through._resync_agents)
+    monkeypatch.setattr(registry_read_through, "agent_registry_read_through", read_through)
+    return read_through

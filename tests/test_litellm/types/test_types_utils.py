@@ -1,11 +1,20 @@
-import os
-import sys
+import json
+from typing import Final
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm.types.utils import HiddenParams
+from litellm.types.utils import (
+    HiddenParams,
+    ImageObject,
+    ImageResponse,
+    all_litellm_params,
+    text_tokens_without_nested_reasoning,
+)
+
+
+def test_rust_is_a_known_litellm_param():
+    assert "rust" in all_litellm_params
 
 
 def test_hidden_params_response_ms():
@@ -69,6 +78,29 @@ def test_usage_dump():
 
     new_usage = Usage(**current_usage.model_dump())
     assert new_usage.prompt_tokens_details.web_search_requests == 1
+
+
+def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
+    """Regression (LIT-5757): DashScope nests the Anthropic-spelled
+    cache_creation_input_tokens inside prompt_tokens_details. It must populate
+    the canonical cache_write_tokens/cache_creation_tokens pair, without
+    overriding an explicitly provided canonical value."""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    nested: Final = PromptTokensDetailsWrapper(
+        cached_tokens=0, text_tokens=2059, cache_creation_input_tokens=2048
+    )
+    assert nested.cache_write_tokens == 2048
+    assert nested.cache_creation_tokens == 2048
+
+    explicit: Final = PromptTokensDetailsWrapper(
+        cache_write_tokens=100, cache_creation_input_tokens=2048
+    )
+    assert explicit.cache_write_tokens == 100
+    assert explicit.cache_creation_tokens == 100
+
+    non_int: Final = PromptTokensDetailsWrapper(cache_creation_input_tokens=None)
+    assert not hasattr(non_int, "cache_write_tokens")
 
 
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
@@ -734,3 +766,98 @@ def test_delta_function_tool_call_unchanged_by_custom_support():
     delta = Delta(tool_calls=[{"index": 0, "id": "c2", "type": "function", "function": {"name": "g", "arguments": ""}}])
     assert isinstance(delta.tool_calls[0], ChatCompletionDeltaToolCall)
     assert "custom" not in delta.model_dump()["tool_calls"][0]
+
+
+def test_image_response_keeps_background():
+    """https://github.com/BerriAI/litellm/issues/38649"""
+    response = ImageResponse(created=1, data=[{"b64_json": "aGk="}], background="transparent", output_format="png")
+    assert response.background == "transparent"
+    assert response.model_dump()["background"] == "transparent"
+
+
+def test_image_response_serialization_honors_dump_options():
+    response: Final = ImageResponse(
+        data=[
+            ImageObject(
+                url="https://example.com/image.png",
+                provider_specific_fields={"width": 1024, "height": 1536, "content_type": "image/png"},
+            )
+        ]
+    )
+    expected: Final = [
+        {
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+        }
+    ]
+    assert response.model_dump(exclude_none=True)["data"] == expected
+    assert json.loads(response.model_dump_json(exclude_none=True))["data"] == expected
+    assert response.model_dump()["data"][0]["provider_specific_fields"] == expected[0]["provider_specific_fields"]
+    assert "url" not in response.model_dump(exclude={"data": {0: {"url"}}})["data"][0]
+    assert response.model_dump(include={"data": {"__all__": {"url"}}})["data"] == [
+        {"url": "https://example.com/image.png"}
+    ]
+    assert response.model_dump(include={"data": {0: True}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+        }
+    ]
+    assert response.model_dump(exclude={"data": {0: True}})["data"] == []
+
+    two_image_response: Final = ImageResponse(
+        data=[
+            ImageObject(url="https://example.com/image.png"),
+            ImageObject(url="https://example.com/second-image.png"),
+        ]
+    )
+    assert two_image_response.model_dump(exclude={"data": {1}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": None,
+        }
+    ]
+    assert two_image_response.model_dump(exclude={"data": {-1}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": None,
+        }
+    ]
+    assert two_image_response.model_dump(include={"data": {-1: {"url"}}})["data"] == [
+        {"url": "https://example.com/second-image.png"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("completion_tokens", "text_tokens", "reasoning_tokens", "other_modality_tokens", "expected_text_tokens"),
+    (
+        pytest.param(50, 30, 20, 0, 30, id="details_sum_to_completion_is_a_no_op"),
+        pytest.param(34, 30, 24, 0, 10, id="strip_is_capped_at_the_over_sum"),
+        pytest.param(100, 100, 10, 70, 90, id="only_the_reasoning_share_is_stripped_when_text_over_reports_further"),
+        pytest.param(10, 5, 20, 0, 0, id="text_never_goes_negative_when_reasoning_exceeds_it"),
+    ),
+)
+def test_text_tokens_without_nested_reasoning_clamps(
+    completion_tokens: int,
+    text_tokens: int,
+    reasoning_tokens: int,
+    other_modality_tokens: int,
+    expected_text_tokens: int,
+) -> None:
+    """The strip never exceeds the reasoning share, the reported text, or the over-sum past completion_tokens."""
+
+    assert (
+        text_tokens_without_nested_reasoning(
+            completion_tokens=completion_tokens,
+            text_tokens=text_tokens,
+            reasoning_tokens=reasoning_tokens,
+            other_modality_tokens=other_modality_tokens,
+        )
+        == expected_text_tokens
+    )

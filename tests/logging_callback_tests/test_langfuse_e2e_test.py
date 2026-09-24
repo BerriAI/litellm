@@ -3,7 +3,6 @@ import copy
 import json
 import logging
 import os
-import sys
 import threading
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
 logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion
@@ -483,12 +481,12 @@ class TestLangfuseLogging:
                     completion_tokens=10,
                     total_tokens=20,
                 ),
-                model="vertex/gemini-2.0-flash-001",
+                model="vertex/gemini-3-flash-preview",
                 object="chat.completion",
                 created=1723081200,
             ).model_dump()
             await litellm.acompletion(
-                model="vertex_ai/gemini-2.0-flash-001",
+                model="vertex_ai/gemini-3-flash-preview",
                 messages=[{"role": "user", "content": "Hello!"}],
                 mock_response=mock_response,
                 metadata={"trace_id": setup["trace_id"]},

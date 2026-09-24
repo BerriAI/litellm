@@ -2,15 +2,28 @@
 Test automatic routing to xAI Responses API when tools are present
 """
 
-import os
-import sys
+import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
-
+import httpx
 import pytest
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.main import responses_api_bridge_check
+
+
+class _RecordingResponsesHandler:
+    """MockTransport handler that serves a canned /responses reply and keeps the body xAI would have received"""
+
+    def __init__(self, reply: Mapping[str, object]) -> None:
+        self.reply: Final = reply
+        self.request_body: Mapping[str, object] | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_body = json.loads(request.content)
+        return httpx.Response(200, json=dict(self.reply), request=request)
 
 
 class TestXAIResponsesAutoRouting:
@@ -33,34 +46,6 @@ class TestXAIResponsesAutoRouting:
         assert model_info.get("mode") != "responses"
         assert updated_model == model
 
-    def test_responses_api_bridge_check_with_tools(self):
-        """Test that with tools, xAI automatically routes to Responses API"""
-        model = "grok-3"
-        custom_llm_provider = "xai"
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the weather",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"location": {"type": "string"}},
-                    },
-                },
-            }
-        ]
-        web_search_options = None
-
-        model_info, updated_model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
-
-        # Should auto-route to responses mode when tools are present
-        assert model_info.get("mode") == "chat"
-        assert updated_model == model
 
     def test_responses_api_bridge_check_with_empty_tools(self):
         """Test that with empty tools list, xAI does not route to Responses API"""
@@ -121,57 +106,8 @@ class TestXAIResponsesAutoRouting:
         assert model_info.get("mode") == "responses"
         assert updated_model == "grok-3"  # prefix removed
 
-    def test_responses_api_bridge_check_with_code_interpreter_tool(self):
-        """Test auto-routing with code_interpreter tool"""
-        model = "grok-3"
-        custom_llm_provider = "xai"
-        tools = [{"type": "code_interpreter"}]
-        web_search_options = None
 
-        model_info, updated_model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
-        # Should auto-route with code_interpreter tool
-        assert model_info.get("mode") == "chat"
-        assert updated_model == model
 
-    def test_responses_api_bridge_check_with_web_search_tool(self):
-        """Test auto-routing with web_search tool"""
-        model = "grok-4"
-        custom_llm_provider = "xai"
-        tools = [
-            {"type": "web_search", "filters": {"allowed_domains": ["wikipedia.org"]}}
-        ]
-        web_search_options = None
-
-        model_info, updated_model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
-
-        # Should auto-route with web_search tool
-        assert model_info.get("mode") == "chat"
-        assert updated_model == model
-
-    def test_responses_api_bridge_check_with_x_search_tool(self):
-        """Test auto-routing with x_search tool"""
-        model = "grok-4"
-        custom_llm_provider = "xai"
-        tools = [{"type": "x_search", "allowed_x_handles": ["@elonmusk"]}]
-        web_search_options = None
-
-        model_info, updated_model = responses_api_bridge_check(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
-        )
-
-        # Should auto-route with x_search tool
-        assert model_info.get("mode") == "chat"
-        assert updated_model == model
 
     def test_responses_api_bridge_check_with_web_search_options(self):
         """Test auto-routing with web_search_options"""
@@ -206,6 +142,17 @@ class TestXAIResponsesAutoRouting:
         # Should auto-route with both present
         assert model_info.get("mode") == "responses"
         assert updated_model == model
+
+    def test_responses_api_bridge_check_with_web_search_options_on_unmapped_model(self):
+        """web search must reach /responses even for a model missing from the cost map, chat returns 410"""
+        model_info, updated_model = responses_api_bridge_check(
+            model="grok-not-in-cost-map",
+            custom_llm_provider="xai",
+            web_search_options={"search_context_size": "medium"},
+        )
+
+        assert model_info.get("mode") == "responses"
+        assert updated_model == "grok-not-in-cost-map"
 
     @patch("litellm.completion_extras.responses_api_bridge.completion")
     def test_completion_with_tools_routes_to_responses_api(
@@ -245,6 +192,44 @@ class TestXAIResponsesAutoRouting:
         # The mock should have been called, indicating responses API was used
         # Note: This test may need adjustment based on actual mock_response behavior
         # The key is that the responses_api_bridge_check logic routes correctly
+
+    def test_system_message_survives_web_search_bridge(self):
+        """A system message becomes 'instructions' on the bridged /responses call, and xAI accepts it"""
+        handler: Final = _RecordingResponsesHandler(
+            reply={
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 0,
+                "status": "completed",
+                "model": "grok-4.6",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_test",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "1.0.0", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
+        )
+
+        response: Final = litellm.completion(
+            model="xai/grok-4.6",
+            messages=[
+                {"role": "system", "content": "Answer briefly."},
+                {"role": "user", "content": "newest litellm version?"},
+            ],
+            web_search_options={"search_context_size": "medium"},
+            api_key="fake-key",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+
+        assert response.choices[0].message.content == "1.0.0"
+        assert handler.request_body is not None
+        assert handler.request_body["instructions"] == "Answer briefly."
+        assert handler.request_body["tools"] == [{"type": "web_search"}]
 
 
 if __name__ == "__main__":

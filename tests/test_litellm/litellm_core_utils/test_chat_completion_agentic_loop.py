@@ -20,14 +20,11 @@ removed, so `test_internal_control_fields_never_leak_into_provider_body` proves
 they stay out of the body even without it.
 """
 
-import os
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -344,6 +341,40 @@ async def test_dispatcher_runs_followup_with_incremented_depth_and_patched_messa
     assert "_agentic_loop_api_surface" not in call_kwargs
     # Cleanup hook always runs.
     assert logger.cleanup_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_followup_does_not_repeat_a_request_param_found_in_request_kwargs(
+    restore_callbacks,
+):
+    """Request kwargs that repeat a request param must not crash the follow-up
+    with a duplicate keyword, whether or not the plan copies them too."""
+    followup = _plain_model_response("done")
+    request_kwargs = {"temperature": 0.2, "api_base": "https://a"}
+    plan = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(messages=_patched_messages(), kwargs=dict(request_kwargs)),
+    )
+    litellm.callbacks = [_GateOnlyLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})]
+
+    acompletion_mock = AsyncMock(return_value=followup)
+    with patch.object(litellm, "acompletion", acompletion_mock):
+        result = await maybe_run_chat_completion_agentic_loop(
+            response=_tool_call_model_response(),
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "what is 6*7?"}],
+            optional_params={"temperature": 0.2},
+            kwargs=dict(request_kwargs),
+            logging_obj=_LoggingStub(),
+            custom_llm_provider="openai",
+            stream=False,
+        )
+
+    assert result is followup
+    acompletion_mock.assert_awaited_once()
+    call_kwargs = acompletion_mock.await_args.kwargs
+    assert call_kwargs["temperature"] == 0.2
+    assert call_kwargs["api_base"] == "https://a"
 
 
 @pytest.mark.asyncio

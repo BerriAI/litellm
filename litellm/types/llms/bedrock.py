@@ -1,8 +1,10 @@
 import json
+from collections.abc import Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from typing_extensions import Required, TypedDict, override
+from pydantic import BaseModel, ConfigDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -94,6 +96,10 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
     signature: str
     redactedContent: str
     text: str
+
+
+class BedrockConverseGptReasoningEffortBlock(TypedDict):
+    effort: ReadOnly[str]
 
 
 class GuardrailConverseTextBlock(TypedDict, total=False):
@@ -216,14 +222,22 @@ class ConverseResponseOutputBlock(TypedDict):
     message: MessageBlock | None
 
 
-class ConverseTokenUsageBlock(TypedDict):
-    inputTokens: int
-    outputTokens: int
-    totalTokens: int
-    cacheReadInputTokenCount: int
-    cacheReadInputTokens: int
-    cacheWriteInputTokenCount: int
-    cacheWriteInputTokens: int
+class CacheDetailBlock(TypedDict):
+    """Per-TTL cache-write breakdown, read-only AWS response data. https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html"""
+
+    inputTokens: ReadOnly[int]
+    ttl: ReadOnly[Literal["5m", "1h"]]
+
+
+class ConverseTokenUsageBlock(TypedDict, total=False):
+    inputTokens: Required[ReadOnly[int]]
+    outputTokens: Required[ReadOnly[int]]
+    totalTokens: ReadOnly[int]
+    cacheReadInputTokenCount: ReadOnly[int]
+    cacheReadInputTokens: ReadOnly[int]
+    cacheWriteInputTokenCount: ReadOnly[int]
+    cacheWriteInputTokens: ReadOnly[int]
+    cacheDetails: ReadOnly[list[CacheDetailBlock]]  # mutable-ok: AWS response array, never mutated after parsing
 
 
 class ServiceTierBlock(TypedDict):
@@ -396,7 +410,7 @@ class OutputConfigBlock(TypedDict, total=False):
 
 class CommonRequestObject(TypedDict, total=False):  # common request object across sync + async flows
     additionalModelRequestFields: dict
-    additionalModelResponseFieldPaths: list[str]
+    additionalModelResponseFieldPaths: Sequence[str]
     inferenceConfig: InferenceConfig
     system: list[SystemContentBlock]
     toolConfig: ToolConfigBlock
@@ -544,7 +558,6 @@ class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
     message: str  # Specifies any errors that occur during generation.
 
 
-# TwelveLabs Marengo Embed 2.7 types
 TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]
 TWELVELABS_EMBEDDING_OPTIONS = Literal["visual-text", "visual-image", "audio"]
 
@@ -578,6 +591,113 @@ class TwelveLabsMarengoEmbeddingResponse(TypedDict):
     endSec: float
 
 
+TWELVELABS_MARENGO_3_INPUT_TYPES: TypeAlias = Literal["text", "image", "video", "audio", "text_image", "multi_input"]
+TWELVELABS_MARENGO_3_EMBEDDING_OPTIONS: TypeAlias = Literal["visual", "audio", "transcription"]
+TWELVELABS_MARENGO_3_EMBEDDING_TYPES: TypeAlias = Literal["separate_embedding", "fused_embedding"]
+TWELVELABS_MARENGO_3_EMBEDDING_SCOPES: TypeAlias = Literal["clip", "asset"]
+
+
+class TwelveLabsMarengo3FixedSegmentationConfig(TypedDict):
+    durationSec: ReadOnly[int]
+
+
+class TwelveLabsMarengo3FixedSegmentation(TypedDict):
+    method: ReadOnly[Literal["fixed"]]
+    fixed: ReadOnly[TwelveLabsMarengo3FixedSegmentationConfig]
+
+
+class TwelveLabsMarengo3DynamicSegmentationConfig(TypedDict):
+    minDurationSec: ReadOnly[int]
+
+
+class TwelveLabsMarengo3DynamicSegmentation(TypedDict):
+    method: ReadOnly[Literal["dynamic"]]
+    dynamic: ReadOnly[TwelveLabsMarengo3DynamicSegmentationConfig]
+
+
+TwelveLabsMarengo3Segmentation: TypeAlias = TwelveLabsMarengo3FixedSegmentation | TwelveLabsMarengo3DynamicSegmentation
+
+
+class TwelveLabsMarengo3TextInput(TypedDict):
+    inputText: ReadOnly[str]
+
+
+class TwelveLabsMarengo3ImageInput(TypedDict):
+    mediaSource: ReadOnly[TwelveLabsMediaSource]
+
+
+class TwelveLabsMarengo3TimedMediaOptions(TypedDict, total=False):
+    startSec: ReadOnly[float]
+    endSec: ReadOnly[float]
+    segmentation: ReadOnly[TwelveLabsMarengo3Segmentation]
+    embeddingOption: ReadOnly[Sequence[TWELVELABS_MARENGO_3_EMBEDDING_OPTIONS]]
+    embeddingType: ReadOnly[Sequence[TWELVELABS_MARENGO_3_EMBEDDING_TYPES]]
+    embeddingScope: ReadOnly[Sequence[TWELVELABS_MARENGO_3_EMBEDDING_SCOPES]]
+
+
+class TwelveLabsMarengo3TimedMediaInput(TwelveLabsMarengo3TimedMediaOptions):
+    mediaSource: Required[ReadOnly[TwelveLabsMediaSource]]
+
+
+class TwelveLabsMarengo3TextImageInput(TypedDict):
+    inputText: ReadOnly[str]
+    mediaSource: ReadOnly[TwelveLabsMediaSource]
+
+
+class TwelveLabsMarengo3NamedMediaSource(TwelveLabsMediaSource):
+    name: Required[ReadOnly[str]]
+    mediaType: Required[ReadOnly[Literal["image"]]]
+
+
+class TwelveLabsMarengo3MultiInput(TypedDict, total=False):
+    inputText: ReadOnly[str]
+    mediaSources: Required[ReadOnly[Sequence[TwelveLabsMarengo3NamedMediaSource]]]
+
+
+class TwelveLabsMarengo3RequestBase(TypedDict, total=False):
+    inferenceId: ReadOnly[str]
+
+
+class TwelveLabsMarengo3TextRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["text"]]
+    text: ReadOnly[TwelveLabsMarengo3TextInput]
+
+
+class TwelveLabsMarengo3ImageRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["image"]]
+    image: ReadOnly[TwelveLabsMarengo3ImageInput]
+
+
+class TwelveLabsMarengo3VideoRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["video"]]
+    video: ReadOnly[TwelveLabsMarengo3TimedMediaInput]
+
+
+class TwelveLabsMarengo3AudioRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["audio"]]
+    audio: ReadOnly[TwelveLabsMarengo3TimedMediaInput]
+
+
+class TwelveLabsMarengo3TextImageRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["text_image"]]
+    text_image: ReadOnly[TwelveLabsMarengo3TextImageInput]
+
+
+class TwelveLabsMarengo3MultiInputRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["multi_input"]]
+    multi_input: ReadOnly[TwelveLabsMarengo3MultiInput]
+
+
+TwelveLabsMarengo3EmbeddingRequest: TypeAlias = (
+    TwelveLabsMarengo3TextRequest
+    | TwelveLabsMarengo3ImageRequest
+    | TwelveLabsMarengo3VideoRequest
+    | TwelveLabsMarengo3AudioRequest
+    | TwelveLabsMarengo3TextImageRequest
+    | TwelveLabsMarengo3MultiInputRequest
+)
+
+
 class TwelveLabsS3OutputDataConfig(TypedDict):
     s3Uri: str
 
@@ -588,7 +708,7 @@ class TwelveLabsOutputDataConfig(TypedDict):
 
 class TwelveLabsAsyncInvokeRequest(TypedDict):
     modelId: str
-    modelInput: TwelveLabsMarengoEmbeddingRequest
+    modelInput: ReadOnly[TwelveLabsMarengoEmbeddingRequest | TwelveLabsMarengo3EmbeddingRequest]
     outputDataConfig: TwelveLabsOutputDataConfig
 
 
@@ -961,6 +1081,7 @@ class BedrockS3InputDataConfig(TypedDict):
     """S3 input data configuration for Bedrock batch jobs."""
 
     s3Uri: str
+    s3BucketOwner: NotRequired[ReadOnly[str]]
 
 
 class BedrockInputDataConfig(TypedDict):
@@ -974,6 +1095,7 @@ class BedrockS3OutputDataConfig(TypedDict, total=False):
 
     s3Uri: str
     s3EncryptionKeyId: str | None
+    s3BucketOwner: ReadOnly[str]
 
 
 class BedrockOutputDataConfig(TypedDict):
@@ -985,6 +1107,31 @@ class BedrockOutputDataConfig(TypedDict):
 class BedrockTag(TypedDict):
     key: str
     value: str
+
+
+class AwsSessionTag(TypedDict):
+    Key: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+    Value: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+
+
+class AwsAuthParams(BaseModel):
+    """Every credential-shaped aws_* param BaseAWSLLM.get_credentials accepts; region is resolved separately."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+    aws_session_name: str | None = None
+    aws_profile_name: str | None = None
+    aws_role_name: str | None = None
+    aws_web_identity_token: str | None = None
+    aws_sts_endpoint: str | None = None
+    aws_external_id: str | None = None
+    aws_session_tags: object = None
+
+
+AWS_AUTH_PARAM_KEYS: Final[tuple[str, ...]] = tuple(AwsAuthParams.model_fields)
 
 
 class BedrockCreateBatchRequest(TypedDict, total=False):
@@ -1090,6 +1237,7 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     thinking: dict
     metadata: dict
     output_config: dict
+    safeguards: list
 
     # `context_management` is allowed for Bedrock InvokeModel only when it
     # carries `compact_20260112` edits paired with the `compact-2026-01-12`

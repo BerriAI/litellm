@@ -1,27 +1,41 @@
 import ast
 import asyncio
+import base64
+import dataclasses
 import json
-import os
+import logging
+import re
 import sys
+import time
+from io import StringIO
 from pathlib import Path
 from typing import List
 
 import pytest
-
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
-import logging
-import sys
+from pydantic import BaseModel, computed_field
 
 import litellm
 from litellm._logging import (
+    _COLOR_LOG_FORMAT,
+    _MAX_SCRUBBED_ACCESS_ARG,
+    _PLAIN_LOG_FORMAT,
     ALL_LOGGERS,
+    AccessLogPathFilter,
+    AccessLogRedactionFilter,
     CorrelationContextFilter,
     CorrelationPlainFormatter,
+    DiagnosticProcessingFilter,
     JsonFormatter,
+    LevelRoutingStreamHandler,
+    SecretRedactionFilter,
+    StdoutLogTruncationFilter,
+    _get_uvicorn_json_log_config,
     _initialize_loggers_with_handler,
+    _parse_json_logs_env,
+    _plain_log_format,
+    _stdout_truncation_marker,
     _turn_on_json,
+    format_base64_size,
     session_id_var,
     set_session_id,
     set_trace_id,
@@ -30,7 +44,9 @@ from litellm._logging import (
     verbose_proxy_logger,
     verbose_router_logger,
 )
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import secret_redaction
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -57,11 +73,10 @@ def test_json_mode_emits_one_record_per_logger(capfd):
     verbose_router_logger.info("second info from router")
     verbose_proxy_logger.info("third info from proxy")
 
-    # Capture stdout
+    # All three records are INFO, so they must route to stdout and none to stderr
     out, err = capfd.readouterr()
-    print("out", out)
-    print("err", err)
-    lines = [l for l in err.splitlines() if l.strip()]
+    assert [raw for raw in err.splitlines() if raw.strip()] == []
+    lines = [raw for raw in out.splitlines() if raw.strip()]
 
     # Expect exactly three JSON lines
     assert len(lines) == 3, f"got {len(lines)} lines, want 3: {lines!r}"
@@ -177,12 +192,47 @@ def test_json_formatter_parses_embedded_python_dict_repr():
     # Python dict parsed and promoted to first-class properties
     assert obj["model_name"] == "text-embedding-3-large"
     assert "litellm_params" in obj
-    assert obj["litellm_params"]["api_key"] == "sk**********"
+    # Redacted, not passed through: SecretRedactionFilter already collapses this
+    # pair in the plain path before any formatter sees it, so the JSON path matching
+    # it is production parity. The key survives because redaction is per-value here.
+    assert obj["litellm_params"]["api_key"] == "REDACTED"
     assert obj["litellm_params"]["tpm"] == 1000000
     assert obj["litellm_params"]["use_in_pass_through"] is False
     assert "model_info" in obj
     assert obj["model_info"]["id"] == "a624b057aec64ada48311"
     assert obj["model_info"]["db_model"] is False
+
+
+def test_json_formatter_output_stays_parseable_when_a_secret_is_redacted():
+    """Redaction must collapse the value only, never the surrounding JSON member.
+
+    Redacting the serialized document turned '"api_key": "sk-..."' into a bare
+    REDACTED token, so the line stopped being valid JSON entirely.
+    """
+    formatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="calling deployment",
+        args=(),
+        exc_info=None,
+    )
+    record.deployment = {
+        "api_key": "sk-abcdefghijklmnopqrstuvwxyz0123456789",
+        "aws_secret_access_key": "wJalrXUtnFEMIQAfakeKEYbPxRfiCYEXAMPLEKEY",
+        "aws_region_name": "us-east-1",
+        "nested": {"tokens": ["Bearer abcdefghijklmnop", "keep-me"]},
+    }
+
+    obj = json.loads(formatter.format(record))
+
+    assert obj["deployment"]["api_key"] == "REDACTED"
+    assert obj["deployment"]["aws_secret_access_key"] == "REDACTED"
+    # Non-secret siblings stay legible so the logs remain useful
+    assert obj["deployment"]["aws_region_name"] == "us-east-1"
+    assert obj["deployment"]["nested"]["tokens"] == ["REDACTED", "keep-me"]
 
 
 def test_json_formatter_includes_component_field():
@@ -203,9 +253,7 @@ def test_json_formatter_includes_component_field():
         )
         output = formatter.format(record)
         obj = json.loads(output)
-        assert (
-            obj["component"] == logger_name
-        ), f"Expected component={logger_name!r}, got {obj.get('component')!r}"
+        assert obj["component"] == logger_name, f"Expected component={logger_name!r}, got {obj.get('component')!r}"
 
 
 def test_json_formatter_includes_logger_field():
@@ -225,9 +273,7 @@ def test_json_formatter_includes_logger_field():
     )
     output = formatter.format(record)
     obj = json.loads(output)
-    assert (
-        obj["logger"] == "proxy_server.py:123"
-    ), f"Expected logger='proxy_server.py:123', got {obj['logger']!r}"
+    assert obj["logger"] == "proxy_server.py:123", f"Expected logger='proxy_server.py:123', got {obj['logger']!r}"
 
 
 def test_json_formatter_extra_component_not_overwritten():
@@ -246,9 +292,7 @@ def test_json_formatter_extra_component_not_overwritten():
     )
     record.component = "auth-service"
     obj = json.loads(formatter.format(record))
-    assert (
-        obj["component"] == "auth-service"
-    ), f"User-supplied component was overwritten, got {obj['component']!r}"
+    assert obj["component"] == "auth-service", f"User-supplied component was overwritten, got {obj['component']!r}"
 
 
 def test_initialize_loggers_with_handler_sets_propagate_false():
@@ -260,9 +304,9 @@ def test_initialize_loggers_with_handler_sets_propagate_false():
 
     # Check that propagate is set to False for all loggers
     for logger in ALL_LOGGERS:
-        assert (
-            logger.propagate is False
-        ), f"Logger {logger.name} has propagate set to {logger.propagate}, expected False"
+        assert logger.propagate is False, (
+            f"Logger {logger.name} has propagate set to {logger.propagate}, expected False"
+        )
 
 
 @pytest.mark.asyncio
@@ -300,9 +344,9 @@ async def test_cache_hit_includes_custom_llm_provider():
         await asyncio.sleep(0.5)
 
         # Verify we have logged events
-        assert (
-            len(test_custom_logger.logged_standard_logging_payloads) >= 2
-        ), f"Expected at least 2 logged events, got {len(test_custom_logger.logged_standard_logging_payloads)}"
+        assert len(test_custom_logger.logged_standard_logging_payloads) >= 2, (
+            f"Expected at least 2 logged events, got {len(test_custom_logger.logged_standard_logging_payloads)}"
+        )
 
         # Find the cache hit event (should be the second call)
         cache_hit_payload = None
@@ -312,20 +356,18 @@ async def test_cache_hit_includes_custom_llm_provider():
                 break
 
         # Verify cache hit event was found
-        assert (
-            cache_hit_payload is not None
-        ), "No cache hit event found in logged payloads"
+        assert cache_hit_payload is not None, "No cache hit event found in logged payloads"
 
         # Verify custom_llm_provider is included in the cache hit payload
-        assert (
-            "custom_llm_provider" in cache_hit_payload
-        ), "custom_llm_provider missing from cache hit standard logging payload"
+        assert "custom_llm_provider" in cache_hit_payload, (
+            "custom_llm_provider missing from cache hit standard logging payload"
+        )
 
         # Verify custom_llm_provider has a valid value (should be "openai" for gpt-3.5-turbo)
         custom_llm_provider = cache_hit_payload["custom_llm_provider"]
-        assert (
-            custom_llm_provider is not None and custom_llm_provider != ""
-        ), f"custom_llm_provider should not be None or empty, got: {custom_llm_provider}"
+        assert custom_llm_provider is not None and custom_llm_provider != "", (
+            f"custom_llm_provider should not be None or empty, got: {custom_llm_provider}"
+        )
 
         print(
             f"Cache hit standard logging payload with custom_llm_provider: {custom_llm_provider}",
@@ -631,6 +673,608 @@ def test_set_trace_id_strips_control_characters():
         trace_id_var.reset(token)
 
 
+_MARKER_RE = re.compile(rf"\.\.\. \({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped (\d+) chars\..*?\) \.\.\.", re.S)
+
+
+def _extract_marker(text: str) -> "re.Match[str] | None":
+    return _MARKER_RE.search(text)
+
+
+def _make_record(level: int, msg: str, args=(), exc_info=None) -> logging.LogRecord:
+    return logging.LogRecord(
+        name="LiteLLM Router",
+        level=level,
+        pathname="",
+        lineno=0,
+        msg=msg,
+        args=args,
+        exc_info=exc_info,
+    )
+
+
+def _oversized_text(length: int) -> str:
+    return ("payload " * (length // 8 + 1))[:length]
+
+
+_OVERSIZED_TEXT = _oversized_text(100_000)
+
+
+def test_oversized_info_record_is_truncated(monkeypatch):
+    """An error string echoing a huge request payload must not reach stdout in full."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    payload = _OVERSIZED_TEXT
+    record = _make_record(logging.INFO, "litellm.acompletion(model=%s) Exception %s", ("gpt-4", payload))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    message = record.getMessage()
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in message
+    assert len(message) <= 500
+    assert message.startswith("litellm.acompletion(model=gpt-4) Exception payload payload")
+    assert message.endswith("payload ")
+
+    marker = _extract_marker(message)
+    assert marker is not None
+    kept, skipped = len(message) - len(marker.group(0)), int(marker.group(1))
+    assert kept + skipped == 43 + len(payload)
+
+
+def test_truncated_message_fits_the_configured_cap(monkeypatch):
+    """The cap is the whole point of the setting, so the marker has to be paid for out of
+    the budget instead of appended on top of a limit-sized head and tail."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    record = _make_record(logging.ERROR, "Exception %s", ("p" * 2000,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    message = record.getMessage()
+    assert _extract_marker(message) is not None
+    assert len(message) == 500
+
+
+@pytest.mark.parametrize("payload_len", [501, 512, 1000, 9999, 100_000])
+def test_truncated_message_never_exceeds_the_cap(monkeypatch, payload_len):
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    record = _make_record(logging.ERROR, "%s", (_oversized_text(payload_len),))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert len(record.getMessage()) <= 500
+
+
+_NO_BUDGET_PAYLOAD = "p" * 2000
+_MARKER_SIZED_CAP = len(_stdout_truncation_marker(len(_NO_BUDGET_PAYLOAD)))
+
+
+@pytest.mark.parametrize("cap", [_MARKER_SIZED_CAP, _MARKER_SIZED_CAP - 1, 100])
+def test_cap_leaving_no_room_for_the_marker_still_bounds_output(monkeypatch, cap):
+    """An operator can set the cap at or below the marker's own length, leaving nothing to
+    spend on a head and tail, and the output still has to fit."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", str(cap))
+    record = _make_record(logging.ERROR, "%s", (_NO_BUDGET_PAYLOAD,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert len(record.getMessage()) == cap
+
+
+def test_debug_record_is_not_truncated(monkeypatch):
+    """--detailed_debug exists to dump full payloads, so DEBUG records pass through."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    payload = _OVERSIZED_TEXT
+    record = _make_record(logging.DEBUG, "raw request %s", (payload,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == f"raw request {payload}"
+
+
+def test_truncation_disabled_by_zero_limit(monkeypatch):
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "0")
+    payload = _OVERSIZED_TEXT
+    record = _make_record(logging.ERROR, "Exception %s", (payload,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == f"Exception {payload}"
+
+
+def test_oversized_traceback_is_truncated(monkeypatch):
+    """verbose_proxy_logger.exception() re-logs the payload inside the traceback too."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    try:
+        raise ValueError("payload " + _OVERSIZED_TEXT)
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = _make_record(logging.ERROR, "Exception occured", exc_info=exc_info)
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.exc_text is not None
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in record.exc_text
+    assert len(record.exc_text) <= 500
+    assert "Traceback (most recent call last)" in record.exc_text
+
+
+def test_falsy_exc_info_is_not_formatted(monkeypatch):
+    """Callers pass exc_info=False, which logging leaves on the record as a bool."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    record = _make_record(logging.WARNING, "skipping malformed endpoint %s", (_OVERSIZED_TEXT,), exc_info=False)
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.exc_text is None
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in record.getMessage()
+
+
+def test_secret_filter_keeps_truncated_traceback(monkeypatch):
+    """SecretRedactionFilter runs after truncation, so it must redact the capped
+    traceback instead of reformatting the full one from exc_info."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    try:
+        raise ValueError("sk-1234567890abcdefghij payload " + _OVERSIZED_TEXT)
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = _make_record(logging.ERROR, "Exception occured", exc_info=exc_info)
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+    assert SecretRedactionFilter().filter(record) is True
+
+    assert record.exc_text is not None
+    assert len(record.exc_text) <= 500
+    assert "sk-1234567890abcdefghij" not in record.exc_text
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_redaction_precedes_a_credential_cut(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret = "sk-" + "q" * 48
+    record = _make_record(logging.INFO, "%s", ("é" * 110 + secret + "界" * 1000,))
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert len(record.getMessage()) <= 500
+    assert "sk-qq" not in record.getMessage()
+
+
+def test_correlation_id_redacts_before_its_length_bound(monkeypatch):
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret = "sk-" + "q" * 48
+    token = set_trace_id("x" * 250 + secret)
+    try:
+        assert "sk-qq" not in trace_id_var.get()
+        assert len(trace_id_var.get()) <= 256
+    finally:
+        trace_id_var.reset(token)
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_malformed_interpolation_still_scrubs_a_record(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "bad % api_key=secret123", ("value",))
+    record.color_message = "bad % api_key=secret123"
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert record.getMessage() == "REDACTED"
+    assert record.color_message == "REDACTED"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_key_pattern_template_keeps_the_rendered_redacted_line(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.INFO, "password=%s ok", ("hunter2",))
+    record.color_message = "password=%s ok"
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert record.getMessage() == "REDACTED ok"
+    assert record.color_message == "REDACTED ok"
+
+
+def test_disabled_diagnostic_call_does_not_render_arguments(caplog):
+    class Unrenderable:
+        def __str__(self):
+            raise AssertionError("disabled call rendered its argument")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        verbose_logger.debug("hidden %s", Unrenderable())
+
+    assert not caplog.records
+
+
+def test_truncation_filter_survives_json_reconfiguration():
+    """The cap lives on the loggers, so swapping handlers (JSON mode) can't drop it."""
+    _turn_on_json()
+
+    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
+        assert any(isinstance(f, StdoutLogTruncationFilter) for f in lg.filters), f"{lg.name} lost stdout truncation"
+
+
+def test_oversized_error_is_truncated_end_to_end(monkeypatch, caplog):
+    """The router's own exception log line must come out bounded, not just the filter in isolation."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Router"):
+        verbose_router_logger.info("litellm.acompletion(model=%s) Exception %s", "gpt-4", _OVERSIZED_TEXT)
+
+    emitted = "".join(record.getMessage() for record in caplog.records)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in emitted
+    assert len(emitted) <= 500
+
+
+_PDF_BASE64 = base64.b64encode(bytes(range(256)) * 18).decode()
+_IMAGE_BASE64 = base64.b64encode(bytes(range(256)) * 24).decode()
+_SHA256_HEX = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+_LIMIT_SIZED_TOKEN = "t" * 4096
+
+
+def _base64_run(length: int) -> str:
+    return (_PDF_BASE64 * (length // len(_PDF_BASE64) + 1))[:length]
+
+
+def test_debug_record_collapses_long_base64_runs():
+    """A DEBUG line dumping a document upload keeps its text but not the megabytes of
+    base64, which cost seconds of event-loop time per line in the secret regex alone."""
+    record = _make_record(
+        logging.DEBUG,
+        "receiving data: %s",
+        (
+            f"{{'document': 'data:application/pdf;base64,{_PDF_BASE64}', "
+            f"'base64Source': '{_IMAGE_BASE64}', "
+            f"'sha256': '{_SHA256_HEX}', 'token': '{_LIMIT_SIZED_TOKEN}'}}",
+        ),
+    )
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == (
+        "receiving data: {'document': 'data:application/pdf;base64,[base64_data truncated: 4.5KB]', "
+        "'base64Source': '[base64_data truncated: 6.0KB]', "
+        f"'sha256': '{_SHA256_HEX}', 'token': '{_LIMIT_SIZED_TOKEN}'}}"
+    )
+
+
+@pytest.mark.parametrize("run_length,collapses", ((4096, False), (4097, True)))
+def test_base64_run_collapses_only_past_the_limit(run_length, collapses):
+    record = _make_record(logging.DEBUG, "%s", (_base64_run(run_length),))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert ("[base64_data truncated: " in record.getMessage()) is collapses
+
+
+@pytest.mark.parametrize("limit,collapses", (("0", False), ("100", True)))
+def test_base64_collapse_limit_follows_the_env(monkeypatch, limit, collapses):
+    monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", limit)
+    record = _make_record(logging.DEBUG, "%s", (_base64_run(200),))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert ("[base64_data truncated: " in record.getMessage()) is collapses
+
+
+def test_info_record_collapses_base64_before_truncating(monkeypatch):
+    """The collapse runs at every level ahead of the INFO+ cap, so an error echoing a
+    document upload comes out as its text around a size placeholder, not a head and tail."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    record = _make_record(logging.ERROR, "Exception: bad document %s (status 400)", (_base64_run(100_000),))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == "Exception: bad document [base64_data truncated: 73.2KB] (status 400)"
+
+
+@pytest.mark.parametrize(
+    "run",
+    (_SHA256_HEX * 80, _SHA256_HEX.upper() * 80, "0123456789" * 512, "0f" * 2100),
+    ids=("hex", "upper_hex", "digits", "two_char_hex_dump"),
+)
+def test_hex_and_decimal_runs_are_not_mistaken_for_base64(run):
+    """A long hex dump or numeric id stays in the log line even past the limit, since it
+    is not a payload and the operator asked for the full debug output."""
+    record = _make_record(logging.DEBUG, "checksum %s", (run,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == f"checksum {run}"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (bytes(6000), b"\x01" * 6000, b"\x55" * 6000, b"\xaa" * 6000),
+    ids=("zero_filled", "0x01_filled", "0x55_filled", "0xaa_filled"),
+)
+def test_constant_byte_payloads_still_collapse(payload):
+    """A zero-filled buffer encodes to one repeated character, and other constant bytes to
+    a single-case cycle: neither is a digest or an id, so the secret regex never sees them
+    in full and the event loop is not blocked by a degenerate upload."""
+    encoded = base64.b64encode(payload).decode()
+    record = _make_record(logging.DEBUG, "upload %s", (encoded,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.getMessage() == f"upload [base64_data truncated: {format_base64_size(len(encoded))}]"
+
+
+def test_debug_traceback_collapses_base64_runs():
+    """An exception that echoes a document upload gets the same collapse in its traceback
+    as the message does, at DEBUG too, so the secret regex never sees the payload in full."""
+    try:
+        raise ValueError(f"bad document: {_base64_run(100_000)}")
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = _make_record(logging.DEBUG, "call failed", exc_info=exc_info)
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+
+    assert record.exc_text is not None
+    assert "Traceback (most recent call last)" in record.exc_text
+    assert record.exc_text.endswith("ValueError: bad document: [base64_data truncated: 73.2KB]")
+
+
+def test_base64_collapse_applies_end_to_end(caplog):
+    """The proxy's own request dump must come out collapsed, not just the filter in isolation."""
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        verbose_proxy_logger.debug("receiving data: %s", f"{{'document': 'data:application/pdf;base64,{_PDF_BASE64}'}}")
+
+    emitted = "".join(record.getMessage() for record in caplog.records)
+    assert emitted == "receiving data: {'document': 'data:application/pdf;base64,[base64_data truncated: 4.5KB]'}"
+
+
+class _CountingPattern:
+    def __init__(self, pattern: "re.Pattern[str]"):
+        self._pattern = pattern
+        self.calls = 0
+        self.scanned_chars = 0
+
+    def sub(self, repl: str, string: str, count: int = 0) -> str:
+        self.calls += 1
+        self.scanned_chars += len(string)
+        return self._pattern.sub(repl, string, count)
+
+
+_REQUEST_DUMP = "{'model': 'gpt-4', 'messages': [{'role': 'user', 'content': 'hello world'}]}"
+
+
+@pytest.mark.parametrize(
+    "formatter",
+    (CorrelationPlainFormatter(_PLAIN_LOG_FORMAT), JsonFormatter()),
+    ids=("plain", "json"),
+)
+def test_scrubbed_record_scans_the_large_rendered_value_once(monkeypatch, formatter):
+    """The raw format template gets its own check, while the large rendered value gets one scan."""
+    counting = _CountingPattern(secret_redaction._SECRET_RE)
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.setattr(secret_redaction, "_SECRET_RE", counting)
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.DEBUG, "receiving data: %s", (_REQUEST_DUMP,))
+
+    assert StdoutLogTruncationFilter().filter(record) is True
+    assert SecretRedactionFilter().filter(record) is True
+    rendered = formatter.format(record)
+
+    assert _REQUEST_DUMP in rendered
+    assert "litellm_redacted" not in rendered
+    assert counting.calls == 2
+    assert counting.scanned_chars == len(f"receiving data: {_REQUEST_DUMP}") + len("receiving data: %s")
+
+
+def test_stamped_record_is_not_scanned_again(monkeypatch):
+    """JSON mode puts the filter on a third-party logger and again on the root handler its
+    records propagate to, so the second filter must trust the stamp instead of rescanning."""
+    counting = _CountingPattern(secret_redaction._SECRET_RE)
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.setattr(secret_redaction, "_SECRET_RE", counting)
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.DEBUG, "receiving data: %s", (_REQUEST_DUMP,))
+
+    assert SecretRedactionFilter().filter(record) is True
+    assert SecretRedactionFilter().filter(record) is True
+
+    assert counting.calls == 2
+
+
+def test_caller_supplied_stamp_never_skips_the_scrub(monkeypatch):
+    """The stamp is a private sentinel, so a caller passing extra={"litellm_redacted": True}
+    still gets the full scrub, and only the filter's own stamp lets a later pass skip it."""
+    counting = _CountingPattern(secret_redaction._SECRET_RE)
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.setattr(secret_redaction, "_SECRET_RE", counting)
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.DEBUG, "api_key=sk-1234567890abcdefghij")
+    record.litellm_redacted = True
+
+    assert SecretRedactionFilter().filter(record) is True
+    assert "sk-1234567890abcdefghij" not in record.getMessage()
+    assert counting.calls == 1
+
+    assert SecretRedactionFilter().filter(record) is True
+    assert counting.calls == 1
+
+
+def test_stack_info_is_scrubbed_before_the_plain_formatter(monkeypatch):
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.INFO, "call failed")
+    record.stack_info = "Stack (most recent call last):\n  api_key=sk-1234567890abcdefghij"
+
+    assert SecretRedactionFilter().filter(record) is True
+    rendered = CorrelationPlainFormatter(_PLAIN_LOG_FORMAT).format(record)
+
+    assert "sk-1234567890abcdefghij" not in rendered
+    assert "Stack (most recent call last):" in rendered
+
+
+class _BrokenModel(BaseModel):
+    name: str
+
+    @computed_field
+    @property
+    def snapshot(self) -> str:
+        raise RuntimeError("snapshot unavailable")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    ({1, "a"}, {"nested": {1, "a"}}, _BrokenModel(name="gpt-4o"), {"request": _BrokenModel(name="gpt-4o")}),
+    ids=("mixed_set", "nested_mixed_set", "raising_model", "nested_raising_model"),
+)
+def test_unserializable_extra_never_breaks_the_filter(monkeypatch, extra):
+    """A pydantic computed field that raises escapes model_dump() and str() alike, and a
+    logging filter that lets it through raises into the caller's own log call."""
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "request sent")
+    record.payload = extra
+
+    assert SecretRedactionFilter().filter(record) is True
+    rendered = json.loads(JsonFormatter().format(record))
+
+    assert rendered["message"] == "request sent"
+    assert "payload" in rendered
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _RequestExtra:
+    model: str
+    attempt: int
+    api_key: str = dataclasses.field(default="", repr=False)
+
+
+def _nest(value: object, levels: int) -> object:
+    return value if levels == 0 else _nest([value], levels - 1)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    (
+        ("gpt-4o", 2),
+        ["gpt-4o", None, 1.5],
+        {"models": ("gpt-4o", "gpt-4o-mini"), "attempt": 2},
+        {"model": "gpt-4o", "status": "ok"},
+        _nest("gpt-4o", 99),
+    ),
+    ids=("tuple", "list", "nested_tuple", "dict", "deep_list"),
+)
+def test_secret_free_extra_keeps_its_original_object(monkeypatch, extra):
+    """A host application's own handler on a litellm logger reads extras by type, so a
+    container that carried no secret must reach it untouched, not as its JSON shape."""
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "request sent")
+    record.payload = extra
+
+    assert SecretRedactionFilter().filter(record) is True
+
+    assert record.payload is extra
+    assert "payload" in json.loads(JsonFormatter().format(record))
+
+
+@pytest.mark.parametrize(
+    "extra,scrubbed",
+    (
+        (("gpt-4o", "sk-1234567890abcdefghij"), ("gpt-4o", "REDACTED")),
+        ({"gpt-4o", "sk-1234567890abcdefghij"}, ["REDACTED", "gpt-4o"]),
+        ({"model": "gpt-4o", "key": "sk-1234567890abcdefghij"}, {"model": "gpt-4o", "key": "REDACTED"}),
+    ),
+    ids=("tuple", "set", "dict"),
+)
+def test_extra_that_carried_a_secret_comes_back_scrubbed(monkeypatch, extra, scrubbed):
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "request sent")
+    record.payload = extra
+
+    assert SecretRedactionFilter().filter(record) is True
+    rendered = JsonFormatter().format(record)
+
+    assert record.payload == scrubbed
+    assert type(record.payload) is type(scrubbed)
+    assert "sk-1234567890abcdefghij" not in rendered
+    assert "REDACTED" in rendered
+
+
+class _AmbiguousArray:
+    def __eq__(self, other: object) -> bool:
+        raise ValueError("The truth value of an array with more than one element is ambiguous")
+
+    def __repr__(self) -> str:
+        return "array([1, 2])"
+
+
+@pytest.mark.parametrize(
+    "extra,scrubbed",
+    ((_AmbiguousArray(), "array([1, 2])"), ({"weights": _AmbiguousArray()}, {"weights": "array([1, 2])"})),
+    ids=("top_level", "nested"),
+)
+def test_extra_whose_equality_raises_still_comes_back_scrubbed(monkeypatch, extra, scrubbed):
+    """numpy arrays and torch tensors raise when compared for truth, so the keep-or-scrub
+    decision must fall on the scrubbed copy instead of breaking the caller's log call."""
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "request sent")
+    record.payload = extra
+
+    assert SecretRedactionFilter().filter(record) is True
+
+    assert record.payload == scrubbed
+    assert json.loads(JsonFormatter().format(record))["payload"] == scrubbed
+
+
+@pytest.mark.parametrize(
+    "extra",
+    (
+        {1: "sk-1234567890abcdefghij"},
+        {"model": {1: "sk-1234567890abcdefghij"}},
+        _nest("sk-1234567890abcdefghij", 101),
+        _RequestExtra(model="gpt-4o", attempt=2, api_key="sk-1234567890abcdefghij"),
+        {"gpt-4o", "sk-1234567890abcdefghij", 1},
+    ),
+    ids=("int_key", "nested_int_key", "deeper_than_safe_dumps", "dataclass_hidden_field", "unsortable_set"),
+)
+def test_extra_the_filter_cannot_fully_inspect_never_keeps_its_secret(monkeypatch, extra):
+    """Whatever safe_dumps would skip (non-string keys, anything past its depth limit,
+    fields a repr hides) must not ride the original object past the redacted stamp."""
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "request sent")
+    record.payload = extra
+
+    assert SecretRedactionFilter().filter(record) is True
+    rendered = JsonFormatter().format(record)
+
+    assert record.payload is not extra
+    assert "sk-1234567890abcdefghij" not in str(record.payload)
+    assert "sk-1234567890abcdefghij" not in rendered
+
+
+def test_secret_free_set_comes_back_as_its_json_shape(monkeypatch):
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "request sent")
+    record.payload = {"gpt-4o", "gpt-4o-mini"}
+
+    assert SecretRedactionFilter().filter(record) is True
+
+    assert record.payload == ["gpt-4o", "gpt-4o-mini"]
+    assert json.loads(JsonFormatter().format(record))["payload"] == ["gpt-4o", "gpt-4o-mini"]
+
+
+def test_unscrubbed_record_is_still_redacted_by_the_formatter(monkeypatch):
+    """Records that never met SecretRedactionFilter (uvicorn's, in JSON mode) keep
+    their formatter-side redaction."""
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.INFO, "key sk-1234567890abcdefghij")
+
+    assert "sk-1234567890abcdefghij" not in JsonFormatter().format(record)
+    assert "sk-1234567890abcdefghij" not in CorrelationPlainFormatter(_PLAIN_LOG_FORMAT).format(record)
+
+
 def test_set_session_id_bounds_length():
     """set_session_id() must bound length so an oversized caller-supplied value
     isn't repeated across every log line for the request."""
@@ -640,3 +1284,482 @@ def test_set_session_id_bounds_length():
     finally:
         session_id_var.reset(token)
 
+
+class _FakeStream:
+    def __init__(self, tty: bool) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+def test_records_below_warning_go_to_stdout_and_the_rest_to_stderr(capsys):
+    logger = logging.getLogger("test_level_routing")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    logger.addHandler(handler)
+
+    try:
+        logger.debug("d")
+        logger.info("i")
+        logger.warning("w")
+        logger.error("e")
+        logger.critical("c")
+    finally:
+        logger.handlers.clear()
+
+    out, err = capsys.readouterr()
+    assert out.splitlines() == ["DEBUG d", "INFO i"]
+    assert err.splitlines() == ["WARNING w", "ERROR e", "CRITICAL c"]
+
+
+def test_verbose_loggers_route_records_by_level():
+    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
+        assert any(isinstance(h, LevelRoutingStreamHandler) for h in lg.handlers), lg.name
+
+
+@pytest.mark.parametrize(
+    "stdout_tty, stderr_tty, no_color, want_color",
+    [
+        (True, True, None, True),
+        (False, False, None, False),
+        (False, True, None, False),
+        (True, False, None, False),
+        (True, True, "1", False),
+        (True, True, "", True),
+    ],
+)
+def test_plain_log_format_colorizes_only_for_a_terminal(monkeypatch, stdout_tty, stderr_tty, no_color, want_color):
+    if no_color is None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    else:
+        monkeypatch.setenv("NO_COLOR", no_color)
+
+    fmt = _plain_log_format(_FakeStream(stdout_tty), _FakeStream(stderr_tty))
+
+    assert fmt == (_COLOR_LOG_FORMAT if want_color else _PLAIN_LOG_FORMAT)
+    assert ("\033[" in fmt) is want_color
+
+
+def test_plain_format_carries_no_ansi_codes():
+    assert "\033[" not in _PLAIN_LOG_FORMAT
+
+
+class _Brokenstream:
+    """A write-only shim without isatty, like GUI log redirectors install."""
+
+
+class _ClosedStream:
+    closed = True
+
+    def isatty(self) -> bool:
+        raise ValueError("I/O operation on closed file")
+
+
+@pytest.mark.parametrize(
+    "stdout, stderr",
+    [
+        (None, None),
+        (_FakeStream(True), None),
+        (_Brokenstream(), _FakeStream(True)),
+        (_ClosedStream(), _FakeStream(True)),
+    ],
+)
+def test_plain_log_format_survives_hostile_streams(stdout, stderr):
+    """sys.stdout/sys.stderr can be None, shimmed, or closed; import must not crash."""
+    assert _plain_log_format(stdout, stderr) == _PLAIN_LOG_FORMAT
+
+
+def test_level_routing_handler_falls_back_to_stderr_when_stdout_is_unusable(monkeypatch, capsys):
+    logger = logging.getLogger("test_level_routing_fallback")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    logger.addHandler(handler)
+
+    try:
+        monkeypatch.setattr(sys, "stdout", None)
+        logger.info("stdout is gone")
+    finally:
+        logger.handlers.clear()
+
+    err = capsys.readouterr().err
+    assert "INFO stdout is gone" in err
+    assert "--- Logging error ---" not in err
+
+
+@pytest.mark.parametrize(
+    "value, want",
+    [
+        ("true", True),
+        ("True", True),
+        ("TRUE", True),
+        ("false", False),
+        ("False", False),
+        ("0", False),
+        ("1", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_parse_json_logs_env_enables_only_on_true(value, want):
+    """JSON_LOGS=false / 0 must not enable JSON logs (LIT-5558)."""
+    assert _parse_json_logs_env(value) is want
+
+
+def test_plain_log_format_survives_none_streams():
+    """sys.stdout/sys.stderr can be None in embedded interpreters; import must not crash."""
+    assert _plain_log_format(None, None) == _PLAIN_LOG_FORMAT
+    assert _plain_log_format(_FakeStream(True), None) == _PLAIN_LOG_FORMAT
+
+
+# ---------------------------------------------------------------------------
+# Access-log redaction (LIT-5909)
+# ---------------------------------------------------------------------------
+
+_LEAKED_KEY = "sk-mx5ous1o9Iezz5fj3pkLuA"
+
+
+def _access_record(full_path: str) -> logging.LogRecord:
+    """A record shaped exactly like the one uvicorn.access emits per request."""
+    return logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:1", "GET", full_path, "1.1", 200),
+        exc_info=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    [
+        f"/key/info?key={_LEAKED_KEY}",
+        f"/global/spend/report?api_key={_LEAKED_KEY}&start_date=2026-08-01",
+        f"/key/spend/report?api_key={_LEAKED_KEY}",
+        f"/spend/logs?api_key={_LEAKED_KEY}",
+        f"/user/daily/activity?api_key={_LEAKED_KEY}",
+        f"/gemini/v1beta/models/gemini-2.0-flash:generateContent?key={_LEAKED_KEY}",
+    ],
+)
+def test_access_log_filter_redacts_a_credential_query_parameter(full_path):
+    record = _access_record(full_path)
+    assert AccessLogRedactionFilter().filter(record) is True
+    assert _LEAKED_KEY not in record.getMessage()
+    assert "REDACTED" in record.getMessage()
+
+
+def test_access_log_filter_keeps_the_record_formattable_by_uvicorn():
+    """uvicorn's AccessFormatter unpacks record.args, so the filter must scrub the
+    args in place rather than collapse them the way SecretRedactionFilter does."""
+    from uvicorn.logging import AccessFormatter
+
+    record = _access_record(f"/key/info?key={_LEAKED_KEY}")
+    AccessLogRedactionFilter().filter(record)
+    assert isinstance(record.args, tuple)
+    assert len(record.args) == 5
+
+    formatted = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False).format(record)
+    assert _LEAKED_KEY not in formatted
+    assert "GET" in formatted
+    assert "200 OK" in formatted
+
+
+@pytest.mark.parametrize(
+    "full_path, want",
+    [
+        # The delimiter must survive so the logged request line stays well formed.
+        (f"/key/info?key={_LEAKED_KEY}&page=2", "/key/info?REDACTED&page=2"),
+        ("/download?sig=AbCd1234%2Fxy&page=2", "/download?REDACTED&page=2"),
+        (
+            f"/global/spend/report?api_key={_LEAKED_KEY}&start_date=2026-01-01",
+            "/global/spend/report?REDACTED&start_date=2026-01-01",
+        ),
+        ("/sso/callback?client_secret=abcdefgh12345&state=xyz", "/sso/callback?REDACTED&state=xyz"),
+        (f"/v1/models?token={_LEAKED_KEY}&page=2", "/v1/models?REDACTED&page=2"),
+    ],
+)
+def test_access_log_filter_keeps_the_query_delimiter(full_path, want):
+    record = _access_record(full_path)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args[2] == want
+
+
+@pytest.mark.parametrize(
+    "full_path, want",
+    [
+        # Both the param name and the value are encoded, so neither is literal text
+        # the patterns can see, yet the request parser decodes it into a working key.
+        (f"/key/info?k%65y=sk%2D{_LEAKED_KEY[3:]}", "/key/info?REDACTED"),
+        (f"/key/info?k%65y=sk%2D{_LEAKED_KEY[3:]}&page=2", "/key/info?REDACTED"),
+        (f"/v1/models/sk%2D{_LEAKED_KEY[3:]}", "REDACTED"),
+        # A decoded credential must never be echoed back: it can carry a newline and
+        # forge a following log line.
+        (f"/v1/models?k%65y=sk%2D{_LEAKED_KEY[3:]}%0AINFO:%20forged", "/v1/models?REDACTED"),
+    ],
+)
+def test_access_log_filter_redacts_a_percent_encoded_credential(full_path, want):
+    record = _access_record(full_path)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args[2] == want
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    [
+        "/v1/models?filter=gpt%2D4o&page=2",
+        "/gemini/v1beta/models/gemini-2.0-flash%3AgenerateContent",
+    ],
+)
+def test_access_log_filter_leaves_harmless_percent_encoding_alone(full_path):
+    """Decoding is a detector, not a rewrite, so a request line with no credential
+    in it survives encoded exactly as the client sent it."""
+    record = _access_record(full_path)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args[2] == full_path
+
+
+def test_access_log_filter_caps_how_much_of_a_request_target_it_scans():
+    """The request target is the only input to the secret regex an unauthenticated
+    caller controls end to end, so it is bounded before it is scanned, and the
+    dropped tail must not reach the log either."""
+    record = _access_record("/v1/models?u=" + "a://" * 8192 + f"&key={_LEAKED_KEY}")
+
+    started = time.perf_counter()
+    AccessLogRedactionFilter().filter(record)
+    elapsed = time.perf_counter() - started
+
+    scrubbed = record.args[2]
+    assert _LEAKED_KEY not in scrubbed
+    assert len(scrubbed) < 1024
+    assert elapsed < 1.0, f"scrubbing one access line took {elapsed:.2f}s"
+
+
+@pytest.mark.parametrize("chars_before_the_cut", range(1, 12))
+def test_access_log_filter_never_logs_a_half_scanned_credential(chars_before_the_cut):
+    """Cutting mid-value would leave a prefix too short for the key= pattern to match,
+    and that prefix would then be logged raw, so the cut lands on a param boundary."""
+    prefix = "/v1/models?u="
+    padding = _MAX_SCRUBBED_ACCESS_ARG - len(prefix) - len("&key=") - chars_before_the_cut
+    record = _access_record(f"{prefix}{'a' * padding}&key={_LEAKED_KEY}")
+
+    AccessLogRedactionFilter().filter(record)
+
+    assert f"key={_LEAKED_KEY[:chars_before_the_cut]}" not in record.args[2]
+
+
+def test_access_log_filter_leaves_a_credential_free_request_line_intact():
+    record = _access_record("/v1/chat/completions")
+    AccessLogRedactionFilter().filter(record)
+    assert record.getMessage() == '127.0.0.1:1 - "GET /v1/chat/completions HTTP/1.1" 200'
+
+
+def test_access_log_filter_redacts_a_record_that_carries_no_positional_args():
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg=f'127.0.0.1:1 - "GET /key/info?key={_LEAKED_KEY} HTTP/1.1" 200',
+        args=None,
+        exc_info=None,
+    )
+    assert AccessLogRedactionFilter().filter(record) is True
+    assert _LEAKED_KEY not in record.getMessage()
+
+
+def _emit_access_line(full_path: str) -> str:
+    """Hand one real record to uvicorn.access and return what a handler wrote out."""
+    from uvicorn.logging import AccessFormatter
+
+    logger = logging.getLogger("uvicorn.access")
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False))
+    saved_level, saved_propagate = logger.level, logger.propagate
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    try:
+        logger.handle(_access_record(full_path))
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(saved_level)
+        logger.propagate = saved_propagate
+    return stream.getvalue()
+
+
+def test_uvicorn_access_logger_redacts_a_credential_it_is_handed():
+    """Registration happens at litellm import; without it the filter never runs."""
+    emitted = _emit_access_line(f"/key/info?key={_LEAKED_KEY}")
+
+    assert _LEAKED_KEY not in emitted
+    assert "REDACTED" in emitted
+
+
+def test_access_redaction_survives_the_uvicorn_json_log_config():
+    """litellm hands uvicorn a dictConfig when json_logs is on. dictConfig clears a
+    logger's handlers but not its filters, so redaction has to still be attached."""
+    import logging.config
+
+    names = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
+    try:
+        logging.config.dictConfig(_get_uvicorn_json_log_config())
+        emitted = _emit_access_line(f"/key/info?key={_LEAKED_KEY}")
+
+        assert _LEAKED_KEY not in emitted
+        assert "REDACTED" in emitted
+    finally:
+        for lg, handlers, level in saved:
+            lg.handlers[:] = handlers
+            lg.setLevel(level)
+            lg.propagate = True
+
+
+_DISABLED_ACCESS_LOG_PATHS_RAW = " /health/liveliness , ,/metrics/"
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    [
+        "/health/liveliness",
+        "/health/liveliness?x=1",
+        "/health/liveliness?probe=" + "x" * _MAX_SCRUBBED_ACCESS_ARG,
+        "/metrics/",
+        "/metrics/?format=prometheus&job=a",
+    ],
+)
+def test_uvicorn_access_logger_drops_a_configured_path(monkeypatch, full_path):
+    monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", _DISABLED_ACCESS_LOG_PATHS_RAW)
+    assert _emit_access_line(full_path) == ""
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    ["/v1/chat/completions", "/health", "/health/liveliness/", "/metrics", "/v1/models?health=/health/liveliness"],
+)
+def test_uvicorn_access_logger_keeps_an_unconfigured_path(monkeypatch, full_path):
+    monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", _DISABLED_ACCESS_LOG_PATHS_RAW)
+    assert f'"GET {full_path} HTTP/1.1" 200' in _emit_access_line(full_path)
+
+
+@pytest.mark.parametrize("raw", [None, "", " , ,"])
+def test_uvicorn_access_logger_keeps_every_line_when_no_path_is_configured(monkeypatch, raw):
+    if raw is None:
+        monkeypatch.delenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", raw)
+    assert '"GET /health/liveliness HTTP/1.1" 200' in _emit_access_line("/health/liveliness")
+
+
+def test_access_log_path_filter_survives_the_uvicorn_json_log_config(monkeypatch):
+    import logging.config
+
+    monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", _DISABLED_ACCESS_LOG_PATHS_RAW)
+    names = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
+    try:
+        logging.config.dictConfig(_get_uvicorn_json_log_config())
+
+        assert _emit_access_line("/health/liveliness?x=1") == ""
+        assert '"GET /v1/models HTTP/1.1" 200' in _emit_access_line("/v1/models")
+    finally:
+        for lg, handlers, level in saved:
+            lg.handlers[:] = handlers
+            lg.setLevel(level)
+            lg.propagate = True
+
+
+@pytest.mark.parametrize("args", [None, ("127.0.0.1:1", "GET", 42)])
+def test_access_log_path_filter_keeps_a_record_without_a_string_path_arg(monkeypatch, args):
+    monkeypatch.setenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", "/health/liveliness")
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='127.0.0.1:1 - "GET /health/liveliness HTTP/1.1" 200',
+        args=args,
+        exc_info=None,
+    )
+    assert AccessLogPathFilter().filter(record) is True
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_filter_scrubs_exc_stack_and_nested_extras(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret = "sk-" + "q" * 48
+    try:
+        raise ValueError(f"upstream rejected {secret}")
+    except ValueError:
+        record = _make_record(logging.ERROR, "call failed", exc_info=sys.exc_info())
+    record.stack_info = f"Stack (most recent call last): {secret}"
+    record.payload = {
+        "api_key": secret,
+        "items": [secret, "ok"],
+        "tags": {secret},
+        "pair": (secret, "ok"),
+        "count": 2,
+    }
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert secret not in (record.exc_text or "")
+    assert secret not in (record.stack_info or "")
+    assert secret not in repr(record.payload)
+    assert record.payload["count"] == 2
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_filter_stamps_records_so_a_second_pass_is_free(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "api_key=secret123")
+    diagnostic_filter = DiagnosticProcessingFilter()
+
+    assert diagnostic_filter.filter(record) is True
+    assert diagnostic_filter.filter(record) is True
+    assert record.getMessage() == "REDACTED"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_json_formatter_scrubs_unfiltered_extras(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret = "sk-" + "q" * 48
+    record = _make_record(logging.INFO, "response complete")
+    record.payload = {"api_key": secret, "nested": {"list": [secret]}}
+
+    rendered = JsonFormatter().format(record)
+
+    assert secret not in rendered
+    assert "REDACTED" in rendered
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_diagnostic_filter_redacts_a_non_string_message_object(monkeypatch, native):
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    secret = "sk-" + "q" * 48
+    record = _make_record(logging.ERROR, {"api_key": secret})
+
+    assert DiagnosticProcessingFilter().filter(record) is True
+
+    assert secret not in record.getMessage()

@@ -5,12 +5,12 @@ import React, { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import ExportFormatSelector from "./ExportFormatSelector";
 import ExportSummary from "./ExportSummary";
 import ExportTypeSelector from "./ExportTypeSelector";
 import type { EntityUsageExportModalProps, ExportFormat, ExportScope } from "./types";
-import { handleExportCSV, handleExportJSON } from "./utils";
+import { handleExportCSV, handleExportJSON, handleServerExport } from "./utils";
 
 const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   isOpen,
@@ -20,6 +20,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   dateRange,
   selectedFilters,
   customTitle,
+  serverExport,
 }) => {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
   const [exportScope, setExportScope] = useState<ExportScope>("daily");
@@ -35,17 +36,20 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
     const formatToUse = format || exportFormat;
     setIsExporting(true);
     try {
-      if (formatToUse === "csv") {
+      if (serverExport) {
+        await handleServerExport(serverExport, exportScope, entityType, formatToUse);
+        toast.success(`${entityLabel} usage data exported successfully as ${formatToUse.toUpperCase()}`);
+      } else if (formatToUse === "csv") {
         handleExportCSV(spendData, exportScope, entityLabel, entityType, teamAliasMap);
-        NotificationsManager.success(`${entityLabel} usage data exported successfully as CSV`);
+        toast.success(`${entityLabel} usage data exported successfully as CSV`);
       } else {
         handleExportJSON(spendData, exportScope, entityLabel, entityType, dateRange, selectedFilters, teamAliasMap);
-        NotificationsManager.success(`${entityLabel} usage data exported successfully as JSON`);
+        toast.success(`${entityLabel} usage data exported successfully as JSON`);
       }
       onClose();
     } catch (error) {
       console.error("Error exporting data:", error);
-      NotificationsManager.fromBackend("Failed to export data");
+      toast.fromError("Failed to export data");
     } finally {
       setIsExporting(false);
     }

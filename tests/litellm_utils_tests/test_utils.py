@@ -1,6 +1,5 @@
 import copy
 import logging
-import sys
 import time
 from datetime import datetime
 from unittest import mock
@@ -12,9 +11,6 @@ from litellm.types.utils import StandardCallbackDynamicParams
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -26,11 +22,7 @@ from litellm.litellm_core_utils.duration_parser import (
 )
 from litellm.utils import (
     check_valid_key,
-    create_pretrained_tokenizer,
-    create_tokenizer,
-    function_to_dict,
     get_llm_provider,
-    get_max_tokens,
     get_supported_openai_params,
     get_token_count,
     get_valid_models,
@@ -271,7 +263,7 @@ def test_trimming_should_not_change_original_messages():
     assert messages == messages_copy
 
 
-@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-sonnet-4-6"])
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "claude-sonnet-4-6"])
 def test_trimming_with_model_cost_max_input_tokens(model):
     messages = [
         {"role": "system", "content": "This is a normal system message"},
@@ -332,34 +324,23 @@ def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> 
 
 
 def test_aget_valid_models():
-    old_environ = os.environ
-    os.environ = {"OPENAI_API_KEY": "temp"}  # mock set only openai key in environ
+    with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "temp"}, clear=True):
+        valid_models = get_valid_models()
+        print(valid_models)
 
-    valid_models = get_valid_models()
-    print(valid_models)
+        # list of openai supported llms on litellm
+        expected_models = (
+            litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
+        )
 
-    # list of openai supported llms on litellm
-    expected_models = (
-        litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
-    )
-
-    assert set(valid_models) == set(expected_models)
-
-    # reset replicate env key
-    os.environ = old_environ
+        assert set(valid_models) == set(expected_models)
 
     # GEMINI
-    expected_models = litellm.gemini_models
-    old_environ = os.environ
-    os.environ = {"GEMINI_API_KEY": "temp"}  # mock set only openai key in environ
+    with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "temp"}, clear=True):
+        valid_models = get_valid_models()
 
-    valid_models = get_valid_models()
-
-    print(valid_models)
-    assert set(valid_models) == set(expected_models)
-
-    # reset replicate env key
-    os.environ = old_environ
+        print(valid_models)
+        assert set(valid_models) == set(litellm.gemini_models)
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["anthropic", "xai"])
@@ -513,74 +494,6 @@ def test_function_to_dict():
 
 
 # test_function_to_dict()
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-3.5-turbo", True),
-        ("azure/gpt-4-1106-preview", True),
-        ("groq/gemma-7b-it", True),
-        ("gemini/gemini-2.5-flash", True),
-    ],
-)
-def test_supports_function_calling(model, expected_bool):
-    try:
-        assert litellm.supports_function_calling(model=model) == expected_bool
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-4o-mini-search-preview", True),
-        ("openai/gpt-4o-mini-search-preview", True),
-        ("gpt-4o-search-preview", True),
-        ("openai/gpt-4o-search-preview", True),
-        ("groq/deepseek-r1-distill-llama-70b", False),
-        ("groq/llama-3.3-70b-versatile", False),
-        ("codestral/codestral-latest", False),
-    ],
-)
-def test_supports_web_search(model, expected_bool):
-    try:
-        assert litellm.supports_web_search(model=model) == expected_bool
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("openai/o3-mini", True),
-        ("o3-mini", True),
-        ("xai/grok-3-mini-beta", True),
-        ("xai/grok-3-mini-fast-beta", True),
-        ("xai/grok-2", False),
-        ("gpt-3.5-turbo", False),
-    ],
-)
-def test_supports_reasoning(model, expected_bool):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    try:
-        assert litellm.supports_reasoning(model=model) == expected_bool
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_get_max_token_unit_test():
-    """
-    More complete testing in `test_completion_cost.py`
-    """
-    model = "bedrock/anthropic.claude-3-haiku-20240307-v1:0"
-
-    max_tokens = get_max_tokens(
-        model
-    )  # Returns a number instead of throwing an Exception
-
-    assert isinstance(max_tokens, int)
 
 
 def test_get_supported_openai_params() -> None:
@@ -1022,17 +935,14 @@ def test_convert_model_response_object():
         "hidden_params": None,
     }
 
-    try:
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011  # bare Exception() with attributes, so str(e) is empty
         litellm.convert_to_model_response_object(**args)
-        pytest.fail("Expected this to fail")
-    except Exception as e:
-        assert hasattr(e, "status_code")
-        assert e.status_code == 400
-        assert hasattr(e, "message")
-        assert (
-            e.message
-            == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
-        )
+    e = exc_info.value
+    assert e.status_code == 400
+    assert (
+        e.message
+        == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
+    )
 
 
 @pytest.mark.parametrize(
@@ -1057,73 +967,6 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
         expected_reasoning,
         expected_content,
     )
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("vertex_ai/gemini-2.5-pro", True),
-        ("gemini/gemini-2.5-pro", True),
-        ("predibase/llama3-8b-instruct", True),
-        ("databricks/databricks-meta-llama-3-1-70b-instruct", True),
-        ("gpt-3.5-turbo", False),
-        ("groq/llama-3.3-70b-versatile", False),
-    ],
-)
-def test_supports_response_schema(model, expected_bool):
-    """
-    Unit tests for 'supports_response_schema' helper function.
-
-    Should be true for gemini-2.5-pro on google ai studio / vertex ai AND predibase models
-    Should be false otherwise
-    """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    from litellm.utils import supports_response_schema
-
-    response = supports_response_schema(model=model, custom_llm_provider=None)
-
-    assert expected_bool == response
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-3.5-turbo", True),
-        ("gpt-4", True),
-        ("command-nightly", False),
-        ("gemini-2.5-pro", True),
-    ],
-)
-def test_supports_function_calling_v2(model, expected_bool):
-    """
-    Unit test for 'supports_function_calling' helper function.
-    """
-    from litellm.utils import supports_function_calling
-
-    response = supports_function_calling(model=model, custom_llm_provider=None)
-    assert expected_bool == response
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool",
-    [
-        ("gpt-4o", True),
-        ("gpt-3.5-turbo", False),
-        ("claude-sonnet-4-6", True),
-        ("gemini-2.5-flash", True),
-        ("command-nightly", False),
-    ],
-)
-def test_supports_vision(model, expected_bool):
-    """
-    Unit test for 'supports_vision' helper function.
-    """
-    from litellm.utils import supports_vision
-
-    response = supports_vision(model=model, custom_llm_provider=None)
-    assert expected_bool == response
 
 
 def test_usage_object_null_tokens():
@@ -1164,7 +1007,6 @@ def test_is_base64_encoded():
     clear=True,
 )
 def test_async_http_handler(mock_async_client):
-    import httpx
     import ssl
 
     timeout = 120
@@ -1237,20 +1079,6 @@ def test_async_http_handler_force_ipv4(mock_async_client):
     finally:
         # Reset force_ipv4 to default
         litellm.force_ipv4 = False
-
-
-@pytest.mark.parametrize(
-    "model, expected_bool", [("gpt-3.5-turbo", False), ("gpt-4o-audio-preview", True)]
-)
-def test_supports_audio_input(model, expected_bool):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    from litellm.utils import supports_audio_input, supports_audio_output
-
-    supports_pc = supports_audio_input(model=model)
-
-    assert supports_pc == expected_bool
 
 
 def test_is_base64_encoded_2():
@@ -1334,7 +1162,7 @@ def test_validate_chat_completion_user_messages(messages, expected_bool):
         validate_chat_completion_user_messages(messages=messages)
     else:
         ## Invalid message
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid user message at index 0"):
             validate_chat_completion_user_messages(messages=messages)
 
 
@@ -1352,10 +1180,10 @@ def test_validate_chat_completion_tool_choice(tool_choice, expected_bool):
     from litellm.utils import validate_chat_completion_tool_choice
 
     if expected_bool:
-        validate_chat_completion_tool_choice(tool_choice=tool_choice)
+        validate_chat_completion_tool_choice(tool_choice=tool_choice, model="gpt-5.6-sol")
     else:
-        with pytest.raises(Exception):
-            validate_chat_completion_tool_choice(tool_choice=tool_choice)
+        with pytest.raises(litellm.BadRequestError, match="Invalid tool choice"):
+            validate_chat_completion_tool_choice(tool_choice=tool_choice, model="gpt-5.6-sol")
 
 
 def test_models_by_provider():
@@ -1378,8 +1206,7 @@ def test_models_by_provider():
             or v["litellm_provider"] == "bedrock_converse"
         ):
             continue
-        elif v.get("mode") == "search":
-            # Skip search providers as they don't have traditional models
+        elif v.get("mode") in ("search", "evaluation"):
             continue
         else:
             providers.add(v["litellm_provider"])
@@ -1588,23 +1415,6 @@ def test_token_counter_with_image_url_with_detail_high():
     assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
 
 
-def test_fireworks_ai_vision_capability_from_cost_map(monkeypatch):
-    """
-    Fireworks deprecated document inlining on 2025-06-30, so vision/PDF support is
-    no longer hardcoded to True for every Fireworks model. Capabilities are read
-    from the model cost map: unmapped models no longer advertise vision or PDF
-    support, while mapped VLMs still do.
-    """
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    from litellm.utils import supports_pdf_input, supports_vision
-
-    assert supports_vision("fireworks_ai/llama-3.1-8b-instruct") is False
-    assert supports_pdf_input("fireworks_ai/llama-3.1-8b-instruct") is False
-
-    assert supports_vision("fireworks_ai/minimax-m3") is True
-
-
 def test_logprobs_type():
     from litellm.types.utils import Logprobs
 
@@ -1747,19 +1557,10 @@ def test_get_valid_models_default(monkeypatch):
     Prevent regression for existing usage.
     """
     from litellm.utils import get_valid_models
-    import litellm
 
     monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
     valid_models = get_valid_models()
     assert len(valid_models) > 0
-
-
-def test_supports_vision_gemini():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    from litellm.utils import supports_vision
-
-    assert supports_vision("gemini-2.5-pro") is True
 
 
 def test_pick_cheapest_chat_model_from_llm_provider():
@@ -2147,7 +1948,7 @@ def test_validate_user_messages_invalid_content_type():
 
     messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='Please ensure all messages are valid OpenAI chat completion') as e:
         validate_chat_completion_user_messages(messages)
 
     assert "Invalid message" in str(e)

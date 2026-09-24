@@ -8,9 +8,13 @@ a test fail. The comment-scanner cases are the regression for the readline path:
 
 import importlib.util
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / "scripts" / "check_type_discipline.py"
@@ -36,17 +40,17 @@ def test_scan_comments_tokenizes_every_comment():
     # was tokenized, and the valid cast-ok suppression line must be captured. A crash in the
     # readline path would leave both empty.
     source = "x = 1  # noqa\ny = 2  # cast-ok: validated upstream by the caller\n"
-    comments, violations = checker.scan_comments(Path("snippet.py"), source)
+    suppressions, violations = checker.scan_comments(Path("snippet.py"), source)
     assert [v.code for v in violations] == ["LIT003"]
-    assert comments.cast_ok_lines == frozenset({2})
+    assert suppressions["cast-ok"] == frozenset({2})
 
 
 def test_scan_comments_does_not_crash_on_malformed_source():
     # A dedent mismatch makes tokenize raise IndentationError (a SyntaxError subclass);
     # scan_comments must swallow it, not propagate and crash the whole run.
-    comments, violations = checker.scan_comments(Path("x.py"), "if True:\n    a = 1\n  b = 2\n")
+    suppressions, violations = checker.scan_comments(Path("x.py"), "if True:\n    a = 1\n  b = 2\n")
     assert violations == ()
-    assert comments.cast_ok_lines == frozenset()
+    assert suppressions["cast-ok"] == frozenset()
 
 
 def test_malformed_source_degrades_to_lit000(tmp_path):
@@ -101,6 +105,38 @@ def test_ok_suppression_without_reason_is_flagged(tmp_path):
     codes = _codes(tmp_path, "y = []  # mutable-ok\n")
     assert "LIT005" in codes  # reasonless suppression
     assert "LIT002" in codes  # and it does not suppress, so the construction still trips
+
+
+def test_mutable_ok_on_a_real_violation_suppresses_and_is_not_lit013(tmp_path):
+    codes = _codes(tmp_path, "x: Final = []  # mutable-ok: seed\n")
+    assert "LIT002" not in codes
+    assert "LIT013" not in codes
+
+
+def test_mutable_ok_on_a_clean_line_is_lit013(tmp_path):
+    f = tmp_path / "snippet.py"
+    f.write_text("x: Final = (1, 2)  # mutable-ok: stale\n", encoding="utf-8")
+    found = checker.check_file(f)
+    assert [v.code for v in found] == ["LIT013"]
+    assert "mutable-ok" in found[0].message
+
+
+def test_mutable_ok_does_not_suppress_rebind_codes(tmp_path):
+    codes = _codes(tmp_path, "x = 1  # mutable-ok: wrong token\n")
+    assert "LIT010" in codes
+    assert "LIT013" in codes
+
+
+def test_rebind_ok_on_a_real_param_rebind_is_not_lit013(tmp_path):
+    codes = _codes(tmp_path, "def f(p: int) -> None:\n    p = 2  # rebind-ok: reset\n")
+    assert "LIT011" not in codes
+    assert "LIT013" not in codes
+
+
+def test_reasonless_ok_on_a_clean_line_is_lit005_not_lit013(tmp_path):
+    codes = _codes(tmp_path, "x: Final = (1, 2)  # mutable-ok\n")
+    assert "LIT005" in codes
+    assert "LIT013" not in codes
 
 
 # --------------------------------------------------------------------------- #
@@ -197,6 +233,52 @@ def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
     codes = _codes(tmp_path, "x: dict[str, int] = {}  # mutable-ok: in-place buffer mutated hot path\n")
     assert "LIT001" not in codes
     assert "LIT002" not in codes
+
+
+def test_typeddict_annotated_dict_literal_is_exempt(tmp_path):
+    assert "LIT002" not in _codes(
+        tmp_path, "from typing import Final\nfrom foo import MyTD\nx: Final[MyTD] = {'a': 1}\n"
+    )
+    assert "LIT002" not in _codes(tmp_path, "from foo import MyTD\nx: MyTD = {'a': 1}\n")
+    assert "LIT002" not in _codes(tmp_path, "from typing import Final\nx: Final['MyTD'] = {'a': 1}\n")
+    assert "LIT002" not in _codes(tmp_path, "import foo\nfrom typing import Final\nx: Final[foo.MyTD] = {'a': 1}\n")
+
+
+def test_wrapped_typeddict_annotations_share_the_exemption(tmp_path):
+    assert "LIT002" not in _codes(tmp_path, "from typing import Final, Optional\nx: Final[Optional[MyTD]] = {'a': 1}\n")
+    assert "LIT002" not in _codes(
+        tmp_path, "from typing import Annotated, Final\nx: Final[Annotated[MyTD, 'meta']] = {'a': 1}\n"
+    )
+    assert "LIT002" not in _codes(tmp_path, "from typing import ClassVar\nclass C:\n    x: ClassVar[MyTD] = {'a': 1}\n")
+    assert "LIT002" not in _codes(tmp_path, "from typing import Final\nx: Final[MyTD | None] = {'a': 1}\n")
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[dict[str, int] | None] = {'a': 1}\n")
+
+
+def test_bare_final_dict_literal_still_counts(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final = {'a': 1}\n")
+    assert "LIT002" in _codes(tmp_path, "from typing import ClassVar\nclass C:\n    x: ClassVar = {'a': 1}\n")
+
+
+def test_non_typeddict_annotations_do_not_exempt(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[dict[str, int]] = {'a': 1}\n")
+    assert "LIT002" in _codes(
+        tmp_path,
+        "from collections.abc import Mapping\nfrom typing import Final\nx: Final[Mapping[str, int]] = {'a': 1}\n",
+    )
+    assert "LIT002" in _codes(tmp_path, "from typing import Any, Final\nx: Final[Any] = {'a': 1}\n")
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[object] = {'a': 1}\n")
+
+
+def test_typeddict_exemption_covers_only_dict_literals(tmp_path):
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[MyTD] = dict(a=1)\n")
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[MyTD] = {k: 1 for k in ('a',)}\n")
+
+
+def test_nested_dict_literals_share_the_typeddict_exemption(tmp_path):
+    assert "LIT002" not in _codes(
+        tmp_path, "from typing import Final\nx: Final[Outer] = {'inner': {'a': 1}, 'steps': ({'b': 2},)}\n"
+    )
+    assert "LIT002" in _codes(tmp_path, "from typing import Final\nx: Final[Outer] = {'tags': ['a']}\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -319,10 +401,7 @@ def test_walrus_rebinding_is_flagged(tmp_path):
 
 def test_unpack_after_global_declaration_is_flagged(tmp_path):
     src = (
-        "count = 0  # rebind-ok: seeded module counter\n"
-        "def f() -> None:\n"
-        "    global count\n"
-        "    count, other = (1, 2)\n"
+        "count = 0  # rebind-ok: seeded module counter\ndef f() -> None:\n    global count\n    count, other = (1, 2)\n"
     )
     assert _codes(tmp_path, src).count("LIT010") == 1
 
@@ -358,14 +437,7 @@ def test_non_assignment_binding_forms_are_exempt(tmp_path):
 
 
 def test_dunder_underscore_class_body_and_type_alias_are_exempt(tmp_path):
-    src = (
-        "from typing import TypeAlias\n"
-        "__all__ = ['C']\n"
-        "_ = 1\n"
-        "Alias: TypeAlias = str\n"
-        "class C:\n"
-        "    field = 1\n"
-    )
+    src = "from typing import TypeAlias\n__all__ = ['C']\n_ = 1\nAlias: TypeAlias = str\nclass C:\n    field = 1\n"
     assert "LIT010" not in _codes(tmp_path, src)
 
 
@@ -375,12 +447,7 @@ def test_comprehension_targets_are_exempt(tmp_path):
 
 
 def test_global_reassignment_inside_function_is_flagged(tmp_path):
-    src = (
-        "count = 0  # rebind-ok: seeded module counter\n"
-        "def bump() -> None:\n"
-        "    global count\n"
-        "    count = 1\n"
-    )
+    src = "count = 0  # rebind-ok: seeded module counter\ndef bump() -> None:\n    global count\n    count = 1\n"
     assert _codes(tmp_path, src).count("LIT010") == 1
 
 
@@ -532,11 +599,7 @@ def test_walrus_in_own_defaults_binds_in_enclosing_scope_not_the_parameter(tmp_p
 
 
 def test_walrus_in_nested_defaults_rebinds_the_enclosing_parameter(tmp_path):
-    src = (
-        "def g(p: int) -> None:\n"
-        "    def inner(q: int = (p := 2)) -> None:\n"
-        "        return None\n"
-    )
+    src = "def g(p: int) -> None:\n    def inner(q: int = (p := 2)) -> None:\n        return None\n"
     assert "LIT011" in _codes(tmp_path, src)
 
 
@@ -551,11 +614,7 @@ def test_typeddict_writable_field_is_flagged(tmp_path):
 
 
 def test_typeddict_readonly_field_is_clean(tmp_path):
-    src = (
-        "from typing_extensions import ReadOnly, TypedDict\n"
-        "class P(TypedDict):\n"
-        "    a: ReadOnly[int]\n"
-    )
+    src = "from typing_extensions import ReadOnly, TypedDict\nclass P(TypedDict):\n    a: ReadOnly[int]\n"
     assert "LIT012" not in _codes(tmp_path, src)
 
 
@@ -587,11 +646,7 @@ def test_readonly_in_annotated_metadata_position_does_not_qualify(tmp_path):
 
 def test_typeddict_subclass_in_same_module_is_flagged(tmp_path):
     src = (
-        "from typing import TypedDict\n"
-        "class Base(TypedDict):\n"
-        "    pass\n"
-        "class Child(Base, total=False):\n"
-        "    a: int\n"
+        "from typing import TypedDict\nclass Base(TypedDict):\n    pass\nclass Child(Base, total=False):\n    a: int\n"
     )
     assert "LIT012" in _codes(tmp_path, src)
 
@@ -624,11 +679,7 @@ def test_writable_ok_with_reason_suppresses_lit012(tmp_path):
 
 
 def test_writable_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path):
-    src = (
-        "from typing import TypedDict\n"
-        "class P(TypedDict):\n"
-        "    a: int  # writable-ok\n"
-    )
+    src = "from typing import TypedDict\nclass P(TypedDict):\n    a: int  # writable-ok\n"
     codes = _codes(tmp_path, src)
     assert "LIT005" in codes
     assert "LIT012" in codes
@@ -646,3 +697,61 @@ def test_budget_covers_exactly_the_checker_rules():
     for spec in budget.values():
         assert isinstance(spec["limit"], int)
         assert spec["limit"] >= 0
+
+
+_FANS_OUT = checker._worker_count(checker.PARALLEL_MIN_PATHS) > 1
+_SERIAL_ONLY = "one usable core, so scan_paths stays serial and there is no fan-out to compare"
+
+
+def _corpus(tmp_path: Path, count: int) -> tuple[Path, ...]:
+    for index in range(count):
+        (tmp_path / f"mod_{index}.py").write_text(
+            f"def build_{index}(items: list[int]) -> None:\n    return None\n",
+            encoding="utf-8",
+        )
+    return tuple(sorted(tmp_path.rglob("*.py")))
+
+
+def _run_checker(target: Path) -> list[str]:
+    completed = subprocess.run(
+        [sys.executable, str(_MODULE_PATH), str(target)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    return completed.stdout.splitlines()
+
+
+def test_worker_count_stays_serial_below_the_threshold():
+    assert checker._worker_count(checker.PARALLEL_MIN_PATHS - 1) == 1
+
+
+def test_worker_count_fans_out_at_the_threshold():
+    assert checker._worker_count(checker.PARALLEL_MIN_PATHS) == max(1, min(os.cpu_count() or 1, checker.MAX_WORKERS))
+
+
+def test_worker_count_never_exceeds_the_cap():
+    assert checker._worker_count(100_000) <= checker.MAX_WORKERS
+
+
+def test_scan_paths_below_the_threshold_returns_every_violation(tmp_path):
+    paths = _corpus(tmp_path, 3)
+    assert checker._worker_count(len(paths)) == 1
+    found = checker.scan_paths(paths)
+    assert found and len({v.path for v in found}) == 3
+
+
+@pytest.mark.skipif(not _FANS_OUT, reason=_SERIAL_ONLY)
+def test_a_fanned_out_run_reports_exactly_what_a_serial_run_reports(tmp_path):
+    paths = _corpus(tmp_path, checker.PARALLEL_MIN_PATHS + 5)
+    serial = [v.render() for v in sorted(v for path in paths for v in checker.check_file(path))]
+    assert serial, "corpus must produce violations or the comparison proves nothing"
+    assert _run_checker(tmp_path) == serial
+
+
+@pytest.mark.skipif(not _FANS_OUT, reason=_SERIAL_ONLY)
+def test_a_fanned_out_run_reports_each_generated_file_exactly_once(tmp_path):
+    paths = _corpus(tmp_path, checker.PARALLEL_MIN_PATHS + 5)
+    reported = _run_checker(tmp_path)
+    assert reported
+    assert len({line.split(":")[0] for line in reported}) == len(paths)

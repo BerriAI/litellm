@@ -11,7 +11,7 @@ exception types:
   an upstream LLM provider returns 429.
 * :class:`fastapi.HTTPException` (status 429) — raised directly by proxy hooks
   such as ``parallel_request_limiter``, ``dynamic_rate_limiter``,
-  ``batch_rate_limiter``, ``max_budget_limiter``, ``max_iterations_limiter``,
+  ``batch_rate_limiter``, ``max_iterations_limiter``,
   etc.
 * :class:`litellm.llms.base_llm.chat.transformation.BaseLLMException` (status
   429) — raised by some provider transports.
@@ -66,7 +66,7 @@ def map_v3_rate_limit_type(
     return None
 
 
-def _coerce_message(detail: Any) -> str:
+def _coerce_message(detail: object) -> str:
     """Best-effort, JSON-friendly stringification of an HTTPException-style detail."""
     if detail is None:
         return ""
@@ -144,7 +144,7 @@ class ProxyRateLimitError(HTTPException, RateLimitError):
     def __init__(
         self,
         detail: Any,
-        headers: Mapping[str, Any] | None = None,
+        headers: Mapping[str, object] | None = None,
         category: str | RateLimitErrorCategory = RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         rate_limit_type: str | RateLimitType | None = None,
         model: str | None = None,

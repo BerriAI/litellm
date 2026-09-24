@@ -4,14 +4,12 @@ Tests PII detection and masking for different message formats
 """
 
 import asyncio
-import os
-import sys
+import json
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -21,12 +19,11 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 )
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
+from litellm.exceptions import BlockedPiiEntityError
 
 
-def _make_mock_session_iterator(
-    json_response, status=200, content_type="application/json", text_response=""
-):
+def _make_mock_session_iterator(json_response, status=200, content_type="application/json", text_response=""):
     """Create a mock _get_session_iterator that yields a session returning json_response."""
 
     @asynccontextmanager
@@ -102,9 +99,7 @@ def mock_cache():
 
 
 @pytest.mark.asyncio
-async def test_multimodal_message_format_completion_call_type(
-    presidio_guardrail, mock_user_api_key, mock_cache
-):
+async def test_multimodal_message_format_completion_call_type(presidio_guardrail, mock_user_api_key, mock_cache):
     """
     Test Presidio PII masking with multimodal message format (content as list)
     for completion call type.
@@ -249,9 +244,7 @@ async def test_multimodal_message_format_anthropic_messages_call_type(
 
 
 @pytest.mark.asyncio
-async def test_multimodal_message_multiple_content_items(
-    presidio_guardrail, mock_user_api_key, mock_cache
-):
+async def test_multimodal_message_multiple_content_items(presidio_guardrail, mock_user_api_key, mock_cache):
     """
     Test Presidio PII masking with multiple content items in the content list.
     """
@@ -305,9 +298,7 @@ async def test_multimodal_message_multiple_content_items(
 
 
 @pytest.mark.asyncio
-async def test_mixed_string_and_list_content(
-    presidio_guardrail, mock_user_api_key, mock_cache
-):
+async def test_mixed_string_and_list_content(presidio_guardrail, mock_user_api_key, mock_cache):
     """
     Test Presidio PII masking with mixed string and list content formats.
     """
@@ -372,9 +363,7 @@ async def test_mixed_string_and_list_content(
 
 
 @pytest.mark.asyncio
-async def test_content_list_without_text_field(
-    presidio_guardrail, mock_user_api_key, mock_cache
-):
+async def test_content_list_without_text_field(presidio_guardrail, mock_user_api_key, mock_cache):
     """
     Test Presidio PII masking gracefully handles content items without text field
     (e.g., image content items).
@@ -585,9 +574,53 @@ async def test_logging_hook_multiple_content_items(presidio_guardrail):
 
 
 @pytest.mark.asyncio
-async def test_logging_only_does_not_mask_pre_call_request(
-    mock_user_api_key, mock_cache
-):
+async def test_logging_hook_masks_the_response_too(presidio_guardrail):
+    """
+    Regression: async_logging_hook only masked kwargs["messages"] (the request) and
+    left `result` (the model's response) completely untouched, so in `logging_only`
+    mode any PII in the assistant's reply was logged to langfuse/datadog/etc. in the
+    clear. The hook's own docstring promises masking "before logging" for both input
+    and output.
+    """
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    test_kwargs = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "model": "gpt-4",
+    }
+    response = ModelResponse(
+        id="1",
+        object="chat.completion",
+        created=0,
+        model="gpt-test",
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Sure, your card is 4111-1111-1111-1111",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    _, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=response,
+        call_type="completion",
+    )
+
+    assert "[CREDIT_CARD]" in result_response.choices[0].message.content
+    assert "4111-1111-1111-1111" not in result_response.choices[0].message.content
+
+
+@pytest.mark.asyncio
+async def test_logging_only_does_not_mask_pre_call_request(mock_user_api_key, mock_cache):
     """
     A guardrail configured with `logging_only` must only mask PII for logs/traces,
     never for the request sent to the model. `async_pre_call_hook` should leave the
@@ -674,9 +707,7 @@ async def test_presidio_sets_guardrail_information_in_request_data():
     assert "metadata" in request_data
     assert "standard_logging_guardrail_information" in request_data["metadata"]
 
-    guardrail_info_list = request_data["metadata"][
-        "standard_logging_guardrail_information"
-    ]
+    guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
     assert isinstance(guardrail_info_list, list)
     assert len(guardrail_info_list) > 0
 
@@ -803,49 +834,50 @@ async def test_presidio_filter_scope_initializer(monkeypatch):
     import litellm.proxy.guardrails.guardrail_hooks.presidio as presidio_mod
     import litellm.proxy.guardrails.guardrail_initializers as gi
 
-    monkeypatch.setattr(
-        presidio_mod, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False
-    )
-    monkeypatch.setattr(
-        gi, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False
-    )
+    monkeypatch.setattr(presidio_mod, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False)
+    monkeypatch.setattr(gi, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False)
 
     # input-only
     created.clear()
     from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
 
-    params_input = LitellmParams(
-        guardrail="presidio", mode="pre_call", presidio_filter_scope="input"
-    )
+    params_input = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="input")
     guardrail_dict = {"guardrail_name": "g1"}
-    cb = initialize_presidio(params_input, guardrail_dict)
-    assert cb is created[0]
+    callbacks = initialize_presidio(params_input, guardrail_dict)
+    assert callbacks == (created[0],)
     assert created[0].apply_to_output is False
 
     # output-only
     created.clear()
-    params_output = LitellmParams(
-        guardrail="presidio", mode="pre_call", presidio_filter_scope="output"
-    )
-    cb = initialize_presidio(params_output, guardrail_dict)
+    params_output = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="output")
+    callbacks = initialize_presidio(params_output, guardrail_dict)
     assert len(created) == 1
+    assert callbacks == (created[0],)
     assert created[0].apply_to_output is True
 
-    # both -> expect two callbacks (input + output)
+    # both -> expect two callbacks (input + output), both returned, input first
     created.clear()
-    params_both = LitellmParams(
-        guardrail="presidio", mode="pre_call", presidio_filter_scope="both"
-    )
-    cb = initialize_presidio(params_both, guardrail_dict)
+    params_both = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="both")
+    callbacks = initialize_presidio(params_both, guardrail_dict)
     assert len(created) == 2
-    assert any(not c.apply_to_output for c in created)
-    assert any(c.apply_to_output for c in created)
+    assert callbacks == tuple(created)
+    assert callbacks[0].apply_to_output is False
+    assert callbacks[1].apply_to_output is True
+
+    # both + output_parse_pii -> three callbacks, all returned, input first
+    created.clear()
+    params_all = LitellmParams(
+        guardrail="presidio", mode="pre_call", presidio_filter_scope="both", output_parse_pii=True
+    )
+    callbacks = initialize_presidio(params_all, guardrail_dict)
+    assert len(created) == 3
+    assert callbacks == tuple(created)
+    assert callbacks[0].apply_to_output is False
+    assert mgr.added[-3:] == list(created)
 
 
 @pytest.mark.asyncio
-async def test_empty_content_handling(
-    presidio_guardrail, mock_user_api_key, mock_cache
-):
+async def test_empty_content_handling(presidio_guardrail, mock_user_api_key, mock_cache):
     """
     Test that Presidio handles empty content gracefully.
 
@@ -901,9 +933,7 @@ async def test_empty_content_handling(
 
 
 @pytest.mark.asyncio
-async def test_whitespace_only_content(
-    presidio_guardrail, mock_user_api_key, mock_cache
-):
+async def test_whitespace_only_content(presidio_guardrail, mock_user_api_key, mock_cache):
     """
     Test that Presidio handles whitespace-only content gracefully.
 
@@ -1098,9 +1128,7 @@ async def test_analyze_text_list_with_non_dict_items():
         "invalid_string_item",
         {"entity_type": "EMAIL", "start": 10, "end": 25, "score": 0.85},
     ]
-    with patch.object(
-        presidio, "_get_session_iterator", _make_mock_session_iterator(json_response)
-    ):
+    with patch.object(presidio, "_get_session_iterator", _make_mock_session_iterator(json_response)):
         result = await presidio.analyze_text(
             text="some text",
             presidio_config=None,
@@ -1112,9 +1140,7 @@ async def test_analyze_text_list_with_non_dict_items():
 
 
 @pytest.mark.asyncio
-async def test_tool_calling_complete_scenario(
-    presidio_guardrail, mock_user_api_key, mock_cache
-):
+async def test_tool_calling_complete_scenario(presidio_guardrail, mock_user_api_key, mock_cache):
     """
     Test complete tool calling scenario with PII in user message.
 
@@ -1180,9 +1206,7 @@ def test_filter_drops_low_score_detection():
         mock_testing=True,
         presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
     )
-    analyze_results = [
-        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4}
-    ]
+    analyze_results = [{"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4}]
 
     filtered = guardrail.filter_analyze_results_by_score(analyze_results)
     assert filtered == []
@@ -1196,9 +1220,7 @@ def test_filter_preserves_high_score_detection():
         mock_testing=True,
         presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
     )
-    analyze_results = [
-        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.9, "start": 0, "end": 4}
-    ]
+    analyze_results = [{"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.9, "start": 0, "end": 4}]
 
     filtered = guardrail.filter_analyze_results_by_score(analyze_results)
     assert len(filtered) == 1
@@ -1335,17 +1357,13 @@ def test_blocking_respects_threshold_filter():
         presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.9},
     )
 
-    low_score_results = [
-        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4}
-    ]
+    low_score_results = [{"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4}]
     filtered = guardrail.filter_analyze_results_by_score(low_score_results)
     guardrail.raise_exception_if_blocked_entities_detected(filtered)
 
-    high_score_results = [
-        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.95, "start": 0, "end": 4}
-    ]
+    high_score_results = [{"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.95, "start": 0, "end": 4}]
     filtered_high = guardrail.filter_analyze_results_by_score(high_score_results)
-    with pytest.raises(Exception):
+    with pytest.raises(BlockedPiiEntityError):
         guardrail.raise_exception_if_blocked_entities_detected(filtered_high)
 
 
@@ -1404,9 +1422,7 @@ async def test_get_session_iterator_thread_safety(presidio_guardrail):
 
     # Run the background thread test
     bg_future = asyncio.Future()
-    t = threading.Thread(
-        target=thread_target, args=(asyncio.get_running_loop(), bg_future)
-    )
+    t = threading.Thread(target=thread_target, args=(asyncio.get_running_loop(), bg_future))
     t.start()
     t.join()
 
@@ -1615,9 +1631,7 @@ async def test_anonymize_text_non_json_content_type():
     )
 
     with patch.object(guardrail, "_get_session_iterator", mock_iterator):
-        with pytest.raises(
-            Exception, match="Presidio anonymizer returned non-JSON Content-Type"
-        ):
+        with pytest.raises(Exception, match="Presidio anonymizer returned non-JSON Content-Type"):
             await guardrail.anonymize_text(
                 text="Hello world",
                 analyze_results=[{"start": 0, "end": 5, "entity_type": "PERSON"}],
@@ -1675,9 +1689,7 @@ async def test_pii_tokens_stored_in_metadata_not_top_level(presidio_guardrail):
     mock_cache = DualCache()
 
     test_data = {
-        "messages": [
-            {"role": "user", "content": "My name is John and my phone is 555-123-4567"}
-        ],
+        "messages": [{"role": "user", "content": "My name is John and my phone is 555-123-4567"}],
         "model": "claude-haiku-4-5-20251001",
         "metadata": {},
     }
@@ -1826,9 +1838,7 @@ async def test_metadata_none_does_not_crash():
     )
 
     # No pii_tokens to unmask, so content stays as-is
-    assert (
-        response.choices[0].message.content == f"Hello {token_key}, how can I help you?"
-    )
+    assert response.choices[0].message.content == f"Hello {token_key}, how can I help you?"
 
 
 # ---------------------------------------------------------------------------
@@ -2005,9 +2015,7 @@ async def test_anthropic_native_response_unmasking():
         response=anthropic_response,
     )
 
-    assert result["content"][0]["text"] == (
-        "Hello John Smith, your number is 555-123-4567."
-    )
+    assert result["content"][0]["text"] == ("Hello John Smith, your number is 555-123-4567.")
 
 
 @pytest.mark.asyncio
@@ -2126,9 +2134,7 @@ async def test_streaming_bytes_chunks_are_yielded_not_discarded():
     ):
         chunks.append(chunk)
 
-    assert any(
-        isinstance(c, bytes) for c in chunks
-    ), "bytes chunks must not be discarded"
+    assert any(isinstance(c, bytes) for c in chunks), "bytes chunks must not be discarded"
     assert byte_chunk in chunks
 
 
@@ -2238,9 +2244,7 @@ async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
 
     mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
     received = []
-    with patch(
-        "litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger"
-    ) as mock_logger:
+    with patch("litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger") as mock_logger:
         async for chunk in guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=mock_user_api_key,
             response=mock_stream(),
@@ -2257,7 +2261,7 @@ async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
         assert mock_logger.warning.call_count == 2
         warning_messages = [call.args[0] for call in mock_logger.warning.call_args_list]
         assert any("mixed stream detected" in msg for msg in warning_messages)
-        assert any("unknown event objects" in msg for msg in warning_messages)
+        assert any("Output PII masking was skipped" in msg for msg in warning_messages)
 
 
 # ---------------------------------------------------------------------------
@@ -2328,49 +2332,461 @@ async def test_apply_guardrail_masks_on_request():
     assert "John Smith" not in result["texts"][0]
 
 
+def _anthropic_sse(event_type: str, payload: dict) -> bytes:
+    return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+def _anthropic_text_deltas(chunks: list[bytes]) -> list[tuple[int, str]]:
+    deltas = []
+    for line in b"".join(chunks).decode().split("\n"):
+        if not line.startswith("data: "):
+            continue
+        event = json.loads(line[6:])
+        if event.get("type") == "content_block_delta" and event["delta"].get("type") == "text_delta":
+            deltas.append((event["index"], event["delta"]["text"]))
+    return deltas
+
+
+def _chat_delta_chunk(text: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-out-mask",
+        choices=[StreamingChoices(index=0, delta=Delta(content=text, role="assistant"), finish_reason=finish_reason)],
+        created=1,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_bytes_only_logs_warning():
+async def test_apply_to_output_streaming_chat_chunks_are_masked_as_one_response():
     """
-    Regression test: when apply_to_output=True and the stream contains only
-    bytes chunks (Anthropic native SSE), output masking is skipped.
-    A warning must be logged so operators are aware.
+    Structured chat completion chunks are buffered, assembled and masked as a
+    whole, so a card number split across deltas cannot reach the caller.
     """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
+        mock_redacted_text={"text": "my card is <CREDIT_CARD>"},
+    )
+
+    async def mock_stream():
+        yield _chat_delta_chunk("my card is 4111")
+        yield _chat_delta_chunk(" 1111 1111 1111")
+        yield _chat_delta_chunk("", finish_reason="stop")
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={"messages": [{"role": "user", "content": "what is my card"}]},
+    ):
+        collected.append(chunk)
+
+    assert all(isinstance(chunk, ModelResponseStream) for chunk in collected)
+    joined = "".join(chunk.choices[0].delta.content or "" for chunk in collected)
+    assert joined == "my card is <CREDIT_CARD>"
+    assert collected[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_bytes_after_chat_chunks_are_passed_through_in_order():
+    """
+    Once structured chunks have been buffered, a trailing bytes frame belongs to
+    the same stream and must be forwarded rather than treated as a new SSE stream.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "hello"},
+    )
+    trailer = b"data: [DONE]\n\n"
+
+    async def mock_stream():
+        yield _chat_delta_chunk("hello", finish_reason="stop")
+        yield trailer
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected[0] == trailer
+    assert len(collected) == 2
+    assert isinstance(collected[1], ModelResponseStream)
+    assert collected[1].choices[0].delta.content == "hello"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_across_deltas():
+    """
+    Anthropic native /v1/messages streams reach the post_call hook as raw SSE
+    bytes. Output masking must run over the whole content block so a card
+    number split across text_delta events cannot reach the caller.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
     )
 
     byte_chunks = [
-        b'data: {"type":"content_block_delta","delta":{"text":"Hello"}}\n\n',
-        b'data: {"type":"content_block_delta","delta":{"text":" world"}}\n\n',
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111"}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
     ]
 
     async def mock_stream():
         for b in byte_chunks:
             yield b
 
-    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert all(isinstance(chunk, bytes) for chunk in collected)
+    joined = b"".join(collected).decode()
+    assert "4111" not in joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
+    assert joined.count("event: message_start") == 1
+    assert joined.count("event: message_stop") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_forwarded_unchanged():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "Hello world"},
+    )
+
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " world"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
 
     collected = []
-    with patch(
-        "litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger"
-    ) as mock_logger:
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected == byte_chunks
+
+
+def _gemini_sse(text: str) -> bytes:
+    payload = {"candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "index": 0}]}
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_sse_bytes_are_forwarded_incrementally_until_upstream_aborts():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    frames = [_gemini_sse("Partial one from John Smith. "), _gemini_sse("Partial two. ")]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+        raise ConnectionError("upstream closed mid-stream")
+
+    async def collect() -> None:
         async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=mock_user_api_key,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             response=mock_stream(),
             request_data={},
         ):
             collected.append(chunk)
 
-        # All bytes should be yielded through
-        assert len(collected) == len(byte_chunks)
-        for original, received in zip(byte_chunks, collected):
-            assert original == received
+    with pytest.raises(ConnectionError):
+        await collect()
 
-        # Warning must be logged about skipped masking
-        mock_logger.warning.assert_called_once()
-        warning_msg = mock_logger.warning.call_args[0][0]
-        assert "Output PII masking was skipped" in warning_msg
+    assert collected == frames
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_first_frame_split_across_transport_chunks_is_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    message_start = _anthropic_sse(
+        "message_start",
+        {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+    )
+    split_at = message_start.index(b'"message_') + len(b'"message_')
+    byte_chunks = [
+        message_start[:split_at],
+        message_start[split_at:],
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_first_frame_split_across_transport_chunks_streams_incrementally():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    first = _gemini_sse("Partial one from John Smith. ")
+    second = _gemini_sse("Partial two. ")
+    collected: list[object] = []
+
+    async def mock_stream():
+        yield first[:20]
+        yield first[20:]
+        yield second
+        raise ConnectionError("upstream closed mid-stream")
+
+    async def collect() -> None:
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+    with pytest.raises(ConnectionError):
+        await collect()
+
+    assert collected == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_unterminated_first_frame_is_released_once_it_exceeds_the_cap():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    piece = b"data: " + b"x" * 1023 + b"\n"
+    pieces_to_cap = -(-(64 * 1024) // len(piece))
+    released_at: list[int] = []
+
+    async def mock_stream():
+        for index in range(pieces_to_cap * 4):
+            if collected:
+                released_at.append(index)
+            yield piece
+
+    collected: list[object] = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert released_at, "nothing reached the caller before the upstream finished"
+    assert released_at[0] == pieces_to_cap, released_at[:3]
+    assert b"".join(collected) == piece * (pieces_to_cap * 4)
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_fail_closed_when_presidio_is_unreachable():
+    """
+    The raw SSE stream is fully drained before masking, so a Presidio outage
+    must surface as an error to the caller: replaying the unscanned frames
+    would hand over whatever PII the model generated.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        presidio_analyzer_api_base="http://127.0.0.1:9",
+        presidio_anonymizer_api_base="http://127.0.0.1:9",
+    )
+
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello world"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+
+    async def collect_masked_stream():
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+    with pytest.raises(Exception, match="Presidio PII analysis failed"):
+        await collect_masked_stream()
+
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_block_action_raises_instead_of_replaying():
+    """
+    A BLOCK on generated PII must refuse the streaming /v1/messages response the
+    same way it refuses the non streaming one, not replay the raw frames.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        apply_to_output=True,
+        mock_testing=False,
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.BLOCK},
+    )
+
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    analyzer_hit = [{"entity_type": "CREDIT_CARD", "score": 0.99, "start": 0, "end": 19}]
+    collected = []
+
+    async def collect_masked_stream():
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+    with patch.object(guardrail, "_get_session_iterator", _make_mock_session_iterator(analyzer_hit)):
+        with pytest.raises(BlockedPiiEntityError):
+            await collect_masked_stream()
+
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_propagates_upstream_error_when_nothing_was_buffered():
+    """
+    An upstream guardrail that rejects the stream before the first chunk must
+    surface as an error to the caller, not as an empty 200 stream.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
+    )
+
+    async def failing_stream():
+        raise RuntimeError("upstream guardrail rejected the stream")
+        yield b""
+
+    with pytest.raises(RuntimeError, match="upstream guardrail rejected the stream"):
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=failing_stream(),
+            request_data={},
+        ):
+            pass
 
 
 @pytest.mark.asyncio
@@ -2477,10 +2893,7 @@ async def test_output_parse_pii_streaming_responses_completed_event_unmasked(
         collected.append(chunk)
 
     assert collected == [completed_event]
-    assert (
-        collected[0].response.output[0].content[0].text
-        == "Reach me at john@example.com today."
-    )
+    assert collected[0].response.output[0].content[0].text == "Reach me at john@example.com today."
 
 
 @pytest.mark.asyncio
@@ -2543,9 +2956,7 @@ async def test_anonymize_text_uses_correct_positions_no_parse_pii():
     original text using those positions, which produces garbled output
     with remnants of original PII data.
     """
-    original_text = (
-        "My name is John Smith, my email is john@example.com, phone 555-867-5309"
-    )
+    original_text = "My name is John Smith, my email is john@example.com, phone 555-867-5309"
     # Positions as returned by the analyzer (reference original text)
     analyze_results = [
         {"end": 51, "entity_type": "EMAIL_ADDRESS", "score": 1.0, "start": 35},
@@ -2600,9 +3011,9 @@ async def test_anonymize_text_uses_correct_positions_no_parse_pii():
         )
 
     expected = "My name is <PERSON>, my email is <EMAIL_ADDRESS>, phone <PHONE_NUMBER>"
-    assert (
-        result == expected
-    ), f"anonymize_text produced garbled output with PII remnants.\nExpected: {expected!r}\nGot:      {result!r}"
+    assert result == expected, (
+        f"anonymize_text produced garbled output with PII remnants.\nExpected: {expected!r}\nGot:      {result!r}"
+    )
     assert masked_entity_count == {
         "PERSON": 1,
         "EMAIL_ADDRESS": 1,
@@ -2621,9 +3032,7 @@ async def test_anonymize_text_uses_correct_positions_with_parse_pii():
     tokens and the pii_tokens mapping, not positions from anonymizer items
     (which reference the anonymized output text).
     """
-    original_text = (
-        "My name is John Smith, my email is john@example.com, phone 555-867-5309"
-    )
+    original_text = "My name is John Smith, my email is john@example.com, phone 555-867-5309"
     analyze_results = [
         {"end": 51, "entity_type": "EMAIL_ADDRESS", "score": 1.0, "start": 35},
         {"end": 21, "entity_type": "PERSON", "score": 0.85, "start": 11},
@@ -2739,17 +3148,13 @@ def test_unmask_sse_bytes_chunk_ignores_non_text_delta():
 
 def test_unmask_sse_bytes_chunk_handles_malformed_json():
     chunk = b"data: {not valid json}\n\n"
-    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
-        chunk, {"<PERSON_1>": "Bobby"}
-    )
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})
     assert result == chunk
 
 
 def test_unmask_sse_bytes_chunk_handles_unicode_decode_error():
     chunk = b"\xff\xfe invalid utf-8"
-    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
-        chunk, {"<PERSON_1>": "Bobby"}
-    )
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})
     assert result == chunk
 
 
@@ -2783,9 +3188,7 @@ def test_unmask_sse_bytes_chunk_handles_crlf_line_endings():
     }
     crlf_chunk = ("data: " + json.dumps(event) + "\r\ndata: [DONE]\r\n").encode("utf-8")
 
-    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
-        crlf_chunk, pii_tokens
-    )
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(crlf_chunk, pii_tokens)
 
     decoded = result.decode("utf-8")
     parsed = json.loads(decoded.split("data: ", 1)[1].split("\n")[0].strip())
@@ -2849,3 +3252,600 @@ async def test_stream_pii_unmasking_passthrough_when_no_tokens(mock_user_api_key
         chunks.append(chunk)
 
     assert chunks == [raw_chunk]
+
+
+def test_new_entities_pass_through_analyze_payload():
+    """
+    Newly added upstream entities (e.g. German DE_*) must reach the analyzer
+    payload as their exact recognizer names, whether configured as enum or str.
+    """
+    import json
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        pii_entities_config={
+            PiiEntityType.DE_TAX_ID: PiiAction.MASK,
+            "KR_RRN": PiiAction.BLOCK,
+        },
+        presidio_language="de",
+    )
+
+    payload = guardrail._get_presidio_analyze_request_payload(
+        text="Meine Steuer-ID ist 65929970489",
+        presidio_config=None,
+        request_data={},
+    )
+
+    assert set(payload["entities"]) == {"DE_TAX_ID", "KR_RRN"}
+    assert payload["language"] == "de"
+    serialized = json.dumps(payload)
+    assert '"DE_TAX_ID"' in serialized
+    assert '"KR_RRN"' in serialized
+
+
+# ---------------------------------------------------------------------------
+# Chunked /analyze tests (LIT-4785)
+# Oversized texts must be split into overlapping chunks before /analyze, with
+# per-chunk offsets remapped onto the original text.
+# ---------------------------------------------------------------------------
+
+CHUNK_MARKER_ONE = "4111-0001"
+CHUNK_MARKER_TWO = "4111-0002"
+
+
+def _make_marker_session_iterator(
+    recorded_analyze_payloads,
+    analyzer_body_limit_bytes=None,
+    recorded_anonymize_payloads=None,
+):
+    """Mock session behaving like a real Presidio pair.
+
+    /analyze returns a CREDIT_CARD detection for every ``4111-NNNN`` marker in
+    the posted text (chunk-local offsets, like the real analyzer). When
+    ``analyzer_body_limit_bytes`` is set, oversized /analyze bodies get the
+    HTTP 413 from LIT-4785. /anonymize replaces the given spans in the posted
+    text.
+    """
+    import json as json_module
+    import re as re_module
+
+    @asynccontextmanager
+    async def mock_iterator():
+        class MockResponse:
+            def __init__(self, status, body):
+                self.status = status
+                self.content_type = "application/json"
+                self.headers = {"Content-Type": "application/json"}
+                self._body = body
+
+            async def text(self):
+                return json_module.dumps(self._body)
+
+            async def json(self):
+                return self._body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class MockSession:
+            def post(self, url, json=None, headers=None):
+                payload = json
+                if url.endswith("analyze"):
+                    recorded_analyze_payloads.append(payload)
+                    text = payload["text"]
+                    if analyzer_body_limit_bytes is not None and len(text.encode("utf-8")) > analyzer_body_limit_bytes:
+                        return MockResponse(
+                            413,
+                            {
+                                "error": "Request body too large. /analyze accepts at most "
+                                f"{analyzer_body_limit_bytes} bytes; larger documents must be "
+                                "chunked by the caller."
+                            },
+                        )
+                    results = [
+                        {
+                            "entity_type": "CREDIT_CARD",
+                            "start": m.start(),
+                            "end": m.end(),
+                            "score": 1.0,
+                        }
+                        for m in re_module.finditer(r"4111-\d{4}", text)
+                    ]
+                    return MockResponse(200, results)
+                if recorded_anonymize_payloads is not None:
+                    recorded_anonymize_payloads.append(payload)
+                text = payload["text"]
+                items = sorted(payload["analyzer_results"], key=lambda r: r["start"], reverse=True)
+                for r in items:
+                    text = text[: r["start"]] + "<" + r["entity_type"] + ">" + text[r["end"] :]
+                return MockResponse(
+                    200,
+                    {
+                        "text": text,
+                        "items": [{"entity_type": r["entity_type"]} for r in items],
+                    },
+                )
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        yield MockSession()
+
+    return mock_iterator
+
+
+def _chunking_guardrail(chunk_size_bytes=100, **kwargs):
+    return _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        presidio_analyze_chunk_size_bytes=chunk_size_bytes,
+        mock_testing=False,
+        **kwargs,
+    )
+
+
+def _oversized_marker_text():
+    """~258-char text with markers in the 1st and 3rd 100-byte chunk."""
+    filler = "x" * 60
+    return filler + CHUNK_MARKER_ONE + filler + filler + CHUNK_MARKER_TWO + filler
+
+
+def test_split_text_for_analysis_offsets_and_byte_budget():
+    text = " ".join(f"word{i}" for i in range(200))
+    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=100, overlap_chars=20)
+    assert len(chunks) > 1
+    for offset, chunk in chunks:
+        assert len(chunk.encode("utf-8")) <= 100
+        assert text[offset : offset + len(chunk)] == chunk
+    assert chunks[0][0] == 0
+    assert chunks[-1][0] + len(chunks[-1][1]) == len(text)
+    for (prev_off, prev_chunk), (next_off, _) in zip(chunks, chunks[1:]):
+        # consecutive chunks overlap (or at least touch) and make progress
+        assert next_off <= prev_off + len(prev_chunk)
+        assert next_off > prev_off
+
+
+def test_split_text_for_analysis_multibyte_characters():
+    text = "émoji🙂 çafé " * 120
+    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=64, overlap_chars=8)
+    assert len(chunks) > 1
+    for offset, chunk in chunks:
+        assert len(chunk.encode("utf-8")) <= 64
+        assert text[offset : offset + len(chunk)] == chunk
+    assert chunks[-1][0] + len(chunks[-1][1]) == len(text)
+
+
+def test_split_text_for_analysis_under_budget_returns_single_chunk():
+    text = "short text"
+    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=100, overlap_chars=20)
+    assert chunks == [(0, text)]
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_single_call_when_under_limit():
+    guardrail = _chunking_guardrail(chunk_size_bytes=10_000)
+    payloads = []
+    text = f"my card is {CHUNK_MARKER_ONE} thanks"
+    with patch.object(guardrail, "_get_session_iterator", _make_marker_session_iterator(payloads)):
+        results = await guardrail.analyze_text(text=text, presidio_config=None, request_data={})
+    assert len(payloads) == 1
+    assert payloads[0]["text"] == text
+    assert len(results) == 1
+    assert text[results[0]["start"] : results[0]["end"]] == CHUNK_MARKER_ONE
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_chunks_oversized_text_and_remaps_offsets():
+    """Regression test for LIT-4785.
+
+    The mock analyzer rejects bodies over 100 bytes with HTTP 413 (like the
+    reporter's deployment): on unfixed code the single oversized /analyze call
+    fails closed; with chunking every call stays under the limit and the
+    detections come back with offsets remapped onto the original text.
+    The duplicate detection from the overlap region must be deduplicated.
+    """
+    guardrail = _chunking_guardrail(
+        chunk_size_bytes=100,
+        pii_entities_config={"CREDIT_CARD": PiiAction.MASK},
+    )
+    payloads = []
+    text = _oversized_marker_text()
+    with patch.object(
+        guardrail,
+        "_get_session_iterator",
+        _make_marker_session_iterator(payloads, analyzer_body_limit_bytes=100),
+    ):
+        results = await guardrail.analyze_text(text=text, presidio_config=None, request_data={})
+    assert len(payloads) > 1
+    for payload in payloads:
+        assert len(payload["text"].encode("utf-8")) <= 100
+    assert [text[r["start"] : r["end"]] for r in results] == [
+        CHUNK_MARKER_ONE,
+        CHUNK_MARKER_TWO,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_check_pii_masks_oversized_text_with_chunking():
+    guardrail = _chunking_guardrail(
+        chunk_size_bytes=100,
+        pii_entities_config={"CREDIT_CARD": PiiAction.MASK},
+    )
+    analyze_payloads = []
+    anonymize_payloads = []
+    text = _oversized_marker_text()
+    with patch.object(
+        guardrail,
+        "_get_session_iterator",
+        _make_marker_session_iterator(
+            analyze_payloads,
+            analyzer_body_limit_bytes=100,
+            recorded_anonymize_payloads=anonymize_payloads,
+        ),
+    ):
+        masked = await guardrail.check_pii(text=text, output_parse_pii=False, presidio_config=None, request_data={})
+    assert CHUNK_MARKER_ONE not in masked
+    assert CHUNK_MARKER_TWO not in masked
+    assert masked.count("<CREDIT_CARD>") == 2
+    # anonymize still receives the full text with globally remapped offsets
+    assert len(anonymize_payloads) == 1
+    assert anonymize_payloads[0]["text"] == text
+
+
+@pytest.mark.asyncio
+async def test_output_parse_pii_numbered_tokens_across_chunks():
+    """Numbered tokens slice the ORIGINAL text at the remapped offsets; a
+    chunk-local offset would store the wrong substring in pii_tokens and
+    corrupt the later unmask."""
+    guardrail = _chunking_guardrail(
+        chunk_size_bytes=100,
+        pii_entities_config={"CREDIT_CARD": PiiAction.MASK},
+        output_parse_pii=True,
+    )
+    payloads = []
+    request_data = {}
+    text = _oversized_marker_text()
+    with patch.object(
+        guardrail,
+        "_get_session_iterator",
+        _make_marker_session_iterator(payloads, analyzer_body_limit_bytes=100),
+    ):
+        masked = await guardrail.check_pii(
+            text=text,
+            output_parse_pii=True,
+            presidio_config=None,
+            request_data=request_data,
+        )
+    assert masked.count("<CREDIT_CARD_1>") == 1
+    assert masked.count("<CREDIT_CARD_2>") == 1
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    assert pii_tokens["<CREDIT_CARD_1>"] == CHUNK_MARKER_ONE
+    assert pii_tokens["<CREDIT_CARD_2>"] == CHUNK_MARKER_TWO
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_chunked_failure_stays_fail_closed():
+    """If one chunk still fails, the chunked path raises exactly like a single
+    failing /analyze call (fail closed when PII protection is configured)."""
+    guardrail = _chunking_guardrail(
+        chunk_size_bytes=100,
+        pii_entities_config={"CREDIT_CARD": PiiAction.MASK},
+    )
+    payloads = []
+    text = _oversized_marker_text()
+    with patch.object(
+        guardrail,
+        "_get_session_iterator",
+        # every chunk is rejected: limit below the chunk size
+        _make_marker_session_iterator(payloads, analyzer_body_limit_bytes=10),
+    ):
+        with pytest.raises(GuardrailRaisedException, match="HTTP 413"):
+            await guardrail.analyze_text(text=text, presidio_config=None, request_data={})
+
+
+def test_presidio_analyze_chunk_size_default_and_validation():
+    from litellm.constants import DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    assert guardrail.presidio_analyze_chunk_size_bytes == DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+    nonpositive = _OPTIONAL_PresidioPIIMasking(mock_testing=True, presidio_analyze_chunk_size_bytes=-5)
+    assert nonpositive.presidio_analyze_chunk_size_bytes == DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+    custom = _OPTIONAL_PresidioPIIMasking(mock_testing=True, presidio_analyze_chunk_size_bytes=1234)
+    assert custom.presidio_analyze_chunk_size_bytes == 1234
+
+
+def test_update_in_memory_applies_analyze_chunk_size():
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    params = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        presidio_analyze_chunk_size_bytes=99_000,
+    )
+    guardrail.update_in_memory_litellm_params(params)
+    assert guardrail.presidio_analyze_chunk_size_bytes == 99_000
+
+
+def test_update_in_memory_keeps_output_masker_from_unmasking():
+    masker = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True, output_parse_pii=False)
+    unmasker = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    params = LitellmParams(guardrail="presidio", mode="pre_call", output_parse_pii=True)
+
+    masker.update_in_memory_litellm_params(params)
+    unmasker.update_in_memory_litellm_params(params)
+
+    assert (masker.apply_to_output, masker.output_parse_pii) == (True, False)
+    assert (unmasker.apply_to_output, unmasker.output_parse_pii) == (False, True)
+
+
+def test_merge_drops_truncated_same_type_fragment_from_overlap():
+    """A boundary entity seen truncated by chunk 1 and whole by chunk 2 must
+    merge to the single full span; keeping both overlapping spans corrupts the
+    numbered-token rewriter and double-counts entities."""
+    truncated = {"entity_type": "IP_ADDRESS", "start": 10, "end": 21, "score": 0.6}
+    full_local = {"entity_type": "IP_ADDRESS", "start": 5, "end": 18, "score": 0.95}
+    merged = _OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
+        text_chunks=[(0, "x" * 21), (5, "x" * 25)],
+        chunk_results=[[truncated], [full_local]],
+    )
+    assert len(merged) == 1
+    assert (merged[0]["start"], merged[0]["end"]) == (10, 23)
+    assert merged[0]["score"] == 0.95
+
+
+def test_merge_exact_duplicate_keeps_higher_score():
+    low = {"entity_type": "EMAIL_ADDRESS", "start": 3, "end": 9, "score": 0.4}
+    high = {"entity_type": "EMAIL_ADDRESS", "start": 0, "end": 6, "score": 0.9}
+    merged = _OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
+        text_chunks=[(0, "x" * 9), (3, "x" * 9)],
+        chunk_results=[[low], [high]],
+    )
+    assert len(merged) == 1
+    assert merged[0]["score"] == 0.9
+
+
+def test_merge_preserves_cross_type_overlap():
+    """Single-call Presidio returns overlapping detections of DIFFERENT types
+    (e.g. URL inside EMAIL_ADDRESS); the chunk merge must not drop those."""
+    email = {"entity_type": "EMAIL_ADDRESS", "start": 0, "end": 20, "score": 1.0}
+    url = {"entity_type": "URL", "start": 5, "end": 20, "score": 0.5}
+    merged = _OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
+        text_chunks=[(0, "x" * 25)],
+        chunk_results=[[email, url]],
+    )
+    assert len(merged) == 2
+
+
+def test_update_in_memory_coerces_invalid_chunk_size():
+    from litellm.constants import DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, presidio_analyze_chunk_size_bytes=99_000)
+    params = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        presidio_analyze_chunk_size_bytes=-1,
+    )
+    guardrail.update_in_memory_litellm_params(params)
+    assert guardrail.presidio_analyze_chunk_size_bytes == DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+
+def test_split_text_handles_chunk_size_below_char_width():
+    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(
+        text="\U0001f642\U0001f642", chunk_size_bytes=3, overlap_chars=8
+    )
+    assert all(chunk for _, chunk in chunks)
+    assert chunks[-1][0] + len(chunks[-1][1]) == 2
+
+
+@pytest.mark.asyncio
+async def test_tiny_chunk_size_with_multibyte_text_terminates():
+    """chunk_size below one character's UTF-8 width must not recurse forever;
+    the constructor floors the value to the widest character width."""
+    guardrail = _chunking_guardrail(chunk_size_bytes=1)
+    assert guardrail.presidio_analyze_chunk_size_bytes == 4
+    payloads = []
+    with patch.object(guardrail, "_get_session_iterator", _make_marker_session_iterator(payloads)):
+        results = await guardrail.analyze_text(
+            text="\U0001f642\U0001f642\U0001f642ab", presidio_config=None, request_data={}
+        )
+    assert results == []
+    assert len(payloads) >= 2
+
+
+@pytest.mark.asyncio
+async def test_chunked_analyze_concurrency_is_bounded():
+    from litellm.constants import PRESIDIO_ANALYZE_CHUNK_CONCURRENCY
+
+    guardrail = _chunking_guardrail(chunk_size_bytes=10)
+    state = {"active": 0, "peak": 0}
+
+    @asynccontextmanager
+    async def mock_iterator():
+        class MockResponse:
+            status = 200
+            content_type = "application/json"
+            headers = {"Content-Type": "application/json"}
+
+            async def text(self):
+                return "[]"
+
+            async def json(self):
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+                await asyncio.sleep(0.005)
+                state["active"] -= 1
+                return []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class MockSession:
+            def post(self, url, json=None, headers=None):
+                return MockResponse()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        yield MockSession()
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        await guardrail.analyze_text(text="a" * 400, presidio_config=None, request_data={})
+    assert state["peak"] >= 2
+    assert state["peak"] <= PRESIDIO_ANALYZE_CHUNK_CONCURRENCY
+
+
+def test_split_text_accounts_for_json_body_expansion():
+    """Non-ASCII text expands under JSON escaping; the budget must apply to the
+    serialized form or a chunk can still exceed the analyzer body limit."""
+    import json as json_module
+
+    text = "これは個人情報テストです。" * 200  # 3-byte UTF-8 chars, 6-byte escapes
+    budget = 1000
+    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(text=text, chunk_size_bytes=budget, overlap_chars=8)
+    assert len(chunks) > 1
+    for offset, chunk in chunks:
+        assert len(json_module.dumps(chunk).encode("utf-8")) - 2 <= budget
+        assert text[offset : offset + len(chunk)] == chunk
+    # full coverage: last chunk reaches the end of the text
+    last_offset, last_chunk = chunks[-1]
+    assert last_offset + len(last_chunk) == len(text)
+
+
+@pytest.mark.asyncio
+async def test_chunked_analyze_applies_score_threshold_before_merge():
+    """A below-threshold long span must not win overlap resolution against an
+    above-threshold detection of the same type (it would then be dropped by the
+    downstream threshold filter, leaving the entity unmasked)."""
+    guardrail = _chunking_guardrail(
+        chunk_size_bytes=100,
+        presidio_score_thresholds={"CREDIT_CARD": 0.6},
+    )
+    marker_text = "x" * 40 + CHUNK_MARKER_ONE + "x" * 80  # single chunked text
+
+    @asynccontextmanager
+    async def mock_iterator():
+        class MockResponse:
+            status = 200
+            content_type = "application/json"
+            headers = {"Content-Type": "application/json"}
+
+            def __init__(self, body):
+                self._body = body
+
+            async def text(self):
+                import json as json_module
+
+                return json_module.dumps(self._body)
+
+            async def json(self):
+                return self._body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class MockSession:
+            def post(self, url, json=None, headers=None):
+                text = json["text"]
+                idx = text.find(CHUNK_MARKER_ONE)
+                if idx == -1:
+                    return MockResponse([])
+                return MockResponse(
+                    [
+                        # long, below-threshold span engulfing the marker
+                        {
+                            "entity_type": "CREDIT_CARD",
+                            "start": max(idx - 5, 0),
+                            "end": idx + len(CHUNK_MARKER_ONE) + 5,
+                            "score": 0.3,
+                        },
+                        # the true, above-threshold detection
+                        {
+                            "entity_type": "CREDIT_CARD",
+                            "start": idx,
+                            "end": idx + len(CHUNK_MARKER_ONE),
+                            "score": 0.9,
+                        },
+                    ]
+                )
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        yield MockSession()
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        results = await guardrail.analyze_text(text=marker_text, presidio_config=None, request_data={})
+    kept = [r for r in results if r.get("entity_type") == "CREDIT_CARD"]
+    assert any(r.get("score") == 0.9 for r in kept), kept
+    assert all(r.get("score") != 0.3 for r in kept), kept
+
+
+@pytest.mark.asyncio
+async def test_chunk_fanout_bound_is_shared_across_concurrent_calls():
+    """The chunk semaphore is per event loop and instance, so several oversized
+    blocks analyzed concurrently share ONE bound instead of getting 8 each."""
+    from litellm.constants import PRESIDIO_ANALYZE_CHUNK_CONCURRENCY
+
+    guardrail = _chunking_guardrail(chunk_size_bytes=10)
+    state = {"active": 0, "peak": 0}
+
+    @asynccontextmanager
+    async def mock_iterator():
+        class MockResponse:
+            status = 200
+            content_type = "application/json"
+            headers = {"Content-Type": "application/json"}
+
+            async def text(self):
+                return "[]"
+
+            async def json(self):
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+                await asyncio.sleep(0.005)
+                state["active"] -= 1
+                return []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class MockSession:
+            def post(self, url, json=None, headers=None):
+                return MockResponse()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        yield MockSession()
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        await asyncio.gather(
+            *(guardrail.analyze_text(text="a" * 400, presidio_config=None, request_data={}) for _ in range(4))
+        )
+    assert state["peak"] >= 2
+    assert state["peak"] <= PRESIDIO_ANALYZE_CHUNK_CONCURRENCY

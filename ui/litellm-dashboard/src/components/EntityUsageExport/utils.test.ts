@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import Papa from "papaparse";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,11 +8,13 @@ import {
   generateDailyData,
   generateDailyWithKeysData,
   generateDailyWithModelsData,
+  generateDailyWithUsersData,
   generateExportData,
   generateMetadata,
   getEntityBreakdown,
   handleExportCSV,
   handleExportJSON,
+  handleServerExport,
   resolveEntities,
 } from "./utils";
 
@@ -147,6 +151,204 @@ describe("EntityUsageExport utils", () => {
   const mockTeamAliasMap: Record<string, string> = {
     "team-1": "Team One",
     "team-2": "Team Two",
+  };
+
+  const usersFixture: EntitySpendData = {
+    results: [
+      {
+        date: "2025-03-01",
+        breakdown: {
+          entities: {
+            "team-1": {
+              metrics: {
+                spend: 16.5,
+                api_requests: 165,
+                successful_requests: 156,
+                failed_requests: 9,
+                total_tokens: 1650,
+                prompt_tokens: 940,
+                completion_tokens: 710,
+                cache_read_input_tokens: 90,
+                cache_creation_input_tokens: 60,
+              },
+              api_key_breakdown: {
+                kA: {
+                  metrics: {
+                    spend: 1.1,
+                    api_requests: 11,
+                    successful_requests: 10,
+                    failed_requests: 1,
+                    total_tokens: 110,
+                    prompt_tokens: 60,
+                    completion_tokens: 50,
+                    cache_read_input_tokens: 6,
+                    cache_creation_input_tokens: 4,
+                  },
+                  metadata: {
+                    team_id: "team-1",
+                    key_alias: "alice-key",
+                    user_id: "u1",
+                    user_email: "a@x",
+                  },
+                },
+                kB: {
+                  metrics: {
+                    spend: 2.2,
+                    api_requests: 22,
+                    successful_requests: 20,
+                    failed_requests: 2,
+                    total_tokens: 220,
+                    prompt_tokens: 130,
+                    completion_tokens: 90,
+                    cache_read_input_tokens: 12,
+                    cache_creation_input_tokens: 8,
+                  },
+                  metadata: {
+                    team_id: "team-1",
+                    user_id: "u1",
+                    user_email: "a@x",
+                  },
+                },
+                kC: {
+                  metrics: {
+                    spend: 3.3,
+                    api_requests: 33,
+                    successful_requests: 31,
+                    failed_requests: 2,
+                    total_tokens: 330,
+                    prompt_tokens: 190,
+                    completion_tokens: 140,
+                    cache_read_input_tokens: 18,
+                    cache_creation_input_tokens: 12,
+                  },
+                  metadata: {
+                    team_id: "team-1",
+                    user_id: "u2",
+                    user_email: null,
+                  },
+                },
+                kD: {
+                  metrics: {
+                    spend: 4.4,
+                    api_requests: 44,
+                    successful_requests: 42,
+                    failed_requests: 2,
+                    total_tokens: 440,
+                    prompt_tokens: 250,
+                    completion_tokens: 190,
+                    cache_read_input_tokens: 24,
+                    cache_creation_input_tokens: 16,
+                  },
+                  metadata: {
+                    team_id: "team-1",
+                    user_id: null,
+                  },
+                },
+                kE: {
+                  metrics: {
+                    spend: 5.5,
+                    api_requests: 55,
+                    successful_requests: 53,
+                    failed_requests: 2,
+                    total_tokens: 550,
+                    prompt_tokens: 310,
+                    completion_tokens: 240,
+                    cache_read_input_tokens: 30,
+                    cache_creation_input_tokens: 20,
+                  },
+                  metadata: {
+                    team_id: "team-1",
+                    user_id: "u3",
+                    key_exists: false,
+                  },
+                },
+              },
+            },
+            "team-2": {
+              metrics: {
+                spend: 6.6,
+                api_requests: 66,
+                successful_requests: 64,
+                failed_requests: 2,
+                total_tokens: 660,
+                prompt_tokens: 370,
+                completion_tokens: 290,
+                cache_read_input_tokens: 36,
+                cache_creation_input_tokens: 24,
+              },
+              api_key_breakdown: {
+                kF: {
+                  metrics: {
+                    spend: 6.6,
+                    api_requests: 66,
+                    successful_requests: 64,
+                    failed_requests: 2,
+                    total_tokens: 660,
+                    prompt_tokens: 370,
+                    completion_tokens: 290,
+                    cache_read_input_tokens: 36,
+                    cache_creation_input_tokens: 24,
+                  },
+                  metadata: {
+                    team_id: "team-2",
+                    user_id: "u1",
+                    user_email: "a@x",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        date: "2025-03-02",
+        breakdown: {
+          entities: {
+            "team-1": {
+              metrics: {
+                spend: 7.7,
+                api_requests: 77,
+                successful_requests: 75,
+                failed_requests: 2,
+                total_tokens: 770,
+                prompt_tokens: 430,
+                completion_tokens: 340,
+                cache_read_input_tokens: 42,
+                cache_creation_input_tokens: 28,
+              },
+              api_key_breakdown: {
+                kA: {
+                  metrics: {
+                    spend: 7.7,
+                    api_requests: 77,
+                    successful_requests: 75,
+                    failed_requests: 2,
+                    total_tokens: 770,
+                    prompt_tokens: 430,
+                    completion_tokens: 340,
+                    cache_read_input_tokens: 42,
+                    cache_creation_input_tokens: 28,
+                  },
+                  metadata: {
+                    team_id: "team-1",
+                    key_alias: "alice-key",
+                    user_id: "u1",
+                    user_email: "a@x",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    ],
+    metadata: {
+      total_spend: 30.8,
+      total_api_requests: 308,
+      total_successful_requests: 295,
+      total_failed_requests: 13,
+      total_tokens: 3080,
+    },
   };
 
   beforeEach(() => {
@@ -1053,6 +1255,27 @@ describe("EntityUsageExport utils", () => {
       const keyIds = team1Entries.map((r) => r["Key ID"]);
       expect(keyIds).toContain("key1");
       expect(keyIds).toContain("key2");
+    });
+
+    it("should emit key owner columns right after Key ID", () => {
+      const result = generateDailyWithKeysData(usersFixture, "Team");
+
+      const columnNames = Object.keys(result[0]);
+      expect(columnNames[columnNames.indexOf("Key ID") + 1]).toBe("User ID");
+      expect(columnNames[columnNames.indexOf("User ID") + 1]).toBe("User Email");
+
+      const kARow = result.find((r) => r["Key ID"] === "kA" && r.Date === "2025-03-01");
+      expect(kARow?.["User ID"]).toBe("u1");
+      expect(kARow?.["User Email"]).toBe("a@x");
+      expect(kARow?.["Key Alias"]).toBe("alice-key");
+
+      const kCRow = result.find((r) => r["Key ID"] === "kC");
+      expect(kCRow?.["User ID"]).toBe("u2");
+      expect(kCRow?.["User Email"]).toBe("-");
+
+      const kDRow = result.find((r) => r["Key ID"] === "kD");
+      expect(kDRow?.["User ID"]).toBe("-");
+      expect(kDRow?.["User Email"]).toBe("-");
     });
   });
 
@@ -1964,11 +2187,18 @@ describe("EntityUsageExport utils", () => {
 
       handleExportCSV(mockSpendData, "daily", "Team", "team", mockTeamAliasMap);
 
-      expect(Papa.unparse).toHaveBeenCalled();
-      expect(createObjectURLSpy).toHaveBeenCalled();
+      const unparsedRows = vi.mocked(Papa.unparse).mock.calls[0][0] as Record<string, unknown>[];
+      expect(unparsedRows).toHaveLength(3);
+      const day1Team1 = unparsedRows.find((r) => r["Date"] === "2025-01-01" && r["Team ID"] === "team-1");
+      expect(day1Team1?.["Cache Read Input Tokens"]).toBe(50);
+
+      const exportedBlob = createObjectURLSpy.mock.calls[0][0] as Blob;
+      expect(exportedBlob.type).toBe("text/csv;charset=utf-8;");
+
       expect(createElementSpy).toHaveBeenCalledWith("a");
-      expect(appendChildSpy).toHaveBeenCalled();
-      expect(removeChildSpy).toHaveBeenCalled();
+      const attached = appendChildSpy.mock.calls[0][0] as HTMLAnchorElement;
+      expect(attached.download).toMatch(/^team_usage_daily_.*\.csv$/);
+      expect(removeChildSpy).toHaveBeenCalledWith(attached);
     });
 
     it("should generate correct filename", () => {
@@ -2001,6 +2231,21 @@ describe("EntityUsageExport utils", () => {
 
       window.Blob = originalBlob;
     });
+
+    it("should generate the daily_with_users filename and include User ID in the rows", () => {
+      const anchorElement = document.createElement("a");
+      vi.spyOn(document, "createElement").mockReturnValue(anchorElement);
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2025-03-01T12:00:00Z"));
+
+      handleExportCSV(usersFixture, "daily_with_users", "Team", "team", mockTeamAliasMap);
+      vi.useRealTimers();
+
+      expect(anchorElement.download).toBe("team_usage_daily_with_users_2025-03-01.csv");
+
+      const unparsedRows = vi.mocked(Papa.unparse).mock.calls[0][0] as Record<string, unknown>[];
+      expect(unparsedRows[0]).toHaveProperty("User ID");
+    });
   });
 
   describe("handleExportJSON", () => {
@@ -2028,10 +2273,13 @@ describe("EntityUsageExport utils", () => {
 
       handleExportJSON(mockSpendData, "daily", "Team", "team", mockDateRange, [], mockTeamAliasMap);
 
-      expect(createObjectURLSpy).toHaveBeenCalled();
+      const exportedBlob = createObjectURLSpy.mock.calls[0][0] as Blob;
+      expect(exportedBlob.type).toBe("application/json");
+
       expect(createElementSpy).toHaveBeenCalledWith("a");
-      expect(appendChildSpy).toHaveBeenCalled();
-      expect(removeChildSpy).toHaveBeenCalled();
+      const attached = appendChildSpy.mock.calls[0][0] as HTMLAnchorElement;
+      expect(attached.download).toMatch(/^team_usage_daily_.*\.json$/);
+      expect(removeChildSpy).toHaveBeenCalledWith(attached);
     });
 
     it("should generate correct filename", () => {
@@ -2448,6 +2696,350 @@ describe("EntityUsageExport utils", () => {
       expect(result.every((r) => r.Model === "claude-sonnet-4-5")).toBe(true);
       expect(result.find((r) => r["User ID"] === "user-a")?.["User"]).toBe("ada@example.com");
       expect(result.find((r) => r["User ID"] === "user-b")?.["User"]).toBe("Grace");
+    });
+  });
+
+  describe("generateDailyWithUsersData", () => {
+    it("should reconcile spend with daily_with_keys and daily per date and team", () => {
+      const byUser = generateDailyWithUsersData(usersFixture, "Team");
+      const byKey = generateDailyWithKeysData(usersFixture, "Team");
+      const daily = generateDailyData(usersFixture, "Team");
+
+      expect(byUser.length).toBeGreaterThan(0);
+      expect(byKey.length).toBeGreaterThan(0);
+      expect(daily.length).toBeGreaterThan(0);
+
+      const sumSpend = (rows: any[]): Record<string, number> => {
+        const totals: Record<string, number> = {};
+        rows.forEach((r) => {
+          const bucket = `${r.Date}|${r["Team ID"]}`;
+          totals[bucket] = (totals[bucket] || 0) + Number(r["Spend ($)"]);
+        });
+        return totals;
+      };
+
+      const userTotals = sumSpend(byUser);
+      const keyTotals = sumSpend(byKey);
+
+      daily.forEach((row) => {
+        const bucket = `${row.Date}|${row["Team ID"]}`;
+        expect(userTotals[bucket]).toBeCloseTo(Number(row["Spend ($)"]), 4);
+        expect(keyTotals[bucket]).toBeCloseTo(Number(row["Spend ($)"]), 4);
+      });
+    });
+
+    it("should roll multiple keys owned by one user in a team into a single row", () => {
+      const rows = generateDailyWithUsersData(usersFixture, "Team");
+      const matches = rows.filter((r) => r.Date === "2025-03-01" && r["Team ID"] === "team-1" && r["User ID"] === "u1");
+
+      expect(matches).toHaveLength(1);
+      const row = matches[0];
+      expect(row.Keys).toBe(2);
+      expect(row["User Email"]).toBe("a@x");
+      expect(row["Spend ($)"]).toBe("3.3000");
+      expect(row.Requests).toBe(33);
+      expect(row["Successful Requests"]).toBe(30);
+      expect(row["Failed Requests"]).toBe(3);
+      expect(row["Total Tokens"]).toBe(330);
+      expect(row["Prompt Tokens"]).toBe(190);
+      expect(row["Completion Tokens"]).toBe(140);
+      expect(row["Cache Read Input Tokens"]).toBe(18);
+      expect(row["Cache Creation Input Tokens"]).toBe(12);
+    });
+
+    it("should bucket keys with no owner into an Unassigned row without dropping spend", () => {
+      const rows = generateDailyWithUsersData(usersFixture, "Team");
+      const row = rows.find(
+        (r) => r.Date === "2025-03-01" && r["Team ID"] === "team-1" && r["User ID"] === "Unassigned",
+      );
+
+      expect(row).toBeDefined();
+      expect(row?.["User Email"]).toBe("-");
+      expect(Number(row?.["Spend ($)"])).toBeCloseTo(4.4, 4);
+    });
+
+    it("should keep different users in the same team as separate rows", () => {
+      const rows = generateDailyWithUsersData(usersFixture, "Team");
+      const teamRows = rows.filter((r) => r.Date === "2025-03-01" && r["Team ID"] === "team-1");
+
+      const u1Rows = teamRows.filter((r) => r["User ID"] === "u1");
+      const u2Rows = teamRows.filter((r) => r["User ID"] === "u2");
+      expect(u1Rows).toHaveLength(1);
+      expect(u2Rows).toHaveLength(1);
+      expect(Number(u2Rows[0]["Spend ($)"])).toBeCloseTo(3.3, 4);
+    });
+
+    it("should keep the same user in different teams as separate rows", () => {
+      const rows = generateDailyWithUsersData(usersFixture, "Team");
+      const u1Rows = rows.filter((r) => r.Date === "2025-03-01" && r["User ID"] === "u1");
+
+      expect(u1Rows).toHaveLength(2);
+      const team1Row = u1Rows.find((r) => r["Team ID"] === "team-1");
+      const team2Row = u1Rows.find((r) => r["Team ID"] === "team-2");
+      expect(team1Row?.Keys).toBe(2);
+      expect(team2Row?.Keys).toBe(1);
+      expect(Number(team2Row?.["Spend ($)"])).toBeCloseTo(6.6, 4);
+    });
+
+    it("should show a dash email when the user has none", () => {
+      const rows = generateDailyWithUsersData(usersFixture, "Team");
+      const row = rows.find((r) => r.Date === "2025-03-01" && r["Team ID"] === "team-1" && r["User ID"] === "u3");
+
+      expect(row).toBeDefined();
+      expect(row?.["User Email"]).toBe("-");
+    });
+
+    it("should still attribute a deleted key to its user", () => {
+      const rows = generateDailyWithUsersData(usersFixture, "Team");
+      const row = rows.find((r) => r.Date === "2025-03-01" && r["Team ID"] === "team-1" && r["User ID"] === "u3");
+
+      expect(row).toBeDefined();
+      expect(Number(row?.["Spend ($)"])).toBeCloseTo(5.5, 4);
+      expect(row?.Requests).toBe(55);
+    });
+
+    it("should group rows under team_id on the aggregated endpoint shape", () => {
+      const aggregatedFixture: EntitySpendData = {
+        results: [
+          {
+            date: "2025-03-01",
+            breakdown: {
+              entities: {},
+              api_keys: {
+                kA: {
+                  metrics: {
+                    spend: 1.1,
+                    api_requests: 11,
+                    successful_requests: 10,
+                    failed_requests: 1,
+                    total_tokens: 110,
+                    prompt_tokens: 60,
+                    completion_tokens: 50,
+                    cache_read_input_tokens: 6,
+                    cache_creation_input_tokens: 4,
+                  },
+                  metadata: { team_id: "team-1", user_id: "u1", user_email: "a@x" },
+                },
+                kF: {
+                  metrics: {
+                    spend: 6.6,
+                    api_requests: 66,
+                    successful_requests: 64,
+                    failed_requests: 2,
+                    total_tokens: 660,
+                    prompt_tokens: 370,
+                    completion_tokens: 290,
+                    cache_read_input_tokens: 36,
+                    cache_creation_input_tokens: 24,
+                  },
+                  metadata: { team_id: "team-2", user_id: "u2" },
+                },
+              },
+            },
+          },
+        ],
+        metadata: usersFixture.metadata,
+      };
+
+      const rows = generateDailyWithUsersData(aggregatedFixture, "Team");
+
+      expect(rows).toHaveLength(2);
+      const team1Row = rows.find((r) => r["Team ID"] === "team-1");
+      const team2Row = rows.find((r) => r["Team ID"] === "team-2");
+      expect(team1Row?.["User ID"]).toBe("u1");
+      expect(team2Row?.["User ID"]).toBe("u2");
+      expect(Number(team1Row?.["Spend ($)"])).toBeCloseTo(1.1, 4);
+      expect(Number(team2Row?.["Spend ($)"])).toBeCloseTo(6.6, 4);
+    });
+
+    it("should emit the exact column order and sort by date ascending", () => {
+      const rows = generateDailyWithUsersData(usersFixture, "Team");
+
+      expect(Object.keys(rows[0])).toEqual([
+        "Date",
+        "Team",
+        "Team ID",
+        "User ID",
+        "User Email",
+        "Keys",
+        "Spend ($)",
+        "Requests",
+        "Successful Requests",
+        "Failed Requests",
+        "Total Tokens",
+        "Prompt Tokens",
+        "Completion Tokens",
+        "Cache Read Input Tokens",
+        "Cache Creation Input Tokens",
+      ]);
+
+      const dates = rows.map((r) => new Date(r.Date).getTime());
+      for (let i = 0; i < dates.length - 1; i++) {
+        expect(dates[i]).toBeLessThanOrEqual(dates[i + 1]);
+      }
+    });
+
+    it("should dispatch daily_with_users through generateExportData", () => {
+      expect(generateExportData(usersFixture, "daily_with_users", "Team")).toEqual(
+        generateDailyWithUsersData(usersFixture, "Team"),
+      );
+    });
+
+    it("should keep owners separate when entity and user ids contain underscores", () => {
+      const collisionFixture: EntitySpendData = {
+        results: [
+          {
+            date: "2025-03-01",
+            breakdown: {
+              entities: {
+                team_1: {
+                  metrics: { spend: 1, api_requests: 1, total_tokens: 10 },
+                  api_key_breakdown: {
+                    kX: {
+                      metrics: { spend: 1, api_requests: 1, total_tokens: 10 },
+                      metadata: { team_id: "team_1", user_id: "u1" },
+                    },
+                  },
+                },
+                team: {
+                  metrics: { spend: 2, api_requests: 2, total_tokens: 20 },
+                  api_key_breakdown: {
+                    kY: {
+                      metrics: { spend: 2, api_requests: 2, total_tokens: 20 },
+                      metadata: { team_id: "team", user_id: "1_u1" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: usersFixture.metadata,
+      };
+
+      const rows = generateDailyWithUsersData(collisionFixture, "Team");
+
+      expect(rows).toHaveLength(2);
+      const team1Row = rows.find((r) => r["Team ID"] === "team_1");
+      expect(team1Row?.["User ID"]).toBe("u1");
+      expect(team1Row?.Keys).toBe(1);
+      expect(team1Row?.["Spend ($)"]).toBe("1.0000");
+      const teamRow = rows.find((r) => r["Team ID"] === "team");
+      expect(teamRow?.["User ID"]).toBe("1_u1");
+      expect(teamRow?.Keys).toBe(1);
+      expect(teamRow?.["Spend ($)"]).toBe("2.0000");
+    });
+
+    it("should leave daily and daily_with_models output without user columns", () => {
+      const daily = generateDailyData(usersFixture, "Team");
+      expect(daily[0]).not.toHaveProperty("User ID");
+
+      const modelsFixture: EntitySpendData = {
+        results: [
+          {
+            date: "2025-03-01",
+            breakdown: {
+              entities: {
+                "team-1": {
+                  metrics: {
+                    spend: 1.1,
+                    api_requests: 11,
+                    successful_requests: 10,
+                    failed_requests: 1,
+                    total_tokens: 110,
+                    prompt_tokens: 60,
+                    completion_tokens: 50,
+                  },
+                  api_key_breakdown: {
+                    kA: {
+                      metrics: {
+                        spend: 1.1,
+                        api_requests: 11,
+                        successful_requests: 10,
+                        failed_requests: 1,
+                        total_tokens: 110,
+                      },
+                      metadata: { team_id: "team-1", user_id: "u1", user_email: "a@x" },
+                    },
+                  },
+                },
+              },
+              models: {
+                "gpt-4o": {
+                  metrics: { spend: 1.1, api_requests: 11, total_tokens: 110 },
+                  api_key_breakdown: {
+                    kA: {
+                      metrics: {
+                        spend: 1.1,
+                        api_requests: 11,
+                        successful_requests: 10,
+                        failed_requests: 1,
+                        total_tokens: 110,
+                      },
+                      metadata: {},
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        metadata: usersFixture.metadata,
+      };
+
+      const modelRows = generateDailyWithModelsData(modelsFixture, "Team");
+      expect(modelRows).toHaveLength(1);
+      expect(Object.keys(modelRows[0])).toEqual([
+        "Date",
+        "Team",
+        "Team ID",
+        "Model",
+        "Spend ($)",
+        "Requests",
+        "Successful",
+        "Failed",
+        "Total Tokens",
+        "Prompt Tokens",
+        "Completion Tokens",
+        "Cache Read Input Tokens",
+        "Cache Creation Input Tokens",
+      ]);
+    });
+  });
+
+  describe("handleServerExport", () => {
+    beforeEach(() => {
+      document.body.innerHTML = "";
+      window.URL.createObjectURL = vi.fn(() => "blob:mock-url");
+      window.URL.revokeObjectURL = vi.fn();
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("passes the chosen scope and format to the server export and downloads the returned blob", async () => {
+      const serverBlob = new Blob(["payload"], { type: "text/csv" });
+      const serverExport = vi.fn(async () => serverBlob);
+      const createObjectURLSpy = vi.spyOn(window.URL, "createObjectURL");
+      const appendChildSpy = vi.spyOn(document.body, "appendChild");
+
+      await handleServerExport(serverExport, "daily_with_keys", "team", "csv");
+
+      expect(serverExport).toHaveBeenCalledWith("daily_with_keys", "csv");
+      expect(createObjectURLSpy).toHaveBeenCalledWith(serverBlob);
+      const attached = appendChildSpy.mock.calls[0][0] as HTMLAnchorElement;
+      const today = new Date().toISOString().split("T")[0];
+      expect(attached.download).toBe(`team_usage_daily_with_keys_${today}.csv`);
+    });
+
+    it("lets a server failure propagate so the modal can toast it instead of downloading nothing", async () => {
+      const serverExport = vi.fn(async () => {
+        throw new Error("upstream 500");
+      });
+
+      await expect(handleServerExport(serverExport, "daily", "team", "json")).rejects.toThrow("upstream 500");
+      expect(document.body.querySelector("a")).toBeNull();
     });
   });
 });

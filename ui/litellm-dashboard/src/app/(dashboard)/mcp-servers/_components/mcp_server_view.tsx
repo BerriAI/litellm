@@ -9,7 +9,9 @@ import { MCPServer, handleTransport, handleAuth } from "@/components/mcp_tools/t
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
+import { MCPServerUserCredentialsPanel } from "./MCPServerUserCredentialsPanel";
 import { getSecureItem } from "@/utils/secureStorage";
+import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
@@ -23,7 +25,9 @@ interface MCPServerViewProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  isViewOnly?: boolean;
   availableAccessGroups: string[];
+  existingServers?: MCPServer[];
   initialTabIndex?: number;
 }
 
@@ -53,16 +57,21 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   accessToken,
   userRole,
   userID,
+  isViewOnly = false,
   availableAccessGroups,
+  existingServers,
   initialTabIndex = 0,
 }) => {
   // Open the editing Settings tab on first render when returning from the edit OAuth
   // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
-  const returningFromEditOAuth = isReturningFromEditOAuth(isProxyAdmin, mcpServer.server_id);
+  const canEdit = isProxyAdmin && !isViewOnly && !mcpServer.is_config;
+  const returningFromEditOAuth = isReturningFromEditOAuth(canEdit, mcpServer.server_id);
   const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
+  const canViewUserCredentials = userRole !== null && isProxyAdminTierRole(userRole);
+  const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole) && !isViewOnly;
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
@@ -130,22 +139,27 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
       </div>
 
       <Tabs value={String(selectedTabIndex)} onValueChange={(v: unknown) => setSelectedTabIndex(Number(v))}>
-        <TabsList className="mb-4">
-          <TabsTrigger value="0" className="flex-none">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="0" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
-          <TabsTrigger value="1" className="flex-none">
+          <TabsTrigger value="1" className="flex-none rounded-none px-4 py-2">
             MCP Tools
           </TabsTrigger>
           {isProxyAdmin && (
-            <TabsTrigger value="2" className="flex-none">
+            <TabsTrigger value="2" className="flex-none rounded-none px-4 py-2">
               Settings
+            </TabsTrigger>
+          )}
+          {canViewUserCredentials && (
+            <TabsTrigger value="3" className="flex-none rounded-none px-4 py-2">
+              User Credentials
             </TabsTrigger>
           )}
         </TabsList>
 
         {/* Overview Panel */}
-        <TabsContent value="0">
+        <TabsContent value="0" keepMounted>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Card className="p-4">
               <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Transport</p>
@@ -192,7 +206,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabsContent>
 
         {/* Tool Panel */}
-        <TabsContent value="1">
+        <TabsContent value="1" keepMounted>
           <MCPToolsViewer
             serverId={mcpServer.server_id}
             accessToken={accessToken}
@@ -209,17 +223,22 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabsContent>
 
         {/* Settings Panel */}
-        <TabsContent value="2">
+        <TabsContent value="2" keepMounted>
           <Card className="p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-medium">MCP Server Settings</h2>
-              {editing ? null : (
-                <Button variant="outline" onClick={() => setEditing(true)}>
+              {editing && canEdit ? null : (
+                <Button variant="outline" disabled={!canEdit} onClick={() => setEditing(true)}>
                   Edit Settings
                 </Button>
               )}
             </div>
-            {editing ? (
+            {mcpServer.is_config && (
+              <p className="mb-4 text-sm text-muted-foreground">
+                Defined in config. Edit your YAML configuration to make changes
+              </p>
+            )}
+            {editing && canEdit ? (
               <MCPServerEdit
                 mcpServer={mcpServer}
                 accessToken={accessToken}
@@ -227,6 +246,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 onCancel={() => setEditing(false)}
                 onSuccess={handleSuccess}
                 availableAccessGroups={availableAccessGroups}
+                existingServers={existingServers}
               />
             ) : (
               <div className="divide-y divide-border">
@@ -289,7 +309,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   <div className="col-span-2">
                     {mcpServer.allow_all_keys ? (
                       <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                        <span className="h-1.5 w-1.5 rounded-full bg-success" />
                         Enabled
                       </Badge>
                     ) : (
@@ -302,12 +322,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   <div className="col-span-2">
                     {mcpServer.available_on_public_internet ? (
                       <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                        <span className="h-1.5 w-1.5 rounded-full bg-success" />
                         Public
                       </Badge>
                     ) : (
                       <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
+                        <span className="h-1.5 w-1.5 rounded-full bg-warning" />
                         Internal only
                       </Badge>
                     )}
@@ -319,7 +339,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <div className="col-span-2">
                       {mcpServer.delegate_auth_to_upstream ? (
                         <Badge variant="outline">
-                          <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-success" />
                           Enabled (PKCE passthrough)
                         </Badge>
                       ) : (
@@ -336,7 +356,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                       <div className="col-span-2">
                         {mcpServer.oauth_passthrough ? (
                           <Badge variant="outline">
-                            <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                            <span className="h-1.5 w-1.5 rounded-full bg-success" />
                             Enabled
                           </Badge>
                         ) : (
@@ -387,6 +407,18 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
             )}
           </Card>
         </TabsContent>
+
+        {canViewUserCredentials && (
+          <TabsContent value="3">
+            <Card className="p-6">
+              <MCPServerUserCredentialsPanel
+                serverId={mcpServer.server_id}
+                accessToken={accessToken}
+                canRevoke={canRevokeUserCredentials}
+              />
+            </Card>
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

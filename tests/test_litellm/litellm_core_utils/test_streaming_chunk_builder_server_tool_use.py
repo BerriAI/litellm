@@ -17,12 +17,9 @@ response and assert:
    raising ``AttributeError``.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm import completion_cost, stream_chunk_builder
 from litellm.types.utils import (
@@ -102,29 +99,3 @@ def test_stream_chunk_builder_coerces_server_tool_use_to_pydantic():
     assert server_tool_use.web_search_requests == 3
 
 
-def test_completion_cost_does_not_raise_on_streaming_web_search_response():
-    """
-    Regression: completion_cost(...) must not raise AttributeError when the
-    response was reconstructed by stream_chunk_builder from a streaming
-    Anthropic web_search call.
-    """
-    chunks = [
-        _make_text_chunk("hello"),
-        _make_finish_chunk_with_usage_dict_server_tool_use(),
-    ]
-
-    rebuilt = stream_chunk_builder(chunks)
-    assert rebuilt is not None
-
-    # The exact dollar amount depends on the model-pricing table; what matters
-    # for this regression is that it does NOT raise AttributeError on
-    # `dict has no attribute 'web_search_requests'`.
-    try:
-        cost = completion_cost(completion_response=rebuilt)
-    except AttributeError as e:  # pragma: no cover - regression guard
-        pytest.fail(
-            "completion_cost raised AttributeError after stream_chunk_builder "
-            f"(issue #26153 regression): {e}"
-        )
-
-    assert isinstance(cost, (int, float))

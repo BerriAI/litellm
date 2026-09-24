@@ -7,7 +7,8 @@
 
 import asyncio
 import traceback
-from typing import Any, BinaryIO, Final, cast, get_args
+from collections.abc import Mapping, Sequence
+from typing import Any, BinaryIO, Final, TypedDict, cast, get_args
 
 import httpx
 from fastapi import (
@@ -21,6 +22,8 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import CreateFileRequest, get_secret_str
@@ -28,9 +31,16 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.batches_endpoints.litellm_executed_batches import (
+    litellm_executed_provider_of,
+    resolve_litellm_executed_provider,
+)
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -41,28 +51,129 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.proxy.common_utils.openai_error_payload import (
+    error_status_code,
+    openai_error_param,
+    openai_error_type,
+)
+from litellm.proxy.openai_files_endpoints.batch_file_validation import (
+    BATCH_LINE_SHAPE,
+    PASSTHROUGH_BATCH_LINE_SHAPE,
+    check_batch_file_upload,
+    raise_batch_file_validation_failure,
+)
+from litellm.proxy.openai_files_endpoints.batch_guardrails import (
+    EMPTY_MAPPING,
+    BatchScanResult,
+    raise_nothing_to_submit,
+    raise_public,
+    rewrite_batch_input_file,
+    scan_batch_input_file,
+)
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    add_internal_model_credentials,
     apply_team_provider_credentials,
+    authorize_model_for_key,
     encode_file_id_with_model,
     extract_file_creation_params,
-    get_credentials_for_model,
+    get_authorized_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
+    validate_file_list_limit,
     validate_managed_files_requirement,
     validate_managed_id_requirement,
 )
-from litellm.proxy.utils import ProxyLogging, is_known_model
+from litellm.proxy.openai_files_endpoints.general_upload_validation import (
+    MB,
+    check_allowed_extension,
+    check_blocked_extension,
+    check_unsafe_filename,
+    check_upload_file_size,
+    coerce_optional_int_setting,
+    coerce_optional_str_list_setting,
+    raise_upload_validation_failure,
+)
+from litellm.proxy.utils import PrismaClient, ProxyLogging, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
     FileExpiresAfter,
+    FileListPage,
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
 
 router: Final = APIRouter()
+
+
+def _names_a_litellm_executed_provider(llm_router: Router, candidate: str, team_id: str | None) -> bool:
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=candidate, team_id=team_id)
+    return credentials is not None and litellm_executed_provider_of(credentials) is not None
+
+
+async def _litellm_executed_batch_input_model(
+    llm_router: Router | None,
+    purpose: OpenAIFilesPurpose,
+    model: str | None,
+    target_model_names_list: Sequence[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    explicit_storage: str | None,
+) -> str | None:
+    if llm_router is None:
+        return None
+    candidates: Final = (model,) if model is not None else tuple(target_model_names_list)
+    team_id: Final = user_api_key_dict.team_id
+    await asyncio.gather(
+        *(
+            authorize_model_for_key(model_id=candidate, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+            for candidate in candidates
+            if _names_a_litellm_executed_provider(llm_router, candidate, team_id)
+        )
+    )
+    if explicit_storage is not None:
+        return None
+    providers: Final = await asyncio.gather(
+        *(resolve_litellm_executed_provider(llm_router, candidate, team_id) for candidate in candidates)
+    )
+    executed: Final = tuple(
+        candidate for candidate, provider in zip(candidates, providers, strict=True) if provider is not None
+    )
+    if not executed:
+        return None
+    if purpose != "batch":
+        raise ProxyException(
+            message=(
+                f"The server behind {', '.join(executed)} has no Files API, so LiteLLM keeps only batch input "
+                f"files for it and runs the batch itself: upload with purpose=batch; got purpose={purpose}"
+            ),
+            type="invalid_request_error",
+            param="purpose",
+            code=400,
+        )
+    if len(candidates) == 1:
+        return executed[0]
+    raise ProxyException(
+        message=(
+            f"LiteLLM runs batches for {', '.join(executed)} itself and keeps their input files, so a batch "
+            f"input file can target only that one model; got target_model_names={', '.join(candidates)}"
+        ),
+        type="invalid_request_error",
+        param="target_model_names",
+        code=400,
+    )
+
+
+_MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
+_LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
+
+
+class UploadedFileInfo(TypedDict):
+    filename: ReadOnly[str | None]
+    content_type: ReadOnly[str | None]
+    size: ReadOnly[int | None]
+
 
 files_config = None
 
@@ -98,26 +209,158 @@ def get_files_provider_config(
     return None
 
 
+def _deployment_provider(llm_router: Router, model_id: str, team_id: str | None) -> str | None:
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
+    return None if credentials is None else credentials.get("custom_llm_provider")
+
+
+def _resolves_to_vertex_deployments_only(llm_router: Router | None, model_name: str, team_id: str | None) -> bool:
+    if llm_router is None or _deployment_provider(llm_router, model_name, team_id) != "vertex_ai":
+        return False
+    return all(
+        _deployment_provider(llm_router, str(deployment["model_info"]["id"]), team_id) == "vertex_ai"
+        for deployment in llm_router.get_model_list(model_name=model_name, team_id=team_id) or ()
+        if "id" in deployment.get("model_info", {})
+    )
+
+
+def _validate_passthrough_upload(
+    *,
+    purpose: str,
+    target_model_names: Sequence[str],
+    model: str | None,
+    target_storage: str | None,
+    llm_router: Router | None,
+    team_id: str | None,
+) -> None:
+    if purpose != "batch":
+        raise ProxyException(
+            message=(
+                "`passthrough` uploads the file bytes unchanged for a native Vertex batch, "
+                f"so purpose must be 'batch', got '{purpose}'."
+            ),
+            type="invalid_request_error",
+            param="passthrough",
+            code=400,
+        )
+    if target_storage and target_storage != "default":
+        raise ProxyException(
+            message=(
+                "`passthrough` writes the native batch file to the Vertex AI deployment's GCS bucket, "
+                f"so it cannot be combined with target_storage='{target_storage}'."
+            ),
+            type="invalid_request_error",
+            param="target_storage",
+            code=400,
+        )
+    named_deployments: Final = (
+        *(("target_model_names", name) for name in target_model_names),
+        *((("model", model),) if model else ()),
+    )
+    if not named_deployments:
+        raise ProxyException(
+            message=(
+                "`passthrough` needs the Vertex AI deployment that will run the batch, "
+                "since native rows carry no model: pass `target_model_names` or `model`."
+            ),
+            type="invalid_request_error",
+            param="target_model_names",
+            code=400,
+        )
+    offending: Final = next(
+        (
+            (param, name)
+            for param, name in named_deployments
+            if not _resolves_to_vertex_deployments_only(llm_router, name, team_id)
+        ),
+        None,
+    )
+    if offending is None:
+        return
+    param, name = offending
+    raise ProxyException(
+        message=(
+            f"`passthrough` is only supported for Vertex AI deployments; '{name}' does not resolve "
+            "to vertex_ai deployments only."
+        ),
+        type="invalid_request_error",
+        param=param,
+        code=400,
+    )
+
+
+async def _scan_batch_upload(
+    *,
+    file_source: bytes | BinaryIO,
+    purpose: str,
+    passthrough: bool,
+    request_metadata: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+) -> BatchScanResult | None:
+    """Guardrail the records of a batch input file, or None when this upload has nothing to scan."""
+    if (
+        purpose != "batch"
+        or isinstance(file_source, bytes)
+        or not proxy_logging_obj.has_pre_call_guardrails(request_metadata)
+    ):
+        return None
+    if passthrough:
+        raise ProxyException(
+            message=(
+                "Batch guardrails cannot scan native Vertex batch rows, so a `passthrough` upload is refused "
+                "when the key, team, or request has pre-call guardrails configured. "
+                "The file was not forwarded to the provider."
+            ),
+            type="invalid_request_error",
+            param="passthrough",
+            code=400,
+        )
+    outcome: Final = await scan_batch_input_file(
+        file_source=file_source,
+        request_metadata=request_metadata,
+        user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if not isinstance(outcome, BatchScanResult):
+        raise_public(outcome)
+    if outcome.changes and outcome.submitted_records == 0:
+        raise_nothing_to_submit()
+    return outcome
+
+
 def get_first_json_object(file_source: bytes | BinaryIO) -> dict | None:
+    """
+    The first record, used to pick a deployment when batch load balancing is on.
+
+    Read the way the upload validation reads it, since a file it accepted must not lose its
+    routing here: blank lines are not records and are skipped, and the line is parsed as bytes so
+    the json module sniffs the encoding rather than rejecting a leading byte order mark. Either
+    difference makes this return None, which silently sends the batch to the default provider.
+    """
     try:
         if isinstance(file_source, (bytes, bytearray)):
-            newline: Final = file_source.find(b"\n")
-            raw: Final = file_source if newline == -1 else file_source[:newline]
-            first_line = raw.decode("utf-8")
+            first_record: bytes | None = next((line for line in file_source.splitlines() if line.strip()), None)
         else:
+            # lazily, so a batch file that can be gigabytes is not read past its first record
             file_source.seek(0)
-            first_line = file_source.readline().decode("utf-8")
+            first_record = next((line for line in file_source if line.strip()), None)
             file_source.seek(0)
-        return json.loads(first_line.strip())
+        return None if first_record is None else json.loads(first_record.strip())
     except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError):
         return None
 
 
 def get_model_from_json_obj(json_object: dict) -> str | None:
-    body: Final = json_object.get("body", {}) or {}
-    model: Final = body.get("model")
+    """
+    The model a record names, or None when it does not name one readably.
 
-    return model
+    The upload validation only checks that `body` is present, not that it is an object, so a
+    record can carry a string there and reach this. Returning None sends the upload down the
+    default-provider branch, which is what a record with no resolvable model already did.
+    """
+    body: Final = json_object.get("body")
+    return body.get("model") if isinstance(body, dict) else None
 
 
 async def _deprecated_loadbalanced_create_file(
@@ -159,36 +402,48 @@ async def route_create_file(
     5. Else -> use custom_llm_provider with files_settings
     """
 
-    # Handle custom storage backend
-    if target_storage and target_storage != "default":
+    explicit_storage: Final = target_storage if target_storage and target_storage != "default" else None
+    if explicit_storage == LITELLM_DB_STORAGE_BACKEND_NAME:
+        raise ProxyException(
+            message=(
+                f"target_storage={LITELLM_DB_STORAGE_BACKEND_NAME} is not a storage a caller can pick: LiteLLM "
+                "chooses it on its own for the batch input files of a model whose batches it runs itself, so "
+                "upload with purpose=batch and name that model instead of target_storage"
+            ),
+            type="invalid_request_error",
+            param="target_storage",
+            code=400,
+        )
+    executed_model: Final = await _litellm_executed_batch_input_model(
+        llm_router, purpose, model, target_model_names_list, user_api_key_dict, explicit_storage
+    )
+    storage: Final = explicit_storage or (LITELLM_DB_STORAGE_BACKEND_NAME if executed_model is not None else None)
+    if storage is not None:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             extract_file_data,
         )
         from litellm.proxy.openai_files_endpoints.storage_backend_service import (
             StorageBackendFileService,
         )
+        from litellm.proxy.proxy_server import prisma_client
 
-        # Extract file data
-        file_data: Final = extract_file_data(cast(Any, _create_file_request.get("file")))
-
-        # Use storage backend service to handle upload
-        file_object: Final = await StorageBackendFileService.upload_file_to_storage_backend(
-            file_data=file_data,
-            target_storage=target_storage,
-            target_model_names=target_model_names_list,
+        return await StorageBackendFileService.upload_file_to_storage_backend(
+            file_data=extract_file_data(cast(Any, _create_file_request.get("file"))),
+            target_storage=storage,
+            target_model_names=(executed_model,) if executed_model is not None else target_model_names_list,
             purpose=purpose,
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
-
-        return file_object
 
     # NEW: Handle model-based routing (no DB required)
     if model is not None:
         # Get credentials from model_list via router
-        credentials: Final = get_credentials_for_model(
+        credentials: Final = await get_authorized_credentials_for_model(
             llm_router=llm_router,
             model_id=model,
+            user_api_key_dict=user_api_key_dict,
             operation_context="file upload",
         )
 
@@ -220,22 +475,22 @@ async def route_create_file(
         if managed_files_obj is None:
             raise ProxyException(
                 message="Managed files hook not found",
-                type="None",
-                param="None",
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=None,
                 code=500,
             )
         if llm_router is None:
             raise ProxyException(
                 message="LLM Router not found",
-                type="None",
-                param="None",
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=None,
                 code=500,
             )
         if not isinstance(managed_files_obj, BaseFileEndpoints):
             raise ProxyException(
                 message="Managed files hook is not a BaseFileEndpoints",
-                type="None",
-                param="None",
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=None,
                 code=500,
             )
         # Managed files internally calls llm_router.acreate_file() which includes loadbalancing
@@ -297,6 +552,7 @@ async def create_file(
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
     litellm_metadata: str | None = Form(default=None),
+    passthrough: bool = Form(default=False),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -325,14 +581,28 @@ async def create_file(
     )
 
     data: dict = {}
+    # Spools this request owns. Starlette owns the upload handle; anything the guardrail scan
+    # opens is ours, and a batch upload that fails after the scan would otherwise hold the
+    # descriptor and its disk blocks until the collector runs.
+    spools: Final[list[BinaryIO]] = []  # mutable-ok: filled as the scan opens handles
     try:
+        unsafe_filename_failure: Final = check_unsafe_filename(file.filename)
+        if unsafe_filename_failure is not None:
+            raise_upload_validation_failure(unsafe_filename_failure)
+
+        max_file_size_mb: Final = coerce_optional_int_setting(general_settings.get("max_file_size_mb"))
+
         # Batch uploads can be gigabytes. Starlette has already spooled the upload
         # to disk, so stream from that handle instead of reading it into memory.
-        # Other uploads are small and stay in-memory bytes.
+        # Other uploads stay in-memory bytes, bounded to max_file_size_mb (plus one
+        # byte, to still tell "exactly at the limit" from "over it") when it is set,
+        # so an oversized upload cannot be read to completion before it is rejected.
         file_source: bytes | BinaryIO
         if purpose == "batch":
             await file.seek(0)
             file_source = file.file
+        elif max_file_size_mb is not None and max_file_size_mb > 0:
+            file_source = await file.read(max_file_size_mb * MB + 1)
         else:
             file_source = await file.read()
         custom_llm_provider = (
@@ -360,25 +630,59 @@ async def create_file(
 
         # Prepare the data for forwarding
 
-        # Replace with:
         valid_purposes: Final = get_args(OpenAIFilesPurpose)
         if purpose not in valid_purposes:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
-                },
+            raise ProxyException(
+                message=f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
+                type="invalid_request_error",
+                param="purpose",
+                code=400,
             )
         # Cast purpose to OpenAIFilesPurpose type
         purpose = cast(OpenAIFilesPurpose, purpose)
 
-        data = {}
+        general_size_failure: Final = check_upload_file_size(file_source, max_file_size_mb)
+        if general_size_failure is not None:
+            raise_upload_validation_failure(general_size_failure)
+
+        allowed_extensions: Final = coerce_optional_str_list_setting(general_settings.get("allowed_file_extensions"))
+        allowed_extension_failure: Final = check_allowed_extension(file.filename, allowed_extensions)
+        if allowed_extension_failure is not None:
+            raise_upload_validation_failure(allowed_extension_failure)
+
+        blocked_extensions: Final = coerce_optional_str_list_setting(general_settings.get("blocked_file_extensions"))
+        blocked_extension_failure: Final = check_blocked_extension(file.filename, blocked_extensions)
+        if blocked_extension_failure is not None:
+            raise_upload_validation_failure(blocked_extension_failure)
+
+        if passthrough:
+            _validate_passthrough_upload(
+                purpose=purpose,
+                target_model_names=target_model_names_list,
+                model=model_param,
+                target_storage=target_storage,
+                llm_router=llm_router,
+                team_id=user_api_key_dict.team_id,
+            )
+
+        if purpose == "batch":
+            batch_file_failure: Final = await asyncio.to_thread(
+                check_batch_file_upload,
+                file.filename,
+                file_source,
+                _MAX_BATCH_FILE_SIZE_MB_ADAPTER.validate_python(general_settings.get("max_batch_file_size_mb")),
+                PASSTHROUGH_BATCH_LINE_SHAPE if passthrough else BATCH_LINE_SHAPE,
+            )
+            if batch_file_failure is not None:
+                raise_batch_file_validation_failure(batch_file_failure)
+
+        data = {"passthrough": True} if passthrough else {}
 
         # Parse expires_after if provided
         expires_after: FileExpiresAfter | None = None
         form_data_raw: Final = await request.form()
-        form_data_dict: Final[dict[str, Any]] = dict(form_data_raw)
-        extracted_litellm_metadata: Final[dict[str, Any] | None] = extract_nested_form_metadata(
+        form_data_dict: Final[Mapping[str, object]] = dict(form_data_raw)
+        extracted_litellm_metadata: Final[Mapping[str, object] | None] = extract_nested_form_metadata(
             form_data=form_data_dict, prefix="litellm_metadata["
         )
         expires_after_anchor: Final = form_data_raw.get("expires_after[anchor]")
@@ -454,14 +758,61 @@ async def create_file(
             proxy_config=proxy_config,
         )
 
+        uploaded_file_info: Final[UploadedFileInfo] = {
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "size": file.size,
+        }
+        data["purpose"] = purpose
+        data["file"] = uploaded_file_info
+        hooked_data: Final = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="acreate_file",
+        )
+        data = hooked_data if hooked_data is not None else data
+        data.pop("purpose", None)
+        data.pop("file", None)
+
+        # /v1/files stores its proxy metadata under litellm_metadata, not metadata
+        request_metadata: Final = data.get("metadata") or data.get("litellm_metadata") or EMPTY_MAPPING
+        scan_result: Final = await _scan_batch_upload(
+            file_source=file_source,
+            purpose=purpose,
+            passthrough=passthrough,
+            request_metadata=request_metadata,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if scan_result is not None and scan_result.changes:
+            # The caller sees this in the response; a proxy admin needs it server side too,
+            # and it has to land before the post-call hook for logging callbacks to pick it up.
+            get_or_create_metadata_bucket(data)[1]["batch_guardrail"] = scan_result.report().model_dump()
+            verbose_proxy_logger.warning(
+                "batch guardrails changed %s of %s records in %s: %s",
+                len(scan_result.changes),
+                scan_result.scanned_records,
+                file.filename,
+                scan_result.summary(),
+            )
+
         # Prepare the file data according to FileTypes
-        file_data: Final = (file.filename, file_source, file.content_type)
+        if scan_result is not None:
+            spools.append(scan_result.redactions)
+        upload_source: Final = (
+            await asyncio.to_thread(rewrite_batch_input_file, file_source, scan_result)
+            if scan_result is not None and scan_result.changes
+            else file_source
+        )
+        if upload_source is not file_source:
+            spools.append(upload_source)
+        file_data: Final = (file.filename, upload_source, file.content_type)
 
         ## check if model is a loadbalanced model
         router_model: str | None = None
         is_router_model = False
         if litellm.enable_loadbalancing_on_batch_endpoints is True:
-            json_obj: Final = get_first_json_object(file_source)
+            json_obj: Final = get_first_json_object(upload_source)
             if json_obj:
                 router_model = get_model_from_json_obj(json_object=json_obj)
                 is_router_model = is_known_model(model=router_model, llm_router=llm_router)
@@ -529,6 +880,9 @@ async def create_file(
         if _response is not None and isinstance(_response, OpenAIFileObject):
             response = _response
 
+        if scan_result is not None and scan_result.changes:
+            response.litellm_batch_guardrail = scan_result.report()
+
         ### RESPONSE HEADERS ###
         hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
         model_id: Final = hidden_params.get("model_id", None) or ""
@@ -551,21 +905,26 @@ async def create_file(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_file(): Exception occured - %s", e)
+        if isinstance(e, ProxyException):
+            raise e
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
             )
+    finally:
+        for spool in spools:
+            spool.close()
 
 
 @router.get(
@@ -650,28 +1009,28 @@ async def get_file_content(
             if managed_files_obj is None:
                 raise ProxyException(
                     message="Managed files hook not found",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             if llm_router is None:
                 raise ProxyException(
                     message="LLM Router not found",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             if not isinstance(managed_files_obj, BaseFileEndpoints):
                 raise ProxyException(
                     message="Managed files hook is not a BaseFileEndpoints",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
 
             # Check if file is stored in a storage backend (check DB)
             if hasattr(managed_files_obj, "prisma_client") and getattr(managed_files_obj, "prisma_client", None):
-                prisma_client: Final = getattr(managed_files_obj, "prisma_client")
+                prisma_client: Final[PrismaClient] = getattr(managed_files_obj, "prisma_client")
                 db_file: Final = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": file_id}
                 )
@@ -686,7 +1045,7 @@ async def get_file_content(
 
                     try:
                         # Get storage backend (uses same env vars as callback)
-                        storage_backend: Final = get_storage_backend(storage_backend_name)
+                        storage_backend: Final = get_storage_backend(storage_backend_name, prisma_client=prisma_client)
                         file_content: Final = await storage_backend.download_file(storage_url)
 
                         # Return file content
@@ -706,6 +1065,7 @@ async def get_file_content(
 
             model: Final = cast(str | None, data.get("model"))
             if model:
+                add_internal_model_credentials(data=data, llm_router=llm_router, model_id=model)
                 response = await llm_router.afile_content(
                     **{
                         "model": model,
@@ -739,11 +1099,12 @@ async def get_file_content(
                 model_used,
                 original_file_id,
                 credentials,
-            ) = handle_model_based_routing(
+            ) = await handle_model_based_routing(
                 file_id=file_id,
                 request=request,
                 llm_router=llm_router,
                 data=data,
+                user_api_key_dict=user_api_key_dict,
                 check_file_id_encoding=True,
             )
 
@@ -858,17 +1219,17 @@ async def get_file_content(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
             )
 
 
@@ -954,15 +1315,16 @@ async def get_file(
             model_used,
             original_file_id,
             credentials,
-        ) = handle_model_based_routing(
+        ) = await handle_model_based_routing(
             file_id=file_id,
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
         )
 
-        if should_route:
+        if should_route and credentials is not None:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(
                 data=data,
@@ -971,7 +1333,10 @@ async def get_file(
                 include_internal_credentials=True,
             )
 
-            response = await litellm.afile_retrieve(**data)
+            response = await litellm.afile_retrieve(
+                custom_llm_provider=credentials["custom_llm_provider"],
+                **data,
+            )
 
             # Keep the encoded ID in response if it was originally encoded
             if original_file_id and response and hasattr(response, "id") and response.id:
@@ -988,15 +1353,15 @@ async def get_file(
             if managed_files_obj is None:
                 raise ProxyException(
                     message="Managed files hook not found",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             if not isinstance(managed_files_obj, BaseFileEndpoints):
                 raise ProxyException(
                     message="Managed files hook is not a BaseFileEndpoints",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             response = await managed_files_obj.afile_retrieve(
@@ -1052,17 +1417,17 @@ async def get_file(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
             )
 
 
@@ -1119,6 +1484,11 @@ async def delete_file(
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         )
+        if is_managed_cloud_storage_uri(file_id) and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Raw cloud storage file ids can only be deleted by a proxy admin key. Use the LiteLLM managed file id returned when the file was created.",
+            )
 
         custom_llm_provider: Final = (
             provider
@@ -1159,11 +1529,12 @@ async def delete_file(
             model_used,
             original_file_id,
             credentials,
-        ) = handle_model_based_routing(
+        ) = await handle_model_based_routing(
             file_id=file_id,
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
         )
 
@@ -1192,22 +1563,22 @@ async def delete_file(
             if managed_files_obj is None:
                 raise ProxyException(
                     message="Managed files hook not found",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             if llm_router is None:
                 raise ProxyException(
                     message="LLM Router not found",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             if not isinstance(managed_files_obj, BaseFileEndpoints):
                 raise ProxyException(
                     message="Managed files hook is not a BaseFileEndpoints",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
 
@@ -1264,18 +1635,24 @@ async def delete_file(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
             )
+
+
+def _as_file_list_page(response: object) -> object:
+    if not isinstance(response, list):
+        return response
+    return FileListPage(**build_list_page(_LISTED_FILES_ADAPTER.validate_python(response)))
 
 
 @router.get(
@@ -1300,6 +1677,8 @@ async def list_files(
     provider: str | None = None,
     target_model_names: str | None = None,
     purpose: str | None = None,
+    limit: int | None = None,
+    after: str | None = None,
 ):
     """
     Returns information about a specific file. that can be used across - Assistants API, Batch API 
@@ -1324,6 +1703,8 @@ async def list_files(
 
     data: dict = {}
     try:
+        validate_file_list_limit(limit)
+
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
@@ -1342,17 +1723,18 @@ async def list_files(
         response: Any | None = None
 
         # Check for model-based credential routing (no file_id encoding check for list)
-        should_route, model_used, _, credentials = handle_model_based_routing(
+        should_route, model_used, _, credentials = await handle_model_based_routing(
             file_id="",  # No file_id for list endpoint
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=False,
         )
 
         if should_route and credentials is not None:
             # Use model-based routing with credentials from config
-            prepare_data_with_credentials(data=data, credentials=credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
@@ -1373,12 +1755,13 @@ async def list_files(
                     status_code=500,
                     detail="LLM Router not initialized. Ensure models added to proxy.",
                 )
-            credentials = get_credentials_for_model(
+            credentials = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=target_model_names_list[0],
+                user_api_key_dict=user_api_key_dict,
                 operation_context="file list",
             )
-            prepare_data_with_credentials(data=data, credentials=credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
@@ -1390,30 +1773,37 @@ async def list_files(
                 or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
                 or await get_custom_llm_provider_from_request_body(request=request)
-                or "openai"
             )
+            managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+            if custom_llm_provider is None and isinstance(managed_files_obj, BaseFileEndpoints):
+                response = await managed_files_obj.afile_list(
+                    purpose=purpose,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    user_api_key_dict=user_api_key_dict,
+                    limit=limit,
+                    after=after,
+                )
+            else:
+                resolved_custom_llm_provider: Final = custom_llm_provider or "openai"
+                apply_team_provider_credentials(
+                    data=data,
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                    custom_llm_provider=resolved_custom_llm_provider,
+                )
 
-            # No model/target_model_names pinned: resolve upstream credentials from
-            # the team's deployment for this provider so the call is authenticated
-            # against the team's own account (e.g. the team's openai deployment).
-            apply_team_provider_credentials(
-                data=data,
-                llm_router=llm_router,
-                user_api_key_dict=user_api_key_dict,
-                custom_llm_provider=custom_llm_provider,
-            )
-
-            response = await litellm.afile_list(
-                custom_llm_provider=custom_llm_provider,
-                purpose=purpose,
-                **data,
-            )
+                response = await litellm.afile_list(
+                    custom_llm_provider=resolved_custom_llm_provider,
+                    purpose=purpose,
+                    **data,
+                )
 
         if response is None:
             raise HTTPException(
                 status_code=500,
                 detail="Either 'provider' or 'target_model_names' must be provided e.g. `?target_model_names=gpt-4o`",
             )
+        response = _as_file_list_page(response)  # rebind-ok: each dispatch branch above binds response
 
         ## POST CALL HOOKS ###
         _response: Final = await proxy_logging_obj.post_call_success_hook(
@@ -1451,18 +1841,20 @@ async def list_files(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.list_files(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, ProxyException):
+            raise
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
             )

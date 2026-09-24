@@ -1,6 +1,10 @@
+from collections.abc import Mapping, MutableMapping
+from types import MappingProxyType
 from typing import Final
 
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.router import CustomPricingLiteLLMParams
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -14,10 +18,13 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
         "aws_web_identity_token",
         "aws_sts_endpoint",
         "aws_external_id",
+        "aws_session_tags",
         "aws_bedrock_runtime_endpoint",
         "aws_bedrock_project_id",
     }
 )
+
+PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -32,22 +39,32 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "azure_password",
             "azure_scope",
             "timeout",
+            "client_side_timeout",
             "gcs_bucket_name",
             "bucket_name",
+            "s3_endpoint_url",
+            "s3_region_name",
+            "s3_access_key_id",
+            "s3_secret_access_key",
             "vertex_credentials",
             "vertex_project",
             "vertex_location",
             "vertex_ai_project",
             "vertex_ai_location",
             "vertex_ai_credentials",
+            "gigachat_scope",
+            "gigachat_auth_url",
+            "gigachat_access_token",
             "tpm",
             "rpm",
             "itpm",
             "otpm",
             "use_xai_oauth",
+            PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
 # Backward-compatible alias for existing imports/tests.
@@ -103,7 +120,7 @@ def get_litellm_params(
     custom_prompt_dict: dict | None = None,
     litellm_metadata: dict | None = None,
     disable_add_transform_inline_image_block: bool | None = None,
-    drop_params: bool | None = None,
+    drop_params: bool | str | None = None,
     prompt_id: str | None = None,
     prompt_variables: dict | None = None,
     async_call: bool | None = None,
@@ -113,6 +130,7 @@ def get_litellm_params(
     api_version: str | None = None,
     max_retries: int | None = None,
     litellm_request_debug: bool | None = None,
+    stream_chunk_size: int | None = None,
     **kwargs,
 ) -> dict:
     _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
@@ -165,7 +183,7 @@ def get_litellm_params(
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,
         "disable_add_transform_inline_image_block": disable_add_transform_inline_image_block,
-        "drop_params": drop_params,
+        "drop_params": normalize_drop_params(drop_params),
         "prompt_id": prompt_id,
         "prompt_variables": prompt_variables,
         "async_call": async_call,
@@ -175,6 +193,7 @@ def get_litellm_params(
         "max_retries": max_retries,
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
+        "stream_chunk_size": stream_chunk_size,
     }
 
     # Sparse extraction: only add kwargs keys that are actually present
@@ -184,3 +203,19 @@ def get_litellm_params(
                 litellm_params[key] = kwargs[key]
 
     return litellm_params
+
+
+def add_trusted_model_credentials_to_litellm_params(
+    litellm_params_dict: MutableMapping[str, object], kwargs: Mapping[str, object]
+) -> None:
+    """
+    Carry the immutable server-side credential snapshot into litellm_params.
+
+    get_litellm_params has a fixed signature, so callers that need the snapshot to
+    survive into the logging object and the downstream file read have to re-add it. Only
+    a MappingProxyType is accepted, since providers resolve trusted configuration such
+    as a Bedrock file bucket from it and must not read a request-supplied mapping.
+    """
+    trusted_model_credentials: Final = kwargs.get("_litellm_internal_model_credentials")
+    if isinstance(trusted_model_credentials, MappingProxyType):
+        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials

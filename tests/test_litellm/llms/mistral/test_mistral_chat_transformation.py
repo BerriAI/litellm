@@ -1,5 +1,3 @@
-import os
-import sys
 from typing import List, cast
 from unittest.mock import MagicMock, patch
 
@@ -8,9 +6,6 @@ import pytest
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.types.llms.openai import AllMessageValues
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
@@ -56,14 +51,19 @@ class TestMistralReasoningSupport:
         assert "reasoning_effort" in supported_params
         assert "thinking" in supported_params
 
-        # Test non-magistral model doesn't include reasoning parameters
+        supported_params_reasoning = mistral_config.get_supported_openai_params(
+            "mistral/mistral-medium-latest"
+        )
+        assert "reasoning_effort" in supported_params_reasoning
+        assert "thinking" not in supported_params_reasoning
+
         supported_params_normal = mistral_config.get_supported_openai_params(
             "mistral/mistral-large-latest"
         )
         assert "reasoning_effort" not in supported_params_normal
         assert "thinking" not in supported_params_normal
 
-    def test_map_openai_params_reasoning_effort(self):
+    def test_map_openai_params_reasoning_effort(self, local_model_cost_map):
         """Test that reasoning_effort parameter is properly mapped for magistral models."""
         mistral_config = MistralConfig()
 
@@ -78,16 +78,93 @@ class TestMistralReasoningSupport:
 
         assert result.get("_add_reasoning_prompt") is True
 
-        # Test reasoning_effort ignored for non-magistral model
         optional_params_normal = {}
         result_normal = mistral_config.map_openai_params(
             non_default_params={"reasoning_effort": "low"},
             optional_params=optional_params_normal,
-            model="mistral/mistral-large-latest",
+            model="mistral/mistral-medium-latest",
             drop_params=False,
         )
 
         assert "_add_reasoning_prompt" not in result_normal
+        assert result_normal["reasoning_effort"] == "high"
+
+    @pytest.mark.parametrize(
+        ("model", "requested", "sent"),
+        [
+            ("mistral-medium-latest", "high", "high"),
+            ("mistral-medium-latest", "none", "none"),
+            ("mistral-medium-latest", "low", "high"),
+            ("mistral-medium-latest", "medium", "high"),
+            ("mistral-medium-latest", "xhigh", "high"),
+            ("mistral-small-latest", "medium", "high"),
+            ("mistral-vibe-cli-latest", "medium", "high"),
+            ("zai-glm-5", "none", "none"),
+            ("zai-glm-5", "minimal", "low"),
+            ("zai-glm-5", "medium", "high"),
+            ("zai-glm-5", "xhigh", "max"),
+            ("zai-glm-5-2", "medium", "medium"),
+            ("zai-glm-5-2", "xhigh", "xhigh"),
+        ],
+    )
+    def test_reasoning_effort_is_sent_as_a_level_the_model_accepts(self, local_model_cost_map, model, requested, sent):
+        import litellm
+
+        optional_params = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="mistral",
+            reasoning_effort=requested,
+        )
+        assert optional_params["reasoning_effort"] == sent
+
+    def test_reasoning_effort_is_forwarded_verbatim_when_the_map_declares_no_levels(
+        self, local_model_cost_map, monkeypatch
+    ):
+        import litellm
+
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "mistral/undeclared-reasoner",
+            {"litellm_provider": "mistral", "mode": "chat", "supports_reasoning": True},
+        )
+        optional_params = litellm.get_optional_params(
+            model="undeclared-reasoner",
+            custom_llm_provider="mistral",
+            reasoning_effort="medium",
+        )
+        assert optional_params["reasoning_effort"] == "medium"
+
+    def test_reasoning_effort_stays_unsupported_for_non_reasoning_models(self):
+        import litellm
+
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.get_optional_params(
+                model="codestral-latest",
+                custom_llm_provider="mistral",
+                reasoning_effort="high",
+            )
+
+        dropped = litellm.get_optional_params(
+            model="codestral-latest",
+            custom_llm_provider="mistral",
+            reasoning_effort="high",
+            drop_params=True,
+        )
+        assert "reasoning_effort" not in dropped
+
+    def test_client_metadata_stripped_from_request(self):
+        mistral_config = MistralConfig()
+
+        request = mistral_config.transform_request(
+            model="mistral-medium-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"client_metadata": {"originator": "codex_cli_rs"}, "temperature": 0.2},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "client_metadata" not in request
+        assert request["temperature"] == 0.2
 
     def test_map_openai_params_thinking(self):
         """Test that thinking parameter is properly mapped for magistral models."""

@@ -11,16 +11,14 @@
 # these true defaults before every test, preventing cross-test contamination
 # under xdist where module reload is skipped.
 
+import asyncio
 import importlib
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 # ``litellm.model_cost`` is loaded at import time from the URL pinned to ``main``
 # (``LITELLM_MODEL_COST_MAP_URL``).  The in-tree backup ships with this branch
@@ -77,6 +75,9 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
         "test_router_caching.py",
         # Hits the local fake OpenAI endpoint on 127.0.0.1; nothing to record.
         "test_fake_openai_endpoint.py",
+        # Needs the real connection pool a collected handler tears down; vcrpy
+        # patches the transport that pool lives in.
+        "test_handler_gc_does_not_close_client.py",
     }
 )
 
@@ -224,6 +225,7 @@ def isolate_litellm_state():
     yield
 
     # ---- Teardown: restore saved state ----
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -238,7 +240,6 @@ def setup_and_teardown():
     Module-scoped setup. Reloads litellm only in single-process mode
     (skipped under xdist to avoid cross-worker interference).
     """
-    sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
 

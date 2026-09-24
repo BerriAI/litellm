@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Check, ChevronDown, ChevronRight, Clock, Copy } from "lucide-react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -75,7 +75,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
         results.map((result) => {
           const isCollapsed = collapsedResults.has(result.guardrailName);
           return (
-            <Card key={result.guardrailName} className="border-emerald-200 bg-emerald-50">
+            <Card key={result.guardrailName} className="border-success/20 bg-success/10">
               <CardContent className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div
@@ -87,8 +87,8 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                     ) : (
                       <ChevronDown className="size-3 text-muted-foreground" />
                     )}
-                    <Check className="size-4 text-emerald-600" />
-                    <span className="text-sm font-medium text-emerald-800">{result.guardrailName}</span>
+                    <Check className="size-4 text-success" />
+                    <span className="text-sm font-medium text-success">{result.guardrailName}</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="flex items-center space-x-1 text-xs text-muted-foreground">
@@ -102,9 +102,9 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                         onClick={async () => {
                           const success = await copyToClipboard(result.response_text);
                           if (success) {
-                            NotificationsManager.success("Result copied to clipboard");
+                            toast.success("Result copied to clipboard");
                           } else {
-                            NotificationsManager.fromBackend("Failed to copy result");
+                            toast.fromError("Failed to copy result");
                           }
                         }}
                       >
@@ -116,7 +116,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                 </div>
                 {!isCollapsed && (
                   <>
-                    <div className="rounded-sm border border-emerald-200 bg-background p-3">
+                    <div className="rounded-sm border border-success/20 bg-background p-3">
                       <label className="mb-2 block text-xs font-medium text-muted-foreground">Output Text</label>
                       <div className="font-mono text-sm whitespace-pre-wrap wrap-break-word">
                         {result.response_text}
@@ -137,7 +137,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
         errors.map((errorItem) => {
           const isCollapsed = collapsedResults.has(errorItem.guardrailName);
           return (
-            <Card key={errorItem.guardrailName} className="border-red-200 bg-red-50">
+            <Card key={errorItem.guardrailName} className="border-destructive/20 bg-destructive/10">
               <CardContent>
                 <div className="flex items-start space-x-2">
                   <div className="mt-0.5 cursor-pointer" onClick={() => toggleResultCollapse(errorItem.guardrailName)}>
@@ -159,7 +159,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                   <div className="flex-1">
                     <div className="mb-1 flex items-center justify-between">
                       <p
-                        className="cursor-pointer text-sm font-medium text-red-800"
+                        className="cursor-pointer text-sm font-medium text-destructive"
                         onClick={() => toggleResultCollapse(errorItem.guardrailName)}
                       >
                         {errorItem.guardrailName} - Error
@@ -169,7 +169,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                         <span className="font-medium">{errorItem.latency}ms</span>
                       </div>
                     </div>
-                    {!isCollapsed && <p className="mt-1 text-sm text-red-700">{errorItem.error.message}</p>}
+                    {!isCollapsed && <p className="mt-1 text-sm text-destructive">{errorItem.error.message}</p>}
                   </div>
                 </div>
               </CardContent>

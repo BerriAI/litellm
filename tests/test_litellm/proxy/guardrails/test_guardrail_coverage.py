@@ -18,7 +18,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import Request, Response
 
+import litellm
 from litellm import DualCache
+from litellm.constants import DEFAULT_OPENAI_MODERATIONS_MODEL
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import Choices, Message, ModelResponse
 
@@ -158,7 +160,7 @@ async def test_lakera_v2_inspects_responses_api_input(user_api_key, monkeypatch)
             call_type="responses",
         )
 
-    assert seen_messages == [[{"role": "user", "content": "responses-api content"}]]
+    assert seen_messages == [({"role": "user", "content": "responses-api content"},)]
 
 
 @pytest.mark.asyncio
@@ -320,7 +322,7 @@ async def test_lakera_v2_inspects_multimodal_list_content(user_api_key, monkeypa
             call_type="acompletion",
         )
 
-    assert seen_messages == [[{"role": "user", "content": "AKIAEXAMPLE"}]]
+    assert seen_messages == [({"role": "user", "content": "AKIAEXAMPLE"},)]
 
 
 # ── Lasso ─────────────────────────────────────────────────────────────────────
@@ -762,6 +764,40 @@ async def test_openai_moderation_inspects_multimodal_content(monkeypatch, user_a
     )
 
     assert seen_inputs == ["alpha beta"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_after_init", "expected_model"),
+    [("omni-moderation-2024-09-26", "omni-moderation-2024-09-26"), (None, DEFAULT_OPENAI_MODERATIONS_MODEL)],
+)
+async def test_openai_moderation_reads_model_name_at_call_time(
+    monkeypatch, user_api_key, configured_after_init, expected_model
+):
+    """``litellm_settings`` applies ``callbacks`` and ``openai_moderations_model_name`` in YAML
+    order, so the hook must resolve the model when it runs, not when it is constructed."""
+    from enterprise.enterprise_hooks.openai_moderation import (
+        _ENTERPRISE_OpenAI_Moderation,
+    )
+
+    monkeypatch.setattr(litellm, "openai_moderations_model_name", None)
+    guard = _ENTERPRISE_OpenAI_Moderation()
+    monkeypatch.setattr(litellm, "openai_moderations_model_name", configured_after_init)
+
+    class FakeModeration:
+        results = [type("R", (), {"flagged": False})()]
+
+    fake_router = MagicMock()
+    fake_router.amoderation = AsyncMock(return_value=FakeModeration())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router, raising=False)
+
+    await guard.async_moderation_hook(
+        data={"messages": [{"role": "user", "content": "hello"}]},
+        user_api_key_dict=user_api_key,
+        call_type="acompletion",
+    )
+
+    fake_router.amoderation.assert_awaited_once_with(model=expected_model, input="hello")
 
 
 # ── Google Text Moderation ────────────────────────────────────────────────────

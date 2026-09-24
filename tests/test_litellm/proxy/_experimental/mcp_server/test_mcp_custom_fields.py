@@ -5,13 +5,10 @@ Tests that mcp_info can accept arbitrary custom fields in addition to predefined
 """
 
 import pytest
-import sys
-import os
 from unittest.mock import Mock, patch
 from typing import Dict, Any
 
 # Add the path to find the modules
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adjust the path as needed
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.types.mcp import MCPAuth
@@ -21,9 +18,9 @@ from litellm.proxy._types import LiteLLM_MCPServerTable
 class TestMCPCustomFields:
     """Test custom fields functionality in MCP server configuration."""
 
-    async def test_custom_fields_preserved_from_config(self):
+    async def test_custom_fields_preserved_from_config(self, config_only_mcp_manager_factory):
         """Test that custom fields in mcp_info are preserved when loading from config."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         # Mock config with custom fields
         mock_config = {
@@ -65,9 +62,9 @@ class TestMCPCustomFields:
         assert mcp_info["priority"] == 10
         assert mcp_info["tags"] == ["production", "api"]
 
-    async def test_custom_fields_preserved_from_database(self):
+    async def test_custom_fields_preserved_from_database(self, config_only_mcp_manager_factory):
         """Test that custom fields in mcp_info are preserved when adding from database."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         # Mock database record with custom fields
         mock_server = LiteLLM_MCPServerTable(
@@ -109,9 +106,9 @@ class TestMCPCustomFields:
         assert mcp_info["metadata"] == {"source": "database"}
         assert mcp_info["version"] == "1.0.0"
 
-    async def test_empty_mcp_info_handled_gracefully(self):
+    async def test_empty_mcp_info_handled_gracefully(self, config_only_mcp_manager_factory):
         """Test that empty or missing mcp_info is handled gracefully."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         # Config with empty mcp_info
         mock_config = {
@@ -133,9 +130,9 @@ class TestMCPCustomFields:
         # Should have default server_name
         assert mcp_info["server_name"] == "test_server"
 
-    async def test_missing_mcp_info_creates_defaults(self):
+    async def test_missing_mcp_info_creates_defaults(self, config_only_mcp_manager_factory):
         """Test that missing mcp_info creates appropriate defaults."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         # Config without mcp_info
         mock_config = {
@@ -158,9 +155,9 @@ class TestMCPCustomFields:
         assert mcp_info["server_name"] == "test_server"
         assert mcp_info["description"] == "Server description"
 
-    async def test_config_description_fallback(self):
+    async def test_config_description_fallback(self, config_only_mcp_manager_factory):
         """Test that description from config level is used as fallback."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         # Config with description at server level but not in mcp_info
         mock_config = {
@@ -182,9 +179,9 @@ class TestMCPCustomFields:
         assert mcp_info["description"] == "Config level description"
         assert mcp_info["custom_field"] == "custom_value"
 
-    async def test_mcp_info_description_takes_precedence(self):
+    async def test_mcp_info_description_takes_precedence(self, config_only_mcp_manager_factory):
         """Test that description in mcp_info takes precedence over config level."""
-        manager = MCPServerManager()
+        manager = config_only_mcp_manager_factory()
 
         # Config with description at both levels
         mock_config = {

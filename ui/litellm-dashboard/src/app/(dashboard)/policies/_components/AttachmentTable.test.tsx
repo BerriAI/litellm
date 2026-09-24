@@ -45,7 +45,37 @@ describe("AttachmentTable", () => {
     expect(screen.getByText("Keys")).toBeInTheDocument();
     expect(screen.getByText("Models")).toBeInTheDocument();
     expect(screen.getByText("Tags")).toBeInTheDocument();
+    expect(screen.getByText("Priority")).toBeInTheDocument();
     expect(screen.getByText("Created At")).toBeInTheDocument();
+  });
+
+  it("should show the priority and a dash for attachments without one", () => {
+    const attachments = [
+      makeAttachment({ attachment_id: "att-prio0001", policy_name: "prioritized", priority: 5 }),
+      makeAttachment({ attachment_id: "att-prio0002", policy_name: "unprioritized" }),
+    ];
+    renderWithProviders(<AttachmentTable {...defaultProps} attachments={attachments} />);
+    const rows = screen.getAllByRole("row").slice(1);
+    const prioritizedRow = rows.find((row) => within(row).queryByText("prioritized"));
+    const unprioritizedRow = rows.find((row) => within(row).queryByText("unprioritized"));
+    expect(within(prioritizedRow!).getByText("5")).toBeInTheDocument();
+    expect(within(unprioritizedRow!).queryByText("5")).not.toBeInTheDocument();
+    expect(within(unprioritizedRow!).getAllByText("-")).toHaveLength(
+      within(prioritizedRow!).getAllByText("-").length + 1,
+    );
+  });
+
+  it("should show a Default badge only for default attachments", () => {
+    const attachments = [
+      makeAttachment({ attachment_id: "att-def00001", policy_name: "fallback", default: true }),
+      makeAttachment({ attachment_id: "att-def00002", policy_name: "regular" }),
+    ];
+    renderWithProviders(<AttachmentTable {...defaultProps} attachments={attachments} />);
+    const rows = screen.getAllByRole("row").slice(1);
+    const fallbackRow = rows.find((row) => within(row).queryByText("fallback"));
+    const regularRow = rows.find((row) => within(row).queryByText("regular"));
+    expect(within(fallbackRow!).getByText("Default")).toBeInTheDocument();
+    expect(within(regularRow!).queryByText("Default")).not.toBeInTheDocument();
   });
 
   it("should show skeleton rows when isLoading is true", () => {
@@ -135,9 +165,9 @@ describe("AttachmentTable", () => {
     const attachment = makeAttachment({ attachment_id: "att-abcdef1234567" });
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} />);
     const idElement = screen.getByText("att-abcdef1234567");
-    expect(idElement.className).toContain("font-mono");
-    expect(idElement.className).toContain("truncate");
-    expect(idElement.className).not.toContain("bg-blue-50");
+    expect(idElement).toHaveClass("font-mono");
+    expect(idElement).toHaveClass("truncate");
+    expect(idElement).not.toHaveClass("bg-info/10");
   });
 
   it("should render model chips when the attachment has models", () => {

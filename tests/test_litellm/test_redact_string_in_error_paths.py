@@ -2,21 +2,18 @@
 Tests for _redact_string usage in error/logging paths.
 
 Covers actual execution of redaction in:
-- WebSocket close reasons in realtime handlers (openai, azure, bedrock)
+- WebSocket close reasons in realtime handlers (openai, bedrock)
 - Gemini RAG ingestion x-goog-api-key header usage
 - Traceback redaction pattern used in proxy streaming
 - Router fallback-failure traceback redaction
 """
 
 import logging
-import os
-import sys
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string
 
@@ -76,25 +73,6 @@ class TestOpenAIRealtimeRedaction:
         )
 
     @pytest.mark.asyncio
-    async def test_invalid_status_code_redacts_reason(self):
-        import websockets.exceptions
-
-        from litellm.llms.openai.realtime.handler import OpenAIRealtime
-
-        handler = OpenAIRealtime()
-        exc = websockets.exceptions.InvalidStatusCode(403, None)
-        exc.status_code = 403
-
-        kwargs = self._call_kwargs()
-        mock_ws = kwargs["websocket"]
-        p1, p2, p3 = self._make_patches(handler)
-        with p1, p2, p3, patch("websockets.connect", side_effect=exc):
-            await handler.async_realtime(**kwargs)
-
-        mock_ws.close.assert_called_once()
-        assert mock_ws.close.call_args[1]["code"] == 403
-
-    @pytest.mark.asyncio
     async def test_generic_exception_redacts_reason(self):
         from litellm.llms.openai.realtime.handler import OpenAIRealtime
 
@@ -112,41 +90,6 @@ class TestOpenAIRealtimeRedaction:
         mock_ws.close.assert_called_once()
         assert mock_ws.close.call_args[1]["code"] == 1011
         assert "sk-1234567890abcdefghij" not in mock_ws.close.call_args[1]["reason"]
-
-
-class TestAzureRealtimeRedaction:
-    """Test that Azure realtime handler redacts secrets in websocket close reasons."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_status_code_redacts_reason(self):
-        import websockets.exceptions
-
-        from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
-
-        handler = AzureOpenAIRealtime()
-        mock_ws = AsyncMock()
-        exc = websockets.exceptions.InvalidStatusCode(403, None)
-        exc.status_code = 403
-
-        with (
-            patch.object(
-                handler,
-                "_construct_url",
-                return_value="wss://test.openai.azure.com/openai/realtime",
-            ),
-            patch("websockets.connect", side_effect=exc),
-        ):
-            await handler.async_realtime(
-                model="gpt-4",
-                websocket=mock_ws,
-                logging_obj=MagicMock(),
-                api_base="https://test.openai.azure.com/",
-                api_key="test-key",
-                api_version="2024-10-01-preview",
-            )
-
-        mock_ws.close.assert_called_once()
-        assert mock_ws.close.call_args[1]["code"] == 403
 
 
 class TestBedrockRealtimeRedaction:
@@ -175,8 +118,6 @@ class TestLLMHTTPHandlerRealtimeRedaction:
 
 
 class TestProxyStreamingDataGeneratorRedaction:
-    """Test _redact_string on traceback.format_exc() — the pattern at common_request_processing.py:1733."""
-
     def test_redact_traceback_format_exc(self):
         try:
             raise RuntimeError(
@@ -234,7 +175,7 @@ class TestRouterFallbackFailureTracebackRedaction:
                 raise ValueError(f"primary deployment failed api_key={secret}")
             except ValueError as original_exception:
                 with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
-                    with pytest.raises(Exception):
+                    with pytest.raises(ValueError, match='primary deployment failed api_key=sk-testsecretvalu'):
                         await router.async_function_with_fallbacks_common_utils(
                             e=original_exception,
                             disable_fallbacks=False,

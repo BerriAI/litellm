@@ -176,13 +176,16 @@ LLM_CONFIG_NAMES: Final = (
     "BedrockClaudePlatformMessagesConfig",
     "AmazonAnthropicClaudeMessagesConfig",
     "AmazonMantleMessagesConfig",
+    "BedrockMantleAnthropicMessagesConfig",
     "TogetherAIConfig",
+    "TogetherAIChatConfig",
     "NLPCloudConfig",
     "VertexGeminiConfig",
     "GoogleAIStudioGeminiConfig",
     "VertexAIAnthropicConfig",
     "VertexAILlama3Config",
     "VertexAIAi21Config",
+    "VertexAIMistralConfig",
     "AmazonCohereChatConfig",
     "AmazonBedrockGlobalConfig",
     "AmazonAI21Config",
@@ -233,15 +236,19 @@ LLM_CONFIG_NAMES: Final = (
     "OpenAIResponsesAPIConfig",
     "AzureOpenAIResponsesAPIConfig",
     "AzureOpenAIOSeriesResponsesAPIConfig",
+    "AzureAIResponsesAPIConfig",
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "HostedVLLMResponsesAPIConfig",
+    "FireworksAIResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
+    "BedrockOpenAIResponsesConfig",
     "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
+    "VertexAIInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
     "BaseSkillsAPIConfig",
@@ -308,6 +315,8 @@ LLM_CONFIG_NAMES: Final = (
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
     "DashScopeChatConfig",
+    "QwenCloudChatConfig",
+    "QwenAIPlatformChatConfig",
     "ModelScopeChatConfig",
     "MoonshotChatConfig",
     "DockerModelRunnerChatConfig",
@@ -319,6 +328,16 @@ LLM_CONFIG_NAMES: Final = (
     "InceptionChatConfig",
     "HyperbolicChatConfig",
     "VercelAIGatewayConfig",
+    "EdenAIChatConfig",
+    "EdenAIResponsesAPIConfig",
+    "EdenAIAnthropicMessagesConfig",
+    "EdenAIEmbeddingConfig",
+    "EdenAIAudioTranscriptionConfig",
+    "EdenAITextToSpeechConfig",
+    "EdenAIImageGenerationConfig",
+    "EdenAIVideoConfig",
+    "FalAIChatConfig",
+    "FalAIError",
     "OVHCloudChatConfig",
     "OVHCloudEmbeddingConfig",
     "CometAPIEmbeddingConfig",
@@ -739,7 +758,15 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.bedrock.messages.mantle_transformation",
         "AmazonMantleMessagesConfig",
     ),
+    "BedrockMantleAnthropicMessagesConfig": (
+        ".llms.bedrock_mantle.messages.transformation",
+        "BedrockMantleAnthropicMessagesConfig",
+    ),
     "TogetherAIConfig": (".llms.together_ai.chat", "TogetherAIConfig"),
+    "TogetherAIChatConfig": (
+        ".llms.together_ai.chat.transformation",
+        "TogetherAIChatConfig",
+    ),
     "NLPCloudConfig": (".llms.nlp_cloud.chat.handler", "NLPCloudConfig"),
     "VertexGeminiConfig": (
         ".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini",
@@ -760,6 +787,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "VertexAIAi21Config": (
         ".llms.vertex_ai.vertex_ai_partner_models.ai21.transformation",
         "VertexAIAi21Config",
+    ),
+    "VertexAIMistralConfig": (
+        ".llms.vertex_ai.vertex_ai_partner_models.mistral.transformation",
+        "VertexAIMistralConfig",
     ),
     "AmazonCohereChatConfig": (
         ".llms.bedrock.chat.invoke_handler",
@@ -891,6 +922,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "OpenAITextCompletionConfig",
     ),
     "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
+    "BedrockOpenAIResponsesConfig": (
+        ".llms.bedrock.responses.transformation",
+        "BedrockOpenAIResponsesConfig",
+    ),
     "BedrockMantleChatConfig": (
         ".llms.bedrock_mantle.chat.transformation",
         "BedrockMantleChatConfig",
@@ -937,6 +972,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.azure.responses.o_series_transformation",
         "AzureOpenAIOSeriesResponsesAPIConfig",
     ),
+    "AzureAIResponsesAPIConfig": (
+        ".llms.azure_ai.responses.transformation",
+        "AzureAIResponsesAPIConfig",
+    ),
     "XAIResponsesAPIConfig": (
         ".llms.xai.responses.transformation",
         "XAIResponsesAPIConfig",
@@ -948,6 +987,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "HostedVLLMResponsesAPIConfig": (
         ".llms.hosted_vllm.responses.transformation",
         "HostedVLLMResponsesAPIConfig",
+    ),
+    "FireworksAIResponsesAPIConfig": (
+        ".llms.fireworks_ai.responses.transformation",
+        "FireworksAIResponsesAPIConfig",
     ),
     "VolcEngineResponsesAPIConfig": (
         ".llms.volcengine.responses.transformation",
@@ -976,6 +1019,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
         "GoogleAIStudioInteractionsConfig",
+    ),
+    "VertexAIInteractionsConfig": (
+        ".llms.vertex_ai.interactions.transformation",
+        "VertexAIInteractionsConfig",
     ),
     "OpenAIOSeriesConfig": (
         ".llms.openai.chat.o_series_transformation",
@@ -1162,6 +1209,14 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",
     ),
+    "QwenCloudChatConfig": (
+        ".llms.dashscope.qwencloud",
+        "QwenCloudChatConfig",
+    ),
+    "QwenAIPlatformChatConfig": (
+        ".llms.dashscope.qwen_ai_platform",
+        "QwenAIPlatformChatConfig",
+    ),
     "GDCGeminiConfig": (
         ".llms.gdc.chat.transformation",
         "GDCGeminiConfig",
@@ -1192,6 +1247,19 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.vercel_ai_gateway.chat.transformation",
         "VercelAIGatewayConfig",
     ),
+    "EdenAIChatConfig": (".llms.edenai.chat.transformation", "EdenAIChatConfig"),
+    "EdenAIResponsesAPIConfig": (".llms.edenai.responses.transformation", "EdenAIResponsesAPIConfig"),
+    "EdenAIAnthropicMessagesConfig": (".llms.edenai.messages.transformation", "EdenAIAnthropicMessagesConfig"),
+    "EdenAIEmbeddingConfig": (".llms.edenai.embedding.transformation", "EdenAIEmbeddingConfig"),
+    "EdenAIAudioTranscriptionConfig": (
+        ".llms.edenai.audio_transcription.transformation",
+        "EdenAIAudioTranscriptionConfig",
+    ),
+    "EdenAITextToSpeechConfig": (".llms.edenai.text_to_speech.transformation", "EdenAITextToSpeechConfig"),
+    "EdenAIImageGenerationConfig": (".llms.edenai.image_generation.transformation", "EdenAIImageGenerationConfig"),
+    "EdenAIVideoConfig": (".llms.edenai.videos.transformation", "EdenAIVideoConfig"),
+    "FalAIChatConfig": (".llms.fal_ai.chat.transformation", "FalAIChatConfig"),
+    "FalAIError": (".llms.fal_ai.chat.transformation", "FalAIError"),
     "OVHCloudChatConfig": (".llms.ovhcloud.chat.transformation", "OVHCloudChatConfig"),
     "OVHCloudEmbeddingConfig": (
         ".llms.ovhcloud.embedding.transformation",
