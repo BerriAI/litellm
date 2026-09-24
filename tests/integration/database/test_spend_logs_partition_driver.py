@@ -22,6 +22,9 @@ IMAGE_DOCKERFILES: Final = (
     REPO_ROOT / "Dockerfile",
     REPO_ROOT / "docker" / "Dockerfile.database",
     REPO_ROOT / "docker" / "Dockerfile.non_root",
+    REPO_ROOT / "backend" / "Dockerfile",
+    REPO_ROOT / "gateway" / "Dockerfile",
+    REPO_ROOT / "migrations" / "Dockerfile",
 )
 PURE_PYTHON_DRIVER: Final = {"PSYCOPG_IMPL": "python"}
 
