@@ -98,8 +98,6 @@ def test_get_models_returns_every_prefixed_id(valid_credential):
 
 
 def test_get_models_sends_the_copilot_integration_headers(valid_credential):
-    # Copilot scopes the catalog to the integration id, so listing has to send the same headers the
-    # completion path sends. This transport answers with whatever credentials it was handed.
     def echo_headers(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -134,8 +132,6 @@ def test_get_models_bounds_the_request_so_a_slow_copilot_cannot_stall_the_caller
 
 
 def test_get_models_honours_an_explicit_api_base(valid_credential):
-    # The transport serves a catalog at this base only and 404s anything else, so a listing that
-    # ignored the argument would raise instead of returning.
     model_info = GithubCopilotModelInfo(
         valid_credential, _copilot(_serving(MODELS_PAYLOAD, base="https://copilot.example.com"))
     )
@@ -144,8 +140,6 @@ def test_get_models_honours_an_explicit_api_base(valid_credential):
 
 
 def test_get_models_ignores_an_explicit_api_key_so_listing_matches_completions(valid_credential):
-    # Completions always authenticate with the cached Copilot credential, so listing must too.
-    # This transport only serves the caller presenting that credential.
     model_info = GithubCopilotModelInfo(valid_credential, _copilot(_serving(MODELS_PAYLOAD)))
 
     assert model_info.get_models(api_key="a-different-accounts-key", api_base=API_BASE) == EXPECTED_MODELS
