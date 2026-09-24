@@ -3204,9 +3204,8 @@ class Router:
 
         Full parity with the chat-completions path:
           - Pre-first-chunk: retry with the original input unchanged.
-          - Partial content: inject a developer instruction + prior
-            assistant message carrying the generated text so the fallback
-            model continues rather than restarts.
+          - Delivered output: surface the original error rather than
+            restarting an output item or tool call on a fallback.
           - Usage combining: merge partial-stream usage onto the fallback's
             response.completed event so accounting reflects both attempts.
           - Stream cleanup: shielded aclose() on both source and fallback
@@ -3336,10 +3335,17 @@ class Router:
 
         async def stream_with_fallbacks():
             fallback_response = None
+            has_forwarded_output = False
             try:
                 async for item in source_iterator:
+                    if isinstance(getattr(item, "output_index", None), int):
+                        has_forwarded_output = True
                     yield item
             except MidStreamFallbackError as e:
+                if has_forwarded_output:
+                    if e.original_exception is not None:
+                        raise e.original_exception from e
+                    raise
                 partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
                 try:
                     model_group: Final = cast(str, initial_kwargs.get("model"))
