@@ -13,6 +13,12 @@ mod tokenizer;
 
 #[pymodule(gil_used = true)]
 mod _native {
+    #[pymodule_export]
+    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
+    use pyo3::{prelude::*, types::PyModule};
+
+    #[pymodule_export]
+    use crate::cache::Cache;
     use crate::cache::{CacheResolver, CacheTestHandle, ResolvedCache};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -44,9 +50,6 @@ mod _native {
     use crate::tokenizer::HuggingFaceEncoding;
     #[pymodule_export]
     use crate::tokenizer::Tokenizer;
-    #[pymodule_export]
-    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
-    use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -56,6 +59,7 @@ mod _native {
         dict.set_item("_CacheResolver", py.get_type::<CacheResolver>())?;
         dict.set_item("_CacheTestResolver", py.get_type::<CacheResolver>())?;
         dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())?;
+        crate::cache::capture_method_table(py)?;
         dict.set_item(
             "_SecretManagerRuntime",
             py.get_type::<crate::secrets::runtime::NativeSecretManager>(),
@@ -79,6 +83,7 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let mut expected = vec![
+                "Cache",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",

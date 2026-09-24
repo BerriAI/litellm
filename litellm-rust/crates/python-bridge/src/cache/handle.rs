@@ -1,4 +1,3 @@
-use crate::logger::run_sync_value;
 use litellm_auth_aws::AwsAuthConfig;
 use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
 use litellm_cache_qdrant_semantic::{OpenAiEmbedderConfig, Quantization};
@@ -18,16 +17,17 @@ use super::{
     cache_error,
     config::{QdrantSemanticCacheConfig, project_redis_semantic},
     embedder::PythonEmbedder,
-    facade::FacadeGuard,
+    facade::{Cache, NativeStorage},
+    guard::FacadeGuard,
     host_client,
     native::NativeResponseCache,
     request::duration,
 };
+use crate::logger::run_sync_value;
 
 #[pyclass(frozen, name = "_CacheTestHandle")]
 pub(crate) struct CacheTestHandle {
     service: NativeResponseCache,
-    pub(super) guard: Option<FacadeGuard>,
     pid: u32,
 }
 
@@ -49,7 +49,6 @@ impl CacheTestHandle {
     fn memory(capacity: usize, ttl_seconds: f64, max_entry_bytes: usize) -> PyResult<Self> {
         Ok(Self {
             service: NativeResponseCache::memory(capacity, duration(ttl_seconds)?, max_entry_bytes),
-            guard: None,
             pid: std::process::id(),
         })
     }
@@ -79,7 +78,6 @@ impl CacheTestHandle {
         .map_err(cache_error)?;
         Ok(Self {
             service,
-            guard: None,
             pid: std::process::id(),
         })
     }
@@ -116,7 +114,6 @@ impl CacheTestHandle {
         })?;
         Ok(Self {
             service,
-            guard: None,
             pid: std::process::id(),
         })
     }
@@ -141,7 +138,6 @@ impl CacheTestHandle {
         let service = NativeResponseCache::gcs(config, client, token);
         Ok(Self {
             service,
-            guard: None,
             pid: std::process::id(),
         })
     }
@@ -153,7 +149,6 @@ impl CacheTestHandle {
             release_gil(py, move || NativeResponseCache::disk(&directory)).map_err(cache_error)?;
         Ok(Self {
             service,
-            guard: None,
             pid: std::process::id(),
         })
     }
@@ -249,7 +244,6 @@ impl CacheTestHandle {
         })?;
         Ok(Self {
             service,
-            guard: None,
             pid: std::process::id(),
         })
     }
@@ -272,7 +266,6 @@ impl CacheTestHandle {
         .map_err(cache_error)?;
         Ok(Self {
             service,
-            guard: None,
             pid: std::process::id(),
         })
     }
@@ -288,7 +281,6 @@ impl CacheTestHandle {
         })?;
         Ok(Self {
             service,
-            guard: None,
             pid: std::process::id(),
         })
     }
@@ -318,7 +310,6 @@ impl CacheTestHandle {
         .map_err(cache_error)?;
         Ok(Self {
             service,
-            guard: None,
             pid: std::process::id(),
         })
     }
@@ -328,8 +319,16 @@ impl CacheTestHandle {
         self.service.kind()
     }
 
+    /// Binds this handle's backend as `facade`'s native storage, the way the rollout catalog
+    /// would have at construction. Only an exact built-in facade whose configuration describes
+    /// this backend qualifies.
     fn _bind_facade(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<()> {
         let service = self.service()?;
+        if !facade.get_type().is(py.get_type::<Cache>()) {
+            return Err(PyTypeError::new_err(
+                "only exact built-in Cache facades can be registered",
+            ));
+        }
         let guard = FacadeGuard::capture(py, facade, &service)?;
         let service = service
             .with_scope(
@@ -342,22 +341,13 @@ impl CacheTestHandle {
                     .getattr("redis_flush_size")?
                     .extract::<Option<usize>>()?,
             );
-        let handle = Py::new(
-            py,
-            Self {
-                service,
-                guard: Some(guard),
-                pid: self.pid,
-            },
-        )?;
-        facade.setattr("_native_cache_handle", handle)
+        facade
+            .cast::<Cache>()?
+            .get()
+            .bind_native(py, NativeStorage::new(service, guard))
     }
 
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.service.traverse(&visit)?;
-        if let Some(guard) = &self.guard {
-            guard.traverse(visit)?;
-        }
-        Ok(())
+        self.service.traverse(&visit)
     }
 }

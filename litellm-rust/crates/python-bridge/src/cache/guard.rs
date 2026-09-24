@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use super::{
     config::{CacheConfigProjection, NativeCacheConfig},
-    handle::CacheTestHandle,
+    facade::Cache,
     identity::BackendIdentity,
     native::NativeResponseCache,
 };
@@ -80,15 +80,48 @@ const CLUSTER_POOL: RedisPoolAttributes = RedisPoolAttributes {
 
 const VALKEY_POOL: RedisPoolAttributes = STANDALONE_POOL;
 
-/// Class-level defaults an instance overwrites with its own state rather than behavior:
-/// `Cache._native_cache` holds the runtime `Cache.__init__` resolved.
-const INSTANCE_STATE: &[&str] = &["_native_cache"];
+struct ConfigGuard {
+    reference: Py<PyAny>,
+    config: Vec<Value>,
+}
+
+const FACADE_CONFIG: &[&str] = &[
+    "type",
+    "mode",
+    "ttl",
+    "namespace",
+    "supported_call_types",
+    "redis_flush_size",
+    "semantic_cache_scope",
+];
 
 pub(super) struct FacadeGuard {
-    outer: ObjectGuard,
+    facade: ConfigGuard,
     backend: ObjectGuard,
     disk_store: Option<DiskStoreGuard>,
     connection: ConnectionGuard,
+}
+
+impl ConfigGuard {
+    fn capture(py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            reference: py
+                .import("weakref")?
+                .getattr("ref")?
+                .call1((facade,))?
+                .unbind(),
+            config: ObjectGuard::config(facade, FACADE_CONFIG)?,
+        })
+    }
+
+    fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
+        Ok(self.reference.bind(py).call0()?.is(facade)
+            && ObjectGuard::config(facade, FACADE_CONFIG)? == self.config)
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.reference)
+    }
 }
 
 impl ObjectGuard {
@@ -170,9 +203,7 @@ impl ObjectGuard {
                 return Ok(false);
             }
             for (name, value) in &expected.attributes {
-                if (instance.contains(name)?
-                    && !self.config_names.contains(&name.as_str())
-                    && !INSTANCE_STATE.contains(&name.as_str()))
+                if (instance.contains(name)? && !self.config_names.contains(&name.as_str()))
                     || !attributes.get_item(name)?.is(value.bind(py))
                 {
                     return Ok(false);
@@ -361,8 +392,7 @@ impl FacadeGuard {
     ) -> PyResult<Self> {
         let identity = service.identity();
         let kind = identity.kind();
-        let cache_type = py.import("litellm.caching.caching")?.getattr("Cache")?;
-        if !facade.get_type().is(&cache_type) {
+        if !facade.get_type().is(py.get_type::<Cache>()) {
             return Err(PyTypeError::new_err(
                 "only exact built-in Cache facades can be registered",
             ));
@@ -421,19 +451,7 @@ impl FacadeGuard {
             ));
         }
         Ok(Self {
-            outer: ObjectGuard::capture(
-                py,
-                facade,
-                &[
-                    "type",
-                    "mode",
-                    "ttl",
-                    "namespace",
-                    "supported_call_types",
-                    "redis_flush_size",
-                    "semantic_cache_scope",
-                ],
-            )?,
+            facade: ConfigGuard::capture(py, facade)?,
             backend: ObjectGuard::capture(
                 py,
                 &backend,
@@ -473,7 +491,7 @@ impl FacadeGuard {
     }
 
     pub(super) fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
-        if !self.outer.matches(py, facade)? {
+        if !self.facade.matches(py, facade)? {
             return Ok(false);
         }
         let backend = facade.getattr("cache")?;
@@ -489,36 +507,11 @@ impl FacadeGuard {
     }
 
     pub(super) fn traverse(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.outer.traverse(&visit)?;
+        self.facade.traverse(&visit)?;
         self.backend.traverse(&visit)?;
         if let Some(guard) = &self.disk_store {
             guard.traverse(&visit)?;
         }
         self.connection.traverse(&visit)
     }
-}
-
-pub(super) fn resolve(
-    py: Python<'_>,
-    facade: &Bound<'_, PyAny>,
-) -> PyResult<Option<NativeResponseCache>> {
-    let Ok(dict) = facade
-        .getattr("__dict__")
-        .and_then(|dict| dict.cast_into::<PyDict>().map_err(Into::into))
-    else {
-        return Ok(None);
-    };
-    let Some(handle) = dict.get_item("_native_cache_handle")? else {
-        return Ok(None);
-    };
-    let Ok(handle) = handle.extract::<PyRef<'_, CacheTestHandle>>() else {
-        return Ok(None);
-    };
-    let Some(guard) = &handle.guard else {
-        return Ok(None);
-    };
-    if !guard.matches(py, facade).unwrap_or(false) {
-        return Ok(None);
-    }
-    handle.service().map(Some)
 }

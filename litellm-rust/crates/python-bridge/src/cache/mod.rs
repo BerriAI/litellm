@@ -5,6 +5,7 @@ mod config;
 mod embedder;
 mod facade;
 mod future;
+mod guard;
 mod handle;
 mod identity;
 mod native;
@@ -20,7 +21,12 @@ use pyo3::{
     types::PyDict,
 };
 
-pub(crate) use self::{binding::ResolvedCache, handle::CacheTestHandle, resolver::CacheResolver};
+pub(crate) use self::{
+    binding::ResolvedCache,
+    facade::{Cache, capture_method_table},
+    handle::CacheTestHandle,
+    resolver::CacheResolver,
+};
 
 fn cache_error(error: Error) -> PyErr {
     match error {

@@ -18,7 +18,6 @@ from litellm.caching.valkey_semantic_cache import ValkeySemanticCache
 from litellm.rust_bridge import _native, catalog
 from litellm.rust_bridge.catalog import CacheRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.response_cache import ResponseCacheRuntime
 from litellm.types.caching import LiteLLMCacheType
 
 pytestmark: Final = pytest.mark.requires_rust_extension
@@ -613,9 +612,7 @@ async def test_rust_required_rule_activates_the_facade_natively(
         (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({LiteLLMCacheType.VALKEY_SEMANTIC})),),
     )
     facade: Final = _facade(valkey_url, index_name, {"semantic cache prompt": [1.0, 0.0]})
-    runtime: Final = facade._native_cache  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
-    assert isinstance(runtime, ResponseCacheRuntime)
-    assert runtime.kind == "native"
+    assert _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "native"
     kwargs: Final = {"model": "gpt-4o", "messages": _request()["messages"]}
     await facade.async_add_cache({"answer": "valkey"}, **kwargs)
     assert await facade.async_get_cache(**kwargs) == {"answer": "valkey"}
