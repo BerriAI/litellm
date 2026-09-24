@@ -8,6 +8,7 @@ import { toast } from "@/lib/toast";
 import type { Team } from "../key_team_helpers/key_list";
 import type { EffectiveMcpServer } from "../mcp_server_management/effectiveMcpServers";
 import type { MCPServer } from "../mcp_tools/types";
+import { MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES } from "./memberBudgetReset";
 import TeamInfoView, {
   grantedMcpServerIds,
   type McpGrantInput,
@@ -2966,7 +2967,7 @@ describe("TeamInfo MCP permission retention", () => {
   });
 });
 
-describe("TeamInfoView - member budget apply-all prompt", () => {
+describe("TeamInfoView - member budget reset prompt", () => {
   const props = {
     teamId: "123",
     onUpdate: vi.fn(),
@@ -3019,7 +3020,7 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
 
   const openEditorWithCustomMembers = async (
     user: ReturnType<typeof userEvent.setup>,
-    userIds: string[] = ["user-custom@x.com"],
+    userIds: string[] = ["user-custom"],
     maxBudget: number | null = 50,
   ) => {
     const data = {
@@ -3061,7 +3062,7 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
 
     expect(await screen.findByText("Reset member budgets?")).toBeInTheDocument();
     expect(screen.getByText(/1 member has a custom budget/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reset to $20" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reset to $20.00" })).toBeInTheDocument();
     expect(networking.teamUpdateCall).not.toHaveBeenCalled();
     expect(bulkUpdatePOST).not.toHaveBeenCalled();
   });
@@ -3081,18 +3082,18 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
 
   it("saves the new default then clears each custom budget through the bulk endpoint on reset all", async () => {
     const user = userEvent.setup({ delay: null });
-    const input = await openEditorWithCustomMembers(user, ["user-a@x.com", "user-b@x.com"]);
+    const input = await openEditorWithCustomMembers(user, ["user-a", "user-b"]);
     bulkUpdatePOST.mockResolvedValue({
       data: {
         data: [
-          { success: true, user_id: "user-a@x.com" },
-          { success: true, user_id: "user-b@x.com" },
+          { success: true, user_id: "user-a" },
+          { success: true, user_id: "user-b" },
         ],
       },
     });
 
     await submitNewDefault(user, input, "20");
-    await user.click(await screen.findByRole("button", { name: "Reset all to $20" }));
+    await user.click(await screen.findByRole("button", { name: "Reset all to $20.00" }));
 
     await waitFor(() => expect(bulkUpdatePOST).toHaveBeenCalledTimes(1));
     expect(networking.teamUpdateCall).toHaveBeenCalled();
@@ -3101,8 +3102,8 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
       params: { path: { team_id: "123" } },
       body: {
         members: [
-          { user_id: "user-a@x.com", max_budget_in_team: null },
-          { user_id: "user-b@x.com", max_budget_in_team: null },
+          { user_id: "user-a", max_budget_in_team: null },
+          { user_id: "user-b", max_budget_in_team: null },
         ],
       },
     });
@@ -3117,23 +3118,25 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
     bulkUpdatePOST.mockImplementationOnce(() => bulk.promise);
 
     await submitNewDefault(user, input, "20");
-    await user.click(await screen.findByRole("button", { name: "Reset to $20" }));
+    await user.click(await screen.findByRole("button", { name: "Reset to $20.00" }));
 
     await waitFor(() => expect(bulkUpdatePOST).toHaveBeenCalled());
     expect(screen.getByText("Reset member budgets?")).toBeInTheDocument();
     expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
 
-    bulk.resolve({ data: { data: [{ success: true, user_id: "user-custom@x.com" }] } });
+    bulk.resolve({ data: { data: [{ success: true, user_id: "user-custom" }] } });
     await waitFor(() => expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument());
   });
 
-  it("refreshes team data when the reset request fails after the save", async () => {
+  it("offers a retry after a failed reset and never re-saves the team", async () => {
     const user = userEvent.setup({ delay: null });
     const input = await openEditorWithCustomMembers(user);
-    bulkUpdatePOST.mockRejectedValue(new Error("bulk update down"));
+    bulkUpdatePOST
+      .mockRejectedValueOnce(new Error("bulk update down"))
+      .mockResolvedValueOnce({ data: { data: [{ success: true, user_id: "user-custom" }] } });
 
     await submitNewDefault(user, input, "20");
-    await user.click(await screen.findByRole("button", { name: "Reset to $20" }));
+    await user.click(await screen.findByRole("button", { name: "Reset to $20.00" }));
 
     await waitFor(() =>
       expect(toast.fromError).toHaveBeenCalledWith("Team updated, but member budgets could not be reset"),
@@ -3141,22 +3144,86 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
     expect(screen.getByText("Reset member budgets?")).toBeInTheDocument();
     expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
     await waitFor(() => expect(vi.mocked(networking.teamInfoCall).mock.calls.length).toBeGreaterThan(1));
+
+    await user.click(screen.getByRole("button", { name: "Retry reset" }));
+
+    await waitFor(() => expect(bulkUpdatePOST).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls).toHaveLength(1);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Reset 1 member budget to the team default"));
+    await waitFor(() => expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument());
+  });
+
+  it("returns to the prompt without its own toast when the team save fails", async () => {
+    const user = userEvent.setup({ delay: null });
+    const input = await openEditorWithCustomMembers(user);
+    vi.mocked(networking.teamUpdateCall).mockRejectedValueOnce(new Error("save failed"));
+
+    await submitNewDefault(user, input, "20");
+    await user.click(await screen.findByRole("button", { name: "Reset to $20.00" }));
+
+    expect(await screen.findByRole("button", { name: "Reset to $20.00" })).toBeEnabled();
+    expect(bulkUpdatePOST).not.toHaveBeenCalled();
+    expect(toast.fromError).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+  });
+
+  it("reports how many budgets were already reset when a later batch fails", async () => {
+    const user = userEvent.setup({ delay: null });
+    const userIds = Array.from({ length: MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES + 1 }, (_, i) => `user-${i}`);
+    const input = await openEditorWithCustomMembers(user, userIds);
+    bulkUpdatePOST
+      .mockResolvedValueOnce({
+        data: {
+          data: userIds.slice(0, MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES).map((user_id) => ({ success: true, user_id })),
+        },
+      })
+      .mockRejectedValueOnce(new Error("second batch down"))
+      .mockResolvedValueOnce({
+        data: { data: [{ success: true, user_id: `user-${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES}` }] },
+      });
+
+    await submitNewDefault(user, input, "20");
+    await user.click(await screen.findByRole("button", { name: "Reset all to $20.00" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        `Reset ${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES} of ${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES + 1} member budgets; the rest could not be reset`,
+      ),
+    );
+    expect(bulkUpdatePOST).toHaveBeenCalledTimes(2);
+
+    await user.click(screen.getByRole("button", { name: "Retry reset" }));
+
+    await waitFor(() => expect(bulkUpdatePOST).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(bulkUpdatePOST).mock.calls[2][1]).toEqual({
+      params: { path: { team_id: "123" } },
+      body: {
+        members: [{ user_id: `user-${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES}`, max_budget_in_team: null }],
+      },
+    });
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls).toHaveLength(1);
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        `Reset ${MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES + 1} member budgets to the team default`,
+      ),
+    );
   });
 
   it("surfaces a failure toast when some members cannot be reset", async () => {
     const user = userEvent.setup({ delay: null });
-    const input = await openEditorWithCustomMembers(user, ["user-a@x.com", "user-b@x.com"]);
+    const input = await openEditorWithCustomMembers(user, ["user-a", "user-b"]);
     bulkUpdatePOST.mockResolvedValue({
       data: {
         data: [
-          { success: true, user_id: "user-a@x.com" },
-          { success: false, user_id: "user-b@x.com", error: "no such member" },
+          { success: true, user_id: "user-a" },
+          { success: false, user_id: "user-b", error: "no such member" },
         ],
       },
     });
 
     await submitNewDefault(user, input, "20");
-    await user.click(await screen.findByRole("button", { name: "Reset all to $20" }));
+    await user.click(await screen.findByRole("button", { name: "Reset all to $20.00" }));
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith("Team updated, but 1 member budget could not be reset"),
@@ -3201,7 +3268,7 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
 
   it("saves directly when a custom member's cap is null and already inherits the default", async () => {
     const user = userEvent.setup({ delay: null });
-    const input = await openEditorWithCustomMembers(user, ["user-limits-only@x.com"], null);
+    const input = await openEditorWithCustomMembers(user, ["user-limits-only"], null);
 
     await submitNewDefault(user, input, "20");
 
