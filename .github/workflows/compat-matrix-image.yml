@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - tests/e2e/claude_code/cron_vm/**
+      - tests/e2e/claude_code/pr_gate_version_resolver.py
       - .github/workflows/compat-matrix-image.yml
   workflow_dispatch:
 
@@ -28,6 +29,14 @@ jobs:
       - name: Build the Render cron image
         run: docker build -f tests/e2e/claude_code/cron_vm/Dockerfile -t compat-matrix:${{ github.sha }} tests/e2e
 
-      - name: Run the pinned binaries as the cron user
+      - name: Resolve and install the Claude Code CLI as the cron user
         run: |
-          docker run --rm compat-matrix:${{ github.sha }} bash -c 'set -e; whoami; claude --version; gh --version; uv --version'
+          docker run --rm compat-matrix:${{ github.sha }} bash -c '
+            set -euo pipefail
+            whoami
+            gh --version
+            uv --version
+            version="$(uv run --no-project --python 3.12 python /opt/litellm/tests/e2e/claude_code/pr_gate_version_resolver.py)"
+            /opt/litellm/tests/e2e/claude_code/cron_vm/install_claude_code.sh "${version}" /tmp/claude-cli
+            /tmp/claude-cli/claude --version
+          '
