@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 from typing import Final
@@ -68,3 +69,25 @@ def test_without_the_switch_the_hooks_are_maturins() -> None:
     )
     assert result.returncode == 0, f"returncode={result.returncode} stderr={result.stderr}"
     assert result.stdout.strip() == "True", result.stdout
+
+
+def test_sdist_carries_the_build_backend(tmp_path: Path) -> None:
+    result: Final = subprocess.run(
+        [
+            sys.executable,
+            "-P",
+            "-c",
+            "import sys, litellm_build_backend as b; print(b.build_sdist(sys.argv[1]))",
+            str(tmp_path),
+        ],
+        cwd=REPO_ROOT,
+        env=_backend_env(),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"returncode={result.returncode} stderr={result.stderr}"
+    sdist: Final = tmp_path / result.stdout.strip().splitlines()[-1]
+    assert sdist.is_file(), f"sdist not produced: stdout={result.stdout} stderr={result.stderr}"
+    names: Final = tuple(tarfile.open(sdist).getnames())
+    assert any(name.endswith("scripts/litellm_build_backend.py") for name in names), names
+    assert any(name.endswith("/pyproject.toml") for name in names), names

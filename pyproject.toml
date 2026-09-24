@@ -320,6 +320,7 @@ include = [
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/client/cli/commands/codex_base_instructions.md",
+    { path = "scripts/litellm_build_backend.py", format = "sdist" },
 ]
 exclude = [
     "litellm/proxy/enterprise",
