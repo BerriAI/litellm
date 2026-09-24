@@ -9437,20 +9437,37 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
 
 async def test_rotate_master_key_refuses_without_pynacl_before_touching_any_row(monkeypatch):
     import sys
+    from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
     from fastapi import HTTPException
 
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _rotate_master_key,
     )
 
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-rotate")
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+    legacy_row = SimpleNamespace(litellm_params={"api_key": encrypt_value_helper("legacy-secret")})
+    monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setitem(sys.modules, "nacl", None)
     monkeypatch.setitem(sys.modules, "nacl.secret", None)
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db = MagicMock()
-    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[legacy_row])
+    mock_prisma_client.db.litellm_proxymodeltable.update_many = AsyncMock()
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    empty_tables = (
+        "litellm_credentialstable",
+        "litellm_mcpservertable",
+        "litellm_mcpusercredentials",
+        "litellm_mcpuserenvvars",
+    )
+    for table in empty_tables:
+        getattr(mock_prisma_client.db, table).find_many = AsyncMock(return_value=[])
 
     with pytest.raises(HTTPException) as exc_info:
         await _rotate_master_key(
@@ -9462,7 +9479,8 @@ async def test_rotate_master_key_refuses_without_pynacl_before_touching_any_row(
 
     assert exc_info.value.status_code == 400
     assert "legacy-encryption" in exc_info.value.detail["error"]
-    mock_prisma_client.db.litellm_proxymodeltable.find_many.assert_not_awaited()
+    mock_prisma_client.db.litellm_proxymodeltable.update_many.assert_not_awaited()
+    mock_prisma_client.db.tx.assert_not_called()
 
 
 async def test_default_key_generate_params_duration(monkeypatch):

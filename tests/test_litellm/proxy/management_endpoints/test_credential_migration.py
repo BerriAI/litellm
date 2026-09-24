@@ -130,17 +130,31 @@ async def test_migrate_requires_aes_gate(salt_key, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_migrate_and_check_refuse_without_pynacl_instead_of_miscounting_legacy_rows(salt_key, monkeypatch):
+    legacy: Final = _legacy_ct("model-secret", monkeypatch)
+    _enable_aes(monkeypatch)
     monkeypatch.setitem(sys.modules, "nacl", None)
     monkeypatch.setitem(sys.modules, "nacl.secret", None)
     client: Final = MagicMock()
     _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.update = AsyncMock()
 
-    with pytest.raises(RuntimeError, match="legacy-encryption"):
-        await cm.migrate_encryption(prisma_client=client, user_api_key_dict=MagicMock())
+    v3_only: Final = await cm.check_encryption(prisma_client=client)
+    assert v3_only.residual_legacy == 0
+
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(litellm_params={"api_key": legacy})]
+    )
+    client.db.litellm_proxymodeltable.update_many = AsyncMock()
     with pytest.raises(RuntimeError, match="legacy-encryption"):
         await cm.check_encryption(prisma_client=client)
-    for _, db_attr, _, _ in cm._COVERED_TABLE_SPECS:
-        getattr(client.db, db_attr).find_many.assert_not_awaited()
+    with pytest.raises(RuntimeError, match="legacy-encryption"):
+        await cm.migrate_encryption(prisma_client=client, user_api_key_dict=MagicMock())
+    client.db.litellm_proxymodeltable.update_many.assert_not_awaited()
+    client.db.litellm_config.update.assert_not_awaited()
 
 
 # --------------------------- config-row walker ---------------------------

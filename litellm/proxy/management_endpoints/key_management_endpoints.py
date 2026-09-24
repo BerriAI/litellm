@@ -81,7 +81,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     LegacyEncryptionUnavailableError,
-    require_legacy_reader,
+    legacy_encryption_available,
 )
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
@@ -5156,6 +5156,16 @@ async def delete_key_aliases(
     )
 
 
+async def _require_legacy_reader_for_stored_values(prisma_client: PrismaClient) -> None:
+    """Without PyNaCl, scan the rotation covered tables read only so an unprefixed stored value refuses the
+    rotation before any row is rewritten. A fully migrated store passes; with PyNaCl installed nothing runs"""
+    if legacy_encryption_available():
+        return
+    from litellm.proxy.management_endpoints.credential_migration import _scan_covered_tables
+
+    await _scan_covered_tables(prisma_client)
+
+
 async def _rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
@@ -5180,7 +5190,7 @@ async def _rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        require_legacy_reader("rotate the master key")
+        await _require_legacy_reader_for_stored_values(prisma_client)
     except LegacyEncryptionUnavailableError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

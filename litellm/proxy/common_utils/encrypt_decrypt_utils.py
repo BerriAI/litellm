@@ -1,7 +1,7 @@
 import base64
 import hashlib
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from pydantic import TypeAdapter, ValidationError
@@ -221,13 +221,20 @@ def legacy_encryption_available() -> bool:
     return True
 
 
-def require_legacy_reader(purpose: str) -> None:
-    """Refuse a decrypt-then-rewrite pass when PyNaCl is missing: every unprefixed value would read as
-    unreadable and be dropped, double wrapped or miscounted as plaintext, so the pass cannot be trusted."""
-    if not legacy_encryption_available():
-        raise LegacyEncryptionUnavailableError(
-            f"Cannot {purpose}: PyNaCl is needed to read legacy {_ALGO_XSALSA20} values. {_LEGACY_ENCRYPTION_HELP}"
-        )
+def needs_legacy_reader(value: object) -> bool:
+    """True for a stored string that only PyNaCl can tell apart from plaintext: non empty and unprefixed."""
+    return isinstance(value, str) and value != "" and not is_versioned_gcm(value)
+
+
+def require_legacy_reader_for(values: Iterable[object], purpose: str) -> None:
+    """Refuse a decrypt-then-rewrite pass when PyNaCl is missing and one of the values is unprefixed: it would
+    read as unreadable and be dropped, double wrapped or miscounted as plaintext. Versioned gcm and non string
+    values never need PyNaCl, so a fully migrated store passes."""
+    if legacy_encryption_available() or not any(needs_legacy_reader(value) for value in values):
+        return
+    raise LegacyEncryptionUnavailableError(
+        f"Cannot {purpose}: PyNaCl is needed to read legacy {_ALGO_XSALSA20} values. {_LEGACY_ENCRYPTION_HELP}"
+    )
 
 
 def _legacy_secret_box(signing_key: str, purpose: str) -> "SecretBox":

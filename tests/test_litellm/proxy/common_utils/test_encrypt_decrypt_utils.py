@@ -29,7 +29,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
     is_versioned_gcm,
     legacy_encryption_available,
-    require_legacy_reader,
+    require_legacy_reader_for,
 )
 from litellm.proxy.common_utils.fips import FipsModeError
 
@@ -198,13 +198,17 @@ def test_legacy_ciphertext_without_pynacl_logs_the_reencrypt_path_and_never_retu
     assert "legacy-secret" not in caplog.text
 
 
-def test_require_legacy_reader_refuses_rewrite_passes_without_pynacl(monkeypatch):
-    require_legacy_reader("rotate the master key")
+def test_require_legacy_reader_for_refuses_only_unprefixed_values_without_pynacl(monkeypatch):
+    legacy = _legacy_nacl_ciphertext("legacy-secret", _sha256_key())
+    v3 = encrypt_value_helper("v3-secret")
+    require_legacy_reader_for((legacy, v3, "plain"), "rotate the master key")
     monkeypatch.setitem(sys.modules, "nacl", None)
     monkeypatch.setitem(sys.modules, "nacl.secret", None)
 
-    with pytest.raises(LegacyEncryptionUnavailableError, match=r"rotate the master key.*legacy-encryption"):
-        require_legacy_reader("rotate the master key")
+    require_legacy_reader_for((v3, "", None, 3), "rotate the master key")
+    for unreadable in (legacy, "plain-or-legacy"):
+        with pytest.raises(LegacyEncryptionUnavailableError, match=r"rotate the master key.*legacy-encryption"):
+            require_legacy_reader_for((v3, unreadable), "rotate the master key")
 
 
 def test_legacy_opt_in_without_pynacl_fails_the_write_not_silently(monkeypatch):

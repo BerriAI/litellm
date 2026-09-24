@@ -49,7 +49,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
     is_versioned_gcm,
-    require_legacy_reader,
+    require_legacy_reader_for,
 )
 
 ValueClass = Literal["migrated", "legacy", "plaintext", "undecryptable", "not-a-string"]
@@ -148,6 +148,7 @@ def classify_value(value: object, key: str = "scan") -> ValueClass:
         return "plaintext"
     if is_versioned_gcm(value):
         return "migrated"
+    require_legacy_reader_for((value,), "scan stored encryption")
     decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
     if decrypted is None:
         # Did not decrypt under nacl and has no v2 marker: legacy plaintext.
@@ -167,6 +168,7 @@ def reencrypt_value(value: object, key: str = "migrate") -> object:
         return value
     if is_versioned_gcm(value):
         return value  # idempotent: already migrated
+    require_legacy_reader_for((value,), "migrate stored encryption")
     decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
     if decrypted is None:
         # Either legacy plaintext (no ciphertext to migrate) or corrupt. Either
@@ -634,7 +636,6 @@ async def migrate_encryption(
     net-new walkers run in dry-run mode.
     """
     _assert_aes_gate_enabled()
-    require_legacy_reader("migrate stored encryption")
 
     report: Final = MigrationReport()
 
@@ -667,7 +668,6 @@ async def check_encryption(prisma_client: object) -> MigrationReport:
     config rows, SSO config). Reports how many values are still ``legacy``;
     ``residual_legacy == 0`` across this full scan is the compliance attestation.
     """
-    require_legacy_reader("scan stored encryption")
     report: Final = MigrationReport()
 
     # Rotation-covered tables (read-only classification).
