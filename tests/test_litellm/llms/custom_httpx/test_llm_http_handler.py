@@ -407,11 +407,9 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
     config = Mock()
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
-    config.transform_responses_api_request.return_value = {
-        "model": "gpt-5.3-codex",
-        "input": "hi",
-        "stream": True,
-    }
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5.3-codex", "input": "hi", "stream": True}
+    )
     config.sign_request.return_value = ({}, None)
     client = AsyncHTTPHandler()
     client.post = AsyncMock(
@@ -447,7 +445,9 @@ async def test_async_response_api_handler_streaming_passes_logging_obj_to_post()
     config = Mock()
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
-    config.transform_responses_api_request.return_value = {"model": "gpt-5", "input": "hi", "stream": True}
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5", "input": "hi", "stream": True}
+    )
     config.sign_request.return_value = ({}, None)
     client = AsyncHTTPHandler()
     client.post = AsyncMock(
@@ -470,6 +470,41 @@ async def test_async_response_api_handler_streaming_passes_logging_obj_to_post()
     )
 
     assert client.post.call_args.kwargs["logging_obj"] is logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_posts_the_async_transform_hook_result():
+    """A provider whose request transform must await (Bedrock inlines remote image URLs)
+    overrides the async hook; the async handler has to send that result, not the sync one."""
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5", "input": "inlined by the async hook", "stream": True}
+    )
+    config.sign_request.return_value = ({}, None)
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    await handler.async_response_api_handler(
+        model="gpt-5",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        client=client,
+    )
+
+    assert client.post.call_args.kwargs["json"]["input"] == "inlined by the async hook"
+    config.transform_responses_api_request.assert_not_called()
 
 
 @pytest.mark.asyncio

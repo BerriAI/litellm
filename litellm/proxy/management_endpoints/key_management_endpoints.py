@@ -108,6 +108,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    invalidate_cached_object_permissions,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
@@ -2839,7 +2840,14 @@ async def _process_single_key_update(
         await prisma_client.update_data(token=key_request.key, data=_data),
     )
 
-    # Delete cache
+    # Permission row first: a key-object miss between the two evictions would re-cache stale grants
+    await invalidate_cached_object_permissions(
+        object_permission_ids=(
+            existing_key_row.object_permission_id,
+            non_default_values.get("object_permission_id"),
+        ),
+        user_api_key_cache=user_api_key_cache,
+    )
     await _delete_cache_key_object(
         hashed_token=_hash_token_if_needed(key_request.key),
         user_api_key_cache=user_api_key_cache,
@@ -3455,6 +3463,13 @@ async def update_key_fn(
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
+        await invalidate_cached_object_permissions(
+            object_permission_ids=(
+                existing_key_row.object_permission_id,
+                non_default_values.get("object_permission_id"),
+            ),
+            user_api_key_cache=user_api_key_cache,
+        )
         await _delete_cache_key_object(
             hashed_token=_hash_token_if_needed(key),
             user_api_key_cache=user_api_key_cache,
@@ -5569,6 +5584,13 @@ async def _execute_virtual_key_regeneration(
     updated_token_dict["key"] = new_token
     updated_token_dict["token_id"] = updated_token_dict.pop("token")
 
+    await invalidate_cached_object_permissions(
+        object_permission_ids=(
+            key_in_db.object_permission_id,
+            non_default_values.get("object_permission_id"),
+        ),
+        user_api_key_cache=user_api_key_cache,
+    )
     if hashed_api_key or key:
         await _delete_cache_key_object(
             hashed_token=_hash_token_if_needed(key),
