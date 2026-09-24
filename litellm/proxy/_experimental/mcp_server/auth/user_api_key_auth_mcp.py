@@ -109,10 +109,7 @@ class McpToolGrant:
     denied: frozenset[str]
 
     def grants(self, bare_tool_name: str) -> bool:
-        return (
-            MCPRequestHandler.tool_is_granted(bare_tool_name, self.allowed)
-            and bare_tool_name not in self.denied
-        )
+        return MCPRequestHandler.tool_is_granted(bare_tool_name, self.allowed) and bare_tool_name not in self.denied
 
 
 def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: list[str] | None = None) -> list[str] | None:
@@ -2402,9 +2399,7 @@ class MCPRequestHandler:
             if user_api_key_auth.agent_id
             else None,
             org_obj_perm,
-            await MCPRequestHandler._user_denylist_object_permission(user_api_key_auth)
-            if not keyless_source
-            else None,
+            await MCPRequestHandler._user_denylist_object_permission(user_api_key_auth) if not keyless_source else None,
             await MCPRequestHandler._get_end_user_object_permission(user_api_key_auth, prisma_client)
             if user_api_key_auth.end_user_id and prisma_client is not None
             else None,
@@ -2413,9 +2408,9 @@ class MCPRequestHandler:
             tool
             for object_permission in levels
             if object_permission is not None and isinstance(object_permission.mcp_tool_denied_tools, dict)
-            for tool in global_mcp_server_manager.expand_tool_permissions(
-                object_permission.mcp_tool_denied_tools
-            ).get(server_id)
+            for tool in global_mcp_server_manager.expand_tool_permissions(object_permission.mcp_tool_denied_tools).get(
+                server_id
+            )
             or ()
         )
 
