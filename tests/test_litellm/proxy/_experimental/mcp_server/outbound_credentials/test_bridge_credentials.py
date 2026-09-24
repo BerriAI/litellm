@@ -8,6 +8,8 @@ unopenable, and envelope minted for a different server); the producer helper rou
 through the consumer; and no path leaks the upstream token in a repr.
 """
 
+import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -23,9 +25,17 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
     build_bridge_token_response,
     envelope_keys_from_master_key,
     is_bridge_envelope_shaped,
+    legacy_envelope_keys_from_master_key,
     open_bridge_refresh_envelope,
     resolve_bridge_envelope,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.key_derivation import (
+    LEGACY_KDF_GRACE_ENV_VAR,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+    session_keys_from_master_key,
+)
+from litellm.proxy.common_utils.fips import FIPS_MODE_ENV_VAR
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
     ENVELOPE_PREFIX,
     EnvelopeIdentity,
@@ -146,11 +156,10 @@ def test_key_derivation_signing_key_meets_hs256_floor_for_short_master_key():
     assert len(keys.signing_key.get_secret_value()) >= 32
 
 
-def test_key_derivation_is_cached_so_the_memory_hard_kdf_runs_once_per_key():
-    """The scrypt KDF is intentionally expensive to resist offline guessing, so it must be cached:
-    repeated calls for the same master key return the identical object rather than re-deriving,
-    keeping the per-request admission path free. Returning a distinct object each call would mean
-    the cache was dropped and every open would pay the memory-hard cost."""
+def test_key_derivation_is_cached_so_the_hkdf_runs_once_per_key():
+    """Repeated calls for the same master key return the identical object rather than
+    re-deriving, keeping the per-request admission path free. Returning a distinct object
+    each call would mean the cache was dropped and every open would pay the KDF cost."""
     first = envelope_keys_from_master_key("sk-cache-probe-key-9988776655")
     assert envelope_keys_from_master_key("sk-cache-probe-key-9988776655") is first
 
@@ -318,3 +327,110 @@ def test_is_bridge_envelope_shaped_rejects_non_envelope_bearer():
     assert is_bridge_envelope_shaped("Bearer sk-some-litellm-key") is False
     assert is_bridge_envelope_shaped("plain-upstream-token") is False
     assert is_bridge_envelope_shaped("") is False
+
+
+def _rfc5869(ikm: bytes, info: bytes) -> bytes:
+    """Independent RFC 5869 HKDF-SHA256, hand-written on hmac/hashlib so a wrong KDF
+    construction in the product cannot agree with it."""
+    prk = hmac.new(b"\x00" * 32, ikm, hashlib.sha256).digest()
+    return hmac.new(prk, info + b"\x01", hashlib.sha256).digest()[:32]
+
+
+def _environ(values: dict[str, str]):
+    return values.get
+
+
+def _legacy_keys(master_key: str) -> EnvelopeKeys:
+    def derive(salt: bytes) -> str:
+        return hashlib.scrypt(
+            master_key.encode(), salt=salt, n=2**15, r=8, p=1, maxmem=128 * 2**15 * 8 * 2, dklen=32
+        ).hex()
+
+    return EnvelopeKeys(
+        signing_key=SecretStr(derive(b"litellm-mcp-bridge:envelope-signing:")),
+        encryption_key=SecretStr(derive(b"litellm-mcp-bridge:envelope-encryption:")),
+    )
+
+
+def test_envelope_key_derivation_matches_an_independent_rfc5869_vector():
+    keys = envelope_keys_from_master_key("sk-1234")
+    assert keys.signing_key.get_secret_value() == _rfc5869(b"sk-1234", b"litellm-mcp-bridge:envelope-signing:").hex()
+    assert (
+        keys.encryption_key.get_secret_value() == _rfc5869(b"sk-1234", b"litellm-mcp-bridge:envelope-encryption:").hex()
+    )
+    # literal pin computed from the same hand implementation (RFC 5869, salt = 32 zero bytes)
+    assert keys.signing_key.get_secret_value() == "331032bfe2b8d86bd00586ea69c0d854140019ca0e0adbe4dd0cc9e06cb36605"
+
+
+def test_session_key_derivation_matches_an_independent_rfc5869_vector():
+    keys = session_keys_from_master_key("sk-1234")
+    assert keys.signing_key.get_secret_value() == _rfc5869(b"sk-1234", b"litellm-mcp-gateway:session-signing:").hex()
+    assert keys.signing_key.get_secret_value() == "511f07b16ceeb5fba1660033785d4b9a4a6e80c749a51d639a688c287671a0e6"
+
+
+def test_the_three_derived_keys_are_pairwise_distinct():
+    envelope = envelope_keys_from_master_key(_MASTER_KEY)
+    session = session_keys_from_master_key(_MASTER_KEY)
+    derived = {
+        envelope.signing_key.get_secret_value(),
+        envelope.encryption_key.get_secret_value(),
+        session.signing_key.get_secret_value(),
+    }
+    assert len(derived) == 3
+
+
+def test_new_envelopes_open_under_the_hkdf_keys_with_no_legacy_fallback():
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    result = resolve_bridge_envelope(_sealed_token(keys), keys, _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeEnvelopeAdmitted)
+
+
+def test_legacy_envelope_opens_during_the_grace_window():
+    legacy = _legacy_keys(_MASTER_KEY)
+    token = _sealed_token(legacy)
+    grace = legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ({LEGACY_KDF_GRACE_ENV_VAR: "true"}))
+    assert grace == legacy
+    result = resolve_bridge_envelope(
+        token, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID, legacy_keys=grace
+    )
+    assert isinstance(result, BridgeEnvelopeAdmitted)
+    assert result.identity == _IDENTITY
+
+
+def test_legacy_envelope_is_invalid_without_grace():
+    token = _sealed_token(_legacy_keys(_MASTER_KEY))
+    assert legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ({})) is None
+    result = resolve_bridge_envelope(token, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeEnvelopeInvalid)
+
+
+def test_grace_is_disabled_under_fips():
+    grace = legacy_envelope_keys_from_master_key(
+        _MASTER_KEY,
+        environ=_environ({LEGACY_KDF_GRACE_ENV_VAR: "true", FIPS_MODE_ENV_VAR: "true"}),
+    )
+    assert grace is None
+
+
+@pytest.mark.parametrize("value", ["yes", "1", "on", "TRUE ", "True"])
+def test_grace_is_enabled_only_by_case_insensitive_true(value: str):
+    result = legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ({LEGACY_KDF_GRACE_ENV_VAR: value}))
+    expected = value.strip().lower() == "true"
+    assert (result is not None) is expected
+
+
+def test_legacy_refresh_envelope_opens_during_grace():
+    legacy = _legacy_keys(_MASTER_KEY)
+    refresh = _sealed_refresh(legacy)
+    grace = legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ({LEGACY_KDF_GRACE_ENV_VAR: "true"}))
+    result = open_bridge_refresh_envelope(
+        refresh, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID, legacy_keys=grace
+    )
+    assert isinstance(result, BridgeRefreshOpened)
+    assert result.refresh.refresh_token.get_secret_value() == _UPSTREAM_REFRESH
+
+
+def test_legacy_refresh_envelope_is_invalid_without_grace():
+    refresh = _sealed_refresh(_legacy_keys(_MASTER_KEY))
+    result = open_bridge_refresh_envelope(refresh, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeRefreshInvalid)
