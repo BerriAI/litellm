@@ -18192,6 +18192,37 @@ export interface paths {
         patch: operations["patch_agent_v1_agents__agent_id__patch"];
         trace?: never;
     };
+    "/v1/agents/{agent_id}/kill_switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trigger Agent Kill Switch
+         * @description Fire the agent's configured kill switch webhook. Proxy admin only.
+         *
+         *     LiteLLM only makes the configured HTTP call and reports what came back; it
+         *     does not change the agent's state in LiteLLM. Returns 200 when the webhook
+         *     answered 2xx, 502 with the same result body otherwise. Every attempt is
+         *     written to the audit log as a `kill_switch_fired` row against the agent.
+         *
+         *     Example Request:
+         *     ```bash
+         *     curl -X POST "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000/kill_switch" \
+         *         -H "Authorization: Bearer <your_api_key>"
+         *     ```
+         */
+        post: operations["trigger_agent_kill_switch_v1_agents__agent_id__kill_switch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agents/{agent_id}/make_public": {
         parameters: {
             query?: never;
@@ -24152,6 +24183,7 @@ export interface components {
             agent_name: string;
             /** Extra Headers */
             extra_headers?: string[] | null;
+            kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -24256,6 +24288,90 @@ export interface components {
             /** Token */
             token: string;
         };
+        /** AgentKillSwitchApiKeyAuth */
+        AgentKillSwitchApiKeyAuth: {
+            /** Api Key */
+            api_key: string;
+            /**
+             * Header Name
+             * @default x-api-key
+             */
+            header_name: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "api_key";
+        };
+        /** AgentKillSwitchBasicAuth */
+        AgentKillSwitchBasicAuth: {
+            /** Password */
+            password: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "basic";
+            /** Username */
+            username: string;
+        };
+        /** AgentKillSwitchBearerAuth */
+        AgentKillSwitchBearerAuth: {
+            /** Token */
+            token: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "bearer";
+        };
+        /**
+         * AgentKillSwitchConfig
+         * @description Webhook an admin fires to shut an agent down out of band. LiteLLM only
+         *     makes the call; whatever the endpoint does with it is the agent's business.
+         */
+        AgentKillSwitchConfig: {
+            /** Auth */
+            auth?: (components["schemas"]["AgentKillSwitchBearerAuth"] | components["schemas"]["AgentKillSwitchApiKeyAuth"] | components["schemas"]["AgentKillSwitchBasicAuth"]) | null;
+            /** Body */
+            body?: {
+                [key: string]: unknown;
+            } | null;
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            };
+            /**
+             * Method
+             * @default POST
+             * @enum {string}
+             */
+            method: "POST" | "PUT" | "PATCH" | "DELETE" | "GET";
+            /** Query Params */
+            query_params?: {
+                [key: string]: string;
+            };
+            /** Url */
+            url: string;
+        };
+        /** AgentKillSwitchResult */
+        AgentKillSwitchResult: {
+            /** Agent Id */
+            agent_id: string;
+            /** Error */
+            error?: string | null;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "POST" | "PUT" | "PATCH" | "DELETE" | "GET";
+            /** Response Body */
+            response_body?: string | null;
+            /** Status Code */
+            status_code?: number | null;
+            /** Url */
+            url: string;
+        };
         /** AgentMakePublicResponse */
         AgentMakePublicResponse: {
             /** Message */
@@ -24312,6 +24428,7 @@ export interface components {
             extra_headers?: string[] | null;
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
+            kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -37407,6 +37524,7 @@ export interface components {
             agent_name?: string;
             /** Extra Headers */
             extra_headers?: string[] | null;
+            kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -69930,6 +70048,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_agent_kill_switch_v1_agents__agent_id__kill_switch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentKillSwitchResult"];
                 };
             };
             /** @description Validation Error */
