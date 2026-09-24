@@ -38,6 +38,12 @@ if TYPE_CHECKING:
 
 RetryStrategy: TypeAlias = Literal["constant_retry", "exponential_backoff_retry"]
 AgenticSurface: TypeAlias = Literal["chat_completions", "responses"]
+RoutingStrategyName: TypeAlias = Literal[
+    "simple-shuffle",
+    "least-busy",
+    "usage-based-routing",
+    "latency-based-routing",
+]
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
@@ -114,15 +120,7 @@ class RoutingOptions:
     num_retries: int | None = None
     retry_policy: "RetryPolicy | Mapping[str, object] | None" = None
     retry_strategy: RetryStrategy | None = None
-    routing_strategy: (
-        Literal[
-            "simple-shuffle",
-            "least-busy",
-            "usage-based-routing",
-            "latency-based-routing",
-        ]
-        | None
-    ) = None
+    routing_strategy: RoutingStrategyName | None = None
     cooldown_time: float | None = None
     allowed_model_region: str | None = None
     enable_tag_filtering: bool | None = None

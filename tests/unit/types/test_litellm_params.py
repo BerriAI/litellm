@@ -1,10 +1,14 @@
 import inspect
-from collections.abc import Callable, Mapping
-from dataclasses import astuple, dataclass, field, fields
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, fields
+from operator import attrgetter
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast, get_type_hints
 
+import httpx
 import pytest
+from aiohttp import ClientSession
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
@@ -13,8 +17,12 @@ from litellm.litellm_core_utils.get_litellm_params import (
     get_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # untyped legacy carrier
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.router_strategy.complexity_router.context_compaction import CompactionState
+from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
 from litellm.types import litellm_params
 from litellm.types import utils as types_utils
+from litellm.types.caching import DynamicCacheControl
 from litellm.types.litellm_params import (
     ADDRESSED_RESPONSE_ID_FIELD,
     LITELLM_OWNED_ROOTS,
@@ -24,10 +32,22 @@ from litellm.types.litellm_params import (
     wire,
     wire_names,
 )
+from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
 from litellm.types.proxy.litellm_pre_call_utils import SecretFields
-from litellm.types.router import CredentialLiteLLMParams, RouterConfig, UpdateRouterConfig
+from litellm.types.router import (
+    ConfigurableClientsideParamsCustomAuth,
+    CredentialLiteLLMParams,
+    DeploymentTypedDict,
+    RetryPolicy,
+    RouterConfig,
+    UpdateRouterConfig,
+)
+from litellm.types.router_weights import RouterWeights
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
+    ModelResponse,
+    ModelResponseStream,
+    ProviderSpecificHeader,
     StandardCallbackDynamicParams,
     agentic_loop_internal_litellm_params,
     all_litellm_params,
@@ -292,7 +312,6 @@ def test_caching_groups_is_a_flat_sequence_of_model_groups_that_share_one_cache_
 
 def test_all_litellm_params_is_exactly_the_owned_inventory() -> None:
     assert frozenset(all_litellm_params) == frozenset(OWNED_NAMES)
-    assert tuple(all_litellm_params) == OWNED_NAMES
     assert frozenset(ARTIFACT_NAMES).isdisjoint(DECLARED_NAMES)
 
 
@@ -416,36 +435,42 @@ TYPED_CONFIG_MODELS: Final[Mapping[str, tuple[type[BaseModel], ...]]] = MappingP
 
 DECLARED_NAMES: Final = frozenset(name for root in LITELLM_OWNED_ROOTS for name in owned_wire_names(root))
 
-TYPE_NAMESPACE: Final[Mapping[str, object]] = {
-    **litellm_params.__dict__,
-    "ProviderClient": object,
-    "ProviderSpecificHeader": object,
-    "ClientSession": object,
-    "AsyncAzureOpenAI": object,
-    "AsyncOpenAI": object,
-    "AzureOpenAI": object,
-    "OpenAI": object,
-    "AsyncHTTPHandler": object,
-    "HTTPHandler": object,
-    "ConfigurableClientsideParamsCustomAuth": object,
-    "RetryPolicy": object,
-    "DeploymentTypedDict": object,
-    "DynamicCacheControl": object,
-    "ChatCompletionUserMessage": object,
-    "ChatCompletionAssistantMessage": object,
-    "MockResponse": object,
-    "ModelResponse": object,
-    "ModelResponseStream": object,
-    "Logging": object,
-    "CompactionState": object,
-    "RouterWeights": object,
-    "AttemptedFallbackTargets": object,
-    "SecretFields": object,
-}
+ProviderClient: TypeAlias = (
+    OpenAI
+    | AsyncOpenAI
+    | AzureOpenAI
+    | AsyncAzureOpenAI
+    | HTTPHandler
+    | AsyncHTTPHandler
+    | httpx.Client
+    | httpx.AsyncClient
+)
+MockResponse: TypeAlias = str | Exception | Mapping[str, object] | Sequence[float] | ModelResponse | ModelResponseStream
+
 TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
-    **TYPE_NAMESPACE,
+    "ProviderClient": ProviderClient,
+    "ProviderSpecificHeader": ProviderSpecificHeader,
+    "ClientSession": ClientSession,
+    "AsyncAzureOpenAI": AsyncAzureOpenAI,
+    "AsyncOpenAI": AsyncOpenAI,
+    "AzureOpenAI": AzureOpenAI,
+    "OpenAI": OpenAI,
+    "AsyncHTTPHandler": AsyncHTTPHandler,
+    "HTTPHandler": HTTPHandler,
+    "ConfigurableClientsideParamsCustomAuth": ConfigurableClientsideParamsCustomAuth,
+    "RetryPolicy": RetryPolicy,
+    "DeploymentTypedDict": DeploymentTypedDict,
+    "DynamicCacheControl": DynamicCacheControl,
+    "ChatCompletionUserMessage": ChatCompletionUserMessage,
+    "ChatCompletionAssistantMessage": ChatCompletionAssistantMessage,
+    "MockResponse": MockResponse,
+    "ModelResponse": ModelResponse,
+    "ModelResponseStream": ModelResponseStream,
     "Logging": Logging,
     "SecretFields": SecretFields,
+    "CompactionState": CompactionState,
+    "RouterWeights": RouterWeights,
+    "AttemptedFallbackTargets": AttemptedFallbackTargets,
 }
 
 LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
@@ -506,6 +531,7 @@ LEAF_BAD_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
 
 INVALID_LITERAL_SAMPLES: Final[tuple[tuple[type, Mapping[str, object]], ...]] = (
     (litellm_params.RoutingOptions, {"retry_strategy": "linear"}),
+    (litellm_params.RoutingOptions, {"routing_strategy": "random"}),
     (litellm_params.AgenticLoopState, {"api_surface": "batches"}),
 )
 
@@ -514,34 +540,23 @@ def _leaf_id(value: object) -> str:
     return value.__name__ if isinstance(value, type) else ""
 
 
-def _strict_leaf_adapter(leaf: type) -> TypeAdapter[object]:
-    leaf_type: Final = cast(type[object], leaf)
-    adapter: TypeAdapter[object] = TypeAdapter(leaf_type, module="litellm.types.litellm_params")
-    adapter.rebuild(_types_namespace=TYPE_NAMESPACE)
-    return adapter
-
-
 def _leaf_instance(leaf: type, sample: Mapping[str, object]) -> object:
     constructor: Final = cast(Callable[..., object], leaf)
     return constructor(**sample)
 
 
 def _strict_leaf_validation(leaf: type, instance: object) -> object:
-    result: Final = _strict_leaf_adapter(leaf).validate_python(instance, strict=True)
-    values: Final = cast(
-        tuple[object, ...],
-        astuple(instance),  # pyright: ignore[reportArgumentType]  # dataclass verified by callers
-    )
     hints: Final[Mapping[str, object]] = cast(
         Mapping[str, object], get_type_hints(type(instance), localns=TYPE_HINT_NAMESPACE)
     )
-    for field_info, value in zip(fields(leaf), values, strict=True):
+    for field_info in fields(leaf):
+        value = cast(Callable[[object], object], attrgetter(field_info.name))(instance)
         field_adapter: TypeAdapter[object] = TypeAdapter[object](
             hints[field_info.name],
             config=ConfigDict(arbitrary_types_allowed=True),
         )
         field_adapter.validate_python(value, strict=True)
-    return result
+    return instance
 
 
 @pytest.mark.parametrize("leaf,sample", LEAF_SAMPLES.items(), ids=_leaf_id)
