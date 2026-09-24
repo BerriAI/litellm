@@ -1,27 +1,34 @@
 import ast
 import contextvars
+import functools
+import itertools
 import logging
 import os
+import re
 import sys
+from collections.abc import Iterator
 from datetime import datetime
 from logging import Formatter
-from typing import Any, Final, TextIO
+from typing import Final, TextIO
 from urllib.parse import unquote
 
 import litellm
 from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
+    MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.secret_redaction import (
+    _python_redact_string,
+    _python_redact_structured_value,
     redact_internal_details,
     redact_string,
-    redact_structured_value,
 )
+from litellm.rust_bridge import diagnostics
 
 set_verbose = False
 
@@ -45,7 +52,7 @@ def _sanitize_correlation_id(value: str) -> str:
     pass through credential redaction.
     """
     stripped: Final = "".join(ch for ch in value if ch.isprintable())
-    return _redact_string(stripped[:_MAX_CORRELATION_ID_LENGTH])
+    return _redact_string(stripped)[:_MAX_CORRELATION_ID_LENGTH]
 
 
 def set_session_id(session_id: str) -> "contextvars.Token[str]":
@@ -70,10 +77,27 @@ def _redact_string(value: str) -> str:
     return redact_string(value)
 
 
-def _redact_structured_value(key: str | None, value: str) -> str:
-    if not _ENABLE_SECRET_REDACTION:
-        return value
-    return redact_structured_value(key, value)
+_REDACTED_RECORD_ATTR: Final = "litellm_redacted"
+_REDACTED_STAMP: Final = object()
+_UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
+
+
+def _is_redacted(record: logging.LogRecord) -> bool:
+    return getattr(record, _REDACTED_RECORD_ATTR, None) is _REDACTED_STAMP
+
+
+def _scrubbing_changed_nothing(scrubbed: object, original: object) -> bool:
+    try:
+        return bool(scrubbed == original)
+    except Exception:
+        return False
+
+
+def _plain_text(value: object) -> str:
+    try:
+        return str(value)
+    except Exception:
+        return UNSERIALIZABLE_OBJECT
 
 
 def redact_secrets(value: str) -> str:
@@ -115,7 +139,7 @@ def _substituted_color_message(record: logging.LogRecord) -> str | None:
         return None
     try:
         return color_message % record.args
-    except TypeError:
+    except Exception:
         return color_message
 
 
@@ -125,35 +149,9 @@ class SecretRedactionFilter(logging.Filter):
     _formatter = logging.Formatter()
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if not _ENABLE_SECRET_REDACTION:
+        if not _ENABLE_SECRET_REDACTION or _is_redacted(record):
             return True
-
-        # Runs before args are cleared, and before the extra-field loop below
-        # that redacts the substituted result.
-        substituted_color_message: Final = _substituted_color_message(record)
-        if substituted_color_message is not None:
-            record.color_message = substituted_color_message  # rebind-ok: a Filter scrubs records in place
-
-        try:
-            record.msg = _redact_string(record.getMessage())
-            record.args = None
-        except Exception:
-            if isinstance(record.msg, str):
-                record.msg = _redact_string(record.msg)
-
-        # Redact exception tracebacks
-        if record.exc_info and record.exc_info[1] is not None:
-            try:
-                record.exc_text = _redact_string(record.exc_text or self._formatter.formatException(record.exc_info))
-            except Exception:
-                pass
-
-        # Redact extra fields passed via logger.debug("msg", extra={...})
-        for key, value in list(record.__dict__.items()):
-            if key not in _STANDARD_RECORD_ATTRS and isinstance(value, str):
-                setattr(record, key, _redact_string(value))
-
-        return True
+        return _process_record(record, base64_limit=0, text_limit=0, redact=True)
 
 
 _secret_filter: Final = SecretRedactionFilter()
@@ -167,7 +165,7 @@ _REDACTION_PLACEHOLDER: Final = "REDACTED"
 def _hides_a_credential(value: str) -> bool:
     """Whether *value* only looks clean until it is percent-decoded."""
     decoded: Final = unquote(value)
-    return _redact_string(decoded) != decoded
+    return _python_redact_string(decoded) != decoded
 
 
 def _drop_encoded_credential(scrubbed: str) -> str:
@@ -195,10 +193,10 @@ def _scrub_access_arg(value: str) -> str:
     pattern and would then be logged raw.
     """
     if len(value) <= _MAX_SCRUBBED_ACCESS_ARG:
-        return _drop_encoded_credential(_redact_string(value))
+        return _drop_encoded_credential(_python_redact_string(value))
     head: Final = value[:_MAX_SCRUBBED_ACCESS_ARG]
     kept: Final = head[: max(head.rfind("?"), head.rfind("&"))] if "?" in head else head
-    scrubbed: Final = _drop_encoded_credential(_redact_string(kept))
+    scrubbed: Final = _drop_encoded_credential(_python_redact_string(kept))
     return f"{scrubbed}... ({len(value) - len(kept)} more chars truncated) ..."
 
 
@@ -214,8 +212,17 @@ class AccessLogRedactionFilter(logging.Filter):
         if not _ENABLE_SECRET_REDACTION:
             return True
         if isinstance(record.args, tuple) and record.args:
+            strings: Final = tuple(arg for arg in record.args if isinstance(arg, str))
+            candidate: Final = diagnostics.run(
+                lambda native: native.scrub_access_arguments(strings),
+                lambda: tuple(_scrub_access_arg(arg) for arg in strings),
+            )
+            scrubbed: Final = (
+                candidate if len(candidate) == len(strings) else tuple(_scrub_access_arg(arg) for arg in strings)
+            )
+            values: Final = iter(scrubbed)
             record.args = tuple(  # rebind-ok: a Filter scrubs records in place
-                _scrub_access_arg(arg) if isinstance(arg, str) else arg for arg in record.args
+                next(values) if isinstance(arg, str) else arg for arg in record.args
             )
             return True
         # No positional args means everything is in msg, where collapsing is correct.
@@ -223,6 +230,35 @@ class AccessLogRedactionFilter(logging.Filter):
 
 
 _access_log_filter: Final = AccessLogRedactionFilter()
+
+
+@functools.lru_cache(maxsize=1)
+def _parse_disabled_access_log_paths(raw: str) -> frozenset[str]:
+    return frozenset(stripped for path in raw.split(",") if (stripped := path.strip()))
+
+
+def _disabled_access_log_paths() -> frozenset[str]:
+    """Read the variable per record so a value loaded later via proxy config
+    environment_variables or dotenv is honored."""
+    return _parse_disabled_access_log_paths(os.getenv("LITELLM_DISABLE_ACCESS_LOG_PATHS", ""))
+
+
+class AccessLogPathFilter(logging.Filter):
+    """Drops uvicorn.access records for request paths listed in LITELLM_DISABLE_ACCESS_LOG_PATHS.
+
+    uvicorn passes record.args as (client_addr, method, full_path, http_version, status_code).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not isinstance(record.args, tuple) or len(record.args) < 3:
+            return True
+        full_path: Final = record.args[2]
+        if not isinstance(full_path, str):
+            return True
+        return full_path.partition("?")[0] not in _disabled_access_log_paths()
+
+
+_access_log_path_filter: Final = AccessLogPathFilter()
 
 
 def _get_max_string_length_stdout_log() -> int:
@@ -247,6 +283,230 @@ def _truncate_for_stdout_log(text: str, limit: int) -> str:
     return f"{text[:head_chars]}{_stdout_truncation_marker(len(text) - kept_chars)}{text[-tail_chars:]}"
 
 
+_BYTES_PER_KIB: Final = 1024
+_BYTES_PER_MIB: Final = 1024 * 1024
+
+
+def format_base64_size(num_chars: int) -> str:
+    """Return a human-readable byte-size estimate from a base64 character count."""
+    num_bytes: Final = num_chars * 3 / 4
+    if num_bytes >= _BYTES_PER_MIB:
+        return f"{num_bytes / _BYTES_PER_MIB:.2f}MB"
+    if num_bytes >= _BYTES_PER_KIB:
+        return f"{num_bytes / _BYTES_PER_KIB:.1f}KB"
+    return f"{int(num_bytes)}B"
+
+
+def _get_max_base64_length_stdout_log() -> int:
+    return get_env_int("MAX_BASE64_LENGTH_STDOUT_LOG", MAX_BASE64_LENGTH_STDOUT_LOG)
+
+
+@functools.lru_cache(maxsize=8)
+def _base64_run_pattern(min_chars: int) -> "re.Pattern[str]":
+    return re.compile(rf"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{{{min_chars},}}={{0,2}}")
+
+
+_LOWER_HEX_DIGITS: Final = "0123456789abcdef"
+_UPPER_HEX_DIGITS: Final = "0123456789ABCDEF"
+
+
+def _looks_like_base64(run: str) -> bool:
+    unpadded: Final = run.rstrip("=")
+    is_hex_or_decimal: Final = not unpadded.strip(_LOWER_HEX_DIGITS) or not unpadded.strip(_UPPER_HEX_DIGITS)
+    is_one_repeated_char: Final = not unpadded.strip(unpadded[0])
+    return not is_hex_or_decimal or is_one_repeated_char
+
+
+def _replace_base64_run(match: "re.Match[str]") -> str:
+    run: Final = match.group(0)
+    if not _looks_like_base64(run):
+        return run
+    return f"[base64_data truncated: {format_base64_size(len(run))}]"
+
+
+def _collapse_base64_runs(text: str, limit: int) -> str:
+    return _base64_run_pattern(limit + 1).sub(_replace_base64_run, text)
+
+
+def _extra_structure(key: str, value: object) -> object:
+    if isinstance(value, str):
+        return value
+    try:
+        return safe_json_structure(value, key=key)
+    except Exception:
+        return _plain_text(value)
+
+
+def _string_leaves(key: str | None, value: object) -> Iterator[tuple[str | None, str]]:
+    if isinstance(value, str):
+        yield key, value
+    elif isinstance(value, dict):
+        yield from itertools.chain.from_iterable(
+            _string_leaves(child_key, child) for child_key, child in value.items() if isinstance(child_key, str)
+        )
+    elif isinstance(value, (list, tuple)):
+        yield from itertools.chain.from_iterable(_string_leaves(key, child) for child in value)
+
+
+def _replace_string_leaves(value: object, values: Iterator[str]) -> object:
+    if isinstance(value, str):
+        return next(values)
+    if isinstance(value, dict):
+        return {  # mutable-ok: LogRecord extras must keep JSON dict shape for handlers
+            key: _replace_string_leaves(child, values) for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [  # mutable-ok: LogRecord extras must keep JSON list shape for handlers
+            _replace_string_leaves(child, values) for child in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(_replace_string_leaves(child, values) for child in value)
+    return value
+
+
+def _sort_processed_sets(original: object, processed: object) -> object:
+    if isinstance(original, set) and isinstance(processed, list):
+        return sorted(processed)
+    if isinstance(original, dict) and isinstance(processed, dict):
+        return {  # mutable-ok: sorting nested sets must preserve the surrounding JSON dict
+            key: _sort_processed_sets(original.get(key), value) for key, value in processed.items()
+        }
+    if isinstance(original, list) and isinstance(processed, list):
+        return [  # mutable-ok: sorting nested sets must preserve the surrounding JSON list
+            _sort_processed_sets(before, after) for before, after in zip(original, processed)
+        ]
+    if isinstance(original, tuple) and isinstance(processed, tuple):
+        return tuple(_sort_processed_sets(before, after) for before, after in zip(original, processed))
+    return processed
+
+
+def _python_process_diagnostic(
+    message: str,
+    exception: str | None,
+    stack: str | None,
+    leaves: tuple[tuple[str | None, str], ...],
+    redact: bool,
+    base64_limit: int,
+    text_limit: int,
+) -> tuple[str, str | None, str | None, tuple[str, ...], bool]:
+    def process_text(text: str) -> str:
+        collapsed: Final = _collapse_base64_runs(text, base64_limit) if base64_limit > 0 else text
+        scrubbed: Final = _python_redact_string(collapsed) if redact else collapsed
+        return _truncate_for_stdout_log(scrubbed, text_limit) if 0 < text_limit < len(scrubbed) else scrubbed
+
+    processed_message: Final = process_text(message)
+    processed_exception: Final = process_text(exception) if exception is not None else None
+    processed_stack: Final = _python_redact_string(stack) if redact and stack is not None else stack
+    processed_leaves: Final = tuple(
+        _python_redact_structured_value(key, text) if redact else text for key, text in leaves
+    )
+    changed: Final = (
+        processed_message != message
+        or processed_exception != exception
+        or processed_stack != stack
+        or any(processed != original for processed, (_, original) in zip(processed_leaves, leaves))
+    )
+    return processed_message, processed_exception, processed_stack, processed_leaves, changed
+
+
+def _render_message(record: logging.LogRecord) -> str:
+    try:
+        return record.getMessage()
+    except Exception:
+        return record.msg if isinstance(record.msg, str) else UNSERIALIZABLE_OBJECT
+
+
+def _render_exception(record: logging.LogRecord) -> str | None:
+    if not isinstance(record.exc_info, tuple) or len(record.exc_info) < 2 or record.exc_info[1] is None:
+        return None
+    try:
+        return record.exc_text or SecretRedactionFilter._formatter.formatException(record.exc_info)
+    except Exception:
+        return "REDACTED"
+
+
+def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit: int, redact: bool) -> bool:
+    if _is_redacted(record):
+        return True
+    message: Final = _render_message(record)
+    exception: Final = _render_exception(record)
+    stack: Final = record.stack_info if isinstance(record.stack_info, str) else None
+    substituted_color: Final = _substituted_color_message(record)
+    extras: Final = (
+        tuple(
+            (
+                key,
+                value,
+                _extra_structure(
+                    key, substituted_color if key == "color_message" and substituted_color is not None else value
+                ),
+            )
+            for key, value in record.__dict__.items()
+            if key not in _STANDARD_RECORD_ATTRS
+            and key != _REDACTED_RECORD_ATTR
+            and not isinstance(value, _UNREDACTED_SCALAR_TYPES)
+        )
+        if redact
+        else ()
+    )
+    extra_leaves: Final = tuple(
+        itertools.chain.from_iterable(_string_leaves(key, prepared) for key, _, prepared in extras)
+    )
+    raw_template: Final = record.msg if redact and isinstance(record.msg, str) and record.args else None
+    color_template: Final = record.__dict__.get("color_message")
+    raw_color: Final = color_template if redact and isinstance(color_template, str) and record.args else None
+    leaves: Final = (
+        extra_leaves
+        + (((None, raw_template),) if raw_template is not None else ())
+        + (((None, raw_color),) if raw_color is not None else ())
+    )
+    candidate: Final = diagnostics.run(
+        lambda native: native.process_diagnostic(message, exception, stack, leaves, (redact, base64_limit, text_limit)),
+        lambda: _python_process_diagnostic(message, exception, stack, leaves, redact, base64_limit, text_limit),
+    )
+    processed_message, processed_exception, processed_stack, processed_leaves, _ = (
+        candidate
+        if len(candidate[3]) == len(leaves)
+        else _python_process_diagnostic(message, exception, stack, leaves, redact, base64_limit, text_limit)
+    )
+    raw_template_changed: Final = raw_template is not None and processed_leaves[len(extra_leaves)] != raw_template
+    safe_message: Final = "REDACTED" if raw_template_changed and processed_message == message else processed_message
+    if redact or safe_message != message:
+        record.msg = safe_message  # rebind-ok: the Filter interface mutates the record
+        record.args = None  # rebind-ok: the rendered message replaces interpolation inputs
+    if processed_exception is not None:
+        record.exc_text = processed_exception  # rebind-ok: the Filter interface mutates the record
+    if processed_stack is not None:
+        record.stack_info = processed_stack  # rebind-ok: the Filter interface mutates the record
+    processed_values: Final = iter(processed_leaves[: len(extra_leaves)])
+    for key, original, prepared in extras:
+        replacement: Final = _sort_processed_sets(original, _replace_string_leaves(prepared, processed_values))
+        if not _scrubbing_changed_nothing(replacement, original):
+            setattr(record, key, replacement)
+    raw_color_changed: Final = (
+        raw_color is not None and processed_leaves[len(extra_leaves) + int(raw_template is not None)] != raw_color
+    )
+    if raw_color_changed and getattr(record, "color_message", None) == substituted_color:
+        setattr(record, "color_message", "REDACTED")
+    setattr(record, _REDACTED_RECORD_ATTR, _REDACTED_STAMP)
+    return True
+
+
+def _redact_json_record(value: object) -> object:
+    prepared: Final = safe_json_structure(value)
+    leaves: Final = tuple(_string_leaves(None, prepared))
+    candidate: Final = diagnostics.run(
+        lambda native: native.process_diagnostic("", None, None, leaves, (True, 0, 0))[3],
+        lambda: tuple(_python_redact_structured_value(key, text) for key, text in leaves),
+    )
+    replacements: Final = (
+        candidate
+        if len(candidate) == len(leaves)
+        else tuple(_python_redact_structured_value(key, text) for key, text in leaves)
+    )
+    return _sort_processed_sets(value, _replace_string_leaves(prepared, iter(replacements)))
+
+
 class StdoutLogTruncationFilter(logging.Filter):
     """Bounds how much of an oversized log line reaches stdout.
 
@@ -254,41 +514,57 @@ class StdoutLogTruncationFilter(logging.Filter):
     request writes hundreds of KB to stdout, repeatedly as the exception propagates from
     the router to the proxy handler and into its traceback, all inline on the event loop.
 
-    DEBUG records pass through untouched, since dumping full payloads is the point of
+    At every level, in the message and in the traceback alike, a base64 run longer than
+    MAX_BASE64_LENGTH_STDOUT_LOG collapses to a size placeholder first: a multi-megabyte
+    document upload otherwise costs seconds of event-loop time per DEBUG line in the
+    secret regex alone. Hex and decimal runs (digests, numeric ids) are left alone unless
+    they are one repeated character, which is what a zero-filled payload encodes to.
+    The text around a run stays, since dumping payloads is the point of
     `--detailed_debug`, and logging callbacks (OTEL, Datadog, etc.) don't run through
-    logging filters at all, so they still get the untruncated error.
+    logging filters at all, so they still get the untouched record.
     """
 
     _formatter = logging.Formatter()
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.levelno < logging.INFO:
-            return True
-
-        limit: Final = _get_max_string_length_stdout_log()
-        if limit <= 0:
-            return True
-
         try:
             message: Final = record.getMessage()
         except (TypeError, ValueError):
             return True
 
-        if len(message) > limit:
-            record.msg = _truncate_for_stdout_log(message, limit)  # rebind-ok: the Filter interface mutates the record
-            record.args = None  # rebind-ok: args are consumed by the truncated message above
+        base64_limit: Final = _get_max_base64_length_stdout_log()
+        collapsed: Final = _collapse_base64_runs(message, base64_limit) if base64_limit > 0 else message
+        limit: Final = _get_max_string_length_stdout_log() if record.levelno >= logging.INFO else 0
+        bounded: Final = _truncate_for_stdout_log(collapsed, limit) if 0 < limit < len(collapsed) else collapsed
+        if bounded != message:
+            record.msg = bounded  # rebind-ok: the Filter interface mutates the record
+            record.args = None  # rebind-ok: args are consumed by the rewritten message above
 
-        if isinstance(record.exc_info, tuple):
-            exc_text: Final = record.exc_text or self._formatter.formatException(record.exc_info)
-            if len(exc_text) > limit:
-                record.exc_text = _truncate_for_stdout_log(  # rebind-ok: the Filter interface mutates the record
-                    exc_text, limit
-                )
+        if not isinstance(record.exc_info, tuple):
+            return True
+
+        exc_text: Final = record.exc_text or self._formatter.formatException(record.exc_info)
+        collapsed_exc: Final = _collapse_base64_runs(exc_text, base64_limit) if base64_limit > 0 else exc_text
+        bounded_exc: Final = (
+            _truncate_for_stdout_log(collapsed_exc, limit) if 0 < limit < len(collapsed_exc) else collapsed_exc
+        )
+        if bounded_exc != exc_text:
+            record.exc_text = bounded_exc  # rebind-ok: the Filter interface mutates the record
 
         return True
 
 
-_stdout_truncation_filter: Final = StdoutLogTruncationFilter()
+class DiagnosticProcessingFilter(StdoutLogTruncationFilter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return _process_record(
+            record,
+            base64_limit=_get_max_base64_length_stdout_log(),
+            text_limit=_get_max_string_length_stdout_log() if record.levelno >= logging.INFO else 0,
+            redact=_ENABLE_SECRET_REDACTION,
+        )
+
+
+_diagnostic_filter: Final = DiagnosticProcessingFilter()
 
 
 class CorrelationContextFilter(logging.Filter):
@@ -355,9 +631,9 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
         )
         preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
-            self.stream = sys.stderr  # rebind-ok: fall back to the pre-fix stream rather than raising per record
+            self.stream = sys.stderr
         else:
-            self.stream = preferred  # rebind-ok: StreamHandler.emit writes self.stream under the handler lock
+            self.stream = preferred
         super().emit(record)
 
 
@@ -371,17 +647,21 @@ def _parse_json_logs_env(value: str | None) -> bool:
     return (value or "").lower() == "true"
 
 
+def resolve_log_level(log_level: str) -> int:
+    return getattr(logging, log_level.upper())
+
+
 json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
-numeric_level: Final[str] = getattr(logging, log_level.upper())
+numeric_level: Final[int] = resolve_log_level(log_level)
 handler: Final = LevelRoutingStreamHandler()
 handler.setLevel(numeric_level)
 handler.addFilter(_secret_filter)
 handler.addFilter(_correlation_filter)
 
 
-def _try_parse_json_message(message: str) -> dict[str, Any] | None:
+def _try_parse_json_message(message: str) -> dict[str, object] | None:
     """
     Try to parse a log message as JSON. Returns parsed dict if valid, else None.
     Handles messages that are entirely valid JSON (e.g. json.dumps output).
@@ -392,13 +672,13 @@ def _try_parse_json_message(message: str) -> dict[str, Any] | None:
     msg_stripped: Final = message.strip()
     if not (msg_stripped.startswith("{") or msg_stripped.startswith("[")):
         return None
-    parsed: Final = safe_json_loads(message, default=None)
+    parsed: Final[object] = safe_json_loads(message, default=None)
     if parsed is None or not isinstance(parsed, dict):
         return None
     return parsed
 
 
-def _try_parse_embedded_python_dict(message: str) -> dict[str, Any] | None:
+def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
     """
     Try to find and parse a Python dict repr (e.g. str(d) or repr(d)) embedded in
     the message. Handles patterns like:
@@ -422,7 +702,7 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, Any] | None:
                 if depth == 0:
                     substr = message[start : j + 1]
                     try:
-                        result = ast.literal_eval(substr)
+                        result: object = ast.literal_eval(substr)
                         if isinstance(result, dict) and len(result) > 0:
                             return result
                     except (ValueError, SyntaxError, TypeError):
@@ -440,6 +720,7 @@ def _get_standard_record_attrs() -> frozenset:
 
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
+_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
 
 # CorrelationContextFilter is the only legitimate source for these two JSON fields;
 # see JsonFormatter.format() for why they're excluded from the generic message-content
@@ -458,7 +739,7 @@ class JsonFormatter(Formatter):
 
     def format(self, record):
         message_str: Final = record.getMessage()
-        json_record: Final[dict[str, Any]] = {
+        json_record: Final[dict[str, object]] = {
             "message": message_str,
             "level": record.levelname,
             "timestamp": self.formatTime(record),
@@ -480,7 +761,7 @@ class JsonFormatter(Formatter):
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
         for key, value in record.__dict__.items():
-            if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
+            if key not in _NON_EXTRA_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
 
         # trace_id/session_id are reserved: CorrelationContextFilter is the only
@@ -504,7 +785,9 @@ class JsonFormatter(Formatter):
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
-        return safe_dumps(json_record, value_transform=_redact_structured_value)
+        return safe_dumps(
+            json_record if _is_redacted(record) or not _ENABLE_SECRET_REDACTION else _redact_json_record(json_record)
+        )
 
 
 class CorrelationPlainFormatter(logging.Formatter):
@@ -515,7 +798,8 @@ class CorrelationPlainFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        formatted: Final = _redact_string(super().format(record))
+        rendered: Final = super().format(record)
+        formatted: Final = rendered if _is_redacted(record) else _redact_string(rendered)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -533,8 +817,8 @@ def _setup_json_exception_handlers(formatter):
     # Create a handler with JSON formatting for exceptions
     error_handler: Final = logging.StreamHandler()
     error_handler.setFormatter(formatter)
+    error_handler.addFilter(_diagnostic_filter)
     error_handler.addFilter(_secret_filter)
-    error_handler.addFilter(_stdout_truncation_filter)
     error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
@@ -604,10 +888,10 @@ verbose_logger.addHandler(handler)
 
 # Filters attached to the logger, not the handler, survive callers swapping in their own
 # handlers (JSON mode, uvicorn log config, a host app's root handler).
-verbose_router_logger.addFilter(_stdout_truncation_filter)
-verbose_proxy_logger.addFilter(_stdout_truncation_filter)
-verbose_proxy_stdout_logger.addFilter(_stdout_truncation_filter)
-verbose_logger.addFilter(_stdout_truncation_filter)
+verbose_router_logger.addFilter(_diagnostic_filter)
+verbose_proxy_logger.addFilter(_diagnostic_filter)
+verbose_proxy_stdout_logger.addFilter(_diagnostic_filter)
+verbose_logger.addFilter(_diagnostic_filter)
 
 
 def _suppress_loggers():
@@ -663,6 +947,7 @@ def _redact_third_party_loggers() -> None:
     for name in _REDACTED_THIRD_PARTY_LOGGERS:
         logging.getLogger(name).addFilter(_secret_filter)
     for name in _REDACTED_ACCESS_LOGGERS:
+        logging.getLogger(name).addFilter(_access_log_path_filter)
         logging.getLogger(name).addFilter(_access_log_filter)
 
 

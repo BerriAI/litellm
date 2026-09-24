@@ -389,7 +389,6 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
 
 
 def test_vertex_ai_complex_response_schema():
-    import json
     from copy import deepcopy
 
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -1150,10 +1149,6 @@ def test_get_token_url():
     vertex_ai_location = "us-central1"
     vertex_credentials = ""
 
-    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
-        optional_params={"cached_content": "hi"}
-    )
-
     _, url = vertex_llm._get_token_and_url(
         auth_header=None,
         vertex_project=vertex_ai_project,
@@ -1161,7 +1156,7 @@ def test_get_token_url():
         vertex_credentials=vertex_credentials,
         gemini_api_key="",
         custom_llm_provider="vertex_ai_beta",
-        should_use_v1beta1_features=should_use_v1beta1_features,
+        should_use_v1beta1_features=False,
         api_base=None,
         model="",
         stream=False,
@@ -1169,10 +1164,6 @@ def test_get_token_url():
 
     print("url=", url)
 
-    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
-        optional_params={"temperature": 0.1}
-    )
-
     _, url = vertex_llm._get_token_and_url(
         auth_header=None,
         vertex_project=vertex_ai_project,
@@ -1180,7 +1171,7 @@ def test_get_token_url():
         vertex_credentials=vertex_credentials,
         gemini_api_key="",
         custom_llm_provider="vertex_ai_beta",
-        should_use_v1beta1_features=should_use_v1beta1_features,
+        should_use_v1beta1_features=False,
         api_base=None,
         model="",
         stream=False,
@@ -1200,7 +1191,7 @@ async def test_vertex_ai_token_counter_routes_partner_models():
     Test that VertexAITokenCounter correctly routes partner models (Claude, Mistral, etc.)
     to the partner models token counter instead of the Gemini token counter.
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
     from litellm.types.utils import TokenCountResponse
@@ -1250,7 +1241,6 @@ async def test_vertex_ai_token_counter_uses_count_tokens_location():
     from unittest.mock import patch
 
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
-    from litellm.types.utils import TokenCountResponse
 
     token_counter = VertexAITokenCounter()
 
@@ -1291,7 +1281,7 @@ async def test_vertex_ai_token_counter_routes_gemini_models():
     Test that VertexAITokenCounter correctly routes Gemini models
     to the Gemini token counter (not partner models).
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
     from litellm.types.utils import TokenCountResponse
@@ -1738,3 +1728,30 @@ def test_vertex_text_embedding_request_includes_labels_from_metadata():
         },
     )
     assert req.get("labels") == {"project_id": "cost-center-1"}
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_api"),
+    [
+        ("lyria-002", "lyria_predict"),
+        ("vertex_ai/lyria-002", "lyria_predict"),
+        ("lyria-3-clip-preview", "lyria_interactions"),
+        ("lyria-3-pro-preview", "lyria_interactions"),
+    ],
+)
+def test_get_vertex_ai_lyria_model_info_resolves_audio_api(model, expected_api):
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    model_info = get_vertex_ai_lyria_model_info(model=model)
+
+    assert model_info is not None
+    assert model_info["vertex_ai_audio_api"] == expected_api
+
+
+@pytest.mark.parametrize("model", ["en-US-Studio-O", "gemini-2.5-flash-preview-tts", "chirp-3-hd-charon"])
+def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(model):
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    assert get_vertex_ai_lyria_model_info(model=model) is None
+
+

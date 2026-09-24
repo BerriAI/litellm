@@ -31,10 +31,3 @@ export interface ParsedMessages {
   requestMessages: ParsedMessage[];
   responseMessage: ParsedMessage | null;
 }
-
-export interface RoleStyle {
-  background: string;
-  borderColor: string;
-  label: string;
-  labelColor: string;
-}

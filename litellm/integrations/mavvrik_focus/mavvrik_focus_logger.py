@@ -226,13 +226,10 @@ class MavvrikFocusLogger(FocusLogger):
         """Scheduler entry point — uses Mavvrik-specific pod-lock key."""
         from litellm.proxy.proxy_server import proxy_logging_obj  # noqa: PLC0415
 
-        pod_lock_manager = None
-        if proxy_logging_obj is not None:
-            writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None)
-            if writer is not None:
-                pod_lock_manager = getattr(writer, "pod_lock_manager", None)
-
-        if pod_lock_manager and pod_lock_manager.redis_cache:
+        pod_lock_manager: Final = (
+            proxy_logging_obj.db_spend_update_writer.pod_lock_manager if proxy_logging_obj is not None else None
+        )
+        if pod_lock_manager is not None and pod_lock_manager.redis_cache:
             acquired: Final = await pod_lock_manager.acquire_lock(cronjob_id=MAVVRIK_FOCUS_EXPORT_JOB_NAME)
             if not acquired:
                 verbose_proxy_logger.debug("Mavvrik FOCUS export: unable to acquire pod lock")

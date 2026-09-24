@@ -1,13 +1,18 @@
 from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
+from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
+from litellm.router_strategy.complexity_router.jev_classifier import DEFAULT_JEV_INSTRUCTIONS
 from litellm.router_utils.auto_router_model_naming import (
     carries_complexity_router_settings,
     classify_strategy_router_model,
-    count_heuristic_v2_routers,
-    heuristic_v2_limit_violation,
-    is_heuristic_v2_router,
+    GATED_AUTO_ROUTER_CAPABILITIES,
+    capability_limit_violation,
+    claimed_capability,
+    count_capability_routers,
+    gated_capability_of,
     strategy_router_dependencies,
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
@@ -15,9 +20,33 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 
 COMPLEXITY_FIELDS = frozenset({"complexity_router_config"})
-SEMANTIC_FIELDS = frozenset(
-    {"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"}
-)
+SEMANTIC_FIELDS = frozenset({"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"})
+
+
+@pytest.mark.parametrize("model", ["jev-latest", "jev-preview"])
+def test_jev_enumerates_a_paid_evaluation_without_a_completion_classifier(model: str) -> None:
+    found = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"model": model},
+                "tiers": {"SIMPLE": "cheap"},
+            },
+        }
+    )
+    assert tuple((dep.model_name, dep.role) for dep in found) == (
+        ("cheap", "tier"),
+        (f"typesafe/{model}", "evaluation"),
+    )
+
+
+@pytest.mark.parametrize("instructions", [None, DEFAULT_JEV_INSTRUCTIONS, "Route conservatively"])
+def test_only_non_default_jev_instructions_claim_the_shared_customization_slot(instructions: str | None) -> None:
+    capability = claimed_capability({"classifier_type": "jev", "jev_classifier_config": {"instructions": instructions}})
+    assert (capability.key if capability else None) == (
+        "tier_or_classifier_prompt" if instructions == "Route conservatively" else None
+    )
 
 
 @pytest.mark.parametrize(
@@ -169,12 +198,56 @@ def test_validate_accepts_loadable_complexity_config(complexity_router_config):
     assert validate_complexity_router_config_write(complexity_router_config=complexity_router_config) is None
 
 
+def _fuse_write_config(profiles: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "classifier_type": "llm_v2",
+        "classifier_llm_config": {"model": "judge"},
+        "tiers": {"SIMPLE": ["opaque-efficient"], "REASONING": ["opaque-capable"]},
+        "llm_v2_config": {"max_quality_gap": 0.05, **profiles},
+    }
+
+
+def test_fuse_write_accepts_presets_and_custom_text_with_the_same_entitlement() -> None:
+    catalog: Final = get_fuse_presets()
+    presets: Final = _fuse_write_config(
+        {
+            "efficient_profile_preset": catalog.models[0].id,
+            "capable_profile_preset": catalog.models[-1].id,
+            "harness_preset": catalog.harnesses[0].id,
+        }
+    )
+    custom: Final = _fuse_write_config(
+        {
+            "efficient_profile": catalog.models[0].text,
+            "capable_profile": catalog.models[-1].text,
+            "harness": catalog.harnesses[0].text,
+        }
+    )
+    assert validate_complexity_router_config_write(presets) is None
+    assert validate_complexity_router_config_write(custom) is None
+    assert claimed_capability(presets) is claimed_capability(custom)
+    assert claimed_capability(presets) is not None
+
+
+@pytest.mark.parametrize("field", ("efficient_profile", "capable_profile", "harness"))
+def test_fuse_write_rejects_unknown_preset_even_with_custom_text(field: str) -> None:
+    config: Final = _fuse_write_config(
+        {
+            "efficient_profile": "Custom efficient solver",
+            "capable_profile": "Custom capable solver",
+            "harness": "Custom runtime",
+            f"{field}_preset": "unknown-v1",
+        }
+    )
+    violation: Final = validate_complexity_router_config_write(config)
+    assert violation is not None
+    assert f"{field}_preset" in violation
+
+
 def test_naming_check_ignores_the_config_entirely():
     """The naming contract and the config's contents are separate questions with separate owners;
     a write may carry a config without naming a model, so neither can stand in for the other."""
-    violation = validate_strategy_router_model_write(
-        model="auto_router/complexity_router", present_fields=frozenset()
-    )
+    violation = validate_strategy_router_model_write(model="auto_router/complexity_router", present_fields=frozenset())
     assert violation is not None
     assert "requires" in violation
 
@@ -211,6 +284,22 @@ def test_config_check_ignores_the_model_entirely():
                 },
             },
             (("a", "tier"), ("clf", "classifier")),
+        ),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "a", "REASONING": "b"},
+                    "classifier_type": "capability",
+                    "classifier_llm_config": {"model": "clf"},
+                    "capability_classifier_config": {
+                        "efficient_tier": "SIMPLE",
+                        "capable_tier": "REASONING",
+                        "base_threshold": 0.5,
+                    },
+                },
+            },
+            (("a", "tier"), ("b", "tier"), ("clf", "classifier")),
         ),
         (
             {
@@ -285,7 +374,10 @@ def test_complexity_ignores_its_config_default_model_and_quality_does_not():
 )
 def test_strategy_router_dependencies_never_raises_on_a_malformed_config(config):
     """A config the router itself would refuse must not take the whole /health response down."""
-    assert strategy_router_dependencies({"model": "auto_router/complexity_router", "complexity_router_config": config}) == ()
+    assert (
+        strategy_router_dependencies({"model": "auto_router/complexity_router", "complexity_router_config": config})
+        == ()
+    )
 
 
 @pytest.mark.parametrize(
@@ -376,38 +468,169 @@ def test_placement_is_scoped_to_complexity_router_deployments(model, present_fie
     assert carries_complexity_router_settings(model, present_fields) is scoped
 
 
+_HV2_CONFIG: Mapping[str, object] = {"classifier_type": "heuristic_v2"}
+_CAPABILITY_CONFIG: Mapping[str, object] = {"classifier_type": "capability"}
+_FUSE_CONFIG: Mapping[str, object] = {"classifier_type": "llm_v2"}
+_CUSTOM_TIER_CONFIG: Mapping[str, object] = {
+    "classifier_type": "llm",
+    "tier_definitions": [{"name": "routine", "description": "easy"}, {"name": "hard", "description": "hard"}],
+}
+_CUSTOM_PROMPT_CONFIG: Mapping[str, object] = {
+    "classifier_type": "llm",
+    "classifier_llm_config": {"model": "gpt-4o-mini", "system_prompt": "judge it my way"},
+}
+
+
 @pytest.mark.parametrize(
-    "litellm_params,expected",
+    "config,expected_key",
     [
-        ({"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, True),
-        ({"model": "auto_router/complexity_router-eu", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, True),
-        ({"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic"}}, False),
-        ({"model": "auto_router/complexity_router", "complexity_router_config": {"tiers": {"SIMPLE": "a"}}}, False),
-        ({"model": "auto_router/complexity_router"}, False),
-        ({"model": "auto_router/quality_router", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, False),
-        ({"model": "openai/gpt-4o", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, False),
-        ({"model": "auto_router/complexity_router", "complexity_router_config": "heuristic_v2"}, False),
-        ({}, False),
+        (_CUSTOM_PROMPT_CONFIG, "tier_or_classifier_prompt"),
+        (
+            {"classifier_type": "llm", "classifier_llm_config": {"model": "m"}, "classification_prompt": "grade it"},
+            "tier_or_classifier_prompt",
+        ),
+        (
+            {
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "m"},
+                "classification_examples": '- "x" -> SIMPLE',
+            },
+            "tier_or_classifier_prompt",
+        ),
+        ({"classifier_type": "hybrid", "classification_examples": "- y -> MEDIUM"}, "tier_or_classifier_prompt"),
+        (
+            {
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "m"},
+                "classification_prompt": None,
+                "classification_examples": None,
+            },
+            None,
+        ),
+        ({"classifier_type": "heuristic", "classification_examples": "- x -> SIMPLE"}, None),
+        ({"classifier_type": "hybrid", "classifier_llm_config": {"system_prompt": "p"}}, "tier_or_classifier_prompt"),
+        (
+            {"classifier_type": "heuristic_first", "classifier_llm_config": {"system_prompt": "p"}},
+            "tier_or_classifier_prompt",
+        ),
+        ({"classifier_type": "llm", "classifier_llm_config": {"model": "m", "classification_rubric": "chat"}}, None),
+        ({"classifier_type": "llm", "classifier_llm_config": {"model": "m"}}, None),
+        ({"classifier_type": "llm", "classifier_llm_config": {"model": "m", "system_prompt": None}}, None),
+        ({"classifier_type": "heuristic", "classifier_llm_config": {"system_prompt": "p"}}, None),
+        ({"classifier_type": "heuristic_v2", "classifier_llm_config": {"system_prompt": "p"}}, "heuristic_v2"),
+        ({"classifier_type": "llm", "classifier_llm_config": "not a mapping"}, None),
     ],
 )
-def test_is_heuristic_v2_router(litellm_params: Mapping[str, object], expected: bool) -> None:
-    """Only a complexity router whose config selects heuristic_v2 counts toward the license limit."""
-    assert is_heuristic_v2_router(litellm_params) is expected
+def test_custom_classifier_prompt_capability(config: Mapping[str, object], expected_key: str | None) -> None:
+    """Every operator-written part of the classifier prompt claims the customization slot: a whole
+    replacement system_prompt, replacement opening instructions (classification_prompt), or replacement
+    calibration examples (classification_examples).
+
+    A shipped rubric preset stays free, and the heuristic scorers never read system_prompt, so a
+    value sitting on one is inert and claims nothing (heuristic_v2 still claims its own capability).
+    """
+    claimed = claimed_capability(config)
+    assert (None if claimed is None else claimed.key) == expected_key
 
 
-def test_count_heuristic_v2_routers_reads_model_list_rows_and_ignores_malformed_ones() -> None:
-    v2 = {"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic_v2"}}
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("auto_router/complexity_router", True),
+        ("auto_router/complexity_router-eu", True),
+        ("auto_router/semantic_router", False),
+        ("auto_router/adaptive_router", False),
+        ("auto_router/quality_router", False),
+        ("openai/gpt-4o", False),
+        (None, False),
+    ],
+)
+def test_is_complexity_router_model(model: str | None, expected: bool) -> None:
+    from litellm.router_utils.auto_router_model_naming import is_complexity_router_model
+
+    assert is_complexity_router_model(model) is expected
+
+
+@pytest.mark.parametrize(
+    "litellm_params,expected_key",
+    [
+        ({"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY_CONFIG}, "capability"),
+        ({"model": "auto_router/complexity_router-eu", "complexity_router_config": _FUSE_CONFIG}, "llm_v2"),
+        ({"model": "openai/solver", "complexity_router_config": _CAPABILITY_CONFIG}, None),
+        ({"model": "auto_router/quality_router", "complexity_router_config": _FUSE_CONFIG}, None),
+        ({"model": "auto_router/complexity_router", "complexity_router_config": _HV2_CONFIG}, "heuristic_v2"),
+        ({"model": "auto_router/complexity_router-eu", "complexity_router_config": _HV2_CONFIG}, "heuristic_v2"),
+        (
+            {"model": "auto_router/complexity_router", "complexity_router_config": _CUSTOM_TIER_CONFIG},
+            "tier_or_classifier_prompt",
+        ),
+        (
+            {"model": "auto_router/complexity_router-eu", "complexity_router_config": _CUSTOM_TIER_CONFIG},
+            "tier_or_classifier_prompt",
+        ),
+        (
+            {"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic"}},
+            None,
+        ),
+        ({"model": "auto_router/complexity_router", "complexity_router_config": {"tiers": {"SIMPLE": "a"}}}, None),
+        ({"model": "auto_router/complexity_router", "complexity_router_config": {"tier_definitions": None}}, None),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tier_labels": {"SIMPLE": "Cheap"}},
+            },
+            None,
+        ),
+        ({"model": "auto_router/complexity_router"}, None),
+        ({"model": "auto_router/quality_router", "complexity_router_config": _HV2_CONFIG}, None),
+        ({"model": "auto_router/quality_router", "complexity_router_config": _CUSTOM_TIER_CONFIG}, None),
+        ({"model": "openai/gpt-4o", "complexity_router_config": _HV2_CONFIG}, None),
+        ({"model": "openai/gpt-4o", "complexity_router_config": _CUSTOM_TIER_CONFIG}, None),
+        ({"model": "auto_router/complexity_router", "complexity_router_config": "heuristic_v2"}, None),
+        ({}, None),
+    ],
+)
+def test_gated_capability_of(litellm_params: Mapping[str, object], expected_key: str | None) -> None:
+    """Only a complexity router claiming a licensed capability counts toward that capability's limit.
+
+    Renaming the built-in tiers through tier_labels is not a custom tier set, so it stays ungated.
+    """
+    capability = gated_capability_of(litellm_params)
+    assert (None if capability is None else capability.key) == expected_key
+
+
+@pytest.mark.parametrize("capability", GATED_AUTO_ROUTER_CAPABILITIES, ids=lambda c: c.key)
+def test_count_capability_routers_counts_only_its_own_capability(capability) -> None:
+    """Each capability has its own ceiling, so a router claiming the sibling capability never counts,
+    while a custom tier set and a custom classifier prompt count into the SAME customization slot."""
+
+    def row(name: str, config: Mapping[str, object] | None) -> Mapping[str, object]:
+        params = {"model": "auto_router/complexity_router"} | (
+            {} if config is None else {"complexity_router_config": config}
+        )
+        return {"model_name": name, "litellm_params": params}
+
+    by_key = {
+        "heuristic_v2": (_HV2_CONFIG, _HV2_CONFIG),
+        "capability": (_CAPABILITY_CONFIG, _CAPABILITY_CONFIG),
+        "llm_v2": (_FUSE_CONFIG, _FUSE_CONFIG),
+        "tier_or_classifier_prompt": (_CUSTOM_TIER_CONFIG, _CUSTOM_PROMPT_CONFIG),
+    }
+    mine_first, mine_second = by_key[capability.key]
+    theirs = next(configs[0] for key, configs in by_key.items() if key != capability.key)
     rows: list[Mapping[str, object]] = [
-        {"model_name": "a", "litellm_params": v2},
-        {"model_name": "b", "litellm_params": {"model": "openai/gpt-4o"}},
-        {"model_name": "c", "litellm_params": v2},
-        {"model_name": "d"},
-        {"model_name": "e", "litellm_params": "not a mapping"},
+        row("a", mine_first),
+        row("b", theirs),
+        {"model_name": "c", "litellm_params": {"model": "openai/gpt-4o"}},
+        row("d", mine_second),
+        {"model_name": "e"},
+        {"model_name": "f", "litellm_params": "not a mapping"},
     ]
-    assert count_heuristic_v2_routers(rows) == 2
-    assert count_heuristic_v2_routers(()) == 0
+    assert count_capability_routers(rows, capability=capability) == 2
+    assert count_capability_routers((), capability=capability) == 0
 
 
+@pytest.mark.parametrize("capability", GATED_AUTO_ROUTER_CAPABILITIES, ids=lambda c: c.key)
 @pytest.mark.parametrize(
     "held,limit,violates",
     [
@@ -419,10 +642,48 @@ def test_count_heuristic_v2_routers_reads_model_list_rows_and_ignores_malformed_
         (4, 3, True),
     ],
 )
-def test_heuristic_v2_limit_violation(held: int, limit: int | None, violates: bool) -> None:
-    violation = heuristic_v2_limit_violation(held=held, limit=limit)
+def test_capability_limit_violation(held: int, limit: int | None, violates: bool, capability) -> None:
+    violation = capability_limit_violation(capability=capability, held=held, limit=limit)
     assert (violation is not None) is violates
     if violation is not None:
         assert f"At most {limit} auto-router" in violation
         assert f"would make {held}" in violation
+        assert capability.subject in violation
+        assert capability.remedy in violation
         assert "license" not in violation
+
+
+def test_every_gated_capability_has_a_distinct_predicate_and_sql_spelling() -> None:
+    """The in-process and SQL halves of a capability must stay paired, and no two capabilities may collide."""
+    keys = tuple(capability.key for capability in GATED_AUTO_ROUTER_CAPABILITIES)
+    assert len(set(keys)) == len(keys)
+    for capability in GATED_AUTO_ROUTER_CAPABILITIES:
+        assert "{config}" in capability.sql_config_predicate
+        assert capability.uses is not None
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        _HV2_CONFIG,
+        _CAPABILITY_CONFIG,
+        _FUSE_CONFIG,
+        _CUSTOM_TIER_CONFIG,
+        _CUSTOM_PROMPT_CONFIG,
+        {"classifier_type": "heuristic"},
+        {"classifier_type": "heuristic_v2", "classifier_llm_config": {"system_prompt": "p"}},
+        {
+            "classifier_type": "llm",
+            "classifier_llm_config": {"model": "m", "system_prompt": "p"},
+            "tier_labels": {"SIMPLE": "Cheap"},
+        },
+    ],
+)
+def test_capabilities_are_mutually_exclusive_on_one_config(config: Mapping[str, object]) -> None:
+    """No config claims two capabilities, which is what lets one lock and one count serve them all.
+
+    The config validator is what makes this true and is pinned separately in test_complexity_router:
+    tier_definitions rejects every heuristic classifier_type and rejects the classifier system_prompt,
+    and system_prompt only counts for the classifier types heuristic_v2 is not one of.
+    """
+    assert sum(1 for capability in GATED_AUTO_ROUTER_CAPABILITIES if capability.uses(config)) <= 1

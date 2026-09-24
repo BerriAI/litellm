@@ -29,9 +29,8 @@ from ..common_utils import (
 )
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -258,7 +257,7 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:

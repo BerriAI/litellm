@@ -18,6 +18,7 @@ TTL ``MCP_SSO_ASSERTION_CACHE_TTL_SECONDS``; invalidation also guards against st
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -29,11 +30,41 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE, MCP_SSO_ASSERTION_CACHE_TTL_SECONDS
 
 if TYPE_CHECKING:
+    from prisma.models import LiteLLM_SSOIdentityAssertion
+
     from litellm.proxy.utils import PrismaClient
 
 _ASSERTION_DECRYPT_LOG_KEY: Final = "sso_identity_assertion"
 _STR_ADAPTER: Final[TypeAdapter[str]] = TypeAdapter(str)
 _MAYBE_STR_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+
+
+class _SSOAssertionTable(Protocol):
+    """The ``LiteLLM_SSOIdentityAssertion`` table operations this store calls."""
+
+    async def find_unique(self, *, where: Mapping[str, str]) -> LiteLLM_SSOIdentityAssertion | None: ...
+
+    async def find_many(self) -> Sequence[LiteLLM_SSOIdentityAssertion]: ...
+
+    async def upsert(self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> object: ...
+
+    async def update(self, *, where: Mapping[str, str], data: Mapping[str, str]) -> object: ...
+
+
+class _MCPServerTable(Protocol):
+    """The ``LiteLLM_MCPServerTable`` lookup the retention gate calls."""
+
+    async def find_first(self, *, where: Mapping[str, str]) -> object | None: ...
+
+
+def _assertion_table(prisma_client: PrismaClient) -> _SSOAssertionTable:
+    """The SSO assertion table, typed so the untyped prisma client surface stops here."""
+    return prisma_client.db.litellm_ssoidentityassertion
+
+
+def _mcp_server_table(prisma_client: PrismaClient) -> _MCPServerTable:
+    """The MCP server table, typed so the untyped prisma client surface stops here."""
+    return prisma_client.db.litellm_mcpservertable
 
 
 class SSOIdentityAssertion(BaseModel):
@@ -127,6 +158,23 @@ def assertion_from_sso_login(id_token: object, refresh_token: object) -> SSOIden
     )
 
 
+def assertion_expired(assertion: SSOIdentityAssertion, now: datetime) -> bool:
+    """Whether the assertion's ``exp`` has passed at ``now``. An assertion carrying no expiry is
+    treated as usable and left for the IdP to reject, since the store records what the id_token
+    claimed rather than imposing a lifetime of its own. A naive ``expires_at`` is read as UTC so a
+    stored value that lost its offset compares instead of raising.
+
+    Lives beside the model rather than in either reader so the egress guard and the renewal
+    trigger judge the same field the same way; passing a ``now`` in the future is how a caller
+    asks "is this about to expire" without a second, driftable predicate.
+    """
+    expires_at: Final = assertion.expires_at
+    if expires_at is None:
+        return False
+    normalized: Final = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=timezone.utc)
+    return normalized <= now
+
+
 async def ema_assertion_retention_enabled() -> bool:
     """Whether any MCP server uses ``oauth2_id_jag``, evaluated per login so the gateway only
     retains bearer material while an EMA upstream exists to spend it on. Judged against the two
@@ -146,7 +194,7 @@ async def ema_assertion_retention_enabled() -> bool:
         return True
     if prisma_client is None:
         return False
-    row = await prisma_client.db.litellm_mcpservertable.find_first(where={"auth_type": MCPAuth.oauth2_id_jag.value})
+    row: Final = await _mcp_server_table(prisma_client).find_first(where={"auth_type": MCPAuth.oauth2_id_jag.value})
     return row is not None
 
 
@@ -158,14 +206,14 @@ async def persist_sso_identity_assertion(
 
     if prisma_client is None:
         return
-    payload: Final[dict[str, str]] = {
+    payload: Final = {
         "id_token": assertion.id_token.get_secret_value(),
         **({"refresh_token": assertion.refresh_token.get_secret_value()} if assertion.refresh_token else {}),
         **({"issuer": assertion.issuer} if assertion.issuer else {}),
         **({"expires_at": assertion.expires_at.isoformat()} if assertion.expires_at else {}),
     }
     encoded: Final = _STR_ADAPTER.validate_python(encrypt_value_helper(json.dumps(payload)))
-    await prisma_client.db.litellm_ssoidentityassertion.upsert(
+    await _assertion_table(prisma_client).upsert(
         where={"user_id": user_id},
         data={
             "create": {"user_id": user_id, "assertion_b64": encoded},
@@ -181,7 +229,7 @@ async def _read_assertion_from_db(user_id: str) -> SSOIdentityAssertion | None:
 
     if prisma_client is None:
         return None
-    row: Final = await prisma_client.db.litellm_ssoidentityassertion.find_unique(where={"user_id": user_id})
+    row: Final = await _assertion_table(prisma_client).find_unique(where={"user_id": user_id})
     if row is None:
         return None
     raw: Final = _MAYBE_STR_ADAPTER.validate_python(
@@ -220,11 +268,13 @@ async def fetch_sso_identity_assertion(
 
 
 class AssertionStoreUnavailable(Exception):
-    """Raised by ``fetch`` when the backing store is unreachable (e.g. the DB is down).
+    """Raised by ``fetch`` when the assertion cannot be read for a transient reason: the DB is
+    down, or the IdP behind a renewing store could not be reached.
 
     Distinct from returning ``None`` for "this user has no captured assertion": an outage must not
     read as a definite absence, which would tell the user to sign in again over a transient failure,
-    and it must not escape as an unhandled error on the egress or retry path. Mirrors
+    and it must not escape as an unhandled error on the egress or retry path. The message names the
+    real component for the operator log; callers get the reader's generic 503. Mirrors
     ``TokenStoreUnavailable`` on the sibling per-user OAuth store.
     """
 
@@ -257,6 +307,12 @@ class DbSSOAssertionStore:
         except Exception as exc:  # noqa: BLE001  # any driver/storage failure is an outage, not an absence
             raise AssertionStoreUnavailable(str(exc)) from exc
 
+    async def fetch_uncached(self, user_id: str) -> SSOIdentityAssertion | None:
+        try:
+            return await _read_assertion_from_db(user_id)
+        except Exception as exc:  # noqa: BLE001  # any driver/storage failure is an outage, not an absence
+            raise AssertionStoreUnavailable(str(exc)) from exc
+
 
 async def rotate_sso_identity_assertions_master_key(prisma_client: PrismaClient, new_master_key: str) -> None:
     """Re-encrypt every stored assertion under ``new_master_key`` during a salt-key rotation,
@@ -280,14 +336,16 @@ async def rotate_sso_identity_assertions_master_key(prisma_client: PrismaClient,
                 row.user_id,
             )
             return False
-        re_encrypted = _STR_ADAPTER.validate_python(encrypt_value_helper(plaintext, new_encryption_key=new_master_key))
-        await prisma_client.db.litellm_ssoidentityassertion.update(
+        re_encrypted: Final = _STR_ADAPTER.validate_python(
+            encrypt_value_helper(plaintext, new_encryption_key=new_master_key)
+        )
+        await _assertion_table(prisma_client).update(
             where={"user_id": row.user_id},
             data={"assertion_b64": re_encrypted},
         )
         return True
 
-    rows: Final = await prisma_client.db.litellm_ssoidentityassertion.find_many()
+    rows: Final = await _assertion_table(prisma_client).find_many()
     outcomes: Final = [await _rotate_row(row) for row in rows]
     verbose_proxy_logger.info(
         "rotate_sso_identity_assertions_master_key: rotated %d row(s), skipped %d",

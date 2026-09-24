@@ -10,6 +10,7 @@ from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFi
 from litellm.caching import DualCache
 from litellm.proxy._types import CallTypes
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    BATCH_CREATE_HIDDEN_PARAM,
     _is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
 )
@@ -3185,7 +3186,7 @@ def _batch_response(batch_id, output_file_id=None, is_create=False):
         output_file_id=output_file_id,
     )
     if is_create:
-        batch._hidden_params["unified_file_id"] = "unified-input-file-id"
+        batch._hidden_params[BATCH_CREATE_HIDDEN_PARAM] = True
     return batch
 
 
@@ -3411,11 +3412,8 @@ async def test_provider_format_file_without_ownership_row_stays_accessible():
 
 
 @pytest.mark.asyncio
-async def test_post_call_batch_create_stores_ownership_row():
-    """
-    Batch creation (response hidden params carry the unified input file id)
-    must write an ownership row attributed to the creating key.
-    """
+@pytest.mark.parametrize("batch_id", [MODEL_ENCODED_BATCH_ID, RAW_PROVIDER_BATCH_ID])
+async def test_post_call_batch_create_stores_ownership_row(batch_id):
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
@@ -3432,13 +3430,11 @@ async def test_post_call_batch_create_stores_ownership_row():
         user_api_key_dict=UserAPIKeyAuth(
             user_id="user_a", team_id="team_a", parent_otel_span=MagicMock()
         ),
-        response=_batch_response(MODEL_ENCODED_BATCH_ID, is_create=True),
+        response=_batch_response(batch_id, is_create=True),
     )
 
     upsert_call = prisma_client.db.litellm_managedobjecttable.upsert.await_args
-    assert upsert_call.kwargs["where"] == {
-        "unified_object_id": MODEL_ENCODED_BATCH_ID
-    }
+    assert upsert_call.kwargs["where"] == {"unified_object_id": batch_id}
     create_data = upsert_call.kwargs["data"]["create"]
     assert create_data["created_by"] == "user_a"
     assert create_data["team_id"] == "team_a"

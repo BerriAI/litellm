@@ -4,7 +4,7 @@ import copy
 import json
 import traceback
 from collections import deque
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -18,12 +18,15 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.exceptions import MidStreamFallbackError
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
     ContentBlockDelta,
     ContextManagementResponse,
     MessageBlockDelta,
+    MessageDelta,
     StreamingContentBlockDeltaType,
     UsageDelta,
     UsageIteration,
@@ -55,6 +58,25 @@ def _optional_attr(obj: object, name: str) -> object:
 def _optional_attr_sequence(obj: object, name: str) -> Sequence[object]:
     value: Final = getattr(obj, name, None)
     return value if value else ()
+
+
+def _error_status_and_message(exc: Exception) -> tuple[int, str]:
+    if isinstance(exc, (BaseLLMException, MidStreamFallbackError)):
+        return exc.status_code, exc.message
+    return 500, str(exc) or "Upstream stream ended before completion"
+
+
+def _mid_stream_error_sse_event(exc: Exception) -> bytes:
+    from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
+        AnthropicExceptionMapping,
+    )
+
+    status_code, message = _error_status_and_message(exc)
+    error_response = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status_code,
+        raw_message=message,
+    )
+    return f"event: error\ndata: {json.dumps(error_response)}\n\n".encode()
 
 
 def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
@@ -100,6 +122,10 @@ class _CombinedChunkSplitter:
     @staticmethod
     def _is_combined(chunk: "ModelResponseStream") -> bool:
         """True if ``chunk`` carries response content AND a finish_reason."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+            openai_chat_refusal_text,
+        )
+
         choices: Final = _optional_attr_sequence(chunk, "choices")
         if not choices:
             return False
@@ -114,6 +140,7 @@ class _CombinedChunkSplitter:
             or _optional_attr(delta, "tool_calls")
             or _optional_attr(delta, "reasoning_content")
             or _optional_attr(delta, "thinking_blocks")
+            or openai_chat_refusal_text(delta)
         )
 
     _PAYLOAD_FIELD_GROUPS: "tuple[tuple[str, ...], ...]" = (
@@ -305,6 +332,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Synthesized compaction block from compact_20260112 polyfill (streaming).
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
+        self._refusal_text: str = ""
         self.sent_compaction_block: bool = False
         # Per-phase flags so the compaction block's start/delta/stop events
         # are emitted (and the public state machine is advanced) in
@@ -348,10 +376,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         usage_dict: UsageDelta = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
             chunk.usage
         )
-        merged_chunk["usage"] = usage_dict
         if self.applied_edits and "context_management" not in merged_chunk:
             merged_chunk["context_management"] = ContextManagementResponse(applied_edits=list(self.applied_edits))
-        return self._augment_message_delta_usage(merged_chunk)
+        return self._augment_message_delta_usage({**merged_chunk, "usage": usage_dict})
 
     def _handle_choiceless_chunk(self, chunk: "ModelResponseStream") -> bool:
         """Consume an OpenAI-compatible chunk that carries no ``choices``.
@@ -420,10 +447,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             }
             iterations.append(message_iteration)
         augmented_usage["iterations"] = iterations
-        augmented["usage"] = augmented_usage
-        return augmented
+        return {**augmented, "usage": augmented_usage}
 
-    def _next_compaction_event(self) -> dict[str, Any] | None:
+    def _next_compaction_event(self) -> dict[str, object] | None:
         """Return the next compaction content-block SSE event, or ``None``.
 
         Anthropic delivers compaction as a single delta (no token-by-token
@@ -462,7 +488,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 "delta": {"type": "compaction_delta", "content": summary_content},
             }
 
-        stop_event: Final = {
+        stop_event: Final[dict[str, object]] = {
             "type": "content_block_stop",
             "index": compaction_index,
         }
@@ -572,6 +598,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     current_content_block_index=self.current_content_block_index,
                     applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
                 )
+                processed_chunk = self._with_refusal_stop_details(processed_chunk)
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
                 if will_merge_into_held:
@@ -806,6 +833,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     current_content_block_index=self.current_content_block_index,
                     applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
                 )
+                processed_chunk = self._with_refusal_stop_details(processed_chunk)
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
                 if will_merge_into_held:
@@ -981,20 +1009,44 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Async version of anthropic_sse_wrapper.
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
         """
-        async for chunk in self:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
-            else:
-                # For non-dict chunks, forward the original value unchanged
-                yield chunk
+        try:
+            async for chunk in self:
+                if isinstance(chunk, dict):
+                    event_type: str = str(chunk.get("type", "message"))
+                    payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                    yield payload.encode()
+                else:
+                    yield chunk
+        except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
+            verbose_logger.exception("Anthropic Adapter - mid-stream error, emitting Anthropic error event: %s", e)
+            yield _mid_stream_error_sse_event(e)
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
 
+    def _with_refusal_stop_details(
+        self,
+        processed_chunk: ContentBlockDelta | MessageBlockDelta,
+    ) -> ContentBlockDelta | MessageBlockDelta:
+        if processed_chunk["type"] != "message_delta" or not self._refusal_text:
+            return processed_chunk
+        delta: Final = processed_chunk["delta"]
+        if delta.get("stop_reason") == "max_tokens":
+            return processed_chunk
+        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+            refusal_stop_details,
+        )
+
+        refusal_delta: Final[MessageDelta] = {
+            **delta,
+            "stop_reason": "refusal",
+            "stop_details": refusal_stop_details(self._refusal_text),
+        }
+        refusal_chunk: Final[MessageBlockDelta] = {**processed_chunk, "delta": refusal_delta}
+        return refusal_chunk
+
     @staticmethod
-    def _delta_has_content(processed_chunk: dict[str, Any]) -> bool:
+    def _delta_has_content(processed_chunk: Mapping[str, object]) -> bool:
         """Return True if a translated chunk carries a non-empty
         ``content_block_delta`` payload.
 
@@ -1035,6 +1087,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     @staticmethod
     def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
         from litellm.llms.anthropic.common_utils import is_empty_unsigned_thinking_block
+        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+            openai_chat_refusal_text,
+        )
 
         choice: Final = chunk.choices[0]
         if choice.finish_reason is not None:
@@ -1043,6 +1098,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if getattr(delta, "tool_calls", None):
             return False
         if getattr(delta, "content", None):
+            return False
+        if openai_chat_refusal_text(delta):
             return False
         if getattr(delta, "reasoning_content", None):
             return False
@@ -1067,12 +1124,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         - Different content types in the response
         - Specific markers in the content
         """
+        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+            openai_chat_refusal_text,
+        )
+
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        # Example logic - customize based on your needs:
-        # If chunk indicates a tool call
         if chunk.choices[0].finish_reason is not None:
             return False
+
+        refusal_text: Final = openai_chat_refusal_text(chunk.choices[0].delta)
+        if refusal_text is not None:
+            self._refusal_text = self._refusal_text + refusal_text
 
         (
             block_type,

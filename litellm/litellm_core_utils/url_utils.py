@@ -19,6 +19,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
   check but still resolve DNS and still rewrite HTTP to the resolved IP.
 """
 
+import asyncio
 import socket
 from ipaddress import ip_address, ip_network
 from typing import Any, Final, Protocol
@@ -335,7 +336,7 @@ def validate_url(url: str) -> tuple[str, str]:
                 raise SSRFError(
                     f"URL targets a blocked address ({resolved_ip}). "
                     "If this is a legitimate internal service, add the host "
-                    "to `user_url_allowed_hosts` in general_settings."
+                    "to `user_url_allowed_hosts` in litellm_settings."
                 )
 
     # For HTTPS with SSL verification enabled, TLS certificate validation
@@ -417,7 +418,7 @@ def _extract_redirect_url(response: httpx.Response, request_url: str) -> str:
     return str(httpx.URL(request_url).join(location))
 
 
-def safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
+def safe_get(client: _UrlFetcher, url: str, **kwargs: Any) -> httpx.Response:
     """
     Fetch a user-supplied URL with SSRF protection on every redirect hop.
 
@@ -460,7 +461,7 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
     raise SSRFError("Too many redirects")
 
 
-async def async_safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
+async def async_safe_get(client: _AsyncUrlFetcher, url: str, **kwargs: Any) -> httpx.Response:
     """Async version of safe_get."""
     if not getattr(litellm, "user_url_validation", True):
         kwargs.setdefault("follow_redirects", True)
@@ -471,7 +472,7 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response
     kwargs.pop("follow_redirects", None)
     headers_view: Final[_CallerHeadersView] = {"headers": kwargs.pop("headers", {})}
     for _ in range(_MAX_REDIRECTS):
-        validated_url, original_host = validate_url(url)
+        validated_url, original_host = await asyncio.to_thread(validate_url, url)
         response = await fetcher.get(
             validated_url,
             headers={**headers_view["headers"], "Host": original_host},

@@ -241,7 +241,7 @@ class TestRouterIndexManagement:
             "_get_deployment_by_litellm_model": "lookup by litellm_params.model, which is not indexed",
             "_finalize_adaptive_router_if_configured": 'init-time prefix scan for "auto_router/adaptive_router"; no index for prefix match',
             "config_deployments": "filters the whole list on model_info.db_model; admin path only (model add/upsert)",
-            "heuristic_v2_router_limit_violation": "counts heuristic_v2 routers across the whole list; admin path only (auto-router init/upsert)",
+            "auto_router_capability_violation": "counts gated auto-routers across the whole list; admin path only (auto-router init/upsert)",
         }
 
         # Get path to router.py

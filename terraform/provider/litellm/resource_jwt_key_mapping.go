@@ -29,10 +29,17 @@ func resourceLiteLLMJWTKeyMapping() *schema.Resource {
 				Description: "Value of the claim identifying the JWT client. Unique together with jwt_claim_name",
 			},
 			"key": {
-				Type:        schema.TypeString,
-				Required:    true,
-				Sensitive:   true,
-				Description: "The virtual key this claim value maps to. The proxy stores only a hash of it and never returns it, so drift on this attribute cannot be detected and Terraform tracks the configured value",
+				Type:         schema.TypeString,
+				Optional:     true,
+				Sensitive:    true,
+				ExactlyOneOf: []string{"key", "token_id"},
+				Description:  "The virtual key this claim value maps to, as plaintext. The proxy stores only a hash of it and never returns it, so drift on this attribute cannot be detected and Terraform tracks the configured value. litellm_key marks its generated key write-only, so this cannot reference a litellm_key resource; use token_id for that, or supply the plaintext from a variable or a secret manager",
+			},
+			"token_id": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				ExactlyOneOf: []string{"key", "token_id"},
+				Description:  "The SHA-256 hash of the virtual key this claim value maps to, which is what the proxy stores. litellm_key exposes it as token_id, so unlike key it can be referenced directly from a litellm_key resource. Not a secret, so it is not marked sensitive",
 			},
 			"description": {
 				Type:        schema.TypeString,
