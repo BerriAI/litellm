@@ -232,4 +232,111 @@ describe("useMemberBudgetReset", () => {
     expect(gateway.saveTeam).not.toHaveBeenCalled();
     expect(gateway.resetMemberBudgets).not.toHaveBeenCalled();
   });
+
+  it("skips the refresh and stays idle when dismissed while a reset is in flight", async () => {
+    const gateway = buildGateway();
+    const bulkDone = Promise.withResolvers<{ success: boolean; user_id: string }[]>();
+    gateway.resetMemberBudgets.mockReturnValueOnce(bulkDone.promise);
+    const { result } = renderReset(gateway);
+
+    await act(async () => {
+      result.current.prompt(pendingFor(["u-1"]));
+    });
+    let resetPromise = Promise.resolve();
+    await act(async () => {
+      resetPromise = result.current.reset();
+    });
+    expect(result.current.state.phase).toBe("resetting");
+
+    act(() => {
+      result.current.dismiss();
+    });
+    await act(async () => {
+      bulkDone.resolve([{ success: true, user_id: "u-1" }]);
+      await resetPromise;
+    });
+
+    expect(result.current.state.phase).toBe("idle");
+    expect(gateway.refreshTeamData).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith("Reset 1 member budget to the team default");
+  });
+
+  it("does not return to prompting when the team save fails after a dismiss", async () => {
+    const gateway = buildGateway();
+    const saveDone = Promise.withResolvers<void>();
+    gateway.saveTeam.mockReturnValueOnce(saveDone.promise);
+    const { result } = renderReset(gateway);
+
+    await act(async () => {
+      result.current.prompt(pendingFor(["u-1"]));
+    });
+    let resetPromise = Promise.resolve();
+    await act(async () => {
+      resetPromise = result.current.reset();
+    });
+
+    act(() => {
+      result.current.dismiss();
+    });
+    await act(async () => {
+      saveDone.reject(new Error("team update failed"));
+      await resetPromise;
+    });
+
+    expect(result.current.state.phase).toBe("idle");
+    expect(gateway.resetMemberBudgets).not.toHaveBeenCalled();
+    expect(gateway.refreshTeamData).not.toHaveBeenCalled();
+  });
+
+  it("stays idle without a refresh when the reset fails after a dismiss", async () => {
+    const gateway = buildGateway();
+    const bulkDone = Promise.withResolvers<{ success: boolean; user_id: string }[]>();
+    gateway.resetMemberBudgets.mockReturnValueOnce(bulkDone.promise);
+    const { result } = renderReset(gateway);
+
+    await act(async () => {
+      result.current.prompt(pendingFor(["u-1"]));
+    });
+    let resetPromise = Promise.resolve();
+    await act(async () => {
+      resetPromise = result.current.reset();
+    });
+
+    act(() => {
+      result.current.dismiss();
+    });
+    await act(async () => {
+      bulkDone.reject(new Error("bulk failed"));
+      await resetPromise;
+    });
+
+    expect(result.current.state.phase).toBe("idle");
+    expect(gateway.refreshTeamData).not.toHaveBeenCalled();
+  });
+
+  it("skips the refresh when dismissed while keep-custom is saving", async () => {
+    const gateway = buildGateway();
+    const saveDone = Promise.withResolvers<void>();
+    gateway.saveTeam.mockReturnValueOnce(saveDone.promise);
+    const { result } = renderReset(gateway);
+
+    await act(async () => {
+      result.current.prompt(pendingFor(["u-1"]));
+    });
+    let keepPromise = Promise.resolve();
+    await act(async () => {
+      keepPromise = result.current.keepCustom();
+    });
+
+    act(() => {
+      result.current.dismiss();
+    });
+    await act(async () => {
+      saveDone.resolve();
+      await keepPromise;
+    });
+
+    expect(result.current.state.phase).toBe("idle");
+    expect(gateway.refreshTeamData).not.toHaveBeenCalled();
+  });
 });

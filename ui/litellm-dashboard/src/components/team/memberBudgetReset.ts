@@ -28,7 +28,7 @@ export const shouldPromptMemberBudgetReset = (
 };
 
 export const chunk = <T>(items: readonly T[], size: number): T[][] => {
-  if (size <= 0) throw new RangeError("chunk size must be positive");
+  if (size <= 0) return [];
   return Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, i * size + size));
 };
 

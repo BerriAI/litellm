@@ -83,8 +83,9 @@ describe("chunk", () => {
     expect(chunk([], MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES)).toEqual([]);
   });
 
-  it("rejects a non-positive size instead of dividing by zero", () => {
-    expect(() => chunk(["u-1"], 0)).toThrow(RangeError);
+  it("returns no chunks for a non-positive size", () => {
+    expect(chunk(["u-1"], 0)).toEqual([]);
+    expect(chunk(["u-1"], -3)).toEqual([]);
   });
 });
 

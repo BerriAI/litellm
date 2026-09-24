@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { components } from "@/lib/http/schema";
 import { toast } from "@/lib/toast";
 import {
@@ -28,8 +28,10 @@ type ResetRun =
 
 export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
   const [state, setState] = useState<MemberBudgetResetState>({ phase: "idle" });
+  const activeRun = useRef<object | null>(null);
+  const isCurrent = (run: object) => activeRun.current === run;
 
-  const runReset = async (pending: MemberBudgetResetPending, attempted: number) => {
+  const runReset = async (pending: MemberBudgetResetPending, attempted: number, run: object) => {
     const { resetMemberBudgets, refreshTeamData } = gateway;
 
     const runChunks = (
@@ -61,8 +63,10 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
       } else {
         toast.fromError("Team updated, but member budgets could not be reset");
       }
-      setState({ phase: "resetFailed", pending, attempted: outcome.attempted });
-      await refreshTeamData();
+      if (isCurrent(run)) {
+        setState({ phase: "resetFailed", pending, attempted: outcome.attempted });
+        await refreshTeamData();
+      }
       return;
     }
     const failed = outcome.results.filter((r) => !r.success);
@@ -75,8 +79,10 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
         `Reset ${outcome.attempted} member ${pluralize(outcome.attempted, "budget", "budgets")} to the team default`,
       );
     }
-    setState({ phase: "idle" });
-    await refreshTeamData();
+    if (isCurrent(run)) {
+      setState({ phase: "idle" });
+      await refreshTeamData();
+    }
   };
 
   const prompt = (pending: MemberBudgetResetPending) => setState({ phase: "prompting", pending });
@@ -84,27 +90,33 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
   const reset = async () => {
     if (state.phase !== "prompting") return;
     const { pending } = state;
+    const run = {};
+    activeRun.current = run;
     setState({ phase: "resetting", pending, attempted: 0 });
     try {
       await gateway.saveTeam(pending.updateData);
     } catch (error) {
       console.error("Error updating team:", error);
-      setState({ phase: "prompting", pending });
+      if (isCurrent(run)) setState({ phase: "prompting", pending });
       return;
     }
-    await runReset(pending, 0);
+    await runReset(pending, 0, run);
   };
 
   const retry = async () => {
     if (state.phase !== "resetFailed") return;
     const { pending, attempted } = state;
+    const run = {};
+    activeRun.current = run;
     setState({ phase: "resetting", pending, attempted });
-    await runReset(pending, attempted);
+    await runReset(pending, attempted, run);
   };
 
   const keepCustom = async () => {
     if (state.phase !== "prompting") return;
     const { pending } = state;
+    const run = {};
+    activeRun.current = run;
     setState({ phase: "idle" });
     try {
       await gateway.saveTeam(pending.updateData);
@@ -112,10 +124,13 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
     } catch (error) {
       console.error("Error updating team:", error);
     }
-    await gateway.refreshTeamData();
+    if (isCurrent(run)) await gateway.refreshTeamData();
   };
 
-  const dismiss = useCallback(() => setState({ phase: "idle" }), []);
+  const dismiss = useCallback(() => {
+    activeRun.current = null;
+    setState({ phase: "idle" });
+  }, []);
 
   return { state, prompt, reset, retry, keepCustom, dismiss };
 };

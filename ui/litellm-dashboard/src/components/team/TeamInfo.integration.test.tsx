@@ -289,21 +289,25 @@ const seedDefaultMocks = () => {
   mockUseAllProxyModels.mockReturnValue({
     data: { data: [] },
     isLoading: false,
-  } as any);
+  } as unknown as ReturnType<typeof useAllProxyModels>);
   mockUseTeam.mockReturnValue({
     data: undefined,
     isLoading: false,
-  } as any);
+  } as unknown as ReturnType<typeof useTeam>);
   mockUseOrganization.mockReturnValue({
     data: undefined,
     isLoading: false,
-  } as any);
+  } as unknown as ReturnType<typeof useOrganization>);
   mockUseCurrentUser.mockReturnValue({
     data: { models: [] },
     isLoading: false,
-  } as any);
-  mockUseMCPServers.mockReturnValue({ data: [], isLoading: false, isError: false } as any);
-  mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false, isError: false } as any);
+  } as unknown as ReturnType<typeof useCurrentUser>);
+  mockUseMCPServers.mockReturnValue({ data: [], isLoading: false, isError: false } as unknown as ReturnType<
+    typeof useMCPServers
+  >);
+  mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false, isError: false } as unknown as ReturnType<
+    typeof useMCPToolsets
+  >);
   mockUseAccessGroups.mockReturnValue({
     data: [
       { access_group_id: "ag-1", access_group_name: "Group 1", access_mcp_server_ids: [] },
@@ -311,18 +315,21 @@ const seedDefaultMocks = () => {
     ],
     isLoading: false,
     isError: false,
-  } as any);
+  } as unknown as ReturnType<typeof useAccessGroups>);
   mockUseUISettings.mockReturnValue({
     data: { values: {} },
     isLoading: false,
-  } as any);
+  } as unknown as ReturnType<typeof useUISettings>);
   mockUseKeys.mockReturnValue({
     data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
     isPending: false,
     isFetching: false,
     refetch: vi.fn(),
-  } as any);
-  vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: [], isLoading: false } as any);
+  } as unknown as ReturnType<typeof useKeys>);
+  vi.mocked(useTeamMetadataSchema).mockReturnValue({
+    data: [],
+    isLoading: false,
+  } as unknown as ReturnType<typeof useTeamMetadataSchema>);
 
   can.mockReturnValue(true);
   vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
@@ -657,6 +664,48 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     await waitFor(() => expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument());
     expect(bulkUpdatePOST).not.toHaveBeenCalled();
+  });
+
+  it("does not reopen the dialog or refetch the old team when the team changes mid-reset", async () => {
+    const user = userEvent.setup({ delay: null });
+    const data = {
+      ...createMockTeamData({
+        team_member_budget_table: { max_budget: 10, budget_duration: null, tpm_limit: null, rpm_limit: null },
+      }),
+      team_memberships: [customBudgetMembership("user-custom")],
+    } as TeamData;
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(data);
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: savedTeam, team_id: "123" });
+    const bulkDone = Promise.withResolvers<{ data: { data: { success: boolean; user_id: string }[] } }>();
+    bulkUpdatePOST.mockReturnValue(bulkDone.promise);
+
+    const { rerender } = renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByText("Team Member Settings"));
+    const input = await screen.findByLabelText("Default Budget (USD)");
+
+    await submitNewDefault(user, input, "20");
+    await user.click(await screen.findByRole("button", { name: "Reset to $20.00" }));
+    await waitFor(() => expect(bulkUpdatePOST).toHaveBeenCalled());
+
+    const infoCallsBeforeSwitch = vi.mocked(networking.teamInfoCall).mock.calls.length;
+    rerender(<TeamInfoView {...props} teamId="456" />);
+    bulkDone.resolve({ data: { data: [{ success: true, user_id: "user-custom" }] } });
+
+    await waitFor(() => expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(networking.teamInfoCall)
+          .mock.calls.slice(infoCallsBeforeSwitch)
+          .some((call) => call[1] === "456"),
+      ).toBe(true),
+    );
+    const infoCallsAfterSwitch = vi.mocked(networking.teamInfoCall).mock.calls.slice(infoCallsBeforeSwitch);
+    expect(infoCallsAfterSwitch.every((call) => call[1] === "456")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Retry reset" })).not.toBeInTheDocument();
   });
 
   it("saves directly when a custom member's cap is null and already inherits the default", async () => {
