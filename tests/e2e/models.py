@@ -1155,6 +1155,12 @@ class CostMapEntry(BaseModel):
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     cache_read_input_token_cost: float | None = None
+    input_cost_per_token_balanced: float | None = None
+    output_cost_per_token_balanced: float | None = None
+    cache_read_input_token_cost_balanced: float | None = None
+    input_cost_per_token_flex: float | None = None
+    output_cost_per_token_flex: float | None = None
+    cache_read_input_token_cost_flex: float | None = None
     supports_function_calling: bool | None = None
     supports_reasoning: bool | None = None
     supports_response_schema: bool | None = None
