@@ -392,7 +392,11 @@ def deepseek_off_peak_drift(entry: Mapping[str, object]) -> str | None:
     windows: Final = tuple(block.get("windows", ()))
     if windows[: len(DEEPSEEK_OFF_PEAK_WINDOWS)] != DEEPSEEK_OFF_PEAK_WINDOWS:
         return f"windows={block.get('windows')}"
-    if not all("override_dates" in rule for rule in windows[len(DEEPSEEK_OFF_PEAK_WINDOWS) :]):
+    if not all(
+        "override_dates" in rule
+        and rule.get("hours_utc") in ("00:00-00:00", DEEPSEEK_OFF_PEAK_WINDOWS[0]["hours_utc"])
+        for rule in windows[len(DEEPSEEK_OFF_PEAK_WINDOWS) :]
+    ):
         return f"windows={block.get('windows')}"
     halved: Final = {rate: block.get(rate) for rate in DEEPSEEK_HALVED_RATES}
     expected: Final = {rate: float(str(entry[rate])) / 2 for rate in DEEPSEEK_HALVED_RATES}

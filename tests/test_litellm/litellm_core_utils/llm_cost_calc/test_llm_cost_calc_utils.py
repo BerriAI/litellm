@@ -723,6 +723,9 @@ def test_is_off_peak_ignores_malformed_override_dates():
         ["2026-1-1"],
         ["2026-W01-4"],
         ["2026-01-1 "],
+        ["2026-02-30"],
+        ["2026-13-01"],
+        ["2026-01-011"],
     ):
         block = {"windows": peak_windows + [{"hours_utc": "00:00-00:00", "override_dates": bad}]}
         assert _is_off_peak(block, peak_instant) is False, (
@@ -740,9 +743,45 @@ def test_is_off_peak_override_rule_without_valid_hours_is_disabled():
         "windows": [
             {"override_dates": ["2026-03-03"], "hours_utc": 5},
             {"override_dates": ["2026-03-03"]},
+            {"override_dates": ["2026-03-03"], "hours_utc": "garbage"},
+            {"override_dates": ["2026-03-03"], "hours_utc": "25:00-26:00"},
+            {"override_dates": ["2026-03-03"], "hours_utc": ["4pm-midnight"]},
         ],
     }
     assert _is_off_peak(block, datetime(2026, 3, 3, 12, 0, tzinfo=timezone.utc)) is True
+
+
+def test_is_off_peak_override_rule_ignores_its_weekdays():
+    """On a date an override rule lists, its own weekdays field is ignored: a weekend-only
+    holiday rule still applies on the Thursday holiday."""
+    from datetime import datetime, timezone
+
+    block = {
+        "windows": [
+            {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+            {"hours_utc": "00:00-00:00", "weekdays": [6, 7], "override_dates": ["2026-01-01"]},
+        ],
+    }
+    holiday_thursday = datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc)
+    assert _is_off_peak(block, holiday_thursday) is True, (
+        f"{holiday_thursday.isoformat()} is a Thursday holiday billed off-peak all day"
+    )
+
+
+def test_is_off_peak_matching_override_rules_are_a_union():
+    """Every rule listing today's date applies: the date is off-peak inside any of their
+    windows, peak outside all of them."""
+    from datetime import datetime, timezone
+
+    block = {
+        "windows": [
+            {"override_dates": ["2026-03-03"], "hours_utc": "01:00-02:00"},
+            {"override_dates": ["2026-03-03"], "hours_utc": "12:00-13:00"},
+        ],
+    }
+    assert _is_off_peak(block, datetime(2026, 3, 3, 1, 30, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 3, 3, 12, 30, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 3, 3, 5, 0, tzinfo=timezone.utc)) is False
 
 
 def test_is_off_peak_disables_rules_with_partially_malformed_override_dates():
@@ -802,6 +841,35 @@ def test_override_dates_use_weekday_timezone_calendar_on_shipped_deepseek_rows()
         if row.get("windows") != block["windows"] or row.get("weekday_timezone") != block["weekday_timezone"]
     ]
     assert not drifted, f"off_peak schedule drift on {drifted}"
+
+    from datetime import date, timedelta
+
+    windows: Final = block["windows"]
+    assert windows[:2] == [
+        {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+        {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+    ]
+    holidays: Final = {
+        (start + timedelta(days=offset)).isoformat()
+        for start, days in (
+            (date(2026, 1, 1), 3),
+            (date(2026, 2, 15), 9),
+            (date(2026, 4, 4), 3),
+            (date(2026, 5, 1), 5),
+            (date(2026, 6, 19), 3),
+            (date(2026, 9, 25), 3),
+            (date(2026, 10, 1), 7),
+        )
+        for offset in range(days)
+    }
+    workdays: Final = {"2026-01-04", "2026-02-14", "2026-02-28", "2026-05-09", "2026-09-20", "2026-10-10"}
+    holiday_rule, workday_rule = windows[2], windows[3]
+    assert holiday_rule["hours_utc"] == "00:00-00:00"
+    assert set(holiday_rule["override_dates"]) == holidays
+    assert workday_rule["hours_utc"] == windows[0]["hours_utc"]
+    assert set(workday_rule["override_dates"]) == workdays
+    assert holidays.isdisjoint(workdays)
+    assert all(date.fromisoformat(day).isoweekday() in (6, 7) for day in workdays)
 
     shanghai_make_up_sunday = datetime(2026, 1, 3, 17, 0, tzinfo=timezone.utc)
     make_up_sunday_peak = datetime(2026, 1, 4, 2, 0, tzinfo=timezone.utc)
