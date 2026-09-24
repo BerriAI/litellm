@@ -231,7 +231,7 @@ async def test_non_string_metadata_user_id_is_rejected_before_the_provider_call(
 ) -> None:
     messages_server.expected_requests = 0
 
-    with pytest.raises(litellm.BadRequestError, match="metadata.user_id must be a string"):
+    with pytest.raises(litellm.BadRequestError, match=r"metadata\.user_id must be a string"):
         await litellm.anthropic.messages.acreate(**arguments(messages_server, metadata={"user_id": 123}))
 
     assert messages_server.requests == []
