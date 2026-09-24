@@ -1571,6 +1571,34 @@ class TestVertexResponsesBatchInputTranslation:
         with pytest.raises(ValueError, match="missing required `input` field"):
             _wrap_entries([_responses_entry(body={"model": "gemini-2.5-flash"})])
 
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            _responses_entry(
+                body={
+                    "model": "gemini-2.5-flash",
+                    "input": [{"role": "developer", "content": "be terse"}, {"role": "user", "content": "ping"}],
+                }
+            ),
+            {
+                "custom_id": "chat-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-2.5-flash",
+                    "messages": [{"role": "developer", "content": "be terse"}, {"role": "user", "content": "ping"}],
+                },
+            },
+        ],
+        ids=["responses", "chat"],
+    )
+    def test_developer_role_becomes_the_system_instruction_like_real_time(self, entry):
+        (row,) = _wrap_entries([entry])
+
+        request = row["request"]
+        assert request["system_instruction"] == {"parts": [{"text": "be terse"}]}
+        assert request["contents"] == [{"role": "user", "parts": [{"text": "ping"}]}]
+
 
 class TestVertexEmbeddingsBatchOutputTranslation:
     """Vertex Gemini Embedding batch output rows must come back as OpenAI batch rows."""

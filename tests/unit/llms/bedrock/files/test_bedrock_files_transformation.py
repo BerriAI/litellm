@@ -1689,8 +1689,31 @@ class TestBedrockBatchNonChatEndpointRecords:
         )
 
         assert model_input["messages"][0]["content"] == [{"type": "text", "text": "Weather in Paris?"}]
-        assert model_input["tools"][0]["function"]["name"] == "get_weather"
-        assert model_input["tools"][0]["function"]["parameters"] == parameters
+        tool = model_input["tools"][0]
+        function = tool.get("function", tool)
+        assert (function["name"], function.get("parameters", function.get("input_schema"))) == ("get_weather", parameters)
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            (
+                "/v1/responses",
+                {"input": [{"role": "developer", "content": "be terse"}, {"role": "user", "content": "ping"}]},
+            ),
+            (
+                "/v1/chat/completions",
+                {"messages": [{"role": "developer", "content": "be terse"}, {"role": "user", "content": "ping"}]},
+            ),
+        ],
+        ids=["responses", "chat"],
+    )
+    def test_anthropic_developer_role_becomes_the_system_prompt_like_real_time(self, url, body):
+        model_input = self._transform(
+            {"custom_id": "4c", "method": "POST", "url": url, "body": {"model": self.ANTHROPIC_MODEL, **body}}
+        )
+
+        assert model_input["system"] == [{"type": "text", "text": "be terse"}]
+        assert [message["role"] for message in model_input["messages"]] == ["user"]
 
     def test_responses_record_keeps_metadata(self):
         """`metadata` reaches the bridge, which reads it as its own kwarg."""

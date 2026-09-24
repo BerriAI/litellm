@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
 )
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
 from litellm.llms.base_llm.files.transformation import (
@@ -880,7 +881,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         from litellm.types.utils import LlmProviders
 
-        messages: Final = openai_request_body.get("messages", [])
+        messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---

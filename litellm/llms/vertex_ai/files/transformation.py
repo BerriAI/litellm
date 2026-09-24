@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     extract_file_metadata,
 )
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
 from litellm.llms.base_llm.files.transformation import (
@@ -681,7 +682,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         else openai_request_body
     )
     vertex_request_body: Final = _transform_request_body(
-        messages=chat_request_body.get("messages", []),
+        messages=map_developer_role_to_system_role(chat_request_body.get("messages", [])),
         model=chat_request_body.get("model", ""),
         optional_params=map_openai_to_vertex_params(chat_request_body),
         custom_llm_provider="vertex_ai",
