@@ -12,7 +12,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
-def _deployment(model_name: str, model: str = "openai/gpt-4.1-mini", **model_info):
+def _deployment(model_name: str, model: str = "openai/gpt-4.1-mini", **model_info: str | bool) -> dict[str, object]:
     return {
         "model_name": model_name,
         "litellm_params": {"model": model, "api_key": "sk-fake"},
@@ -68,8 +68,8 @@ def _claude_code_request() -> Request:
     return _anthropic_request((b"user-agent", b"claude-cli/2.1.267 (external, cli)"))
 
 
-async def _v1_models(user_api_key_dict: UserAPIKeyAuth, **kwargs) -> list[str]:
-    response = await proxy_server.model_list(user_api_key_dict=user_api_key_dict, **kwargs)
+async def _v1_models(user_api_key_dict: UserAPIKeyAuth, request: Request | None = None) -> list[str]:
+    response = await proxy_server.model_list(user_api_key_dict=user_api_key_dict, request=request)
     return [m["id"] for m in response["data"]]
 
 
