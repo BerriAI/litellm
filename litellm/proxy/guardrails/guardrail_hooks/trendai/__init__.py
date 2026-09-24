@@ -16,7 +16,7 @@ def _normalize_event_hook(
     if isinstance(mode, str):
         return GuardrailEventHooks(mode)
     if isinstance(mode, list):
-        return [GuardrailEventHooks(item) for item in mode]
+        return [GuardrailEventHooks(item) for item in mode]  # mutable-ok: guardrail event hooks require a list
     return mode
 
 
@@ -41,7 +41,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return callback
 
 
-guardrail_initializer_registry: Final = {GUARDRAIL_NAME: initialize_guardrail}
-guardrail_class_registry: Final = {GUARDRAIL_NAME: TrendAIGuardrail}
+guardrail_initializer_registry: Final = {  # mutable-ok: registry discovery requires a dict
+    GUARDRAIL_NAME: initialize_guardrail
+}
+guardrail_class_registry: Final = {  # mutable-ok: registry discovery requires a dict
+    GUARDRAIL_NAME: TrendAIGuardrail
+}
 
 __all__ = ("TrendAIGuardrail",)
