@@ -524,6 +524,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
     if (last) el.scrollTop = last.offsetTop;
   }, [chatHistory]);
 
+  const scrollToLastMessage = () => {
+    const el = chatScrollRef.current;
+    const messages = el?.querySelectorAll<HTMLElement>("[data-role]");
+    const last = messages?.[messages.length - 1];
+    if (el && last) el.scrollTop = last.offsetTop + last.offsetHeight - el.clientHeight;
+  };
+
   const handleCancelRequest = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -1854,10 +1861,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       size="icon"
                       aria-label="Jump to bottom"
                       className="absolute bottom-3 right-3 rounded-full shadow-sm"
-                      onClick={() => {
-                        const el = chatScrollRef.current;
-                        if (el) el.scrollTop = el.scrollHeight;
-                      }}
+                      onClick={scrollToLastMessage}
                     >
                       <ArrowDown className="size-4" />
                     </Button>
