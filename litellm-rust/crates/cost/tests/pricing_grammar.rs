@@ -179,3 +179,28 @@ fn parsed_pricing_buckets_a_synthetic_overlay_entry() {
     assert!(pricing.extra.is_empty(), "recognized non-rate keys drop");
     let _: LazyLock<()> = LazyLock::new(|| ());
 }
+
+#[test]
+fn checked_rates_reject_negative_and_non_finite_where_python_bills_them() {
+    use litellm_cost::error::CostError;
+    use litellm_cost::pricing::Rate;
+    assert_eq!(Rate::Value(3e-6).checked(), Ok(3e-6));
+    assert_eq!(Rate::Value(0.0).checked(), Ok(0.0));
+    assert_eq!(
+        Rate::Value(-1.0).checked(),
+        Err(CostError::InvalidRate),
+        "divergence: Python bills negative rates as negative costs; Rust refuses them"
+    );
+    assert_eq!(
+        Rate::Value(f64::NAN).checked(),
+        Err(CostError::InvalidRate),
+        "divergence: Python propagates NaN costs; Rust refuses them"
+    );
+    assert_eq!(
+        Rate::Value(f64::INFINITY).checked(),
+        Err(CostError::InvalidRate)
+    );
+    assert_eq!(Rate::Missing.checked(), Err(CostError::InvalidRate));
+    assert_eq!(Rate::Null.checked(), Err(CostError::InvalidRate));
+    assert_eq!(Rate::Invalid.checked(), Err(CostError::InvalidRate));
+}

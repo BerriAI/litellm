@@ -3,8 +3,6 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{PromptConvention, Usage};
-
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct CachedTokenDetails {
     pub text_tokens: Option<u64>,
@@ -58,33 +56,6 @@ pub struct ChatUsage {
     pub completion_tokens_details: Option<CompletionTokenDetails>,
     pub cost: Option<f64>,
     pub extra: BTreeMap<String, Value>,
-}
-
-impl ChatUsage {
-    pub fn token_usage(&self) -> Usage {
-        let cache_creation_details = self
-            .prompt_tokens_details
-            .as_ref()
-            .and_then(|details| details.cache_creation_token_details.as_ref());
-        Usage {
-            prompt_tokens: self.prompt_tokens,
-            completion_tokens: self.completion_tokens,
-            cache_read_tokens: self
-                .prompt_tokens_details
-                .as_ref()
-                .map_or(0, |details| details.cached_tokens),
-            cache_write_tokens: self
-                .prompt_tokens_details
-                .as_ref()
-                .and_then(|details| details.cache_write_tokens)
-                .unwrap_or(0),
-            cache_write_5m_tokens: cache_creation_details
-                .map(|details| details.ephemeral_5m_input_tokens.unwrap_or(0)),
-            cache_write_1h_tokens: cache_creation_details
-                .map(|details| details.ephemeral_1h_input_tokens.unwrap_or(0)),
-            prompt_convention: PromptConvention::IncludesCache,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

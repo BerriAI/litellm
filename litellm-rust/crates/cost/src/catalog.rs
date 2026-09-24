@@ -81,12 +81,6 @@ use crate::vertex_cost::{
     cost_per_token as vertex_cost_per_token, cost_router as vertex_cost_router,
 };
 use crate::xai_cost::{cost_per_token as xai_cost_per_token, reported_cost as xai_reported_cost};
-use crate::{Cost, Pricing, PricingError, Rates, Request, calculate};
-
-#[derive(Clone, Debug, Default)]
-pub struct CostCatalog {
-    entries: HashMap<String, Rates>,
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct ModelInfoCatalog {
@@ -185,7 +179,6 @@ pub struct DefaultImageCostRequest<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogError {
     ModelNotFound,
-    Pricing(PricingError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -295,12 +288,6 @@ impl From<UsageError> for RealtimeCostError {
     }
 }
 
-impl From<PricingError> for CatalogError {
-    fn from(value: PricingError) -> Self {
-        Self::Pricing(value)
-    }
-}
-
 impl From<CatalogError> for CatalogResponseError {
     fn from(value: CatalogError) -> Self {
         Self::Catalog(value)
@@ -358,40 +345,6 @@ fn select_model_key<'a, T>(
                 .get_key_value(candidate)
                 .map(|(key, _)| key.as_str())
         })
-}
-
-impl CostCatalog {
-    pub fn new(entries: HashMap<String, Rates>) -> Self {
-        Self { entries }
-    }
-
-    pub fn select_model_key<'a>(
-        &'a self,
-        model: &str,
-        provider: Option<&str>,
-        region: Option<&str>,
-    ) -> Option<&'a str> {
-        select_model_key(&self.entries, model, provider, region)
-    }
-
-    pub fn cost_per_token(
-        &self,
-        model: &str,
-        provider: Option<&str>,
-        region: Option<&str>,
-        request: &Request,
-    ) -> Result<Cost, CatalogError> {
-        let key = self
-            .select_model_key(model, provider, region)
-            .ok_or(CatalogError::ModelNotFound)?;
-        let pricing = Pricing {
-            standard: self.entries[key],
-            tiers: &[],
-            thresholds: &[],
-            off_peak: None,
-        };
-        Ok(calculate(&pricing, request)?)
-    }
 }
 
 impl ModelInfoCatalog {
@@ -1347,7 +1300,7 @@ impl ModelInfoCatalog {
         }
         let rate = |info: &Value, key: &str| {
             crate::generic_input::get_cost_per_unit(info, key, None)
-                .map_or(crate::Rate::Missing, crate::Rate::Value)
+                .map_or(crate::pricing::Rate::Missing, crate::pricing::Rate::Value)
         };
         let tables = [request.supplied_model_info, shared]
             .into_iter()

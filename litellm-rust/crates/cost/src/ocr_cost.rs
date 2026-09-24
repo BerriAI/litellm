@@ -1,7 +1,7 @@
 use serde_json::Value;
 
-use crate::Rate;
 use crate::non_token::{Error as NonTokenError, OcrRates, OcrUsage, calculate_ocr_with_tables};
+use crate::pricing::Rate;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OcrCostError {
@@ -28,7 +28,7 @@ fn rates(model_info: &Value) -> OcrRates {
 fn value(rate: Rate) -> Option<f64> {
     match rate {
         Rate::Value(value) => Some(value),
-        Rate::Missing | Rate::Null => None,
+        Rate::Missing | Rate::Null | Rate::Invalid => None,
     }
 }
 

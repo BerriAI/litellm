@@ -5,22 +5,17 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use litellm_cost::catalog::{CatalogError, CostCatalog, ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::catalog::{CatalogError, ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::usage_dispatch::get_usage_object;
-use litellm_cost::{PromptConvention, Rate, Rates, Request, ServiceTier, ThresholdPolicy, Usage};
 use rstest::rstest;
 use serde_json::json;
 
-fn rates(input: f64, output: f64) -> Rates {
-    Rates {
-        input: Rate::Value(input),
-        output: Rate::Value(output),
-        ..Rates::EMPTY
-    }
+fn rates(input: f64, output: f64) -> serde_json::Value {
+    json!({"input_cost_per_token": input, "output_cost_per_token": output})
 }
 
-fn catalog() -> CostCatalog {
-    CostCatalog::new(HashMap::from([
+fn catalog() -> ModelInfoCatalog {
+    ModelInfoCatalog::new(HashMap::from([
         ("openai/model".to_owned(), rates(1e-6, 2e-6)),
         ("openai/openai/model".to_owned(), rates(9e-6, 9e-6)),
         ("bedrock_mantle/model".to_owned(), rates(3e-6, 4e-6)),
@@ -32,21 +27,28 @@ fn catalog() -> CostCatalog {
     ]))
 }
 
-fn request() -> Request {
-    Request {
-        usage: Usage {
-            prompt_tokens: 100,
-            completion_tokens: 50,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            cache_write_5m_tokens: None,
-            cache_write_1h_tokens: None,
-            prompt_convention: PromptConvention::IncludesCache,
-        },
-        service_tier: ServiceTier::Standard,
-        threshold_policy: ThresholdPolicy::Exclusive,
-        region_multiplier: None,
-        billed_at_utc_minute: None,
+fn usage() -> litellm_cost::responses_usage::ChatUsage {
+    get_usage_object(&json!({"usage": {"prompt_tokens": 100, "completion_tokens": 50}}))
+        .unwrap()
+        .unwrap()
+}
+
+fn request<'a>(
+    model: &'a str,
+    provider: Option<&'a str>,
+    region: Option<&'a str>,
+    usage: &'a litellm_cost::responses_usage::ChatUsage,
+) -> ModelCostRequest<'a> {
+    ModelCostRequest {
+        model,
+        provider,
+        region,
+        usage,
+        service_tier: None,
+        data_residency: None,
+        vertex_location: None,
+        at: "2026-01-01T12:00Z".parse().unwrap(),
+        response_time_ms: None,
     }
 }
 
@@ -87,22 +89,31 @@ fn cost_per_token_resolves_model_key_in_python_order(
 
 #[rstest]
 fn cost_per_token_uses_the_selected_regional_prices() {
-    let cost = catalog()
-        .cost_per_token(
-            "bedrock_mantle/model",
-            Some("bedrock_mantle"),
-            Some("us-gov-west-1"),
-            &request(),
+    let usage = usage();
+    let (input, output) = catalog()
+        .cost_per_token_for_call(
+            request(
+                "bedrock_mantle/model",
+                Some("bedrock_mantle"),
+                Some("us-gov-west-1"),
+                &usage,
+            ),
+            litellm_cost::catalog::CostCall::Token {
+                call_type: "completion",
+                prompt_characters: None,
+                completion_characters: None,
+                request_model: None,
+            },
         )
         .unwrap();
-    assert!((cost.input() - 100.0 * 5e-6).abs() < 1e-12);
-    assert!((cost.output() - 50.0 * 6e-6).abs() < 1e-12);
+    assert!((input - 100.0 * 5e-6).abs() < 1e-12);
+    assert!((output - 50.0 * 6e-6).abs() < 1e-12);
 }
 
 #[rstest]
 fn cost_per_token_reports_an_unmapped_model() {
     assert_eq!(
-        catalog().cost_per_token("missing", Some("openai"), None, &request()),
+        catalog().cost_per_token(request("missing", Some("openai"), None, &usage())),
         Err(CatalogError::ModelNotFound)
     );
 }

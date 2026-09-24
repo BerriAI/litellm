@@ -84,7 +84,7 @@ pub struct VideoRates<'a> {
 fn priced(rate: Rate) -> Option<f64> {
     match rate {
         Rate::Value(value) => Some(value),
-        Rate::Missing | Rate::Null => None,
+        Rate::Missing | Rate::Null | Rate::Invalid => None,
     }
 }
 
@@ -283,4 +283,4 @@ pub fn video_resolution_to_cost_field_suffix(resolution: &str) -> Option<String>
         .collect();
     (!suffix.is_empty() && suffix.chars().count() <= 24).then_some(suffix)
 }
-use crate::Rate;
+use crate::pricing::Rate;

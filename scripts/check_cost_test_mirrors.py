@@ -16,7 +16,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COST_TESTS = REPO_ROOT / "litellm-rust" / "crates" / "cost" / "tests"
 PYTHON_TESTS = REPO_ROOT / "tests"
-GENERATOR = "crates/cost/tests/generate_python_fixtures.py"
+GENERATORS = {
+    "crates/cost/tests/generate_python_fixtures.py",
+    "crates/cost/tests/generate_python_reference.py",
+}
 MIRROR_RE = re.compile(r"^//\s*mirrors:\s*(\S.*)$", re.MULTILINE)
 TARGET_RE = re.compile(r"^([\w./-]+\.py)(?:::[\w.-]+)*$")
 
@@ -48,7 +51,7 @@ def main() -> int:
                 offenders.append(f"{rust_file.name}: malformed mirrors target {target!r}")
                 continue
             path = match.group(1)
-            if path == GENERATOR:
+            if path in GENERATORS:
                 continue
             if not (PYTHON_TESTS / path.removeprefix("litellm/tests/")).is_file():
                 offenders.append(

@@ -5,8 +5,8 @@
 use litellm_cost::anthropic_usage::{
     is_anthropic_usage_object, transform_anthropic_usage_to_chat_usage,
 };
+use litellm_cost::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use litellm_cost::responses_usage::UsageError;
-use litellm_cost::{Pricing, Rate, Rates, Request, ServiceTier, ThresholdPolicy, calculate};
 use rstest::rstest;
 use serde_json::{Value, json};
 
@@ -82,29 +82,22 @@ fn calculate_usage_aggregates_iteration_cache_write_details(
     assert_eq!(usage.prompt_tokens, first_write + second_write);
     assert_eq!(details.ephemeral_5m_input_tokens, Some(expected_5m));
     assert_eq!(details.ephemeral_1h_input_tokens, Some(expected_1h));
-    let pricing = Pricing {
-        standard: Rates {
-            input: Rate::Value(1e-6),
-            output: Rate::Value(2e-6),
-            cache_read: Rate::Missing,
-            cache_write: Rate::Value(1.25e-6),
-            cache_write_1h: Rate::Value(2e-6),
-        },
-        tiers: &[],
-        thresholds: &[],
-        off_peak: None,
-    };
-    let request = Request {
-        usage: usage.token_usage(),
-        service_tier: ServiceTier::Standard,
-        threshold_policy: ThresholdPolicy::Exclusive,
-        region_multiplier: None,
-        billed_at_utc_minute: None,
-    };
-    let cost = calculate(&pricing, &request).unwrap();
-    assert!(
-        (cost.input() - (expected_5m as f64 * 1.25e-6 + expected_1h as f64 * 2e-6)).abs() < 1e-12
+    let model_info = json!({
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_creation_input_token_cost": 1.25e-6,
+        "cache_creation_input_token_cost_above_1hr": 2e-6
+    });
+    let (input, _) = calculate_generic_cost_from_model_info_with_region(
+        &usage,
+        &model_info,
+        None,
+        false,
+        None,
+        None,
+        "2026-01-01T12:00Z".parse().unwrap(),
     );
+    assert!((input - (expected_5m as f64 * 1.25e-6 + expected_1h as f64 * 2e-6)).abs() < 1e-12);
 }
 
 #[rstest]

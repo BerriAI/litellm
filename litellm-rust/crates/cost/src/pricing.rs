@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use crate::error::CostError;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Rate {
     #[default]
@@ -14,6 +16,13 @@ impl Rate {
         match self {
             Self::Value(value) => Some(value),
             Self::Missing | Self::Null | Self::Invalid => None,
+        }
+    }
+
+    pub fn checked(self) -> Result<f64, CostError> {
+        match self {
+            Self::Value(value) if value.is_finite() && value >= 0.0 => Ok(value),
+            _ => Err(CostError::InvalidRate),
         }
     }
 }

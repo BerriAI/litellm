@@ -149,10 +149,7 @@ fn batch_cost_rates_match_executed_python_fixtures() {
             prompt_tokens,
             uses_inclusive_token_thresholds(Some(provider)),
         );
-        let as_option = |rate: Rate| match rate {
-            Rate::Value(value) => Some(value),
-            Rate::Missing | Rate::Null => None,
-        };
+        let as_option = |rate: Rate| rate.value();
         let option_equals = |actual: Option<f64>, key: &str| match (actual, row.get(key)) {
             (Some(got), Some(want)) => {
                 assert_close(got, want.as_f64().unwrap(), &format!("{id}/{key}"))

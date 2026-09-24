@@ -2,11 +2,11 @@
 
 // mirrors: test_litellm/responses/test_responses_utils.py::TestResponseAPILoggingUtils
 
+use litellm_cost::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use litellm_cost::responses_usage::{
     UsageError, is_response_api_usage, text_tokens_without_nested_reasoning,
     transform_response_api_usage_to_chat_usage,
 };
-use litellm_cost::{Pricing, Rate, Rates, Request, ServiceTier, ThresholdPolicy, calculate};
 use rstest::rstest;
 use serde_json::{Value, json};
 
@@ -181,26 +181,21 @@ fn transformed_responses_usage_reaches_cache_aware_token_calculation() {
         "input_tokens_details": {"cached_tokens": 200, "cache_write_tokens": 100}
     });
     let usage = transform_response_api_usage_to_chat_usage(&raw).unwrap();
-    let pricing = Pricing {
-        standard: Rates {
-            input: Rate::Value(1e-6),
-            output: Rate::Value(2e-6),
-            cache_read: Rate::Value(0.2e-6),
-            cache_write: Rate::Value(1.25e-6),
-            cache_write_1h: Rate::Missing,
-        },
-        tiers: &[],
-        thresholds: &[],
-        off_peak: None,
-    };
-    let request = Request {
-        usage: usage.token_usage(),
-        service_tier: ServiceTier::Standard,
-        threshold_policy: ThresholdPolicy::Exclusive,
-        region_multiplier: None,
-        billed_at_utc_minute: None,
-    };
-    let cost = calculate(&pricing, &request).unwrap();
-    assert!((cost.input() - (700.0 * 1e-6 + 200.0 * 0.2e-6 + 100.0 * 1.25e-6)).abs() < 1e-12);
-    assert!((cost.output() - 100.0 * 2e-6).abs() < 1e-12);
+    let model_info = json!({
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 0.2e-6,
+        "cache_creation_input_token_cost": 1.25e-6
+    });
+    let (input, output) = calculate_generic_cost_from_model_info_with_region(
+        &usage,
+        &model_info,
+        None,
+        false,
+        None,
+        None,
+        "2026-01-01T12:00Z".parse().unwrap(),
+    );
+    assert!((input - (700.0 * 1e-6 + 200.0 * 0.2e-6 + 100.0 * 1.25e-6)).abs() < 1e-12);
+    assert!((output - 100.0 * 2e-6).abs() < 1e-12);
 }

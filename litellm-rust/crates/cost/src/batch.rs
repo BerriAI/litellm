@@ -2,9 +2,15 @@ use serde_json::Value;
 
 use crate::base_rate_selection::uses_inclusive_token_thresholds;
 use crate::generic_usage::{get_billable_input_tokens, parse_prompt_tokens_details};
+use crate::pricing::Rate;
 use crate::regional_uplift::get_regional_uplift_multiplier;
 use crate::responses_usage::ChatUsage;
-use crate::{Rate, ThresholdPolicy};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThresholdPolicy {
+    Exclusive,
+    Inclusive,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BatchCostRates {
@@ -71,10 +77,7 @@ pub enum BatchError {
 }
 
 fn value(rate: Rate) -> Option<f64> {
-    match rate {
-        Rate::Value(value) => Some(value),
-        Rate::Missing | Rate::Null => None,
-    }
+    rate.value()
 }
 
 fn selected_rate(
@@ -258,7 +261,7 @@ fn selected_model_rate(
         .max_by_key(|(threshold, _)| *threshold)
         .map_or(flat, |(_, key)| match model_rate(model_info, key) {
             Rate::Value(rate) => Rate::Value(rate),
-            Rate::Missing | Rate::Null => flat,
+            Rate::Missing | Rate::Null | Rate::Invalid => flat,
         })
 }
 

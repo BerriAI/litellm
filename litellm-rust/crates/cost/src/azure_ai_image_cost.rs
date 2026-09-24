@@ -1,10 +1,10 @@
 use jiff::Timestamp;
 use serde_json::Value;
 
-use crate::Rate;
 use crate::generic_input::get_cost_per_unit;
 use crate::image_response_cost::calculate_image_response_cost_from_usage;
 use crate::non_token::{Error, ImageRates, ImageUsage, calculate_image};
+use crate::pricing::Rate;
 
 #[derive(Clone, Copy, Debug)]
 pub struct AzureAiImageRequest<'a> {

@@ -17,9 +17,5 @@ criterion.workspace = true
 proptest.workspace = true
 rstest.workspace = true
 
-[[bench]]
-name = "calculate"
-harness = false
-
 [lints.clippy]
 disallowed-types = "deny"

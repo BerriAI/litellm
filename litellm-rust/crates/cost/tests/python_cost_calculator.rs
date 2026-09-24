@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use litellm_cost::Rate;
+use litellm_cost::batch::ThresholdPolicy;
 use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchTier, BatchUsage, ModalityRates, batch_cost_calculator,
     batch_cost_from_model_info, get_batch_cost_rates,
@@ -15,7 +17,6 @@ use litellm_cost::non_token::{
     calculate_ocr_batch, calculate_ocr_with_tables, calculate_video,
 };
 use litellm_cost::responses_usage::{ChatUsage, PromptTokenDetails};
-use litellm_cost::{Rate, ThresholdPolicy};
 use rstest::rstest;
 use serde_json::json;
 
