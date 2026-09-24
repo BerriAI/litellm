@@ -101,6 +101,7 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages_async,
 )
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.owned_keys import log_safe, loggable_owned_keys, owned_keys_in, parse_request_body
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -1338,8 +1339,23 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         if model:  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
+        self._warn_owned_keys_in_request(additional_args.get("complete_input_dict"))
         self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(
             additional_args.get("api_base", "")
+        )
+
+    def _warn_owned_keys_in_request(self, body: object) -> None:
+        parsed: Final = parse_request_body(body)
+        if parsed is None:
+            return
+        flagged: Final = owned_keys_in(parsed)
+        if not flagged:
+            return
+        verbose_logger.warning(
+            "LiteLLM-owned keys reached the provider request body. provider=%s model=%s keys=%s",
+            log_safe(self.model_call_details.get("custom_llm_provider")),
+            log_safe(self.model_call_details.get("model")),
+            ", ".join(loggable_owned_keys(flagged)),
         )
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
