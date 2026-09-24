@@ -181,6 +181,8 @@ class _UnreachableMembershipPrisma:
             async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
                 raise httpx.ConnectError("All connection attempts failed")
 
+    replica_db = db
+
 
 async def test_resolve_marks_a_membership_read_that_hits_a_db_outage_as_degraded():
     loaders = _Loaders(user=_user(), team=_team())

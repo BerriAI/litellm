@@ -4687,6 +4687,7 @@ def _setup_unscoped_list_files_route_over_real_hook(
         internal_usage_cache=MagicMock(), prisma_client=MagicMock()
     )
     managed_files.prisma_client.db.litellm_managedfiletable = _ManagedFileTableOverRows(rows)
+    managed_files.prisma_client.replica_db = managed_files.prisma_client.db
 
     proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
     proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
