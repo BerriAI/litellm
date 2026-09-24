@@ -6,6 +6,10 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use litellm_python_compat::json as python_json;
+use litellm_python_compat::repr::to_str;
+use litellm_python_compat::truthy::truthy;
+use litellm_python_compat::{Value as PythonValue, number, pydantic};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -72,64 +76,28 @@ pub fn catalog_with_overlays(
     overlay_catalog(&EMBEDDED_CATALOG, overlays)
 }
 
-pub fn is_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(fields) => !fields.is_empty(),
-    }
+fn python_value(value: &Value) -> PythonValue {
+    python_json::from_json(value.clone())
 }
 
-fn python_int_literal(text: &str) -> Option<i64> {
-    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
-    let well_formed = digits
-        .split('_')
-        .all(|group| !group.is_empty() && group.bytes().all(|byte| byte.is_ascii_digit()));
-    if !well_formed {
-        return None;
-    }
-    text.replace('_', "").parse().ok()
+pub fn is_truthy(value: &Value) -> bool {
+    truthy(&python_value(value))
+}
+
+pub fn py_str(value: &Value) -> String {
+    to_str(&python_value(value))
 }
 
 pub fn py_int(value: &Value) -> Option<i64> {
-    match value {
-        Value::Number(number) => number.as_i64().or_else(|| {
-            number
-                .as_f64()
-                .map(f64::trunc)
-                .filter(|float| float.abs() < i64::MAX as f64)
-                .map(|float| float as i64)
-        }),
-        Value::Bool(flag) => Some(i64::from(*flag)),
-        Value::String(text) => python_int_literal(text.trim()),
-        _ => None,
-    }
+    i64::try_from(&number::int(&python_value(value)).ok()?).ok()
 }
 
 pub fn py_float(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(number) => number.as_f64(),
-        Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
-        Value::String(text) => text.trim().parse().ok(),
-        _ => None,
-    }
+    number::float(&python_value(value)).ok()
 }
 
 pub fn lax_int(value: &Value) -> Option<i64> {
-    match value {
-        Value::Number(number) => number.as_i64().or_else(|| {
-            number
-                .as_f64()
-                .filter(|float| float.fract() == 0.0 && float.abs() < i64::MAX as f64)
-                .map(|float| float as i64)
-        }),
-        Value::Bool(flag) => Some(i64::from(*flag)),
-        Value::String(text) => python_int_literal(text.trim()),
-        _ => None,
-    }
+    i64::try_from(&pydantic::lax_int(&python_value(value)).ok()?).ok()
 }
 
 pub fn lax_count(value: &Value) -> Option<u64> {
@@ -912,66 +880,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case(serde_json::json!(3), Some(3))]
-    #[case(serde_json::json!(3.9), Some(3))]
-    #[case(serde_json::json!(-3.9), Some(-3))]
-    #[case(serde_json::json!(true), Some(1))]
-    #[case(serde_json::json!(" 12 "), Some(12))]
-    #[case(serde_json::json!("1_0"), Some(10))]
-    #[case(serde_json::json!("3.5"), None)]
-    #[case(serde_json::json!(null), None)]
-    #[case(serde_json::json!({}), None)]
-    fn py_int_follows_python_int(#[case] value: Value, #[case] expected: Option<i64>) {
-        assert_eq!(py_int(&value), expected);
-    }
-
-    #[rstest]
-    #[case(serde_json::json!(2), Some(2.0))]
-    #[case(serde_json::json!(0.25), Some(0.25))]
-    #[case(serde_json::json!(false), Some(0.0))]
-    #[case(serde_json::json!(" 0.5 "), Some(0.5))]
-    #[case(serde_json::json!("abc"), None)]
-    #[case(serde_json::json!(null), None)]
-    #[case(serde_json::json!([1]), None)]
-    fn py_float_follows_python_float(#[case] value: Value, #[case] expected: Option<f64>) {
-        assert_eq!(py_float(&value), expected);
-    }
-
-    #[rstest]
-    #[case(serde_json::json!(3), Some(3))]
-    #[case(serde_json::json!(-1), Some(-1))]
-    #[case(serde_json::json!(2.0), Some(2))]
-    #[case(serde_json::json!(2.5), None)]
-    #[case(serde_json::json!(true), Some(1))]
-    #[case(serde_json::json!("3"), Some(3))]
-    #[case(serde_json::json!(" 3 "), Some(3))]
-    #[case(serde_json::json!("-4"), Some(-4))]
-    #[case(serde_json::json!("1_000"), Some(1000))]
-    #[case(serde_json::json!("1__000"), None)]
-    #[case(serde_json::json!("_1"), None)]
-    #[case(serde_json::json!("3.0"), None)]
-    #[case(serde_json::json!("x"), None)]
-    #[case(serde_json::json!(null), None)]
-    #[case(serde_json::json!([3]), None)]
-    fn lax_int_follows_pydantic_lax_int(#[case] value: Value, #[case] expected: Option<i64>) {
-        assert_eq!(lax_int(&value), expected);
-    }
-
-    #[rstest]
-    #[case(serde_json::json!(null), false)]
-    #[case(serde_json::json!(false), false)]
-    #[case(serde_json::json!(true), true)]
-    #[case(serde_json::json!(0), false)]
-    #[case(serde_json::json!(0.0), false)]
-    #[case(serde_json::json!(-0.5), true)]
-    #[case(serde_json::json!(""), false)]
-    #[case(serde_json::json!("0"), true)]
-    #[case(serde_json::json!([]), false)]
-    #[case(serde_json::json!([0]), true)]
-    #[case(serde_json::json!({}), false)]
-    #[case(serde_json::json!({"k": null}), true)]
-    fn is_truthy_follows_python_bool(#[case] value: Value, #[case] expected: bool) {
-        assert_eq!(is_truthy(&value), expected);
+    #[case::integral_json_float(serde_json::json!(2.0), Some(2), Some(2), Some(2.0), true)]
+    #[case::json_integer_beyond_i64(serde_json::json!(u64::MAX), None, None, Some(u64::MAX as f64), true)]
+    #[case::json_string(serde_json::json!(" 3.0 "), None, Some(3), Some(3.0), true)]
+    #[case::json_null(serde_json::json!(null), None, None, None, false)]
+    fn python_adapters_read_json_as_json_loads_would(
+        #[case] value: Value,
+        #[case] int: Option<i64>,
+        #[case] lax: Option<i64>,
+        #[case] float: Option<f64>,
+        #[case] truthy: bool,
+    ) {
+        assert_eq!(py_int(&value), int);
+        assert_eq!(lax_int(&value), lax);
+        assert_eq!(py_float(&value), float);
+        assert_eq!(is_truthy(&value), truthy);
     }
 
     #[rstest]

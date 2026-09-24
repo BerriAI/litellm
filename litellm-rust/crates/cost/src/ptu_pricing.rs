@@ -2,7 +2,7 @@ use jiff::Timestamp;
 use jiff::civil::{Date, DateTime};
 use serde_json::{Map, Value, json};
 
-use crate::wire::{is_truthy, py_float, py_int};
+use crate::wire::{is_truthy, py_float, py_int, py_str};
 
 pub const PTU_COST_ATTRIBUTION_ENV_VAR: &str = "LITELLM_ENABLE_PTU_COST_ATTRIBUTION";
 pub const AZURE_SPILLOVER_HEADER: &str = "x-ms-is-spilled-over";
@@ -156,24 +156,6 @@ pub struct PtuTerms {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AzureSpillover {
     pub from_deployment: Option<String>,
-}
-
-fn py_str(value: &Value) -> String {
-    match value {
-        Value::Null => "None".to_string(),
-        Value::Bool(true) => "True".to_string(),
-        Value::Bool(false) => "False".to_string(),
-        Value::Number(number) => match (number.as_i64(), number.as_f64()) {
-            (Some(int), _) => int.to_string(),
-            (None, Some(float)) if float == float.trunc() && float.is_finite() => {
-                format!("{float:.1}")
-            }
-            (None, Some(float)) => float.to_string(),
-            (None, None) => number.to_string(),
-        },
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    }
 }
 
 fn as_utc(value: &Value) -> Option<Timestamp> {

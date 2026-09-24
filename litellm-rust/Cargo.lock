@@ -2980,6 +2980,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "jiff",
+ "litellm-python-compat",
  "litellm-token-counter",
  "proptest",
  "regex",
