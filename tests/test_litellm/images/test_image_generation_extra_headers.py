@@ -6,13 +6,13 @@ to the OpenAI SDK on the openai/litellm_proxy/openai_compatible_providers
 code paths.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
 
 import litellm
-from litellm.images.main import image_generation
+from litellm.images.main import aimage_generation, image_generation
 
 
 class TestImageGenerationExtraHeaders:
@@ -73,3 +73,28 @@ class TestImageGenerationExtraHeaders:
         )
 
         assert "extra_headers" not in optional_params
+
+
+@pytest.mark.asyncio
+@patch("litellm.images.main.image_generation")
+@patch("litellm.images.main.get_llm_provider")
+async def test_aimage_generation_forwards_explicit_provider_to_resolution(
+    mock_get_llm_provider: Mock, mock_image_generation: Mock
+) -> None:
+    mock_get_llm_provider.return_value = ("Qwen-Image", "openai", None, None)
+    mock_image_generation.return_value = litellm.utils.ImageResponse(
+        created=1234567890,
+        data=[{"url": "https://example.com/image.png"}],
+    )
+
+    await aimage_generation(
+        model="Qwen-Image",
+        prompt="A red circle",
+        custom_llm_provider="openai",
+    )
+
+    mock_get_llm_provider.assert_called_once_with(
+        model="Qwen-Image",
+        custom_llm_provider="openai",
+        api_base=None,
+    )
