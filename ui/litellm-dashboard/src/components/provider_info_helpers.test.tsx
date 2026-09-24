@@ -194,6 +194,7 @@ describe("provider_info_helpers", () => {
         Providers.PETALS,
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
+        Providers.Sail,
         Providers.WANDB,
         Providers.ZAI,
       ];
@@ -302,6 +303,10 @@ describe("provider_info_helpers", () => {
 
     it("should return cognition/swe-1.7 placeholder for Cognition provider", () => {
       expect(getPlaceholder(Providers.Cognition)).toBe("cognition/swe-1.7");
+    });
+
+    it("should return a sail/ placeholder for the Sail provider", () => {
+      expect(getPlaceholder(Providers.Sail)).toBe("sail/zai-org/GLM-5.3");
     });
 
     it("should return a chatgpt/ placeholder for the CHATGPT dropdown key", () => {
