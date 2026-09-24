@@ -7913,3 +7913,119 @@ def test_supports_sampling_params_prefixed_and_anthropic_fallback(monkeypatch: p
     )
     assert AmazonConverseConfig._supports_sampling_params("custom-test-reasoning-model") is False
     assert AmazonConverseConfig._supports_sampling_params("anthropic.claude-custom-unregistered") is True
+
+
+def test_bedrock_converse_messages_pt_preserves_redacted_thinking_blocks():
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+
+    # Case 1: redacted_thinking in assistant message 'thinking_blocks'
+    messages_1 = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": "Hi there!",
+            "thinking_blocks": [
+                {"type": "redacted_thinking", "data": "redacted_secret_data_123"}
+            ],
+        },
+        {"role": "user", "content": "Followup"},
+    ]
+    result_1 = _bedrock_converse_messages_pt(
+        messages=messages_1,
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock",
+    )
+    assistant_blocks_1 = result_1[1]["content"]
+    assert any(
+        block.get("reasoningContent", {}).get("redactedContent") == "redacted_secret_data_123"
+        for block in assistant_blocks_1
+    ), f"Expected redactedContent in assistant blocks, got: {assistant_blocks_1}"
+
+    # Case 2: redacted_thinking in assistant message 'content' list
+    messages_2 = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "redacted_thinking", "data": "redacted_secret_data_456"},
+                {"type": "text", "text": "Hi there!"},
+            ],
+        },
+        {"role": "user", "content": "Followup"},
+    ]
+    result_2 = _bedrock_converse_messages_pt(
+        messages=messages_2,
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock",
+    )
+    assistant_blocks_2 = result_2[1]["content"]
+    assert any(
+        block.get("reasoningContent", {}).get("redactedContent") == "redacted_secret_data_456"
+        for block in assistant_blocks_2
+    ), f"Expected redactedContent in assistant blocks, got: {assistant_blocks_2}"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_messages_pt_async_preserves_redacted_thinking_blocks():
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "redacted_thinking", "data": "async_redacted_data_789"},
+                {"type": "text", "text": "Async response"},
+            ],
+        },
+    ]
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock",
+    )
+    assistant_blocks = result[1]["content"]
+    assert any(
+        block.get("reasoningContent", {}).get("redactedContent") == "async_redacted_data_789"
+        for block in assistant_blocks
+    ), f"Expected redactedContent in async assistant blocks, got: {assistant_blocks}"
+
+
+def test_bedrock_converse_redacted_thinking_with_tool_calls_ordering():
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+
+    messages = [
+        {"role": "user", "content": "Calculate something"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "redacted_thinking", "data": "redacted_jwt_tokens"},
+                {"type": "text", "text": "Calling tool now"},
+            ],
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {"name": "calc", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "call_abc123", "content": "42"}],
+        },
+    ]
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock",
+    )
+    assistant_blocks = result[1]["content"]
+
+    # Verify sort order: reasoningContent must be first, followed by text, followed by toolUse
+    assert "reasoningContent" in assistant_blocks[0]
+    assert assistant_blocks[0]["reasoningContent"]["redactedContent"] == "redacted_jwt_tokens"
+    assert "text" in assistant_blocks[1]
+    assert assistant_blocks[1]["text"] == "Calling tool now"
+    assert "toolUse" in assistant_blocks[2]
+    assert assistant_blocks[2]["toolUse"]["toolUseId"] == "call_abc123"

@@ -89,7 +89,7 @@ class BedrockConverseReasoningTextBlock(TypedDict, total=False):
 
 class BedrockConverseReasoningContentBlock(TypedDict, total=False):
     reasoningText: BedrockConverseReasoningTextBlock
-    redactedContent: str
+    redactedContent: str | bytes
 
 
 class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
