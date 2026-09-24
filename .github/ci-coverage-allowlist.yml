@@ -111,3 +111,9 @@ dockerfiles:
       An example image under cookbook/ that is documentation rather than a shipped artifact
     paths:
       - cookbook/litellm-ollama-docker-image/Dockerfile
+  - reason: >-
+      The FIPS image builds on the pinned cgr.dev/berri.ai chainguard-base-fips base and every apk
+      call authenticates to virtualapk.cgr.dev with a Chainguard token supplied as a build secret;
+      no pull request job holds that token, so no job can build it
+    paths:
+      - docker/Dockerfile.fips
