@@ -201,7 +201,8 @@ jobs:
             mkdir -p test-results/<< parameters.flag >>
             selection="$(find tests/unit -name 'test_*.py' | sort)" || { echo "test selection failed for << parameters.flag >>"; exit 1; }
             [ -n "${selection}" ] || { echo "test selection produced no files for << parameters.flag >>"; exit 1; }
-            mapfile -t files < <(printf '%s\n' "${selection}" | circleci tests split --split-by=timings --timings-type=filename)
+            shard="$(printf '%s\n' "${selection}" | circleci tests split --split-by=timings --timings-type=filename)" || { echo "circleci tests split failed for << parameters.flag >>"; exit 1; }
+            mapfile -t files < <(printf '%s\n' "${shard}")
             if [ "${#files[@]}" -eq 0 ]; then echo "shard ${CIRCLE_NODE_INDEX} received no << parameters.flag >> files; nothing to run"; exit 0; fi
             rerun_args=(-p no:rerunfailures)
             if [ "<< parameters.reruns >>" -gt 0 ]; then rerun_args=(--reruns << parameters.reruns >> --reruns-delay 1 --rerun-except "from pytest-timeout"); fi
