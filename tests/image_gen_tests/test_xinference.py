@@ -24,9 +24,14 @@ async def test_xinference_image_generation():
         def model_dump(self):
             return mock_openai_response
 
-    # Create a mock client with the images.generate method
+    class MockRawResponse:
+        headers = {}
+
+        def parse(self):
+            return MockResponse()
+
     mock_client = AsyncMock()
-    mock_client.images.generate = AsyncMock(return_value=MockResponse())
+    mock_client.images.with_raw_response.generate = AsyncMock(return_value=MockRawResponse())
 
     # Capture the actual arguments sent to OpenAI client
     captured_args = None
@@ -36,9 +41,9 @@ async def test_xinference_image_generation():
         nonlocal captured_args, captured_kwargs
         captured_args = args
         captured_kwargs = kwargs
-        return MockResponse()
+        return MockRawResponse()
 
-    mock_client.images.generate.side_effect = capture_generate_call
+    mock_client.images.with_raw_response.generate.side_effect = capture_generate_call
 
     # Mock the _get_openai_client method to return our mock client
     with patch.object(
@@ -65,7 +70,7 @@ async def test_xinference_image_generation():
         assert response.data[0].url == "https://example.com/image.png"
 
         # Validate that the OpenAI client was called with correct parameters
-        mock_client.images.generate.assert_called_once()
+        mock_client.images.with_raw_response.generate.assert_called_once()
         assert captured_kwargs is not None
         assert (
             captured_kwargs["model"] == "stabilityai/stable-diffusion-3.5-large"
@@ -97,9 +102,14 @@ async def test_xinference_image_generation_with_response_format():
         def model_dump(self):
             return mock_openai_response
 
-    # Create a mock client with the images.generate method
+    class MockRawResponse:
+        headers = {}
+
+        def parse(self):
+            return MockResponse()
+
     mock_client = AsyncMock()
-    mock_client.images.generate = AsyncMock(return_value=MockResponse())
+    mock_client.images.with_raw_response.generate = AsyncMock(return_value=MockRawResponse())
 
     # Capture the actual arguments sent to OpenAI client
     captured_args = None
@@ -109,9 +119,9 @@ async def test_xinference_image_generation_with_response_format():
         nonlocal captured_args, captured_kwargs
         captured_args = args
         captured_kwargs = kwargs
-        return MockResponse()
+        return MockRawResponse()
 
-    mock_client.images.generate.side_effect = capture_generate_call
+    mock_client.images.with_raw_response.generate.side_effect = capture_generate_call
 
     # Mock the _get_openai_client method to return our mock client
     with patch.object(
@@ -141,7 +151,7 @@ async def test_xinference_image_generation_with_response_format():
         assert response.data[0].b64_json is not None
 
         # Validate that the OpenAI client was called with correct parameters
-        mock_client.images.generate.assert_called_once()
+        mock_client.images.with_raw_response.generate.assert_called_once()
         assert captured_kwargs is not None
         assert (
             captured_kwargs["model"] == "stabilityai/stable-diffusion-3.5-large"
