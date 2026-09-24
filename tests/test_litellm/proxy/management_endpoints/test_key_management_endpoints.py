@@ -9496,6 +9496,49 @@ async def test_rotate_master_key_refuses_without_pynacl_before_touching_any_row(
     mock_prisma_client.db.tx.assert_not_called()
 
 
+async def test_rotate_master_key_preflight_without_pynacl_passes_migrated_oauth_client_with_plaintext_scopes(
+    monkeypatch,
+):
+    import sys
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _require_legacy_reader_for_stored_values,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-rotate")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    v3_secret = encrypt_value_helper("dcr-secret")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    for table in (
+        "litellm_proxymodeltable",
+        "litellm_credentialstable",
+        "litellm_mcpservertable",
+        "litellm_mcpusercredentials",
+        "litellm_mcpuserenvvars",
+        "litellm_ssoidentityassertion",
+    ):
+        getattr(mock_prisma_client.db, table).find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_mcpserveroauthclient.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                server_id="s1",
+                credentials={"client_id": v3_secret, "client_secret": v3_secret, "scopes": ["a"], "auth_type": "oauth2"},
+            )
+        ]
+    )
+
+    await _require_legacy_reader_for_stored_values(mock_prisma_client)
+
+    assert mock_prisma_client.db.litellm_mcpserveroauthclient.find_many.await_count == 1
+
+
 async def test_default_key_generate_params_duration(monkeypatch):
     """
     Test that default_key_generate_params with 'duration' is applied

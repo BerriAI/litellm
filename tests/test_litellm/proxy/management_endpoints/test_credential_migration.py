@@ -193,6 +193,49 @@ async def test_check_refuses_without_pynacl_for_every_rotation_rewritten_locatio
         await cm.check_encryption(prisma_client=client)
 
 
+@pytest.mark.asyncio
+async def test_check_without_pynacl_ignores_plaintext_mcp_metadata_next_to_v3_secrets(salt_key, monkeypatch):
+    _enable_aes(monkeypatch)
+    v3_secret: Final = encrypt_value_helper("dcr-secret")
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_mcpserveroauthclient.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                server_id="s1",
+                credentials={"client_id": v3_secret, "client_secret": v3_secret, "scopes": ["a"], "auth_type": "oauth2"},
+            )
+        ]
+    )
+    client.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                server_id="s1",
+                credentials={"auth_value": v3_secret, "auth_type": "api_key", "token_url": "https://idp/token"},
+                env_vars=[
+                    {"name": "TOKEN", "scope": "global", "value": v3_secret},
+                    {"name": "USER_TOKEN", "scope": "user", "value": "{{user.token}}"},
+                ],
+            )
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    report: Final = await cm.check_encryption(prisma_client=client)
+
+    by_location: Final = report.as_dict()["locations"]
+    assert report.residual_legacy == 0, by_location
+    assert by_location["mcp_oauth_client"]["already_v2"] == 2, by_location
+    assert by_location["mcp_oauth_client"]["scanned"] == 2, by_location
+    assert by_location["mcp_server"]["already_v2"] == 2, by_location
+    assert by_location["mcp_server"]["scanned"] == 2, by_location
+
+
 # --------------------------- config-row walker ---------------------------
 
 

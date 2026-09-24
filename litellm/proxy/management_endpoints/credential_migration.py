@@ -31,6 +31,7 @@ config rows, and the SSO config table.
 """
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, cast
 
@@ -465,6 +466,7 @@ _COVERED_TABLE_SPECS: Final = [
     ("mcp_oauth_client", "litellm_mcpserveroauthclient", ("credentials",), ()),
     ("sso_identity_assertion", "litellm_ssoidentityassertion", (), ("assertion_b64",)),
 ]
+_MCP_CREDENTIAL_TABLES: Final = frozenset({"litellm_mcpservertable", "litellm_mcpserveroauthclient"})
 
 
 def _iter_encrypted_strings(obj: object):
@@ -483,6 +485,31 @@ def _iter_encrypted_strings(obj: object):
             stack.extend(cur.values())
         elif isinstance(cur, list):
             stack.extend(cur)
+
+
+def _mcp_encrypted_leaves(col: str, raw: object) -> Iterator[str]:
+    """Only the strings an MCP column encrypts at rest: a credentials blob keeps auth_type, scopes and urls in
+    plaintext and env_vars keeps every name and every per user placeholder, so without PyNaCl those must not be
+    mistaken for legacy ciphertext and refuse the scan"""
+    from litellm.proxy._experimental.mcp_server.db import MCP_CREDENTIAL_SECRET_FIELDS, _is_global_env_var_scope
+
+    if col == "credentials":
+        if not isinstance(raw, dict):
+            return iter(())
+        return (v for k, v in raw.items() if k in MCP_CREDENTIAL_SECRET_FIELDS and isinstance(v, str))
+    if not isinstance(raw, list):
+        return iter(())
+    return (
+        e["value"]
+        for e in raw
+        if isinstance(e, dict) and _is_global_env_var_scope(e.get("scope")) and isinstance(e.get("value"), str)
+    )
+
+
+def _encrypted_leaves(db_attr: str, col: str, raw: object) -> Iterator[str]:
+    if db_attr in _MCP_CREDENTIAL_TABLES and col in ("credentials", "env_vars"):
+        return _mcp_encrypted_leaves(col, raw)
+    return _iter_encrypted_strings(raw)
 
 
 def _classify_into_report(report: LocationReport, value: str) -> None:
@@ -548,7 +575,7 @@ async def _scan_one_table(
                     raw = json.loads(raw)
                 except (ValueError, TypeError):
                     pass
-            for s in _iter_encrypted_strings(raw):
+            for s in _encrypted_leaves(db_attr, col, raw):
                 _classify_into_report(report, s)
         for col in scalar_columns:
             v = getattr(row, col, None)
