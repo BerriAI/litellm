@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
@@ -123,6 +124,9 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	}
 	if inputCostPerPixel := d.Get("input_cost_per_pixel").(float64); inputCostPerPixel > 0 {
 		litellmParams["input_cost_per_pixel"] = inputCostPerPixel
+	}
+	if raw, err := d.GetRawConfigAt(cty.GetAttrPath("input_cost_per_reference_pixel")); err == nil && !raw.IsNull() && raw.Type() == cty.Number {
+		litellmParams["input_cost_per_reference_pixel"] = d.Get("input_cost_per_reference_pixel").(float64)
 	}
 	if outputCostPerPixel := d.Get("output_cost_per_pixel").(float64); outputCostPerPixel > 0 {
 		litellmParams["output_cost_per_pixel"] = outputCostPerPixel

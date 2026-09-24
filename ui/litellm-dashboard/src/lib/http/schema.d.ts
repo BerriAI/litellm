@@ -31409,6 +31409,8 @@ export interface components {
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
             input_cost_per_query?: number | null;
+            /** Input Cost Per Reference Pixel */
+            input_cost_per_reference_pixel?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
             /** Input Cost Per Token */
@@ -33948,6 +33950,8 @@ export interface components {
             health_status?: string | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
+            /** Input Cost Per Reference Pixel */
+            input_cost_per_reference_pixel?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
             /**
@@ -42304,6 +42308,8 @@ export interface components {
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
             input_cost_per_query?: number | null;
+            /** Input Cost Per Reference Pixel */
+            input_cost_per_reference_pixel?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
             /** Input Cost Per Token */
