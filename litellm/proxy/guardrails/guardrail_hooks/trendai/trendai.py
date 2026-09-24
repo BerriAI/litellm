@@ -80,7 +80,6 @@ class TrendAIGuardrail(CustomGuardrail):
         timeout: float = 5.0,
         stream_overlap_size: int = 256,
         response_content_chunk_size_bytes: int = RESPONSE_CONTENT_CHUNK_SIZE_BYTES,
-        logging_only_scan: Literal["request", "response", "both"] = "both",
         async_handler: _AsyncHTTPClient | None = None,
         guardrail_name: str | None = None,
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
@@ -100,8 +99,6 @@ class TrendAIGuardrail(CustomGuardrail):
             )
         if fallback_on_error not in ("block", "allow"):
             raise ValueError("fallback_on_error must be 'block' or 'allow'")
-        if logging_only_scan not in ("request", "response", "both"):
-            raise ValueError("logging_only_scan must be 'request', 'response', or 'both'")
         if timeout <= 0:
             raise ValueError("timeout must be greater than zero")
         if stream_overlap_size < 0:
@@ -116,7 +113,6 @@ class TrendAIGuardrail(CustomGuardrail):
         self.timeout: float = timeout
         self.stream_overlap_size: int = stream_overlap_size
         self.response_content_chunk_size_bytes: int = response_content_chunk_size_bytes
-        self.logging_only_scan: Literal["request", "response", "both"] = logging_only_scan
         self.async_handler: _AsyncHTTPClient = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
@@ -136,9 +132,6 @@ class TrendAIGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.logging_only,
         ]
-
-    def logging_only_scan_scope(self) -> Literal["request", "response", "both"]:
-        return self.logging_only_scan
 
     @log_guardrail_information
     async def apply_guardrail(

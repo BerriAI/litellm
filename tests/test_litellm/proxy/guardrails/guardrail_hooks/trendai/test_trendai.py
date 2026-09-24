@@ -37,7 +37,6 @@ def _guardrail(
     timeout: float = 5.0,
     stream_overlap_size: int = 256,
     response_content_chunk_size_bytes: int = 49_500,
-    logging_only_scan: Literal["request", "response", "both"] = "both",
     async_handler: httpx.AsyncClient | None = None,
     api_base: str = "https://guard.example.com/v3.0/aiSecurity",
     event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_call,
@@ -50,7 +49,6 @@ def _guardrail(
         timeout=timeout,
         stream_overlap_size=stream_overlap_size,
         response_content_chunk_size_bytes=response_content_chunk_size_bytes,
-        logging_only_scan=logging_only_scan,
         async_handler=async_handler,
         guardrail_name="trendai",
         event_hook=event_hook,
@@ -538,29 +536,17 @@ def _logged_call(user_text: str, assistant_text: str) -> tuple[dict[str, object]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("scope", "expected_scans"),
-    [
-        ("request", ["user a@b.com"]),
-        ("response", ["assistant SECRET"]),
-        ("both", ["user a@b.com", "assistant SECRET"]),
-    ],
-)
-async def test_logging_only_scan_scope_selects_which_side_is_scanned(
-    scope: Literal["request", "response", "both"], expected_scans: Sequence[str]
-) -> None:
+async def test_logging_only_scans_both_sides_without_modifying_them() -> None:
     respond, scanned = _engine(redact={"a@b.com": "[EMAIL]", "SECRET": "******"})
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        guardrail = _guardrail(
-            async_handler=client, logging_only_scan=scope, event_hook=GuardrailEventHooks.logging_only
-        )
+        guardrail = _guardrail(async_handler=client, event_hook=GuardrailEventHooks.logging_only)
         kwargs, response = _logged_call("user a@b.com", "assistant SECRET")
         out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
 
-    assert scanned == list(expected_scans)
+    assert scanned == ["user a@b.com", "assistant SECRET"]
     assert out_kwargs["messages"] == [{"role": "user", "content": "user a@b.com"}]
     assert out_response is response
     assert response.choices[0].message.content == "assistant SECRET"
     entries = out_kwargs["standard_logging_object"]["guardrail_information"]
-    assert [entry["guardrail_status"] for entry in entries] == ["success"] * len(expected_scans)
+    assert [entry["guardrail_status"] for entry in entries] == ["success", "success"]
     assert all(entry["guardrail_mode"] == "logging_only" for entry in entries)

@@ -15,7 +15,6 @@ class TrendAISettings(BaseModel):
     timeout: float = 5.0
     stream_overlap_size: int = 256
     response_content_chunk_size_bytes: int = 49_500
-    logging_only_scan: Literal["request", "response", "both"] = "both"
 
 
 class TrendAIChatMessage(BaseModel):
