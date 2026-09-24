@@ -3,12 +3,13 @@ use serde_json::Value;
 
 use crate::base_rate_selection::{
     TokenBaseRates, get_tiered_reasoning_rate, get_token_base_cost,
-    get_token_base_cost_without_off_peak,
+    get_token_base_cost_without_off_peak, uses_inclusive_token_thresholds,
 };
 use crate::generic_input::{InputBaseRates, calculate_input_cost};
 use crate::generic_output::{calculate_output_cost, resolve_reasoning_token_cost};
 use crate::generic_usage::{ParsedPromptDetails, parse_prompt_tokens_details};
 use crate::off_peak::{open_off_peak_block, parse_off_peak_rate};
+use crate::provider_cache::apply_provider_cache_read_default;
 use crate::regional_uplift::regional_totals_multiplier;
 use crate::responses_usage::ChatUsage;
 
@@ -185,5 +186,29 @@ pub fn calculate_generic_cost_from_model_info_with_region(
         threshold_inclusive,
         multiplier,
         at,
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GenericCostRequest<'a> {
+    pub model_info: &'a Value,
+    pub usage: &'a ChatUsage,
+    pub provider: Option<&'a str>,
+    pub service_tier: Option<&'a str>,
+    pub data_residency: Option<&'a str>,
+    pub vertex_location: Option<&'a str>,
+    pub at: Timestamp,
+}
+
+pub fn generic_cost_per_token(request: GenericCostRequest<'_>) -> (f64, f64) {
+    let model_info = apply_provider_cache_read_default(request.model_info, request.provider);
+    calculate_generic_cost_from_model_info_with_region(
+        request.usage,
+        &model_info,
+        request.service_tier,
+        uses_inclusive_token_thresholds(request.provider),
+        request.data_residency,
+        request.vertex_location,
+        request.at,
     )
 }

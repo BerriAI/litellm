@@ -174,3 +174,49 @@ fn transcription_cost_selects_token_usage_or_duration_pricing() {
         (0.05, 0.0)
     );
 }
+
+#[rstest]
+fn speech_priced_per_token_uses_generic_rates_not_the_provider_per_second_route() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "azure/tts".to_owned(),
+        json!({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "output_cost_per_second": 0.01}),
+    )]));
+    let usage =
+        get_usage_object(&json!({"usage": {"prompt_tokens": 1000, "completion_tokens": 1000}}))
+            .unwrap()
+            .unwrap();
+    let (prompt, completion) = litellm_cost::cost_calculator::speech_cost(
+        &catalog,
+        ModelCostRequest {
+            response_time_ms: Some(1000.0),
+            ..request("tts", "azure", &usage)
+        },
+        None,
+    )
+    .unwrap();
+    assert!((prompt - 1e-3).abs() < 1e-15);
+    assert!((completion - 2e-3).abs() < 1e-15);
+}
+
+#[rstest]
+fn transcription_token_pricing_ignores_the_vertex_location() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/transcribe".to_owned(),
+        json!({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "regional_endpoint_uplift_multiplier": 3.0}),
+    )]));
+    let usage =
+        get_usage_object(&json!({"usage": {"prompt_tokens": 1000, "completion_tokens": 1000}}))
+            .unwrap()
+            .unwrap();
+    let (prompt, completion) = litellm_cost::cost_calculator::transcription_cost(
+        &catalog,
+        ModelCostRequest {
+            vertex_location: Some("us-east5"),
+            ..request("transcribe", "openai", &usage)
+        },
+        0.0,
+    )
+    .unwrap();
+    assert!((prompt - 1e-3).abs() < 1e-15);
+    assert!((completion - 2e-3).abs() < 1e-15);
+}

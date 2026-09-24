@@ -6,7 +6,6 @@ use serde_json::Value;
 use crate::anthropic_cost::fast_speed_multiplier;
 use crate::azure_ai_cost::azure_ai_cost_per_token;
 use crate::azure_cost::output_per_second_cost;
-use crate::base_rate_selection::uses_inclusive_token_thresholds;
 use crate::batch::batch_cost_from_model_info;
 use crate::catalog::{CostCall, ModelCostRequest, ModelInfoCatalog};
 use crate::completion_cost::{
@@ -20,7 +19,7 @@ use crate::error::CostError;
 use crate::fireworks_cost::{
     FireworksThresholds, cost_per_token as fireworks_cost_per_token, get_base_model_for_pricing,
 };
-use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
+use crate::generic_cost::{GenericCostRequest, generic_cost_per_token};
 use crate::lemonade_cost::lemonade_cost_per_token;
 use crate::ocr_cost::ocr_cost;
 use crate::openai_cost::video_generation_cost;
@@ -321,15 +320,25 @@ pub fn cost_per_token(
     if !dispatches_before_the_gate && !has_token_or_tiered_pricing(&model_info) {
         return Ok((0.0, 0.0));
     }
-    let cost = calculate_generic_cost_from_model_info_with_region(
-        request.usage,
-        &model_info,
-        request.service_tier,
-        uses_inclusive_token_thresholds(request.provider),
-        request.data_residency,
-        request.vertex_location,
-        request.at,
-    );
+    let (service_tier, data_residency) = match provider {
+        Some(
+            LlmProviders::ANTHROPIC
+            | LlmProviders::BEDROCK
+            | LlmProviders::AZURE
+            | LlmProviders::GEMINI,
+        ) => (request.service_tier, None),
+        Some(LlmProviders::DEEPSEEK | LlmProviders::TENCENT) => (None, None),
+        _ => (request.service_tier, request.data_residency),
+    };
+    let cost = generic_cost_per_token(GenericCostRequest {
+        model_info: catalog.entry_for_key(key),
+        usage: request.usage,
+        provider: request.provider,
+        service_tier,
+        data_residency,
+        vertex_location: None,
+        at: request.at,
+    });
     let speed = if provider == Some(LlmProviders::ANTHROPIC) {
         fast_speed_multiplier(&model_info, request.usage)
             * get_provider_specific_geo_multiplier(
@@ -374,7 +383,15 @@ pub fn speech_cost(
                 completion.unwrap_or(0.0),
             ))
         }
-        SpeechCostMetric::PerToken => cost_per_token(catalog, request),
+        SpeechCostMetric::PerToken => Ok(generic_cost_per_token(GenericCostRequest {
+            model_info,
+            usage: request.usage,
+            provider: request.provider,
+            service_tier: request.service_tier,
+            data_residency: request.data_residency,
+            vertex_location: None,
+            at: request.at,
+        })),
     }
 }
 
@@ -387,15 +404,15 @@ pub fn transcription_cost(
         .entry(request.model, request.provider, request.region)
         .ok_or(CostError::ModelNotFound)?;
     if transcription_usage_has_token_details(request.usage) {
-        return Ok(calculate_generic_cost_from_model_info_with_region(
-            request.usage,
+        return Ok(generic_cost_per_token(GenericCostRequest {
             model_info,
-            request.service_tier,
-            false,
-            request.data_residency,
-            request.vertex_location,
-            request.at,
-        ));
+            usage: request.usage,
+            provider: request.provider,
+            service_tier: request.service_tier,
+            data_residency: request.data_residency,
+            vertex_location: None,
+            at: request.at,
+        }));
     }
     Ok(cost_per_second(model_info, duration_seconds))
 }
@@ -453,15 +470,15 @@ pub fn handle_realtime_stream_cost_calculation(
         .chain(std::iter::once(requested_model))
         .find_map(|model| {
             let model_info = catalog.entry(model, Some(provider), None)?;
-            let cost = calculate_generic_cost_from_model_info_with_region(
-                combined_usage,
+            let cost = generic_cost_per_token(GenericCostRequest {
                 model_info,
-                None,
-                false,
+                usage: combined_usage,
+                provider: Some(provider),
+                service_tier: None,
                 data_residency,
-                None,
+                vertex_location: None,
                 at,
-            );
+            });
             (cost.0 + cost.1 > 0.0 || cost_map_entry_declares_pricing(catalog, model, provider))
                 .then_some(cost)
         })

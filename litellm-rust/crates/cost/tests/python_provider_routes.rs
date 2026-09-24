@@ -148,3 +148,52 @@ fn lemonade_provider_is_free_for_unmapped_and_token_priced_models() {
     .unwrap();
     assert_eq!(elapsed, (0.1, 0.0));
 }
+
+fn flagged_rates() -> Value {
+    json!({
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_flex": 0.5e-6,
+        "output_cost_per_token_flex": 1e-6,
+        "regional_processing_uplift_multiplier_eu": 1.5,
+        "regional_endpoint_uplift_multiplier": 3.0
+    })
+}
+
+#[rstest]
+#[case::openai_takes_tier_and_residency("openai", (0.5e-3 * 1.5, 1e-3 * 1.5))]
+#[case::custom_provider_takes_tier_and_residency("custom", (0.5e-3 * 1.5, 1e-3 * 1.5))]
+#[case::anthropic_takes_only_the_tier("anthropic", (0.5e-3, 1e-3))]
+#[case::bedrock_takes_only_the_tier("bedrock", (0.5e-3, 1e-3))]
+#[case::azure_takes_only_the_tier("azure", (0.5e-3, 1e-3))]
+#[case::gemini_takes_only_the_tier("gemini", (0.5e-3, 1e-3))]
+#[case::deepseek_takes_neither("deepseek", (1e-3, 2e-3))]
+#[case::tencent_takes_neither("tencent", (1e-3, 2e-3))]
+fn cost_per_token_forwards_only_the_pricing_flags_each_python_provider_passes(
+    #[case] provider: &str,
+    #[case] expected: (f64, f64),
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        format!("{provider}/model"),
+        flagged_rates(),
+    )]));
+    let usage =
+        get_usage_object(&json!({"usage": {"prompt_tokens": 1000, "completion_tokens": 1000}}))
+            .unwrap()
+            .unwrap();
+    let (prompt, completion) = cost_per_token(
+        &catalog,
+        ModelCostRequest {
+            service_tier: Some("flex"),
+            data_residency: Some("eu"),
+            vertex_location: Some("us-east5"),
+            ..request("model", provider, &usage)
+        },
+    )
+    .unwrap();
+    assert!((prompt - expected.0).abs() < 1e-15, "{provider}: {prompt}");
+    assert!(
+        (completion - expected.1).abs() < 1e-15,
+        "{provider}: {completion}"
+    );
+}
