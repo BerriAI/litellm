@@ -151,7 +151,11 @@ describe("KeyActivityPanel", () => {
   it("calls loadMoreKeys when the button is clicked", async () => {
     const loadMoreKeys = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     render(
-      <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3 }} loadMoreKeys={loadMoreKeys} />,
+      <KeyActivityPanel
+        keyMetrics={keyMetrics}
+        apiKeyTruncation={{ limit: 2, total: 3 }}
+        loadMoreKeys={loadMoreKeys}
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
@@ -163,7 +167,11 @@ describe("KeyActivityPanel", () => {
   it("shows a pending status while loadMoreKeys is in flight", async () => {
     const loadMoreKeys = vi.fn<() => Promise<void>>().mockReturnValue(new Promise(() => {}));
     render(
-      <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3 }} loadMoreKeys={loadMoreKeys} />,
+      <KeyActivityPanel
+        keyMetrics={keyMetrics}
+        apiKeyTruncation={{ limit: 2, total: 3 }}
+        loadMoreKeys={loadMoreKeys}
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
@@ -175,7 +183,11 @@ describe("KeyActivityPanel", () => {
   it("reports a failed key page load", async () => {
     const loadMoreKeys = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("boom"));
     render(
-      <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3 }} loadMoreKeys={loadMoreKeys} />,
+      <KeyActivityPanel
+        keyMetrics={keyMetrics}
+        apiKeyTruncation={{ limit: 2, total: 3 }}
+        loadMoreKeys={loadMoreKeys}
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
