@@ -5,6 +5,7 @@ import ipaddress
 import json
 import ssl
 import threading
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -140,6 +141,8 @@ class _CipherPeerHandler(BaseHTTPRequestHandler):
         user_value: Final = body.get("user")
         user: Final = user_value if isinstance(user_value, str) else None
         peer.record(TlsPeerRequest(path=self.path, user=user, cipher=_negotiated_cipher(self)))
+        if user is not None and "slow" in user:
+            time.sleep(5)
         identifier: Final = f"chatcmpl-{user or ''}"
         model_value: Final = body.get("model")
         model: Final = model_value if isinstance(model_value, str) else "gpt-4o-mini"

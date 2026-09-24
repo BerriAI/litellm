@@ -308,7 +308,7 @@ class _BurstOutcome:
 
 def _chaos_request(proxy: Gateway, kind: str, index: int, marker: str) -> _BurstOutcome:
     user: Final = f"chaos-{kind}-{index}-{marker}"
-    if kind == "chat":
+    if kind in ("chat", "slow"):
         try:
             chat_response: Final = proxy.request(
                 "POST",
@@ -429,7 +429,10 @@ def test_proxy_burst_survives_losing_one_worker(cipher_owned_proxy: OwnedProxy, 
     marker: Final = uuid.uuid4().hex[:8]
     executor: Final = ThreadPoolExecutor(max_workers=12)
     with executor:
-        futures: Final = tuple(executor.submit(_chaos_request, proxy, "chat", index, marker) for index in range(12))
+        futures: Final = tuple(
+            executor.submit(_chaos_request, proxy, "slow" if index % 2 else "chat", index, marker)
+            for index in range(12)
+        )
         eventually(
             lambda: sum(1 for future in futures if future.done() and future.result().status == 200),
             lambda successes: successes >= 2,
@@ -441,7 +444,9 @@ def test_proxy_burst_survives_losing_one_worker(cipher_owned_proxy: OwnedProxy, 
         children[0].kill()
         finished: Final = tuple(future.result(timeout=120) for future in futures)
     assert len(finished) == 12, finished
-    assert any(outcome.status == 200 and outcome.finished_at > killed_at for outcome in finished), finished
+    assert any(outcome.finished_at > killed_at for outcome in finished), finished
+    post_kill_id: Final = _sync_completion(proxy, "tls-peer", f"post-kill-{marker}")
+    assert post_kill_id == f"chatcmpl-post-kill-{marker}"
 
     def _ready() -> bool:
         try:
