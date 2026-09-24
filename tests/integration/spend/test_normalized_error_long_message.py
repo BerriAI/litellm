@@ -278,8 +278,13 @@ def test_upstream_budget_wording_clusters_as_budget_exceeded(gateway: Gateway, m
     assert info["normalized_error"] == "429_BUDGET_EXCEEDED", info
 
 
-def test_upstream_exceeded_and_budget_65_chars_apart_clusters_by_exception_class(gateway: Gateway) -> None:
+def test_upstream_exceeded_and_budget_65_chars_apart_still_clusters_as_budget_exceeded(gateway: Gateway) -> None:
     info: Final = _upstream_failure_row(gateway, "exceeded" + "x" * 65 + "budget")
+    assert info["normalized_error"] == "429_BUDGET_EXCEEDED", info
+
+
+def test_upstream_exceeded_and_budget_on_different_lines_cluster_by_exception_class(gateway: Gateway) -> None:
+    info: Final = _upstream_failure_row(gateway, "exceeded the limit\nbudget unaffected")
     assert info["normalized_error"] == "429_RATE_LIMIT_EXCEEDED", info
 
 

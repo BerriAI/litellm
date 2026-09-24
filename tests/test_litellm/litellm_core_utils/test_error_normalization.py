@@ -254,7 +254,13 @@ def test_repeated_exceeded_in_a_288kb_message_classifies_in_linear_time() -> Non
         "LiteLLM Team: team-1, exceeded budget for model=gpt-4o-mini",
         "ExceededBudget: Key over 1d budget. Spend=3.0, Budget=2.0",
         "Budget has been exceeded! Key=sk-... Current cost: 11.0, Max budget: 10.0",
+        "EXCEEDED " + "x" * 65 + " BuDgEt",
     ],
 )
 def test_real_budget_wordings_still_cluster_as_budget_exceeded(message: str) -> None:
     assert normalize_error(Exception(message), "400", message) == "429_BUDGET_EXCEEDED"
+
+
+@pytest.mark.parametrize("message", ["budget then exceeded", "exceeded the limit\nbudget unaffected", "exceededbudge"])
+def test_exceeded_without_a_following_budget_on_the_same_line_is_not_budget(message: str) -> None:
+    assert normalize_error(Exception(message), "400", message) == "400_INVALID_REQUEST"

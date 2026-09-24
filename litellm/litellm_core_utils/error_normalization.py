@@ -61,7 +61,7 @@ class _HasProxyErrorType(Protocol):
 
 _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
     (
-        re.compile(r"budget has been exceeded|max budget|exceeded.{0,64}budget|crossed budget", re.IGNORECASE),
+        re.compile(r"budget has been exceeded|max budget|crossed budget", re.IGNORECASE),
         BUDGET_EXCEEDED,
     ),
     (re.compile(r"no healthy deployments?|no deployments available", re.IGNORECASE), NO_HEALTHY_DEPLOYMENTS),
@@ -155,6 +155,14 @@ _CLASS_CODE_TABLE: Final[tuple[tuple[tuple[type[BaseException], ...], str], ...]
 )
 
 
+def _exceeded_before_budget(message: str) -> bool:
+    """Linear-time equivalent of ``re.search(r"exceeded.*budget", message, re.IGNORECASE)``."""
+    return any(
+        (start := line.find("exceeded")) != -1 and line.find("budget", start + len("exceeded")) != -1
+        for line in message.lower().split("\n")
+    )
+
+
 def _classify_by_message(message: str, patterns: tuple[tuple[re.Pattern[str], str], ...]) -> str | None:
     return next((code for pattern, code in patterns if pattern.search(message)), None)
 
@@ -183,7 +191,9 @@ def normalize_error(exc: Exception | None, status_code: str, message: str) -> st
     by_proxy_type: Final = _PROXY_ERROR_TYPE_MAP.get(proxy_type) if isinstance(proxy_type, str) else None
     if by_proxy_type is not None:
         return by_proxy_type
-    by_message: Final = _classify_by_message(message, _MESSAGE_PATTERNS)
+    by_message: Final = (
+        BUDGET_EXCEEDED if _exceeded_before_budget(message) else _classify_by_message(message, _MESSAGE_PATTERNS)
+    )
     if by_message is not None:
         return by_message
     by_class: Final = _classify_by_class(exc)
