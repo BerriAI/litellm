@@ -37,8 +37,10 @@ def _changed_files_selected_by(tmp_path: Path, pathspecs: tuple[str, ...], files
     )
 
 
-def test_workflow_still_carries_the_ruff_format_and_e2e_basedpyright_diff_gates() -> None:
-    assert frozenset(_scoped_root(gate[0]) for gate in GATES) == frozenset({"litellm/", "tests/e2e/"})
+def test_workflow_still_carries_the_ruff_format_e2e_basedpyright_and_claude_code_harness_diff_gates() -> None:
+    assert frozenset(_scoped_root(gate[0]) for gate in GATES) == frozenset(
+        {"litellm/", "tests/e2e/", "tests/e2e/claude_code/"}
+    )
 
 
 @pytest.mark.parametrize("pathspecs", GATES, ids=" ".join)
