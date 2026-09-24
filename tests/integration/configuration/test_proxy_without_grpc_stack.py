@@ -6,7 +6,7 @@ import signal
 import subprocess
 import sys
 import uuid
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
@@ -62,12 +62,23 @@ def _python_without_grpc_stack(directory: Path) -> Generator[str, None, None]:
     yield pythonpath
 
 
-@pytest.fixture(scope="module")
-def proxy_without_grpc_stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
-    directory: Final = tmp_path_factory.mktemp("no-grpc-stack")
+@contextmanager
+def _proxy_without_grpc_stack(directory: Path) -> Generator[OwnedProxy, None, None]:
     with _python_without_grpc_stack(directory) as pythonpath, gateway_from_environment() as gateway:
         with owned_proxy_process(gateway, directory, {"PYTHONPATH": pythonpath}, workers=2) as owned:
             yield owned
+
+
+@pytest.fixture(scope="module")
+def proxy_without_grpc_stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
+    with _proxy_without_grpc_stack(tmp_path_factory.mktemp("no-grpc-stack")) as owned:
+        yield owned
+
+
+@pytest.fixture
+def chaos_proxy_without_grpc_stack(tmp_path: Path) -> Iterator[OwnedProxy]:
+    with _proxy_without_grpc_stack(tmp_path) as owned:
+        yield owned
 
 
 def test_chat_completions_serves_without_the_grpc_stack(proxy_without_grpc_stack: OwnedProxy) -> None:
@@ -203,13 +214,23 @@ def test_messages_and_responses_serve_without_the_grpc_stack(proxy_without_grpc_
 
 
 def _worker_gone(pid: int) -> bool:
-    if not psutil.pid_exists(pid):
+    try:
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return True
-    return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
 
 
-def test_surviving_worker_keeps_serving_without_the_grpc_stack(proxy_without_grpc_stack: OwnedProxy) -> None:
-    owned: Final = proxy_without_grpc_stack
+def _chat_once(
+    client: httpx.Client, headers: Mapping[str, str], body: Mapping[str, JsonValue]
+) -> httpx.Response | None:
+    try:
+        return client.post("/v1/chat/completions", json=body, headers=headers)
+    except httpx.HTTPError:
+        return None
+
+
+def test_surviving_worker_keeps_serving_without_the_grpc_stack(chaos_proxy_without_grpc_stack: OwnedProxy) -> None:
+    owned: Final = chaos_proxy_without_grpc_stack
     launcher: Final = psutil.Process(owned.process.pid)
     children: Final = launcher.children(recursive=True)
     workers: Final = tuple(child for child in children if any("spawn_main" in arg for arg in child.cmdline()))
@@ -217,18 +238,42 @@ def test_surviving_worker_keeps_serving_without_the_grpc_stack(proxy_without_grp
     killed, survivor = workers
     os.kill(killed.pid, signal.SIGKILL)
     eventually(lambda: _worker_gone(killed.pid), lambda gone: gone, seconds=30)
-    with owned.gateway.scenario() as scenario:
-        model: Final = scenario.model()
-        responses: Final = tuple(
-            owned.gateway.request(
-                "POST",
-                "/v1/chat/completions",
-                {"model": model, "messages": [{"role": "user", "content": f"surviving worker {attempt}"}]},
-            )
-            for attempt in range(5)
+    headers: Final = {"Authorization": f"Bearer {owned.gateway.key}"}
+    name: Final = f"integration-{uuid.uuid4().hex}"
+    with httpx.Client(base_url=str(owned.gateway.client.base_url), timeout=10, trust_env=False) as client:
+        created: Final = client.post(
+            "/model/new",
+            json={
+                "model_name": name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "integration-provider-key",
+                    "api_base": f"{owned.gateway.upstream_url}/v1",
+                },
+                "model_info": {},
+            },
+            headers=headers,
         )
-        bodies: Final = tuple(JSON_OBJECT.validate_json(response.content) for response in responses)
-        for response, body in zip(responses, bodies):
-            assert response.status_code == 200, response.text
-            assert isinstance(body["id"], str) and body["id"].startswith("chatcmpl-"), response.text
+        assert created.status_code == 200, created.text
+        model_id: Final = str(object_value(JSON_OBJECT.validate_json(created.content)["model_info"])["id"])
+        try:
+            requests: Final[tuple[dict[str, JsonValue], ...]] = tuple(
+                {"model": name, "messages": [{"role": "user", "content": f"surviving worker {attempt}"}]}
+                for attempt in range(5)
+            )
+            probe: Final = eventually(
+                lambda: _chat_once(client, headers, requests[0]),
+                lambda response: response is not None and response.status_code == 200,
+                seconds=30,
+            )
+            assert probe is not None
+            responses: Final = (probe,) + tuple(
+                client.post("/v1/chat/completions", json=body, headers=headers) for body in requests[1:]
+            )
+            bodies: Final = tuple(JSON_OBJECT.validate_json(response.content) for response in responses)
+            for response, body in zip(responses, bodies):
+                assert response.status_code == 200, response.text
+                assert isinstance(body["id"], str) and body["id"].startswith("chatcmpl-"), response.text
+        finally:
+            client.post("/model/delete", json={"id": model_id}, headers=headers).raise_for_status()
     assert psutil.pid_exists(survivor.pid) and psutil.Process(survivor.pid).is_running()
