@@ -197,6 +197,17 @@ def test_get_model_info_anthropic_compaction(
     assert litellm.get_model_info("claude-sonnet-5")["supports_anthropic_compaction"] is capability
 
 
+@pytest.mark.parametrize("capability", [True, False, None])
+def test_get_model_info_supports_sampling_params(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, capability: bool | None
+) -> None:
+    if capability is None:
+        monkeypatch.delitem(litellm.model_cost["claude-opus-5"], "supports_sampling_params", raising=False)
+    else:
+        monkeypatch.setitem(litellm.model_cost["claude-opus-5"], "supports_sampling_params", capability)
+    assert litellm.get_model_info("anthropic/claude-opus-5")["supports_sampling_params"] is capability
+
+
 def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
     info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
     assert info["key"] == "ft:gpt-4o-2024-08-06"
