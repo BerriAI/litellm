@@ -10,9 +10,11 @@
 
 import asyncio
 import json
+import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
 
@@ -98,22 +100,47 @@ def _json_escaped_len(text: str) -> int:
 _MAX_FIRST_SSE_FRAME_BYTES: Final = 64 * 1024
 
 
-def _holds_classifiable_sse_frame(raw: bytes) -> bool:
-    """Whether ``raw`` holds one complete SSE event carrying a ``data:`` line, or is too large to keep joining."""
-    complete_frames, _ = split_complete_sse_frames(raw)
-    return (
-        any(line.startswith(b"data:") for line in complete_frames.splitlines())
-        or len(raw) >= _MAX_FIRST_SSE_FRAME_BYTES
+@dataclass(frozen=True, slots=True)
+class _SsePreface:
+    """Complete leading SSE frames with no ``data:`` line, relayed verbatim before the stream shape is decided."""
+
+    raw: bytes
+
+
+_SSE_FRAME_END: Final = re.compile(rb"\r\n\r\n|\n\n|\r\r")
+
+
+def _split_sse_preface(complete_frames: bytes) -> tuple[bytes, bytes]:
+    """Split complete frames into ``(frames before the first data-bearing frame, that frame and everything after)``."""
+    start = 0
+    for end in _SSE_FRAME_END.finditer(complete_frames):
+        frame = complete_frames[start : end.end()]
+        if any(line.startswith(b"data:") for line in frame.splitlines()):
+            return complete_frames[:start], complete_frames[start:]
+        start = end.end()
+    return complete_frames, b""
+
+
+def _flush_unmaskable_buffer(all_chunks: list[ModelResponseStream]) -> Iterator[ModelResponseStream]:
+    """Buffered chunks flushed unmasked when a mixed stream shape makes reconstruction impossible."""
+    if not all_chunks:
+        return
+    verbose_proxy_logger.warning(
+        "Presidio apply_to_output: mixed stream detected (ModelResponseStream + unknown event). "
+        "Flushing %d buffered chunks without PII masking and switching to transparent passthrough.",
+        len(all_chunks),
     )
+    yield from all_chunks
 
 
 async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
     """
-    Join leading raw ``bytes`` chunks until they hold one complete SSE event
-    with a data line (a comment keepalive or data-less event alone says nothing
-    about the stream shape), so the stream shape is decided on a whole frame
-    rather than a transport fragment. Everything after that first frame is
-    forwarded untouched.
+    Relay leading data-less SSE frames (comment keepalives, events without a
+    ``data:`` line) as they complete, and join raw ``bytes`` chunks until they
+    hold one complete SSE event with a data line, so the stream shape is
+    decided on a whole frame rather than a transport fragment. Everything
+    after that first frame is forwarded untouched. The byte cap can only be
+    reached by a single unterminated frame.
     """
     pending = b""
     try:
@@ -122,7 +149,12 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
                 yield chunk
                 continue
             pending += chunk
-            if _holds_classifiable_sse_frame(pending):
+            complete_frames, tail = split_complete_sse_frames(pending)
+            preface, classifiable = _split_sse_preface(complete_frames)
+            if preface:
+                yield _SsePreface(preface)
+            pending = classifiable + tail
+            if classifiable or len(pending) >= _MAX_FIRST_SSE_FRAME_BYTES:
                 break
         else:
             if pending:
@@ -1407,6 +1439,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         yield chunk
                     else:
                         all_chunks.append(chunk)
+                elif isinstance(chunk, _SsePreface):
+                    yield chunk.raw
                 elif isinstance(chunk, bytes):
                     first_frame_is_anthropic = (
                         not passthrough_due_to_unknown_stream_shape
@@ -1423,18 +1457,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         yield masked_chunk
                     return
                 else:
-                    if all_chunks:
-                        # Flush buffered chunks and switch to transparent passthrough for this stream shape.
-                        # NOTE: these buffered chunks are emitted unmasked because this
-                        # stream mixed chunk types and cannot be safely reconstructed.
-                        verbose_proxy_logger.warning(
-                            "Presidio apply_to_output: mixed stream detected (ModelResponseStream + unknown event). "
-                            "Flushing %d buffered chunks without PII masking and switching to transparent passthrough.",
-                            len(all_chunks),
-                        )
-                        for buffered_chunk in all_chunks:
-                            yield buffered_chunk
-                        all_chunks = []
+                    for buffered_chunk in _flush_unmaskable_buffer(all_chunks):
+                        yield buffered_chunk
+                    all_chunks = []
                     passthrough_due_to_unknown_stream_shape = True
                     yield chunk
             if passthrough_due_to_unknown_stream_shape:

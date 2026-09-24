@@ -408,6 +408,7 @@ def test_anthropic_messages_stream_led_by_sse_comment_keepalive_is_still_masked(
     with presidio_rig(gateway, tmp_path, anthropic_provider(chunks, pause_between_chunks=0.5)) as rig:
         received: Final = rig.stream("/v1/messages", rig.messages_body())
         assert received.status == 200, received.text
+        assert received.text.startswith(": keepalive"), received.text[:200]
         assert anthropic_text(received) == f"{MASK} designed it."
         assert PERSON not in received.text, received.text
         assert identity in received.text

@@ -2692,7 +2692,9 @@ async def test_apply_to_output_streaming_anthropic_stream_led_by_sse_comment_kee
     ):
         collected.append(chunk)
 
-    joined = b"".join(collected).decode()
+    raw = b"".join(collected)
+    assert raw.startswith(b": keepalive\n\n"), raw[:200]
+    joined = raw.decode()
     assert "John Smith" not in joined, joined
     assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
     assert joined.count("event: message_start") == 1
@@ -2711,6 +2713,89 @@ async def test_apply_to_output_streaming_anthropic_stream_led_by_data_less_ping_
         _anthropic_sse(
             "content_block_delta",
             {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+        ),
+        *_anthropic_stream_tail(),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    raw = b"".join(collected)
+    assert raw.startswith(b"event: ping\n\n"), raw[:200]
+    joined = raw.decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_leading_keepalive_is_forwarded_before_upstream_data_arrives():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    gate = asyncio.Event()
+    byte_chunks = [
+        *_anthropic_stream_head(),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+        ),
+        *_anthropic_stream_tail(),
+    ]
+
+    async def mock_stream():
+        yield b": keepalive\n\n"
+        await gate.wait()
+        for b in byte_chunks:
+            yield b
+
+    out = guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    )
+    assert await asyncio.wait_for(anext(out), 1) == b": keepalive\n\n"
+    assert not gate.is_set()
+
+    gate.set()
+    collected = [chunk async for chunk in out]
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_leading_comments_over_the_frame_cap_are_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    keepalives = [b": keepalive\n\n" * 512] * 12  # ~72 KiB of complete comment frames, over the 64 KiB cap
+    byte_chunks = [
+        *keepalives[:-1],
+        keepalives[-1]
+        + b"".join(
+            [
+                *_anthropic_stream_head(),
+                _anthropic_sse(
+                    "content_block_delta",
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+                ),
+            ]
         ),
         *_anthropic_stream_tail(),
     ]
