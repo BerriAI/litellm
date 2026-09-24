@@ -1408,6 +1408,53 @@ fn realtime_response_prices_session_tokens_and_completed_transcription() {
 }
 
 #[rstest]
+#[case::event_tiers_without_a_request_tier(None, None, 100.0 * 0.002 + 60.0 * 0.005)]
+#[case::explicit_tier_overrides_every_event(Some(json!("priority")), None, 160.0 * 0.005)]
+#[case::optional_params_tier_overrides_every_event(None, Some(json!({"service_tier": "priority"})), 160.0 * 0.005)]
+#[case::auto_request_tier_keeps_event_tiers(Some(json!("auto")), None, 100.0 * 0.002 + 60.0 * 0.005)]
+fn responses_websocket_prices_parts_at_the_requested_tier_first(
+    #[case] service_tier: Option<Value>,
+    #[case] optional_params: Option<Value>,
+    #[case] expected_input: f64,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/model".to_owned(),
+        json!({
+            "input_cost_per_token": 0.002,
+            "output_cost_per_token": 0.0,
+            "input_cost_per_token_priority": 0.005,
+            "output_cost_per_token_priority": 0.0
+        }),
+    )]));
+    let response = json!({"results": [
+        {"type": "response.completed", "response": {"service_tier": "default", "usage": {"input_tokens": 100, "output_tokens": 0}}},
+        {"type": "response.completed", "response": {"service_tier": "priority", "usage": {"input_tokens": 60, "output_tokens": 0}}}
+    ]});
+    let empty = json!({});
+    let base = request(
+        Some(&response),
+        Some("model"),
+        Some("openai"),
+        &empty,
+        &empty,
+    );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some("_aresponses_websocket"),
+                service_tier: service_tier.as_ref(),
+                optional_params: optional_params.as_ref(),
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.input - expected_input).abs() < 1e-12);
+}
+
+#[rstest]
 fn responses_websocket_prices_each_tier_and_applies_fixed_margin_per_tier() {
     let catalog = ModelInfoCatalog::new(HashMap::from([(
         "openai/model".to_owned(),

@@ -12,7 +12,9 @@ use crate::catalog::{CostCall, ModelCostRequest, ModelInfoCatalog};
 use crate::completion_cost::{
     CompletionCost, completion_cost, get_response_cost_from_hidden_params,
 };
-use crate::completion_input::{CompletionInputRequest, PreparedCompletionInput, ResponseKind};
+use crate::completion_input::{
+    CompletionInputRequest, PreparedCompletionInput, ResponseKind, normalize_service_tier,
+};
 use crate::cost_calculator::{
     cost_per_token, cost_per_token_for_call, default_video_cost_calculator,
     handle_realtime_stream_cost_calculation,
@@ -525,6 +527,12 @@ fn price_responses_websocket(
     region: Option<&str>,
 ) -> Result<PricedCompletionResponse, CostError> {
     let results = realtime_results(request)?;
+    let requested_tier = normalize_service_tier(request.input.service_tier.or_else(|| {
+        request
+            .input
+            .optional_params
+            .and_then(|params| params.get("service_tier"))
+    }));
     let partition = partition_results_by_service_tier(results);
     let groups = if partition.is_empty() {
         vec![(prepared.service_tier.as_deref(), Vec::new())]
@@ -561,7 +569,8 @@ fn price_responses_websocket(
                             provider,
                             region,
                             usage,
-                            service_tier: tier,
+                            service_tier: requested_tier
+                                .or_else(|| tier.filter(|tier| !tier.eq_ignore_ascii_case("auto"))),
                             data_residency: request.data_residency,
                             vertex_location: request.vertex_location,
                             at: request.at,
