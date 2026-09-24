@@ -68565,6 +68565,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "vertex_ai/gemini-2.5-flash-native-audio": {
+        "deprecation_date": "2026-12-13",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "vertex_ai",
