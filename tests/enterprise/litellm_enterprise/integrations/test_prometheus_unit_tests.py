@@ -211,11 +211,10 @@ class CustomPrometheusLogger(PrometheusLogger):
         self,
         litellm_model_name: str,
         model_id: str,
-        api_base: str,
         api_provider: str,
     ):
         self.deployment_complete_outages.append(
-            [litellm_model_name, model_id, api_base, api_provider]
+            [litellm_model_name, model_id, api_provider]
         )
 
     def increment_deployment_cooled_down(
@@ -286,7 +285,6 @@ async def test_router_cooldown_event_callback():
     assert prometheus_logger.deployment_complete_outages[0] == [
         "gpt-5-mini",
         "test-model-id",
-        "https://api.openai.com",
         "openai",
     ]
     assert prometheus_logger.deployment_cooled_downs[0] == [
