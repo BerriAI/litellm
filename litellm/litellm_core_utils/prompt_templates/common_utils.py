@@ -208,7 +208,7 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     for _ in range(_IMAGE_SCAN_MAX_DEPTH):
         if any(isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_PART_TYPES for part in frontier):
             return True
-        frontier = tuple(  # rebind-ok: depth-bounded frontier walk
+        frontier = tuple(
             nested
             for part in frontier
             if isinstance(part, Mapping)
@@ -2003,11 +2003,11 @@ def strip_encrypted_reasoning_from_messages(messages: object) -> None:
     """
     if not isinstance(messages, list):
         return
-    for content in _anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
+    for content in anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
         _strip_encrypted_reasoning_from_blocks(content)
 
 
-def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
+def anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
     return (
         cast(list[object], content)  # cast-ok: narrowed by isinstance
         for message in messages
@@ -2020,7 +2020,7 @@ def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
 def _strip_encrypted_reasoning_from_blocks(content: object) -> None:
     blocks: Final = cast(list[object], content)  # cast-ok: narrowed by the caller's isinstance
     kept: Final = tuple(block for block in blocks if not is_encrypted_reasoning_block(block))
-    blocks[:] = kept  # rebind-ok: shared with fallback snapshot
+    blocks[:] = kept
 
 
 def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:

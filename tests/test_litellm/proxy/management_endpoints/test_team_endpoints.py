@@ -11633,6 +11633,83 @@ async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
     assert "allowed_passthrough_routes" in str(exc.value.message)
 
 
+def test_check_disable_global_guardrails_caller_permission_team():
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.common_utils import (
+        _check_disable_global_guardrails_caller_permission,
+    )
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    non_admin = _non_admin_auth()
+
+    _check_disable_global_guardrails_caller_permission(True, {"disable_global_guardrails": True}, admin, entity="team")
+    _check_disable_global_guardrails_caller_permission(None, None, non_admin, entity="team")
+    _check_disable_global_guardrails_caller_permission(False, None, non_admin, entity="team")
+
+    with pytest.raises(HTTPException) as exc:
+        _check_disable_global_guardrails_caller_permission(True, None, non_admin, entity="team")
+    assert exc.value.status_code == 403
+    assert "disable_global_guardrails" in str(exc.value.detail)
+    assert "team" in str(exc.value.detail)
+
+    with pytest.raises(HTTPException) as exc:
+        _check_disable_global_guardrails_caller_permission(
+            None, {"disable_global_guardrails": True}, non_admin, entity="team"
+        )
+    assert exc.value.status_code == 403
+    assert "disable_global_guardrails" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_new_team_blocks_non_admin_disable_global_guardrails(mock_db_client):
+    """A non-proxy-admin cannot opt a team out of global guardrails via /team/new."""
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, ProxyException
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._check_user_team_limits",
+        AsyncMock(return_value=None),
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await new_team(
+                data=NewTeamRequest(team_alias="t", disable_global_guardrails=True),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=_non_admin_auth(),
+            )
+    assert str(exc.value.code) == "403"
+    assert "disable_global_guardrails" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_update_team_blocks_non_admin_disable_global_guardrails(mock_db_client):
+    """Even a team manager (non-proxy-admin) cannot set
+    disable_global_guardrails via /team/update."""
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    existing = MagicMock()
+    existing.model_dump.return_value = {"team_id": "t1"}
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._resolve_team_access",
+        AsyncMock(return_value="org_admin"),
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await update_team(
+                data=UpdateTeamRequest(team_id="t1", disable_global_guardrails=True),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=_non_admin_auth(),
+            )
+    assert str(exc.value.code) == "403"
+    assert "disable_global_guardrails" in str(exc.value.message)
+
+
 def test_set_budget_reset_at_clears_when_budget_duration_null():
     """
     When budget_duration is explicitly set to null, _set_budget_reset_at

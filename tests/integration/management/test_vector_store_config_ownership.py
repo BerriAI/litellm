@@ -318,7 +318,14 @@ def test_redis_outage_keeps_config_store_served_and_recovers(
                     "REDIS_PORT": str(cache.port),
                     "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "1",
                 }
-                with owned_proxy(gateway, tmp_path, overrides, config=PROXY_CONFIG, workers=2) as candidate:
+                with owned_proxy(
+                    gateway,
+                    tmp_path,
+                    overrides,
+                    config=PROXY_CONFIG,
+                    workers=2,
+                    remove_environment=("DATABASE_URL_READ_REPLICA",),
+                ) as candidate:
                     db_store_id: Final = f"vs_db_{uuid.uuid4().hex}"
                     for phase in ("before", "during", "after"):
                         if phase == "during":

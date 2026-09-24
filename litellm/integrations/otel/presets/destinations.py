@@ -153,7 +153,7 @@ def destination_for(
     endpoint, protocol = resolved
     return OtelDestination(
         endpoint=endpoint,
-        headers=MappingProxyType(dict(headers)),  # mutable-ok: MappingProxyType needs a concrete mapping to wrap
+        headers=MappingProxyType(dict(headers)),
         resource_attributes=MappingProxyType({"service.name": service_name}) if service_name else _NO_ATTRS,
         callback_name=callback_name,
         protocol=protocol,

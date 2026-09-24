@@ -2958,3 +2958,50 @@ describe("TeamInfo MCP permission retention", () => {
     errorToast.mockRestore();
   });
 });
+
+describe("TeamInfoView - disable_global_guardrails switch gating", () => {
+  beforeEach(() => {
+    seedDefaultMocks();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    authState.userRole = "Admin";
+  });
+
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4"],
+    editTeam: false,
+    premiumUser: false,
+  };
+
+  const openEditForm = async () => {
+    const user = userEvent.setup({ delay: null });
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  it("hides the Disable all global guardrails switch from a non-admin", async () => {
+    authState.userRole = "Internal User";
+    renderWithProviders(<TeamInfoView {...props} is_proxy_admin={false} />);
+    await openEditForm();
+
+    expect(screen.queryByRole("switch", { name: /Disable all global guardrails/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the Disable all global guardrails switch to a proxy admin", async () => {
+    renderWithProviders(<TeamInfoView {...props} />);
+    await openEditForm();
+
+    expect(await screen.findByRole("switch", { name: /Disable all global guardrails/i })).toBeInTheDocument();
+  });
+});

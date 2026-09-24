@@ -9,6 +9,7 @@ from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import (
+    INVALID_SPAN,
     Link,
     NonRecordingSpan,
     Span,
@@ -225,6 +226,28 @@ def resolve_parent_context(threaded: Span | None = None) -> Context:
     if is_recordable_span(threaded) and not is_recordable_span(get_current_span(ctx)):
         ctx = context_from_span(threaded, context=ctx)
     return ctx
+
+
+def resolve_service_span_context(
+    threaded: Span | None = None, end_time_ns: int | None = None
+) -> tuple[Context, tuple[Link, ...]]:
+    """Parent context + links for a service/DB span that ended at ``end_time_ns``.
+
+    A call that finished after its parent ended (post-response spend tracking)
+    starts its own root trace with a span link back to the parent instead of
+    stretching the parent's trace. Baggage stays on the returned context.
+    """
+    ctx: Final = resolve_parent_context(threaded)
+    parent: Final = get_current_span(ctx)
+    if not _ended_before(parent, end_time_ns):
+        return ctx, ()
+    return set_span_in_context(INVALID_SPAN, ctx), (Link(parent.get_span_context()),)
+
+
+def _ended_before(span: Span, end_time_ns: int | None) -> bool:
+    if not isinstance(span, ReadableSpan) or span.end_time is None:
+        return False
+    return end_time_ns is None or end_time_ns > span.end_time
 
 
 def resolve_request_span_context() -> Context:

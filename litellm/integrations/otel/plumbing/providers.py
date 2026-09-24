@@ -354,7 +354,7 @@ class _DrainPool:
 
     def _drain_until_closed(self) -> None:
         while True:
-            processor: SpanProcessor | None = self._pending.get()  # rebind-ok: loop variable
+            processor: SpanProcessor | None = self._pending.get()
             if processor is None:
                 return
             _shutdown_quietly(processor)
@@ -579,7 +579,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 span, destination.span_scope
             ):
                 continue
-            processor = self._acquire(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
+            processor = self._acquire(destination)
             if processor is None:
                 continue
             try:

@@ -365,7 +365,7 @@ def _budget_reservation_on_auth_object(user_api_key_auth: object) -> object:
     return getattr(user_api_key_auth, "budget_reservation", None)
 
 
-def budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict | None:
+def budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict[str, object] | None:
     stamped: Final = metadata.get("user_api_key_budget_reservation")
     if isinstance(stamped, dict):
         return stamped
@@ -764,4 +764,4 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
         **(additional_headers if isinstance(additional_headers, Mapping) else _NO_HEADERS),
         RESPONSE_COST_HEADER: cost,
     }
-    hidden_params["additional_headers"] = merged  # rebind-ok: the caller's record is the point
+    hidden_params["additional_headers"] = merged
