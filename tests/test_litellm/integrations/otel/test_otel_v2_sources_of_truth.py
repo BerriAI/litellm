@@ -1207,14 +1207,18 @@ def test_speech_response_without_a_byte_count_produces_no_output() -> None:
 def test_speech_binary_response_is_logged_as_its_summary_not_dropped() -> None:
     import httpx
 
+    from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
     from litellm.litellm_core_utils.litellm_logging import _extract_response_obj_and_hidden_params
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     raw: Final = httpx.Response(200, headers={"content-type": "audio/mpeg"}, content=b"\x00" * 1234)
-    response_obj, hidden_params = _extract_response_obj_and_hidden_params(HttpxBinaryResponseContent(raw), None)
+    speech: Final = HttpxBinaryResponseContent(raw)
+    set_provider_response_headers_in_hidden_params(speech, raw.headers)
+    response_obj, hidden_params = _extract_response_obj_and_hidden_params(speech, None)
 
     assert response_obj == {"object": "binary", "content_type": "audio/mpeg", "num_bytes": 1234}
-    assert hidden_params is None
+    assert hidden_params is not None
+    assert hidden_params["headers"]["content-type"] == "audio/mpeg"
 
 
 def test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far() -> None:
