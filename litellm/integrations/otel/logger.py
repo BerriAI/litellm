@@ -320,9 +320,7 @@ class OpenTelemetryV2(CustomLogger):
             span: Final = self._emitter.start_span(
                 SpanRole.LLM_CALL,
                 call.provisional_span_name,
-                parent_context=(
-                    set_span_in_context(INVALID_SPAN, parent_context) if route.detached else parent_context
-                ),
+                parent_context=set_span_in_context(INVALID_SPAN, parent_context),
                 start_time_ns=start_time_ns,
                 tracer=route.tracer,
                 links=_request_trace_links(parent_context) if route.detached else None,
@@ -586,7 +584,7 @@ class OpenTelemetryV2(CustomLogger):
             return self._emitter.emit(
                 SpanRole.LLM_CALL,
                 data,
-                parent_context=(set_span_in_context(INVALID_SPAN, parent_ctx) if route.detached else parent_ctx),
+                parent_context=set_span_in_context(INVALID_SPAN, parent_ctx),
                 start_time_ns=(carrier.start_time_ns if carrier is not None else to_ns(start_time)),
                 end_time_ns=end_time_ns,
                 tracer=route.tracer,
