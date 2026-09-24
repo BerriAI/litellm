@@ -253,3 +253,46 @@ class TeamUserSpendResponse(BaseModel):
     start_date: str
     end_date: str
     results: tuple[TeamUserSpendRow, ...]
+
+
+TeamDailyActivityExportType = Literal["daily", "daily_with_keys", "daily_with_users", "daily_with_models"]
+TeamDailyActivityExportFormat = Literal["csv", "json"]
+
+
+class TeamDailyActivityExportRow(BaseModel):
+    date: str
+    team_id: str
+    team_alias: str | None = None
+    api_key: str | None = None
+    key_alias: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
+    keys: int | None = None
+    model: str | None = None
+    spend: float
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+
+
+class TeamDailyActivityExportMetadata(BaseModel):
+    export_date: str
+    export_type: TeamDailyActivityExportType
+    start_date: str
+    end_date: str
+    team_ids: list[str] | None
+    total_spend: float
+    total_api_requests: int
+    total_successful_requests: int
+    total_failed_requests: int
+    total_tokens: int
+
+
+class TeamDailyActivityExportResponse(BaseModel):
+    metadata: TeamDailyActivityExportMetadata
+    data: list[TeamDailyActivityExportRow]
