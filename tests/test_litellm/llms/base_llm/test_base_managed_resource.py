@@ -40,9 +40,11 @@ def _make_resource(records: List = None) -> _StubResource:
     cache.async_get_cache = AsyncMock(return_value=None)
 
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     table = MagicMock()
     table.find_many = AsyncMock(return_value=records or [])
     prisma.db = MagicMock()
+    prisma.replica_db = prisma.db
     setattr(prisma.db, "litellm_test_resource_table", table)
 
     return _StubResource(internal_usage_cache=cache, prisma_client=prisma)
@@ -122,6 +124,7 @@ async def test_can_access_uses_team_id_for_service_account(caller_team_id, expec
         }
     )
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     resource = _StubResource(internal_usage_cache=cache, prisma_client=prisma)
 
     caller = (

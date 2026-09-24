@@ -58,6 +58,7 @@ async def test_vendor_credential_state_agrees_with_egress_token_resolution(monke
     read = AsyncMock(return_value=credential)
     refresh = AsyncMock(return_value=_stored_grant(access_token="fresh-token", expires_in_seconds=3600))
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
     monkeypatch.setattr(mcp_db, "get_user_oauth_credential", read)
     monkeypatch.setattr(mcp_db, "refresh_user_oauth_token", refresh)
@@ -7847,6 +7848,7 @@ async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_ca
         key="fresh-jwt-user", value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=[]), model_type=LiteLLM_UserTable
     )
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=["team-a"])
     )
@@ -7881,6 +7883,7 @@ async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_rea
         model_type=LiteLLM_UserTable,
     )
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(user_id="cached-jwt-user", teams=[])
     )
@@ -9341,6 +9344,7 @@ async def test_reload_servers_from_database_hydrates_dcr_clients():
     )
 
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
     hydrate_spy = AsyncMock()
@@ -11780,6 +11784,7 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple["JWTHandler", "
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     prisma: Final = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     return handler, signing_key
@@ -11869,6 +11874,7 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
         return httpx.Response(200, json={"access_token": "upstream-token", "token_type": "Bearer"})
 
     database: Final = MagicMock()
+    database.replica_db = database.db
     users: Final = database.db.litellm_usertable
     users.find_unique = AsyncMock(return_value=None)
     users.find_first = AsyncMock(return_value=None)
@@ -12149,6 +12155,7 @@ async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
         organization_memberships=[],
     )
     database: Final = MagicMock()
+    database.replica_db = database.db
     table: Final = database.db.litellm_usertable
     table.find_unique = AsyncMock(side_effect=[None, owner if identity == "sso" else None])
     table.find_first = AsyncMock(return_value=owner)

@@ -281,6 +281,7 @@ class TestCheckResponsesCost:
         """Create a mock Prisma client"""
         client = MagicMock()
         client.db = MagicMock()
+        client.replica_db = client.db
         client.db.litellm_managedobjecttable = MagicMock()
         return client
 

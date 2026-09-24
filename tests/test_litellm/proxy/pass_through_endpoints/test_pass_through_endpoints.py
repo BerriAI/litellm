@@ -1646,6 +1646,7 @@ async def test_pass_through_request_streamed_response_is_owned_by_the_caller():
         b'event: response.completed\ndata: {"type": "response.completed", "response": {"id": "%s"}}\n\n'
     ) % (raw_id.encode(), raw_id.encode())
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
     prisma_client.db.litellm_managedobjecttable.upsert = AsyncMock(return_value=None)
     prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
@@ -2755,6 +2756,7 @@ async def test_filter_endpoints_by_team_allowed_routes_with_filter():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_team = MagicMock()
     mock_team.metadata = {"allowed_passthrough_routes": ["/api/allowed1", "/api/allowed2"]}
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team)
@@ -2795,6 +2797,7 @@ async def test_filter_endpoints_by_team_allowed_routes_team_not_found():
 
     # Mock prisma client to return None (team not found)
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
     # Call the function and expect HTTPException
@@ -2829,6 +2832,7 @@ async def test_filter_endpoints_by_team_allowed_routes_no_metadata():
 
     # Mock prisma client with team that has None metadata
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_team = MagicMock()
     mock_team.metadata = None
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team)
@@ -2865,6 +2869,7 @@ async def test_filter_endpoints_by_team_allowed_routes_no_allowed_routes_key():
 
     # Mock prisma client with team that has metadata but no allowed_passthrough_routes
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_team = MagicMock()
     mock_team.metadata = {"some_other_key": "some_value"}
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team)
@@ -2901,6 +2906,7 @@ async def test_filter_endpoints_by_team_allowed_routes_empty_allowed_list():
 
     # Mock prisma client with team that has empty allowed_passthrough_routes
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_team = MagicMock()
     mock_team.metadata = {"allowed_passthrough_routes": []}
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team)
@@ -2941,6 +2947,7 @@ async def test_filter_endpoints_by_team_allowed_routes_partial_match():
 
     # Mock prisma client with team that allows only 2 routes
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_team = MagicMock()
     mock_team.metadata = {"allowed_passthrough_routes": ["/api/openai", "/api/azure"]}
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team)

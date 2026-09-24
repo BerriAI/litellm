@@ -3615,6 +3615,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     fake_router = MagicMock()
     fake_router.update_settings = MagicMock()
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_config.find_first = AsyncMock(
         return_value=SimpleNamespace(param_value={"timeout": 30, "retries": 2, "fallbacks": []})
     )
@@ -3658,6 +3659,7 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
     fake_router = MagicMock()
     fake_router.get_model_list = MagicMock(return_value=[])
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_config.find_first = AsyncMock(
         return_value=SimpleNamespace(param_value={"routing_strategy": "latency-based-routing"})
     )
@@ -3716,6 +3718,7 @@ def _encrypted_credential_row(credential_name: str, api_key: str) -> dict[str, o
 
 def _fake_prisma_with_encrypted_credential(credential_name: str, api_key: str) -> MagicMock:
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(
         return_value=[_encrypted_credential_row(credential_name, api_key)]
     )
@@ -3732,6 +3735,7 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconcilin
 
     pc = ProxyConfig()
     fake_prisma = MagicMock()
+    fake_prisma.replica_db = fake_prisma.db
     fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
     _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
     monkeypatch.setattr(proxy_server, "general_settings", {})
@@ -4414,6 +4418,7 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
     )
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_agentstable.find_many = AsyncMock(return_value=[_FakeAgentRow("db-id", "db-agent")])
 
     await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
@@ -4450,6 +4455,7 @@ async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_reg
             )
         elif agents_source == "db":
             prisma_client = MagicMock()
+            prisma_client.replica_db = prisma_client.db
             prisma_client.db.litellm_agentstable.find_many = AsyncMock(
                 return_value=[_FakeAgentRow("db-id", "loaded-agent")]
             )
@@ -4571,6 +4577,7 @@ async def test_ProxyConfig__init_guardrails_in_db_skips_only_the_unloadable_row(
     monkeypatch.setitem(registry_module.guardrail_initializer_registry, "lit5367_ok", _initializer)
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
         return_value=[
             _db_guardrail_row("first", "lit5367_ok"),
@@ -4601,6 +4608,7 @@ async def test_add_deployment_re_reads_ui_settings_so_other_pods_converge(monkey
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
     prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
     prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
@@ -4628,6 +4636,7 @@ async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fa
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_uisettings.find_unique = AsyncMock(
         return_value=SimpleNamespace(ui_settings={"allow_agents_for_team_admins": True})
     )
@@ -4893,7 +4902,8 @@ async def test_model_refresh_updates_availability_catalog_and_retains_it_on_db_f
         },
     )
     find_many = AsyncMock(side_effect=[[row], RuntimeError("database unavailable"), []])
-    client = SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many)))
+    tables = SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))
+    client = SimpleNamespace(db=tables, replica_db=tables)
     assert pc.auto_router_db_catalog is None
     assert await pc._get_models_from_db(client) == [row]
     loaded = pc.auto_router_db_catalog

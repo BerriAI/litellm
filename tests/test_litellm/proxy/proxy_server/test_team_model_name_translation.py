@@ -340,6 +340,7 @@ async def test_model_info_v1_unrestricted_key_hides_other_team_byok(monkeypatch)
     router.get_model_access_groups.return_value = {}
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     caller_user_row = MagicMock()
     caller_user_row.teams = ["team-abc-123"]
     caller_user_row.model_dump.return_value = {
@@ -396,6 +397,7 @@ async def test_model_info_v1_service_key_hides_all_team_byok(monkeypatch):
     router.get_model_access_groups.return_value = {}
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "llm_model_list", router.model_list)
@@ -445,6 +447,7 @@ async def test_model_info_v1_team_key_sees_own_byok_regardless_of_user_lookup(
     router.get_model_access_groups.return_value = {}
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_usertable.find_unique = find_unique
 
     async def _populate(**kwargs):
@@ -486,6 +489,7 @@ async def test_model_info_v1_user_team_membership_grants_byok(monkeypatch):
     router.get_model_access_groups.return_value = {}
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=MagicMock(teams=["team-other"])
     )
@@ -534,6 +538,7 @@ async def test_model_info_v1_populates_access_via_team_ids(monkeypatch):
     router.get_model_ids.return_value = ["global-id-1"]
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     async def _fake_populate(**kwargs):
         for model in kwargs["all_models"]:
@@ -614,6 +619,7 @@ async def test_populate_team_access_gives_view_only_admin_full_admin_scope(monke
     monkeypatch.setattr(ps, "get_all_team_models", get_all_team_models)
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(user_id="viewer", teams=[], models=[])
     )
@@ -676,6 +682,7 @@ async def test_populate_team_access_grants_config_access_group_model():
         "access_group_ids": [],
     }
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_db_object])
 
     admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
@@ -1727,6 +1734,7 @@ async def test_populate_team_access_grants_empty_models_user_direct_access(monke
         teams=[],
     )
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
 
     monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
@@ -1829,6 +1837,7 @@ async def test_populate_team_access_hides_models_the_calling_key_cannot_call(mon
         teams=[],
     )
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
 
     monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
@@ -1875,6 +1884,7 @@ async def test_populate_team_access_grants_all_proxy_models_user_direct_access(
         teams=[],
     )
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
 
     monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))

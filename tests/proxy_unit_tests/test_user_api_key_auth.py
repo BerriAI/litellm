@@ -208,6 +208,8 @@ class _NoMembershipRowPrisma:
             async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
                 return None
 
+    replica_db = db
+
 
 @pytest.mark.parametrize("key_ownership", ["user_key", "team_key"])
 @pytest.mark.asyncio

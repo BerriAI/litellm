@@ -14,7 +14,8 @@ from litellm.llms.base_llm.files.storage_backend_factory import get_storage_back
 @pytest.mark.asyncio
 async def test_litellm_db_backend_stores_through_the_given_prisma_client():
     table = MagicMock(create=AsyncMock(return_value=SimpleNamespace(id="row-1")))
-    prisma_client = MagicMock(db=MagicMock(litellm_managedfilecontenttable=table))
+    tables = MagicMock(litellm_managedfilecontenttable=table)
+    prisma_client = MagicMock(db=tables, replica_db=tables)
 
     backend = get_storage_backend(LITELLM_DB_STORAGE_BACKEND_NAME, prisma_client=prisma_client)
 
