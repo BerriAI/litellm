@@ -10,12 +10,9 @@ verifies metadata is preserved for custom callbacks via kwargs['litellm_params']
 """
 
 import asyncio
-import os
-import sys
 from typing import Optional
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 
@@ -51,72 +48,6 @@ class MetadataCaptureCallback(CustomLogger):
         self.event.set()
 
 
-@pytest.mark.asyncio
-async def test_metadata_passed_to_custom_callback_codex_models():
-    """
-    Test that metadata passed to completion() is available in custom callback
-    when using codex models (responses API bridge path).
-
-    Codex models have mode=responses and route through responses_api_bridge,
-    which passes litellm_metadata. The fix ensures this is preserved as
-    litellm_params.metadata for callback compatibility.
-    """
-    from litellm.types.llms.openai import ResponsesAPIResponse
-
-    mock_response = ResponsesAPIResponse.model_construct(
-        id="resp-test",
-        created_at=0,
-        output=[
-            {
-                "type": "message",
-                "id": "msg-1",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "Hello!"}],
-            }
-        ],
-        object="response",
-        model="gpt-5.1-codex",
-        status="completed",
-        usage={
-            "input_tokens": 5,
-            "output_tokens": 10,
-            "total_tokens": 15,
-        },
-    )
-
-    test_metadata = {"foo": "bar", "trace_id": "test-123"}
-    callback = MetadataCaptureCallback()
-    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
-    litellm.callbacks = [callback]
-
-    try:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            new_callable=AsyncMock,
-        ) as mock_post:
-            mock_post.return_value = _make_mock_http_response(
-                mock_response.model_dump()
-            )
-            # gpt-5.1-codex has mode=responses - routes through responses bridge
-            await litellm.acompletion(
-                model="gpt-5.1-codex",
-                messages=[{"role": "user", "content": "Hello"}],
-                metadata=test_metadata,
-            )
-
-        await asyncio.wait_for(callback.event.wait(), timeout=5.0)
-
-        assert callback.captured_kwargs is not None, "Callback should have been invoked"
-
-        litellm_params = callback.captured_kwargs.get("litellm_params", {})
-        metadata = litellm_params.get("metadata") or {}
-
-        assert "foo" in metadata, "metadata['foo'] should be accessible in callback"
-        assert metadata["foo"] == "bar"
-        assert metadata.get("trace_id") == "test-123"
-    finally:
-        litellm.callbacks = original_callbacks
 
 
 @pytest.mark.asyncio

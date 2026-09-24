@@ -2,13 +2,10 @@
 Test the /guardrails/apply_guardrail endpoint
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from fastapi import HTTPException
 

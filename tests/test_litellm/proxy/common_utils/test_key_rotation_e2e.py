@@ -11,7 +11,6 @@ Covers the critical gaps:
 """
 
 import os
-import sys
 from datetime import datetime, timedelta, timezone
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,7 +18,6 @@ from uuid import uuid4
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import (
     GenerateKeyResponse,

@@ -172,7 +172,7 @@ def test_compactifai_authentication_error(respx_mock):
         json=mock_error, status_code=401
     )
 
-    with pytest.raises(litellm.APIConnectionError) as exc_info:
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
         litellm.completion(
             model="compactifai/cai-llama-3-1-8b-slim",
             messages=[{"role": "user", "content": "test"}],

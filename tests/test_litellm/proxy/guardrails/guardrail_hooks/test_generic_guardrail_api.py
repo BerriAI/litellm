@@ -582,6 +582,145 @@ class TestGuardrailActions:
             assert result_images is None
 
 
+class TestStructuredMessagesInResponse:
+    """A guardrail server that rewrites per chat row answers with the rewritten
+    rows as structured_messages, which the endpoint handlers write back by row."""
+
+    @pytest.mark.asyncio
+    async def test_returned_rows_are_handed_back_as_structured_messages(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        rewritten_rows = [
+            {"role": "system", "content": "Never repeat an SSN."},
+            {"role": "user", "content": "Look up [REDACTED] for me."},
+            {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "[REDACTED]"}'},
+        ]
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "texts": ["Never repeat an SSN.", "Look up [REDACTED] for me.", '{"ssn": "[REDACTED]"}'],
+            "structured_messages": rewritten_rows,
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(generic_guardrail.async_handler, "post", return_value=mock_response):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["Look up 123-45-6789 for me."]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert guardrailed_inputs["structured_messages"] == rewritten_rows
+        assert guardrailed_inputs["texts"] == mock_response.json.return_value["texts"]
+
+    @pytest.mark.asyncio
+    async def test_rows_echoed_back_as_shown_keep_their_original_keys(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        tool_call_row = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}, "index": 0}
+            ],
+        }
+        original_rows = [
+            {"role": "user", "content": "Look up 123-45-6789 for me.", "name": "pat"},
+            tool_call_row,
+            {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "123-45-6789"}'},
+        ]
+
+        def echo_with_tool_output_redacted(url, json, headers):
+            shown_rows = json["structured_messages"]
+            assert "index" not in shown_rows[1]["tool_calls"][0]
+            assert "name" not in shown_rows[0]
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": ["Look up 123-45-6789 for me."],
+                "structured_messages": [
+                    shown_rows[0],
+                    shown_rows[1],
+                    {**shown_rows[2], "content": '{"ssn": "[REDACTED]"}'},
+                ],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(generic_guardrail.async_handler, "post", side_effect=echo_with_tool_output_redacted):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["Look up 123-45-6789 for me."], "structured_messages": original_rows},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        returned_rows = guardrailed_inputs["structured_messages"]
+        assert returned_rows[0] is original_rows[0]
+        assert returned_rows[1] is tool_call_row
+        assert returned_rows[2] == {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "[REDACTED]"}'}
+
+    @pytest.mark.asyncio
+    async def test_rows_all_echoed_back_as_shown_leave_the_rewrite_to_texts(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """A server written against the texts contract that echoes the request rows back
+        untouched while rewriting texts still gets its texts rewrite applied."""
+        original_rows = [
+            {"role": "system", "content": "Never repeat an SSN."},
+            {"role": "user", "content": "Look up 123-45-6789 for me."},
+        ]
+
+        def echo_rows_and_rewrite_texts(url, json, headers):
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "NONE",
+                "texts": [text.replace("123-45-6789", "[REDACTED]") for text in json["texts"]],
+                "structured_messages": json["structured_messages"],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(generic_guardrail.async_handler, "post", side_effect=echo_rows_and_rewrite_texts):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Never repeat an SSN.", "Look up 123-45-6789 for me."],
+                    "structured_messages": original_rows,
+                },
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert "structured_messages" not in guardrailed_inputs
+        assert guardrailed_inputs["texts"] == ["Never repeat an SSN.", "Look up [REDACTED] for me."]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "structured_messages",
+        [[], [{"content": "a row with no role"}], "not a list"],
+        ids=["empty", "no_role", "not_a_list"],
+    )
+    async def test_rows_that_are_not_chat_messages_are_ignored(
+        self, generic_guardrail, mock_request_data_input, structured_messages
+    ):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "texts": ["[REDACTED]"],
+            "structured_messages": structured_messages,
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(generic_guardrail.async_handler, "post", return_value=mock_response):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["Look up 123-45-6789 for me."]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert "structured_messages" not in guardrailed_inputs
+        assert guardrailed_inputs["texts"] == ["[REDACTED]"]
+
+
 class TestImageSupport:
     """Test image handling in guardrail requests"""
 
@@ -767,7 +906,7 @@ class TestErrorHandling:
                 "API Error", request=MagicMock(), response=MagicMock(status_code=500)
             ),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Generic Guardrail API failed: API Error') as exc_info:
                 await generic_guardrail.apply_guardrail(
                     inputs={"texts": ["test"]},
                     request_data=mock_request_data_input,
@@ -786,7 +925,7 @@ class TestErrorHandling:
             "post",
             side_effect=httpx.RequestError("Connection failed", request=MagicMock()),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Generic Guardrail API failed: Connection failed') as exc_info:
                 await generic_guardrail.apply_guardrail(
                     inputs={"texts": ["test"]},
                     request_data=mock_request_data_input,
@@ -810,7 +949,7 @@ class TestErrorHandling:
             "post",
             side_effect=httpx.RequestError("Connection failed", request=MagicMock()),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Generic Guardrail API failed: Connection failed') as exc_info:
                 await guardrail.apply_guardrail(
                     inputs={"texts": ["test"]},
                     request_data=mock_request_data_input,
@@ -1150,6 +1289,23 @@ class TestGenericGuardrailAPIStreamingConfig:
 
         assert GenericGuardrailAPI.get_config_model() is GenericGuardrailAPIConfigModel
 
+    def test_streaming_transform_mode_defaults_block_only(self):
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+        )
+        assert guardrail.streaming_transform_mode == "block_only"
+
+    def test_streaming_transform_mode_override(self):
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-generic-guardrail",
+            event_hook="post_call",
+            streaming_transform_mode="incremental_diff",
+        )
+        assert guardrail.streaming_transform_mode == "incremental_diff"
+
     def test_initialize_guardrail_forwards_streaming_flags(self):
         from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
             initialize_guardrail,
@@ -1306,6 +1462,86 @@ class TestGenericGuardrailAPIStreamingConfig:
         assert guardrail.streaming_sampling_rate == 2
 
 
+class TestGenericGuardrailAPIResponseParsing:
+    """GenericGuardrailAPIResponse.from_dict handling of the streaming holdback field."""
+
+    def test_from_dict_parses_stream_holdback_chars(self):
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        response = GenericGuardrailAPIResponse.from_dict(
+            {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": ["Alice went to Berlin"],
+                "stream_holdback_chars": [5],
+            }
+        )
+
+        assert response.action == "GUARDRAIL_INTERVENED"
+        assert response.texts == ["Alice went to Berlin"]
+        assert response.stream_holdback_chars == [5]
+
+    def test_from_dict_coerces_holdback_values_to_int(self):
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        response = GenericGuardrailAPIResponse.from_dict(
+            {"action": "GUARDRAIL_INTERVENED", "texts": ["x", "y"], "stream_holdback_chars": ["3", 0]}
+        )
+
+        assert response.stream_holdback_chars == [3, 0]
+
+    def test_from_dict_holdback_absent_is_none(self):
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        response = GenericGuardrailAPIResponse.from_dict({"action": "NONE", "texts": ["hi"]})
+
+        assert response.stream_holdback_chars is None
+
+    def test_from_dict_malformed_holdback_degrades_to_zero(self):
+        """A null/non-numeric/negative holdback element must not raise; it degrades
+        to 0 (no holdback) so a bad guardrail response can't abort the stream."""
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        response = GenericGuardrailAPIResponse.from_dict(
+            {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": ["a", "b", "c", "d"],
+                "stream_holdback_chars": ["3", None, "bad", -2],
+            }
+        )
+
+        assert response.stream_holdback_chars == [3, 0, 0, 0]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_flows_holdback_back_to_inputs(self, generic_guardrail):
+        """A GUARDRAIL_INTERVENED response with stream_holdback_chars is surfaced on
+        the returned inputs so the streaming framework can apply it."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "texts": ["Alice went to Berlin"],
+            "stream_holdback_chars": [5],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(generic_guardrail.async_handler, "post", return_value=mock_response):
+            result = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["Zorg went to Xanadu"]},
+                request_data={},
+                input_type="response",
+            )
+
+        assert result["texts"] == ["Alice went to Berlin"]
+        assert result["stream_holdback_chars"] == [5]
+
+
 class TestGenericGuardrailAPIStreamingViaUnified:
     """Streaming output checks routed through UnifiedLLMGuardrails."""
 
@@ -1420,7 +1656,9 @@ class TestGenericGuardrailAPIStreamingViaUnified:
 
     @pytest.mark.asyncio
     async def test_streaming_default_uses_sampled_cadence(self):
-        """Default samples every 5th chunk + final pass: 10 chunks → calls at 5, 10, and final = 3."""
+        """Default samples every 5th chunk. For 10 chunks, sampled scans at 5 and 10
+        cover the full text, so the end-of-stream round is skipped and there are 2 calls
+        """
         from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
             UnifiedLLMGuardrails,
         )
@@ -1469,8 +1707,9 @@ class TestGenericGuardrailAPIStreamingViaUnified:
             ):
                 pass
 
-        assert mock_post.await_count == 3, (
-            f"Expected 3 guardrail calls (2 sampled at chunks 5 / 10 + 1 final), "
+        assert mock_post.await_count == 2, (
+            f"Expected 2 guardrail calls (2 sampled at chunks 5 / 10; "
+            f"the end-of-stream round is skipped because chunk 10 already scanned the full text), "
             f"got {mock_post.await_count}"
         )
         for call in mock_post.await_args_list:
@@ -1534,7 +1773,9 @@ class TestGenericGuardrailAPIStreamingViaUnified:
 
     @pytest.mark.asyncio
     async def test_streaming_sampling_rate_override(self):
-        """sampling_rate=2 on 6 chunks → in-stream at 2,4,6 plus final = 4 calls."""
+        """sampling_rate=2 on 6 chunks. Scans at 2, 4, and 6 cover the full text, so
+        the end-of-stream round is skipped and there are 3 calls
+        """
         from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
             UnifiedLLMGuardrails,
         )
@@ -1583,8 +1824,9 @@ class TestGenericGuardrailAPIStreamingViaUnified:
             ):
                 pass
 
-        assert mock_post.await_count == 4, (
-            f"Expected 4 guardrail calls (3 sampled + 1 final aggregate), "
+        assert mock_post.await_count == 3, (
+            f"Expected 3 guardrail calls (3 sampled; the end-of-stream round is skipped "
+            f"because chunk 6 already scanned the full text), "
             f"got {mock_post.await_count}"
         )
 

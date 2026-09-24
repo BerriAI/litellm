@@ -4,10 +4,11 @@ from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
+    is_non_conversational_call_type,
+    is_string_batch_input,
     iter_message_text,
     walk_user_text,
 )
-
 
 # ── iter_message_text ────────────────────────────────────────────────────────────
 
@@ -101,6 +102,71 @@ def test_iter_message_text_empty_data():
     assert list(iter_message_text({"input": ""})) == []
 
 
+def test_iter_message_text_responses_api_input_text_and_output_text_parts():
+    """LIT-4294: Responses-API content parts use ``input_text`` (request) and
+    ``output_text`` (assistant); reading only ``type == "text"`` skipped every
+    ``/v1/responses`` body and every text guardrail was a no-op on that path."""
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "user text"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "assistant text"}],
+            },
+        ]
+    }
+    assert list(iter_message_text(data)) == ["user text", "assistant text"]
+
+
+def test_iter_message_text_responses_api_tool_call_taxonomy():
+    """LIT-4294: a Responses ``input`` list freely mixes message items,
+    ``function_call`` (no ``role``), and ``function_call_output`` items. The
+    old ``all(item has 'role')`` gate wrapped the whole list as one blob and
+    yielded nothing; every text fragment must be visited independently."""
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "c1",
+                "name": "get_weather",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "sunny"}],
+            },
+        ]
+    }
+    assert list(iter_message_text(data)) == ["hello", "sunny"]
+
+
+def test_iter_message_text_inspects_reasoning_content_and_summary():
+    """VERIA: reasoning items forwarded as ``reasoning_content`` must be
+    inspected, including ``summary`` blocks the bridge reads as a fallback."""
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "content": [{"type": "summary_text", "text": "content secret"}],
+                "summary": [{"type": "summary_text", "text": "summary secret"}],
+            }
+        ]
+    }
+    assert list(iter_message_text(data)) == ["content secret", "summary secret"]
+
+
 # ── walk_user_text ────────────────────────────────────────────────────────────
 
 
@@ -160,6 +226,89 @@ def test_walk_user_text_redacts_responses_api_list_input():
     assert data["input"][1] == {"type": "image_url", "image_url": {"url": "..."}}
 
 
+def test_walk_user_text_redacts_responses_input_text_and_output_text_parts():
+    """LIT-4294: ``walk_user_text`` must recognise the Responses text-part
+    variants so masking guardrails (secret detection, PII) actually redact
+    ``/v1/responses`` bodies instead of no-op'ing on them."""
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "AKIAEXAMPLE"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "AKIAEXAMPLE too"}],
+            },
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 2
+    assert data["input"][0]["content"][0] == {
+        "type": "input_text",
+        "text": "[REDACTED]",
+    }
+    assert data["input"][1]["content"][0] == {
+        "type": "output_text",
+        "text": "[REDACTED] too",
+    }
+
+
+def test_walk_user_text_redacts_function_call_output_text():
+    """LIT-4294: tool-call round-trips carry secrets in
+    ``function_call_output.output``; the redact walker must descend into it
+    while leaving ``function_call`` items (call_id, arguments) untouched."""
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "AKIAEXAMPLE user"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "c1",
+                "name": "get_weather",
+                "arguments": '{"AKIAEXAMPLE": 1}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "AKIAEXAMPLE tool"}],
+            },
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 2
+    assert data["input"][0]["content"][0]["text"] == "[REDACTED] user"
+    assert data["input"][1] == {
+        "type": "function_call",
+        "call_id": "c1",
+        "name": "get_weather",
+        "arguments": '{"AKIAEXAMPLE": 1}',
+    }
+    assert data["input"][2]["output"][0]["text"] == "[REDACTED] tool"
+
+
+def test_walk_user_text_redacts_function_call_output_string_output():
+    """LIT-4294: ``function_call_output.output`` is also a plain string in
+    OpenAI's Responses spec; the redact walker must handle both forms."""
+    data = {
+        "input": [
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": "AKIAEXAMPLE tool",
+            },
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 1
+    assert data["input"][0]["output"] == "[REDACTED] tool"
+
+
 def test_walk_user_text_redacts_mixed_list_input():
     """Read and write helpers must agree on coverage — bare strings inside
     a mixed ``input`` list are inspected by both."""
@@ -175,6 +324,27 @@ def test_walk_user_text_redacts_mixed_list_input():
     assert data["input"][0] == {"type": "text", "text": "<secret-one>"}
     assert data["input"][1] == "<secret-two>"
     assert data["input"][2] == {"type": "image_url", "image_url": {"url": "..."}}
+
+
+def test_walk_user_text_redacts_reasoning_content_and_summary():
+    """VERIA: in-place redaction must cover both plaintext shapes the bridge
+    forwards from a reasoning item."""
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "content": [{"type": "summary_text", "text": "AKIAEXAMPLE content"}],
+                "summary": [{"type": "summary_text", "text": "AKIAEXAMPLE summary"}],
+            }
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 2
+    item = data["input"][0]
+    assert item["content"][0]["text"] == "[REDACTED] content"
+    assert item["summary"][0]["text"] == "[REDACTED] summary"
+    assert item["id"] == "rs_1"
 
 
 # ── build_inspection_messages ─────────────────────────────────────────────────
@@ -206,17 +376,13 @@ def test_build_inspection_messages_joins_multimodal_text_parts():
             }
         ]
     }
-    assert build_inspection_messages(data) == [
-        {"role": "user", "content": "first part\nsecond part"}
-    ]
+    assert build_inspection_messages(data) == [{"role": "user", "content": "first part\nsecond part"}]
 
 
 def test_build_inspection_messages_lifts_responses_api_input():
     """fniVO9-F: ``input`` must be visible to hooks that POST messages to a remote API."""
     data = {"input": "responses-api content"}
-    assert build_inspection_messages(data) == [
-        {"role": "user", "content": "responses-api content"}
-    ]
+    assert build_inspection_messages(data) == [{"role": "user", "content": "responses-api content"}]
 
 
 def test_build_inspection_messages_drops_messages_with_no_text():
@@ -233,10 +399,123 @@ def test_build_inspection_messages_drops_messages_with_no_text():
     assert build_inspection_messages(data) == [{"role": "user", "content": "kept"}]
 
 
+def test_build_inspection_messages_responses_api_tool_call_taxonomy():
+    """LIT-4294: mixed Responses ``input`` (message + function_call +
+    function_call_output) must produce a non-empty inspection list. The
+    customer's writeup reproduced a 422 from AIM's ``/fw/v1/analyze``
+    (``No messages in the request``) when this synthesised list came back
+    empty; every other guardrail silently scanned nothing on the same
+    input."""
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "c1",
+                "name": "get_weather",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "sunny"}],
+            },
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "user", "content": "hello"},
+        {"role": "tool", "content": "sunny"},
+    ]
+
+
+def test_build_inspection_messages_function_call_output_defaults_to_tool():
+    """LIT-4294: a Responses ``function_call_output`` item is the semantic
+    equivalent of a chat-completions ``role: "tool"`` message, so the shared
+    helper synthesises ``role: "tool"`` when the item has no explicit role.
+    AIM's schema-safe coercion happens at the AIM call site, not here."""
+    data = {
+        "input": [
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "tool text"}],
+            },
+        ]
+    }
+    assert build_inspection_messages(data) == [{"role": "tool", "content": "tool text"}]
+
+
+def test_build_inspection_messages_function_call_output_preserves_explicit_role():
+    """When ``function_call_output`` carries a caller-supplied ``role`` the
+    shared helper preserves it rather than synthesising ``tool``."""
+    data = {
+        "input": [
+            {
+                "type": "function_call_output",
+                "role": "assistant",
+                "call_id": "c1",
+                "output": [{"type": "input_text", "text": "tool text"}],
+            },
+        ]
+    }
+    assert build_inspection_messages(data) == [{"role": "assistant", "content": "tool text"}]
+
+
+def test_build_inspection_messages_bare_content_part_preserves_explicit_role():
+    """A bare content-part dict with an explicit ``role`` keeps it. Only
+    absent roles get defaulted to ``user``."""
+    data = {
+        "input": [
+            {"type": "input_text", "text": "no role"},
+            {"type": "output_text", "role": "assistant", "text": "with role"},
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "user", "content": "no role"},
+        {"role": "assistant", "content": "with role"},
+    ]
+
+
+def test_build_inspection_messages_message_item_preserves_role():
+    """Responses message items carry a role explicitly; the shared helper
+    passes it through untouched."""
+    data = {
+        "input": [
+            {"type": "message", "role": "system", "content": [{"type": "input_text", "text": "sys"}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "asst"}]},
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "system", "content": "sys"},
+        {"role": "assistant", "content": "asst"},
+    ]
+
+
 def test_build_inspection_messages_empty_data():
     assert build_inspection_messages({}) == []
     assert build_inspection_messages({"messages": []}) == []
     assert build_inspection_messages({"input": ""}) == []
+
+
+def test_build_inspection_messages_includes_reasoning_summary():
+    """VERIA: remote guardrail APIs must see reasoning summaries even when
+    the reasoning item has no ``content`` field."""
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [{"type": "summary_text", "text": "secret summary"}],
+            }
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "assistant", "content": "secret summary"}
+    ]
 
 
 # ── has_non_string_content ────────────────────────────────────────────────────
@@ -301,3 +580,164 @@ def test_apply_redacted_messages_back_skips_input_when_not_string():
     data = {"input": [{"type": "text", "text": "leak"}]}
     apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
     assert data["input"] == [{"type": "text", "text": "leak"}]
+
+
+def test_apply_redacted_messages_back_rewrites_string_batches():
+    """An /embeddings batch is a list of plain strings; each is rewritten in place
+    from the matching redacted message so no element reaches the LLM unredacted."""
+    data = {"input": ["first SSN", "second SSN"]}
+    apply_redacted_messages_back(
+        data,
+        [
+            {"role": "user", "content": "first [REDACTED]"},
+            {"role": "user", "content": "second [REDACTED]"},
+        ],
+    )
+    assert data["input"] == ["first [REDACTED]", "second [REDACTED]"]
+
+
+def test_apply_redacted_messages_back_keeps_batch_elements_aligned():
+    """A guardrail that redacts a whole element away returns it as empty text.
+    Each element still has to take its own redaction, never the next one's."""
+    data = {"input": ["all secret", "second doc", "third doc"]}
+    apply_redacted_messages_back(
+        data,
+        [
+            {"role": "user", "content": ""},
+            {"role": "user", "content": "second doc"},
+            {"role": "user", "content": "third doc"},
+        ],
+    )
+    assert data["input"] == ["", "second doc", "third doc"]
+
+
+def test_apply_redacted_messages_back_skips_empty_batch_elements():
+    """Empty elements are never sent to the guardrail, so the redactions line up
+    with the elements that were."""
+    data = {"input": ["", "secret doc"]}
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED] doc"}]) is True
+    assert data["input"] == ["", "[REDACTED] doc"]
+
+
+def test_apply_redacted_messages_back_rejects_short_batch_response():
+    """A guardrail that returns fewer messages than were inspected cannot be
+    applied element-wise: writing the prefix would forward the rest of the batch
+    unredacted, so nothing is written and the caller has to block."""
+    data = {"input": ["first SSN", "second SSN", "third SSN"]}
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "first [REDACTED]"}]) is False
+    assert data["input"] == ["first SSN", "second SSN", "third SSN"]
+
+
+def test_apply_redacted_messages_back_rejects_long_batch_response():
+    """More redactions than inspected elements means the alignment is unknown."""
+    data = {"input": ["only SSN"]}
+    assert (
+        apply_redacted_messages_back(
+            data,
+            [
+                {"role": "user", "content": "only [REDACTED]"},
+                {"role": "user", "content": "spurious"},
+            ],
+        )
+        is False
+    )
+    assert data["input"] == ["only SSN"]
+
+
+def test_apply_redacted_messages_back_rejects_batch_content_missing():
+    """A message without content cannot safely replace the original batch element."""
+    data = {"input": ["secret doc"]}
+    assert apply_redacted_messages_back(data, [{"role": "user"}]) is False
+    assert data["input"] == ["secret doc"]
+
+
+def test_apply_redacted_messages_back_returns_true_for_non_batch_shapes():
+    data = {"messages": [{"role": "user", "content": "secret"}]}
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}]) is True
+
+
+# ── is_string_batch_input ─────────────────────────────────────────────────────
+
+
+def test_is_string_batch_input_embeddings_batch():
+    assert is_string_batch_input({"input": ["a", "b"]}) is True
+
+
+def test_is_string_batch_input_rejects_other_shapes():
+    assert is_string_batch_input({"input": "a"}) is False
+    assert is_string_batch_input({"input": []}) is False
+    assert is_string_batch_input({"input": [1, 2]}) is False
+    assert is_string_batch_input({"input": ["a", {"type": "text", "text": "b"}]}) is False
+    assert is_string_batch_input({"messages": [], "input": ["a"]}) is False
+
+
+# -------------------------------------------------------------------
+# LIT-4302: custom_tool_call_output walking
+# -------------------------------------------------------------------
+
+def test_iter_message_text_walks_custom_tool_call_output():
+    """custom_tool_call_output items should yield their output text."""
+    data = {
+        "input": [
+            {"type": "custom_tool_call_output", "output": "tool-secret"},
+        ]
+    }
+    from litellm.proxy.guardrails._content_utils import iter_message_text
+    texts = list(iter_message_text(data))
+    assert "tool-secret" in texts
+
+
+def test_walk_user_text_redacts_custom_tool_call_output():
+    """walk_user_text should rewrite text inside custom_tool_call_output."""
+    data = {
+        "input": [
+            {"type": "custom_tool_call_output", "output": "PII-data"},
+        ]
+    }
+    count = walk_user_text(data, lambda t: t.replace("PII-data", "[MASKED]"))
+    assert count >= 1
+    assert data["input"][0]["output"] == "[MASKED]"
+
+
+def test_build_inspection_messages_custom_tool_call_output():
+    """build_inspection_messages should include custom_tool_call_output text."""
+    data = {
+        "input": [
+            {"type": "custom_tool_call_output", "output": "custom-tool-leak"},
+        ]
+    }
+    msgs = build_inspection_messages(data)
+    assert any("custom-tool-leak" in m["content"] for m in msgs)
+
+
+# ── is_non_conversational_call_type ──────────────────────────────────────────────
+
+
+def test_is_non_conversational_call_type_flags_embeddings():
+    """An /embeddings body carries documents being indexed, not a prompt."""
+    assert is_non_conversational_call_type("embedding") is True
+    assert is_non_conversational_call_type("aembedding") is True
+
+
+def test_is_non_conversational_call_type_passes_every_conversational_call_type():
+    """Deliberately a deny-list: ``anthropic_messages``, ``responses`` and
+    ``call_mcp_tool`` carry conversations but are absent from
+    ``TEXT_CONTENT_CALL_TYPES``, so a guardrail gating on that allow-list would
+    stop inspecting them."""
+    for call_type in (
+        "completion",
+        "acompletion",
+        "text_completion",
+        "responses",
+        "aresponses",
+        "anthropic_messages",
+        "aanthropic_messages",
+        "call_mcp_tool",
+    ):
+        assert is_non_conversational_call_type(call_type) is False
+
+
+def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_types():
+    """A call type this module has never heard of must still be inspected —
+    failing closed is the point of the deny-list."""
+    assert is_non_conversational_call_type("some_future_call_type") is False

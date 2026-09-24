@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from aiohttp import ClientResponse
@@ -18,6 +18,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -26,17 +27,17 @@ else:
 
 class BaseImageVariationConfig(BaseConfig, ABC):
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageVariationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageVariationOptionalParams]:
         pass
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         OPTIONAL
@@ -50,7 +51,7 @@ class BaseImageVariationConfig(BaseConfig, ABC):
     @abstractmethod
     def transform_request_image_variation(
         self,
-        model: Optional[str],
+        model: str | None,
         image: FileTypes,
         optional_params: dict,
         headers: dict,
@@ -61,18 +62,18 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return {}
 
     @abstractmethod
     async def async_transform_response_image_variation(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: ClientResponse,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -80,15 +81,15 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
     ) -> ImageResponse:
         pass
 
     @abstractmethod
     def transform_response_image_variation(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -96,15 +97,15 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
     ) -> ImageResponse:
         pass
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -120,12 +121,12 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         raise NotImplementedError(
             "ImageVariationConfig implements 'transform_response_image_variation' for image variation models"

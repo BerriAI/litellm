@@ -1,6 +1,6 @@
 import ssl
 from enum import Enum
-from typing import Union
+from typing import Final, Union
 
 
 class httpxSpecialProvider(str, Enum):
@@ -30,6 +30,9 @@ class httpxSpecialProvider(str, Enum):
     PromptManagement = "prompt_management"
     UI = "ui"
     Sandbox = "sandbox"
+    ModelCostMap = "model_cost_map"
+    PasswordBreachCheck = "password_breach_check"
+    ASGI = "asgi"
 
 
-VerifyTypes = Union[str, bool, ssl.SSLContext]
+VerifyTypes = str | bool | ssl.SSLContext

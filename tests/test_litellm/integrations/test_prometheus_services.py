@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 import time
 from unittest.mock import AsyncMock, patch
 
@@ -13,9 +11,6 @@ from litellm.integrations.prometheus_services import (
     ServiceTypes,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 def test_is_metric_registered_does_not_use_registry_collect():

@@ -3,22 +3,17 @@
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
-import { CreateKeyPrefillData } from "@/components/organisms/create_key_button";
-import UserDashboard from "@/components/user_dashboard";
-import { useAuth } from "@/contexts/AuthContext";
+import CreateKey, { CreateKeyPrefillData } from "@/components/organisms/create_key_button";
+import { VirtualKeysTable } from "@/components/VirtualKeysPage/VirtualKeysTable";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 export default function ApiKeysDashboard() {
-  // Identity comes from useAuthorized (synchronous cookie decode) so userID is set whenever the
-  // route is authorized; useAuth only supplies the backfill setters UserDashboard still expects.
-  const { userId: userID, userRole, userEmail, accessToken, premiumUser } = useAuthorized();
-  const { setUserRole, setUserEmail } = useAuth();
+  const { userId: userID, userRole, accessToken, isViewOnly } = useAuthorized();
   const searchParams = useSearchParams()!;
 
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<KeyResponse[] | null>([]);
-  const [createClicked, setCreateClicked] = useState<boolean>(false);
 
   const autoOpenCreate = searchParams.get("create") === "true";
   const prefillData: CreateKeyPrefillData | undefined = useMemo(() => {
@@ -63,7 +58,6 @@ export default function ApiKeysDashboard() {
 
   const addKey = (data: KeyResponse) => {
     setKeys((prevData) => (prevData ? [...prevData, data] : [data]));
-    setCreateClicked((prev) => !prev);
   };
 
   useEffect(() => {
@@ -77,21 +71,21 @@ export default function ApiKeysDashboard() {
   }, [accessToken, userID, userRole]);
 
   return (
-    <UserDashboard
-      userID={userID}
-      userRole={userRole}
-      premiumUser={premiumUser ?? false}
-      teams={teams}
-      keys={keys}
-      setUserRole={setUserRole}
-      userEmail={userEmail}
-      setUserEmail={setUserEmail}
-      setTeams={setTeams}
-      setKeys={setKeys}
-      addKey={addKey}
-      createClicked={createClicked}
-      autoOpenCreate={autoOpenCreate}
-      prefillData={prefillData}
-    />
+    <main className="flex h-full flex-col p-8">
+      <VirtualKeysTable
+        headerActions={
+          isViewOnly ? undefined : (
+            <CreateKey
+              team={null}
+              teams={teams}
+              data={keys}
+              addKey={addKey}
+              autoOpenCreate={autoOpenCreate}
+              prefillData={prefillData}
+            />
+          )
+        }
+      />
+    </main>
   );
 }
