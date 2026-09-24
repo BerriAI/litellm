@@ -60,6 +60,15 @@ OFF_PEAK_WINDOW: Final[JsonSchema] = {
             },
             "minItems": 1,
         },
+        "override_dates": {
+            "type": "array",
+            "items": ISO_DATE,
+            "minItems": 1,
+            "description": (
+                "YYYY-MM-DD dates, read on weekday_timezone, on which this rule alone decides: "
+                "weekdays and every other window are ignored. On any other date the rule does not apply."
+            ),
+        },
     },
     "required": ["hours_utc"],
     "additionalProperties": False,
@@ -75,21 +84,6 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
             "weekday_timezone": {
                 "type": "string",
                 "description": "IANA zone the weekdays of each window are read on; defaults to UTC.",
-            },
-            "off_peak_dates": {
-                "type": "array",
-                "items": ISO_DATE,
-                "minItems": 1,
-                "description": "Calendar dates, read on weekday_timezone, that are off-peak all day (public holidays).",
-            },
-            "weekday_dates": {
-                "type": "array",
-                "items": ISO_DATE,
-                "minItems": 1,
-                "description": (
-                    "Calendar dates, read on weekday_timezone, that follow the Monday-to-Friday rules "
-                    "even when they fall on a weekend (make-up workdays)."
-                ),
             },
             "input_cost_per_token": NONNEG_NUMBER,
             "output_cost_per_token": NONNEG_NUMBER,

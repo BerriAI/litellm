@@ -135,10 +135,11 @@ OFF_PEAK_ENTRY: Final = MappingProxyType(
         "output_cost_per_token": 8e-6,
         "off_peak_pricing": {
             "hours_utc": "16:30-00:30",
-            "windows": [{"hours_utc": ["00:30-02:00"], "weekdays": [6, "Sunday", "mon", "THURS"]}],
+            "windows": [
+                {"hours_utc": ["00:30-02:00"], "weekdays": [6, "Sunday", "mon", "THURS"]},
+                {"hours_utc": "00:00-00:00", "override_dates": ["2026-01-01"]},
+            ],
             "weekday_timezone": "Asia/Shanghai",
-            "off_peak_dates": ["2026-01-01"],
-            "weekday_dates": ["2026-01-04"],
             "input_cost_per_token": 1e-6,
             "output_cost_per_token": 4e-6,
             "cache_read_input_token_cost": 1e-7,
@@ -169,9 +170,9 @@ def test_generator_classifies_off_peak_pricing_as_a_windowed_rate_block():
         {"hours_utc": "25:00-01:00", "input_cost_per_token": 1e-6},
         {"hours_utc": ["16:30-00:30", "4pm-midnight"], "input_cost_per_token": 1e-6},
         {"windows": [{"hours_utc": "00:30-02:00", "weekdays": ["Funday"]}], "input_cost_per_token": 1e-6},
-        {"hours_utc": "16:30-00:30", "off_peak_dates": ["2026-1-1"], "input_cost_per_token": 1e-6},
-        {"hours_utc": "16:30-00:30", "off_peak_dates": "2026-01-01", "input_cost_per_token": 1e-6},
-        {"hours_utc": "16:30-00:30", "weekday_dates": [], "input_cost_per_token": 1e-6},
+        {"windows": [{"hours_utc": "00:30-02:00", "override_dates": ["2026-1-1"]}], "input_cost_per_token": 1e-6},
+        {"windows": [{"hours_utc": "00:30-02:00", "override_dates": "2026-01-01"}], "input_cost_per_token": 1e-6},
+        {"windows": [{"hours_utc": "00:30-02:00", "override_dates": []}], "input_cost_per_token": 1e-6},
     ],
 )
 def test_generated_off_peak_schema_rejects_malformed_blocks(block: dict):
@@ -388,7 +389,10 @@ def deepseek_off_peak_drift(entry: Mapping[str, object]) -> str | None:
     block: Final = entry.get("off_peak_pricing")
     if not isinstance(block, dict):
         return "no off_peak_pricing block"
-    if tuple(block.get("windows", ())) != DEEPSEEK_OFF_PEAK_WINDOWS:
+    windows: Final = tuple(block.get("windows", ()))
+    if windows[: len(DEEPSEEK_OFF_PEAK_WINDOWS)] != DEEPSEEK_OFF_PEAK_WINDOWS:
+        return f"windows={block.get('windows')}"
+    if not all("override_dates" in rule for rule in windows[len(DEEPSEEK_OFF_PEAK_WINDOWS) :]):
         return f"windows={block.get('windows')}"
     halved: Final = {rate: block.get(rate) for rate in DEEPSEEK_HALVED_RATES}
     expected: Final = {rate: float(str(entry[rate])) / 2 for rate in DEEPSEEK_HALVED_RATES}

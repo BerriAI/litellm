@@ -116,6 +116,9 @@ pub struct OffPeakWindow {
     pub hours_utc: UtcHours,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weekdays: Option<Vec<Weekday>>,
+    /// YYYY-MM-DD dates on which this rule alone decides, ignoring weekdays and other windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_dates: Option<Vec<String>>,
 }
 
 /// Rates that replace the same-named base fields inside the stated UTC windows.
@@ -129,12 +132,6 @@ pub struct OffPeakPricing {
     pub windows: Option<Vec<OffPeakWindow>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weekday_timezone: Option<String>,
-    /// YYYY-MM-DD dates, read on weekday_timezone, that are off-peak all day.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub off_peak_dates: Option<Vec<String>>,
-    /// YYYY-MM-DD dates, read on weekday_timezone, that follow the Monday-to-Friday rules.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub weekday_dates: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

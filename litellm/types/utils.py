@@ -233,11 +233,14 @@ class OffPeakWindow(TypedDict, total=False):
     midnight and an equal-ended window covers the whole day. weekdays is a list of days the
     rule applies on, as ISO-8601 numbers (1 = Monday .. 7 = Sunday) or English day names;
     omitted means every day. The weekday is read on the calendar named by the block's
-    weekday_timezone.
+    weekday_timezone. override_dates lists YYYY-MM-DD dates on that calendar on which this
+    rule alone decides, ignoring weekdays and every other window; on any other date the
+    rule does not apply.
     """
 
     hours_utc: ReadOnly[str | Sequence[str]]
     weekdays: ReadOnly[Sequence[int | str]]
+    override_dates: ReadOnly[Sequence[str]]
 
 
 class OffPeakPricing(TypedDict, total=False):
@@ -247,17 +250,12 @@ class OffPeakPricing(TypedDict, total=False):
     applying on every day of the week; a window may wrap past midnight. windows adds
     day-of-week-qualified rules (e.g. weekend-only whole-day off-peak), matched as a union
     with hours_utc. weekday_timezone names the IANA calendar weekdays are read on, defaulting
-    to UTC. off_peak_dates lists YYYY-MM-DD dates, read on that calendar, that are off-peak
-    all day (public holidays), and weekday_dates lists dates that follow the Monday-to-Friday
-    rules even on a weekend (make-up workdays). Any rate left unset falls back to the
-    standard rate.
+    to UTC. Any rate left unset falls back to the standard rate.
     """
 
     hours_utc: ReadOnly[str | Sequence[str]]
     windows: ReadOnly[Sequence[OffPeakWindow]]
     weekday_timezone: ReadOnly[str]
-    off_peak_dates: ReadOnly[Sequence[str]]
-    weekday_dates: ReadOnly[Sequence[str]]
     input_cost_per_token: ReadOnly[float]
     output_cost_per_token: ReadOnly[float]
     output_cost_per_reasoning_token: ReadOnly[float]
