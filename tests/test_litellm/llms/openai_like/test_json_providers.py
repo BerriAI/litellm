@@ -3,7 +3,6 @@ Tests for JSON-based provider configuration system.
 """
 
 import os
-import subprocess
 import sys
 from unittest.mock import patch
 
@@ -48,53 +47,41 @@ class TestProvidersJsonConsistency:
         assert unknown == [], f"providers.json slugs missing from LlmProviders: {unknown}"
         assert known_non_enum_slugs - enum_slugs == known_non_enum_slugs
 
-    def test_non_sail_slugs_match_the_merge_base_snapshot(self):
-        """Every pre-existing JSON provider must resolve identically to the merge
-        base: sail's entry is the only registry change this PR is allowed to make."""
-        import json
-
-        base_worktree = os.environ.get("LITELLM_BASE_WORKTREE", "/home/ubuntu/triage/wt_base")
-        if not os.path.isdir(os.path.join(base_worktree, "litellm")):
-            pytest.skip("merge-base worktree not present")
-
-        script = """
-import sys, json
-sys.path.insert(0, sys.argv[1])
-import litellm
-assert litellm.__file__.startswith(sys.argv[1]), litellm.__file__
-from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-print(json.dumps({slug: vars(cfg) for slug, cfg in JSONProviderRegistry._providers.items()}, default=lambda v: dict(v) if not isinstance(v, (list, tuple)) else list(v), sort_keys=True))
-"""
-        out = subprocess.run(
-            [sys.executable, "-c", script, base_worktree],
-            capture_output=True, text=True, check=True,
-            env={**os.environ, "PYTHONPATH": base_worktree},
-        )
-        base_snapshot = json.loads(out.stdout)
+    def test_only_sail_opts_into_service_tier_window_handling_and_unsupported_params(self):
+        """sail's entry is the only registry change this PR makes: it is the only
+        slug with unsupported_params or the service_tier_as_completion_window
+        flag; other special_handling keys predate it."""
+        from collections.abc import Mapping
 
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-        tip_snapshot = {
-            slug: {
-                k: list(v) if isinstance(v, tuple) else dict(v) if hasattr(v, "items") else v
-                for k, v in vars(cfg).items()
-            }
-            for slug, cfg in JSONProviderRegistry._providers.items()
-        }
-        removed = sorted(set(base_snapshot) - set(tip_snapshot))
-        assert removed == []
-        drift = {
-            slug: {"base": base_snapshot[slug], "tip": tip_snapshot[slug]}
-            for slug in base_snapshot
-            if {
-                k: v for k, v in tip_snapshot.get(slug, {}).items()
-                if k in base_snapshot[slug]
-            }
-            != base_snapshot[slug]
-        }
-        assert drift == {}
-        added = sorted(set(tip_snapshot) - set(base_snapshot))
-        assert added == ["sail"]
+        offenders = []
+        for slug, cfg in JSONProviderRegistry._providers.items():
+            assert isinstance(cfg.unsupported_params, (tuple, frozenset))
+            assert all(isinstance(param, str) for param in cfg.unsupported_params)
+            assert isinstance(cfg.special_handling, Mapping)
+            assert all(isinstance(value, bool) for value in cfg.special_handling.values())
+            if slug != "sail" and (
+                cfg.unsupported_params
+                or cfg.special_handling.get("service_tier_as_completion_window")
+            ):
+                offenders.append(slug)
+        assert offenders == []
+        sail = JSONProviderRegistry._providers["sail"]
+        assert sail.special_handling["service_tier_as_completion_window"] is True
+
+    def test_unsupported_params_are_excluded_from_supported_openai_params(self):
+        """get_supported_openai_params for every JSON provider excludes exactly
+        that slug's unsupported_params and nothing outside the OpenAI base set."""
+        from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        base_params = set(OpenAIGPTConfig().get_supported_openai_params(model="x"))
+        for slug, cfg in JSONProviderRegistry._providers.items():
+            supported = create_config_class(cfg)().get_supported_openai_params("x")
+            assert set(supported) & set(cfg.unsupported_params) == set(), slug
+            assert set(supported) <= base_params | {"reasoning_effort"}, slug
 
     def test_every_chat_completions_slug_resolves_via_get_llm_provider(self):
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider

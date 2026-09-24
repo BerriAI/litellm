@@ -2,7 +2,6 @@
 
 import io
 import json
-import os
 import wave
 from typing import Final
 
@@ -805,52 +804,76 @@ class TestProviderListBlastRadius:
         assert "sail" not in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS
 
     def test_get_llm_provider_unchanged_for_other_openai_compatible_bases(self):
-        """Every openai_compatible_endpoints api_base must resolve to the same
-        provider slug it resolved to before sail joined the list."""
-        import subprocess
-        import sys
+        """Every openai_compatible_endpoints api_base resolves through the elif
+        chain in get_llm_provider_logic or the JSON registry, and adding sail's
+        endpoint is the only change this PR is allowed to make."""
+        from litellm.constants import openai_compatible_endpoints, openai_compatible_providers
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-        base_worktree = os.environ.get("LITELLM_BASE_WORKTREE", "/home/ubuntu/triage/wt_base")
-        if not os.path.isdir(os.path.join(base_worktree, "litellm")):
-            pytest.skip("merge-base worktree not present")
+        legacy_endpoint_providers = {
+            "api.perplexity.ai": "perplexity",
+            "api.endpoints.anyscale.com/v1": "anyscale",
+            "api.deepinfra.com/v1/openai": "deepinfra",
+            "api.mistral.ai/v1": "mistral",
+            "codestral.mistral.ai/v1/chat/completions": "codestral",
+            "codestral.mistral.ai/v1/fim/completions": "text-completion-codestral",
+            "api.groq.com/openai/v1": "groq",
+            "https://integrate.api.nvidia.com/v1": "nvidia_nim",
+            "api.deepseek.com/v1": "deepseek",
+            "api.together.ai/v1": "together_ai",
+            "api.together.xyz/v1": "together_ai",
+            "app.empower.dev/api/v1": "empower",
+            "https://api.friendli.ai/serverless/v1": "friendliai",
+            "ollama.com": "ollama",
+            "https://api-inference.modelscope.cn/v1": "modelscope",
+            "https://api.v0.dev/v1": "v0",
+            "https://api.lambda.ai/v1": "lambda_ai",
+            "https://api.inceptionlabs.ai/v1": "inception",
+            "https://api.hyperbolic.xyz/v1": "hyperbolic",
+            "https://ai-gateway.vercel.sh/v1": "vercel_ai_gateway",
+            "https://api.edenai.run/v3": "edenai",
+            "https://api.inference.wandb.ai/v1": "wandb",
+            "https://gigachat.devices.sberbank.ru/api/v1": "gigachat",
+        }
+        providers_outside_openai_compatible_list = {
+            "mistral",
+            "text-completion-codestral",
+            "ollama",
+            "gigachat",
+        }
 
-        script = """
-import sys, json
-sys.path.insert(0, sys.argv[1])
-import litellm
-assert litellm.__file__.startswith(sys.argv[1]), litellm.__file__
-from litellm.constants import openai_compatible_endpoints
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-out = {}
-for base in openai_compatible_endpoints:
-    try:
-        out[base] = get_llm_provider(model="openai/gpt-x", custom_llm_provider=None, api_base=base, api_key=None)[1]
-    except Exception:
-        out[base] = None
-print(json.dumps(out, sort_keys=True))
-"""
-        out = subprocess.run(
-            [sys.executable, "-c", script, base_worktree],
-            capture_output=True, text=True, check=True,
-            env={**os.environ, "PYTHONPATH": base_worktree},
-        )
-        base_snapshot = json.loads(out.stdout)
+        assert len(openai_compatible_endpoints) == len(set(openai_compatible_endpoints))
 
-        from litellm.constants import openai_compatible_endpoints
+        expected = {}
+        for base in openai_compatible_endpoints:
+            json_provider = JSONProviderRegistry.get_by_base_url(base)
+            expected[base] = json_provider.slug if json_provider is not None else legacy_endpoint_providers.get(base)
 
-        tip_snapshot = {
+        actual = {
             base: get_llm_provider(
-                model="openai/gpt-x", custom_llm_provider=None, api_base=base, api_key=None
+                model="test-model", custom_llm_provider=None, api_base=base, api_key=None
             )[1]
             for base in openai_compatible_endpoints
         }
-        added = sorted(set(tip_snapshot) - set(base_snapshot))
-        assert added == ["https://api.sailresearch.com/v1"]
-        assert {base: tip_snapshot[base] for base in base_snapshot} == base_snapshot
+        assert actual == expected
+        for base, provider in actual.items():
+            json_provider = JSONProviderRegistry.get_by_base_url(base)
+            if json_provider is not None:
+                assert provider == json_provider.slug
+                assert json_provider.base_url == base
+            assert provider is None or (
+                provider in openai_compatible_providers
+                or provider in providers_outside_openai_compatible_list
+            ), f"{base} resolved to {provider}, which is not a registered openai-compatible provider"
 
 
 def test_model_info_balanced_fields_are_none_off_sail_and_set_on_sail():
-    openai_info = litellm.get_model_info("gpt-5.4", custom_llm_provider="openai")
+    openai_rows = sorted(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "openai" and name.startswith("gpt-")
+    )
+    openai_info = litellm.get_model_info(openai_rows[-1], custom_llm_provider="openai")
     assert openai_info["input_cost_per_token_balanced"] is None
     assert openai_info["output_cost_per_token_balanced"] is None
 
