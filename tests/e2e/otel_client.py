@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Final
 
@@ -96,6 +97,12 @@ class _TracesQuery(BaseModel):
     lookback: str = "1h"
     start: int | None = None
     end: int | None = None
+
+
+def _ticks() -> Iterator[None]:
+    while True:
+        yield None
+        time.sleep(POLL_INTERVAL)
 
 
 def _settled(trace: JaegerTrace, names: set[str], prefixes: set[str]) -> bool:
@@ -245,11 +252,8 @@ class OtelReader:
         linked_names: frozenset[str],
         deadline: float,
     ) -> _Observation:
-        observed: Final = self._observe(call_id, linked_names)
-        if observed.settled(names, prefixes) or time.monotonic() >= deadline:
-            return observed
-        time.sleep(POLL_INTERVAL)
-        return self._poll(call_id, names, prefixes, linked_names, deadline)
+        observations: Final = (self._observe(call_id, linked_names) for _ in _ticks())
+        return next(o for o in observations if o.settled(names, prefixes) or time.monotonic() >= deadline)
 
 
 def build_otel_reader() -> OtelReader:
