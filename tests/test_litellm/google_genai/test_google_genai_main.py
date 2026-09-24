@@ -4,13 +4,115 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 
 import json
+from datetime import datetime
+from typing import Final
 
 import pytest
 
 
-
-
 import litellm
+from litellm.google_genai.main import GenerateContentHelper
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
+
+
+@pytest.mark.parametrize(
+    "provider,location_kwargs,environment_location,expected_location,expected_cost",
+    [
+        ("vertex_ai", {"vertex_location": "global"}, "us-central1", "global", 5.25e-6),
+        (
+            "vertex_ai",
+            {"vertex_location": "europe-west4"},
+            "global",
+            "europe-west4",
+            5.775e-6,
+        ),
+        (
+            "vertex_ai",
+            {"vertex_ai_location": "global"},
+            "us-central1",
+            "global",
+            5.25e-6,
+        ),
+        (
+            "vertex_ai",
+            {"vertex_location": "global", "vertex_ai_location": "us-central1"},
+            "europe-west4",
+            "global",
+            5.25e-6,
+        ),
+        ("vertex_ai", {}, "global", "global", 5.25e-6),
+        ("vertex_ai", {}, None, "us-central1", 5.775e-6),
+        ("gemini", {"vertex_location": "us-central1"}, "us-central1", None, 5.25e-6),
+    ],
+)
+def test_generate_content_prices_the_request_location(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    location_kwargs: dict[str, str],
+    environment_location: str | None,
+    expected_location: str | None,
+    expected_cost: float,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_location", None)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    if environment_location is None:
+        monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    else:
+        monkeypatch.setenv("VERTEXAI_LOCATION", environment_location)
+
+    logging_obj: Final = Logging(
+        model="gemini-flash",
+        messages=[],
+        stream=False,
+        call_type="agenerate_content",
+        start_time=datetime.now(),
+        litellm_call_id="test-vertex-location",
+        function_id="test-vertex-location",
+    )
+    setup: Final = GenerateContentHelper.setup_generate_content_call(
+        model=f"{provider}/gemini-3.8-flash",
+        contents=[{"role": "user", "parts": [{"text": "say ok"}]}],
+        config={"temperature": 0},
+        vertex_project="test-project",
+        api_key="test-key",
+        litellm_logging_obj=logging_obj,
+        **location_kwargs,
+    )
+    config: Final = setup.generate_content_provider_config
+    assert isinstance(config, GoogleGenAIConfig)
+    credentials, project, location = config._get_common_auth_components(dict(setup.litellm_params))
+    _, url = config._build_final_headers_and_url(
+        model=setup.model,
+        auth_header="test-token",
+        vertex_project=project,
+        vertex_location=location,
+        vertex_credentials=credentials,
+        stream=False,
+        api_base=None,
+        litellm_params=dict(setup.litellm_params),
+    )
+    if expected_location is None:
+        assert url.startswith("https://generativelanguage.googleapis.com/")
+    else:
+        assert f"/locations/{expected_location}/" in url
+    assert setup.generate_content_config_dict == {"temperature": 0}
+    assert "vertex_location" not in setup.request_body
+
+    response: Final = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "ok"}], "role": "model"},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 2,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 3,
+        },
+    }
+    assert logging_obj._response_cost_calculator(result=response) == pytest.approx(expected_cost)
 
 
 @pytest.mark.asyncio
