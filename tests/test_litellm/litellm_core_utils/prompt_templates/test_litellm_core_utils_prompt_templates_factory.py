@@ -3847,3 +3847,23 @@ def test_convert_to_anthropic_tool_invoke_keeps_paired_server_tool_use():
         },
         server_result,
     ]
+
+
+
+def test_convert_to_anthropic_tool_result_xml_escaping():
+    """
+    Regression test for convert_to_anthropic_tool_result_xml entity escaping order.
+    Ensures '&' is escaped before '<' and '>', preventing double-escaping into '&amp;lt;'.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_result_xml
+
+    message = {
+        "role": "tool",
+        "name": "eval_expression",
+        "content": "a < b & b > c",
+    }
+    result = convert_to_anthropic_tool_result_xml(message)
+    expected_stdout = "<stdout>\na &lt; b &amp; b &gt; c\n</stdout>"
+    assert expected_stdout in result
+    assert "&amp;lt;" not in result
+    assert "&amp;gt;" not in result
