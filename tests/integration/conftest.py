@@ -15,6 +15,7 @@ from redis import Redis
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
+from tests.integration._support.routing import RoutingPlugin
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
@@ -29,6 +30,8 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "covers(*ids): legacy contract IDs kept for existing tests, not enforced")
     config.stash[REPORTS] = []
     config.pluginmanager.register(IntegrationReportPlugin(config))
+    if os.environ.get("INTEGRATION_ROUTING"):
+        config.pluginmanager.register(RoutingPlugin(config))
 
 
 class IntegrationReportPlugin:
