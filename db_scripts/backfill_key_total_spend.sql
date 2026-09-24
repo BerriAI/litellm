@@ -73,19 +73,22 @@ FROM (
 WHERE k.token = s.token
   AND k.total_spend < s.sum_spend;
 
--- Archived tokens are not unique, so GROUP BY token is correct here and the
--- update hits every archived row carrying that token.
+-- Archived tokens are not unique, so collapse them to one row per token
+-- before joining spend logs; the update then hits every archived row.
 UPDATE "LiteLLM_DeletedVerificationToken" k
 SET total_spend = s.sum_spend
 FROM (
     SELECT k2.token, SUM(l.spend) AS sum_spend
-    FROM "LiteLLM_DeletedVerificationToken" k2
+    FROM (
+        SELECT DISTINCT token
+        FROM "LiteLLM_DeletedVerificationToken"
+        WHERE budget_duration IS NOT NULL
+           OR budget_id IN (
+               SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_duration IS NOT NULL
+           )
+    ) k2
     JOIN "LiteLLM_SpendLogs" l
       ON l.api_key IN (k2.token, encode(sha256(convert_to(k2.token, 'UTF8')), 'hex'))
-    WHERE k2.budget_duration IS NOT NULL
-       OR k2.budget_id IN (
-           SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_duration IS NOT NULL
-       )
     GROUP BY k2.token
 ) s
 WHERE k.token = s.token
