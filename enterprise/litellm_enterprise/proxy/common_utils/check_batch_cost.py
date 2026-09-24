@@ -148,11 +148,11 @@ class CheckBatchCost:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
 
-    async def _get_key_alias(self, batch_id: str, api_key: str | None) -> str | None:
+    async def _get_key_alias(self, batch_id: str, api_key: str | None, created_by: str | None) -> str | None:
         """Resolve the creating virtual key's alias from its hashed token."""
         if not api_key:
             return None
-        if api_key.startswith(f"{CLI_SESSION_KEY_PREFIX}-"):
+        if created_by and api_key == f"{CLI_SESSION_KEY_PREFIX}-{created_by}":
             return api_key
         try:
             key_row: prisma_models.LiteLLM_VerificationToken | None = await _token_table(
@@ -234,7 +234,7 @@ class CheckBatchCost:
             **(await self._get_user_info(batch_id, job.created_by)),
         }
 
-        key_alias = await self._get_key_alias(batch_id, api_key)
+        key_alias = await self._get_key_alias(batch_id, api_key, job.created_by)
         if key_alias is not None:
             metadata["user_api_key_alias"] = key_alias
         team_alias = await self._get_team_alias(team_id)

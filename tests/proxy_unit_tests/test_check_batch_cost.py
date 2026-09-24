@@ -2635,6 +2635,19 @@ class TestBatchCostAttribution:
         assert metadata["user_api_key_alias"] == "cli-session-alice"
 
     @pytest.mark.asyncio
+    async def test_raw_cli_session_token_on_a_legacy_batch_row_is_not_treated_as_the_alias(self):
+        """A batch row written by an older build stores the raw per-login session token, which shares
+        the cli-session- prefix with the alias. Only the exact cli-session-<created_by> value is the
+        alias; anything else stays a secret so redaction hashes it instead of persisting the token."""
+        instance = self._instance(key_row=None)
+
+        metadata = await instance._build_creator_attribution_metadata(
+            self._job(api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"), "batch-1"
+        )
+
+        assert metadata.get("user_api_key_alias") is None
+
+    @pytest.mark.asyncio
     async def test_unnamed_key_keeps_the_creating_user_alias(self):
         """Regression: a key generated without key_alias resolves to no alias, and the
         overwrite must not null out the creating user's alias that _get_user_info supplied.
