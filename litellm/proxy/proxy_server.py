@@ -5081,6 +5081,7 @@ class ProxyConfig:
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
+        self._last_cleanup_schedule_attempt: tuple[SettingsJsonValue | None, ...] | None = None
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -7643,7 +7644,14 @@ class ProxyConfig:
         resolved: Final = self._resolved_retention_values()
         wants_job: Final = any(value is not None for value in resolved)
         has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
-        if previous_retention_values != resolved or wants_job != has_job:
+        attempt: Final = (
+            *resolved,
+            self.settings.get("maximum_spend_logs_cleanup_cron"),
+            self.settings.get("maximum_spend_logs_retention_interval"),
+        )
+        job_missing: Final = wants_job and not has_job and attempt != self._last_cleanup_schedule_attempt
+        if previous_retention_values != resolved or job_missing or (has_job and not wants_job):
+            self._last_cleanup_schedule_attempt = attempt
             await self._reschedule_spend_log_cleanup_job()
 
     async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
