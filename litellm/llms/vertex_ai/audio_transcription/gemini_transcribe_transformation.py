@@ -44,6 +44,7 @@ from litellm.types.utils import (
 
 DEFAULT_GEMINI_TRANSCRIBE_LOCATION: Final = "global"
 AUDIO_MODALITY: Final = "AUDIO"
+AMBIGUOUS_WEBM_MIME_TYPES: Final = frozenset({"application/webm", "application/x-webm", "video/webm", "video/x-webm"})
 
 
 class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase):
@@ -151,6 +152,7 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
         litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         processed_audio: Final = process_audio_file(audio_file)
+        mime_type: Final = _audio_transcription_mime_type(audio_file, processed_audio.content_type)
         request_body: Final = VertexGeminiTranscriptionRequest(
             contents=(
                 VertexGeminiTranscriptionContent(
@@ -158,7 +160,7 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
                     parts=(
                         VertexGeminiTranscriptionPart(
                             inlineData=VertexGeminiTranscriptionInlineData(
-                                mimeType=processed_audio.content_type,
+                                mimeType=mime_type,
                                 data=base64.b64encode(processed_audio.file_content).decode("utf-8"),
                             )
                         ),
@@ -208,6 +210,16 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
                 ),
             )
         return response
+
+
+def _audio_transcription_mime_type(audio_file: FileTypes, processed_content_type: str) -> str:
+    incoming_content_type: Final = audio_file[2] if isinstance(audio_file, tuple) and len(audio_file) >= 3 else None
+    if isinstance(incoming_content_type, str) and incoming_content_type.split(";", 1)[0].strip().lower().startswith(
+        "audio/"
+    ):
+        return incoming_content_type
+    processed_media_type: Final = processed_content_type.split(";", 1)[0].strip().lower()
+    return "audio/webm" if processed_media_type in AMBIGUOUS_WEBM_MIME_TYPES else processed_content_type
 
 
 def _audio_transcription_config(language: object) -> VertexGeminiTranscriptionAudioConfig:
