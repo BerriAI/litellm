@@ -355,7 +355,8 @@ async def test_get_user_api_key_filter_handles_deleted_lookup_failure_and_owned_
         side_effect=RuntimeError("deleted-key table unavailable")
     )
 
-    assert await get_user_api_key_filter(mock_prisma, "target-user", "active-key") == ["active-key"]
+    with pytest.raises(RuntimeError, match="deleted-key table unavailable"):
+        await get_user_api_key_filter(mock_prisma, "target-user", "active-key")
 
 
 @pytest.mark.asyncio

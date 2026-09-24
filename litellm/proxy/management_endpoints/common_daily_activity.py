@@ -564,14 +564,10 @@ async def _get_deleted_keys_for_user(
     prisma_client: PrismaClient,
     user_id: str,
 ) -> Sequence["PrismaDeletedVerificationToken"]:
-    try:
-        return await DeletedVerificationTokenRepository(prisma_client).table.find_many(
-            where={"user_id": user_id},  # mutable-ok: Prisma query payload is consumed as a mutable mapping
-            order={"deleted_at": "desc"},  # mutable-ok: Prisma query payload is consumed as a mutable mapping
-        )
-    except Exception as e:
-        verbose_proxy_logger.warning("Failed to fetch deleted key metadata for user %s: %s", user_id, e)
-        return ()
+    return await DeletedVerificationTokenRepository(prisma_client).table.find_many(
+        where={"user_id": user_id},  # mutable-ok: Prisma query payload is consumed as a mutable mapping
+        order={"deleted_at": "desc"},  # mutable-ok: Prisma query payload is consumed as a mutable mapping
+    )
 
 
 async def get_user_api_key_filter(
