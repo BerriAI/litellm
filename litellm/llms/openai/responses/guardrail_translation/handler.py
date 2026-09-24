@@ -451,7 +451,6 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
 
 
 def _input_image_ref(content_item: Mapping[str, object]) -> str:
-    """Identify an ``input_image`` part by whichever reference field it carries."""
     image_url: Final = content_item.get("image_url")
     if isinstance(image_url, str) and image_url:
         return image_url
@@ -481,7 +480,6 @@ def _image_url_part_ref(content_item: Mapping[str, object], scan_attachments: bo
 def _extract_tool_output_attachments(
     item: Mapping[str, object], images_to_check: list[str], files_to_check: list[str]
 ) -> None:
-    """Attachments nested inside a ``function_call_output`` item's ``output`` parts."""
     if item.get("type") != "function_call_output":
         return
     output: Final = item.get("output")
@@ -497,7 +495,6 @@ def _extract_tool_output_attachments(
 
 
 def _input_file_ref(content_item: Mapping[str, object]) -> str:
-    """Identify an ``input_file`` part by whichever reference field it carries."""
     return next(
         (
             value
