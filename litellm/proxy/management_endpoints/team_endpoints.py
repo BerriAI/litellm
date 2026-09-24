@@ -41,6 +41,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     UI_TEAM_ID,
@@ -143,6 +144,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
 )
+from litellm.proxy.management_endpoints.ptu_consumption import attach_ptu_hours
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
@@ -194,6 +196,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
+from litellm.router_utils.ptu_shares import model_group_ptu_capacity
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -6647,6 +6650,17 @@ async def _resolve_team_daily_activity_scope(
     )
 
 
+def _with_ptu_consumption(
+    activity: SpendAnalyticsPaginatedResponse, llm_router: Router | None
+) -> SpendAnalyticsPaginatedResponse:
+    if llm_router is None or not is_ptu_cost_attribution_enabled():
+        return activity
+    return attach_ptu_hours(
+        activity,
+        lambda model_group: model_group_ptu_capacity(llm_router.get_model_list(model_name=model_group) or ()),
+    )
+
+
 @router.get(
     "/team/daily/activity",
     response_model=SpendAnalyticsPaginatedResponse,
@@ -6679,6 +6693,7 @@ async def get_team_daily_activity(
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
     """
     from litellm.proxy.proxy_server import (
+        llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -6697,7 +6712,7 @@ async def get_team_daily_activity(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    return await get_daily_activity(
+    activity: Final = await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
@@ -6711,6 +6726,7 @@ async def get_team_daily_activity(
         page=page,
         page_size=page_size,
     )
+    return _with_ptu_consumption(activity, llm_router)
 
 
 _MAX_AGGREGATED_RANGE_DAYS: Final = 400
@@ -6767,6 +6783,7 @@ async def get_team_daily_activity_aggregated(
         SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
     """
     from litellm.proxy.proxy_server import (
+        llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -6789,7 +6806,7 @@ async def get_team_daily_activity_aggregated(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    return await get_daily_activity_aggregated(
+    activity: Final = await get_daily_activity_aggregated(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
@@ -6803,6 +6820,7 @@ async def get_team_daily_activity_aggregated(
         timezone_offset_minutes=timezone,
         include_entity_breakdown=True,
     )
+    return _with_ptu_consumption(activity, llm_router)
 
 
 def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool) -> str:

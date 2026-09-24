@@ -10,6 +10,7 @@ export interface EntitySpendData {
   metadata: {
     total_spend: number;
     total_flat_cost?: number;
+    total_ptu_hours?: number;
     total_api_requests: number;
     total_successful_requests: number;
     total_failed_requests: number;
@@ -41,6 +42,7 @@ export interface ExportMetadata {
     total_spend: number;
     total_flat_cost?: number;
     total_cost?: number;
+    total_ptu_hours?: number;
     total_requests: number;
     successful_requests: number;
     failed_requests: number;

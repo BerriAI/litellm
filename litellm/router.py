@@ -238,6 +238,7 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
+from litellm.router_utils.ptu_shares import filter_ptu_shared_deployments, ptu_capacity_warning
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -8824,6 +8825,15 @@ class Router:
             access_windows_error: Final = access_windows_config_error(_model_info, model_name=_model_name)
             if access_windows_error is not None:
                 raise ValueError(access_windows_error)
+            capacity_warning: Final = (
+                ptu_capacity_warning(
+                    _model_name, MappingProxyType({"model_info": _model_info, "litellm_params": _litellm_params})
+                )
+                if is_ptu_cost_attribution_enabled()
+                else None
+            )
+            if capacity_warning is not None:
+                verbose_router_logger.warning(capacity_warning)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
                 **(  # pyright: ignore[reportArgumentType]  # untyped merged dict; already true for every field here
@@ -12778,7 +12788,16 @@ class Router:
                 model=model,
                 llm_provider="",
             )
-        return result.deployments
+        if not is_ptu_cost_attribution_enabled():
+            return result.deployments
+        shared: Final = filter_ptu_shared_deployments(result.deployments, request_team_id)
+        if shared.withheld and len(shared.deployments) == 0:
+            raise litellm.BadRequestError(
+                message=f"Deployment {model} is reserved for the teams holding a PTU share of it",
+                model=model,
+                llm_provider="",
+            )
+        return shared.deployments
 
     def _filter_deployments_by_model_access_groups(
         self,

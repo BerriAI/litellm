@@ -36,6 +36,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
+from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -64,6 +65,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     response_has_hidden_params,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.ptu_shares import PTUTeamCeiling, team_ptu_ceiling
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import (
@@ -110,6 +112,14 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
     if llm_router is None:
         return None
     return resolve_model_group_alias(llm_router.model_group_alias, model)
+
+
+def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -> PTUTeamCeiling | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None or not is_ptu_cost_attribution_enabled():
+        return None
+    return team_ptu_ceiling(llm_router.get_model_list(model_name=model_group) or (), team_id)
 
 
 def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
@@ -420,6 +430,10 @@ _AUDIO_BYTES_PER_TOKEN: Final = 1600
 # on the same project+model simultaneously without colliding on cache keys.
 PROJECT_ITPM_DESCRIPTOR_KEY: Final = "model_per_project_itpm"
 PROJECT_OTPM_DESCRIPTOR_KEY: Final = "model_per_project_otpm"
+# Descriptor "key" for a team's PTU share of a shared Azure provisioned deployment,
+# counted in Azure normalized tokens (output weighted by the model's ratio) so it
+# never collides with the raw-token "model_per_team" counter on the same team+model.
+PTU_TEAM_DESCRIPTOR_KEY: Final = "model_per_team_ptu"
 # How long an acquired slot counts toward the in-flight total before it is
 # considered leaked (worker crashed without any release callback firing) and
 # pruned. Also the longest request duration the gauge can track: a request
@@ -648,10 +662,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         internal_usage_cache: InternalUsageCache,
         time_provider: Callable[[], datetime] | None = None,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
+        ptu_team_ceiling_resolver: Callable[
+            [str, str], PTUTeamCeiling | None
+        ] = _resolve_ptu_team_ceiling_via_proxy_router,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
         self._model_group_resolver = model_group_resolver
+        self._ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
@@ -2879,6 +2897,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model=requested_model if isinstance(requested_model, str) else None,
             descriptors=descriptors,
         )
+        self._add_team_ptu_rate_limit_descriptor(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model if isinstance(requested_model, str) else None,
+            descriptors=descriptors,
+        )
 
         # Agent-level and session-level rate limits
         resolved_agent_id: Final = self._get_resolved_agent_id(user_api_key_dict, data)
@@ -3014,6 +3037,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "tokens_per_unit": team_tpm_limit,
                     "window_size": self.window_size,
                 },
+            )
+        )
+
+    def _add_team_ptu_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+        descriptors: list[RateLimitDescriptor],
+    ) -> None:
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None or not user_api_key_dict.team_id:
+            return
+        ceiling: Final = self._ptu_team_ceiling_resolver(user_api_key_dict.team_id, model.group)
+        if ceiling is None:
+            return
+        descriptors.append(
+            RateLimitDescriptor(
+                key=PTU_TEAM_DESCRIPTOR_KEY,
+                value=f"{user_api_key_dict.team_id}:{model.group}",
+                rate_limit=RateLimitDescriptorRateLimitObject(
+                    requests_per_unit=None, tokens_per_unit=ceiling.tpm_limit, window_size=self.window_size
+                ),
             )
         )
 
@@ -4550,8 +4595,53 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reserved_tokens=reserved_tokens,
             )
         )
+        pipeline_operations.extend(
+            self._build_team_ptu_tpm_ops(
+                standard_logging_metadata=standard_logging_metadata,
+                response_obj=response_obj,
+                reconcile_model=reconcile_model,
+                reserved_scopes=reserved_scopes,
+                reserved_tokens=reserved_tokens,
+                total_tokens=total_tokens,
+            )
+        )
 
         return pipeline_operations
+
+    def _build_team_ptu_tpm_ops(
+        self,
+        standard_logging_metadata: Mapping[str, object],
+        response_obj: object,
+        reconcile_model: RateLimitedModel | None,
+        reserved_scopes: Set[tuple[str, str]],
+        reserved_tokens: int,
+        total_tokens: int,
+    ) -> Sequence[RedisPipelineIncrementOperation]:
+        """Settle the team's PTU counter in Azure normalized tokens: uncached input in full plus
+        output weighted by the model's output-to-input ratio, the way Azure sizes a PTU.
+
+        The pre-call reservation was raw estimated tokens, so this is the same reconcile as the
+        other TPM scopes with a weighted actual; when usage cannot be resolved it charges the raw
+        total the other scopes charge.
+        """
+        team_id: Final = standard_logging_metadata.get("user_api_key_team_id")
+        if reconcile_model is None or not isinstance(team_id, str) or not team_id:
+            return ()
+        ceiling: Final = self._ptu_team_ceiling_resolver(team_id, reconcile_model.group)
+        if ceiling is None:
+            return ()
+        billable_input, completion_tokens, usage_resolved = self._resolve_io_token_reconcile_usage(response_obj)
+        normalized: Final = (
+            billable_input + round(ceiling.output_to_input_ratio * completion_tokens)
+            if usage_resolved
+            else total_tokens
+        )
+        return self._build_reservation_aware_tpm_ops(
+            targets=((PTU_TEAM_DESCRIPTOR_KEY, f"{team_id}:{reconcile_model.group}"),),
+            reserved_scopes=reserved_scopes,
+            actual_tokens=normalized,
+            reserved_tokens=reserved_tokens,
+        )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """

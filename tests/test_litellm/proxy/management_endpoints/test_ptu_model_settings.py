@@ -16,6 +16,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.ptu_pricing import ptu_terms
 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
 from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -1284,3 +1285,48 @@ class TestPtuDeploymentsAreNotBilledPerToken:
 
         assert "input_cost_per_token" in str(exc.value)
         add_team_model_to_db.assert_not_called()
+
+
+_SHARED_START = "2026-08-01T00:00:00Z"
+
+
+def test_validate_helper_accepts_shares_in_place_of_a_team_id():
+    shared = {
+        "ptu_count": 5,
+        "cost_per_ptu_per_hour": 2.0,
+        "ptu_effective_from": _SHARED_START,
+        "ptu_shares": {"team-a": 3, "team-b": 2},
+    }
+
+    _validate_ptu_model_info(shared)
+
+    assert ptu_terms(shared) is not None
+
+
+def test_validate_helper_refuses_shares_that_do_not_add_up_to_the_count():
+    with pytest.raises(HTTPException) as exc:
+        _validate_ptu_model_info(
+            {
+                "ptu_count": 5,
+                "cost_per_ptu_per_hour": 2.0,
+                "ptu_effective_from": _SHARED_START,
+                "ptu_shares": {"team-a": 3, "team-b": 1},
+            }
+        )
+    assert exc.value.status_code == 400
+    assert "4 of 5 allocated" in exc.value.detail
+
+
+def test_validate_helper_refuses_a_team_id_beside_shares():
+    with pytest.raises(HTTPException) as exc:
+        _validate_ptu_model_info(
+            {
+                "team_id": "team-a",
+                "ptu_count": 5,
+                "cost_per_ptu_per_hour": 2.0,
+                "ptu_effective_from": _SHARED_START,
+                "ptu_shares": {"team-a": 5},
+            }
+        )
+    assert exc.value.status_code == 400
+    assert "cannot both be set" in exc.value.detail

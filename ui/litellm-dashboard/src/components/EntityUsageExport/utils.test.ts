@@ -2100,6 +2100,23 @@ describe("EntityUsageExport utils", () => {
       expect(result.summary.total_flat_cost).toBeUndefined();
       expect(result.summary.total_cost).toBeUndefined();
     });
+
+    it("should carry total_ptu_hours into the summary once a PTU model group was used", () => {
+      const withPtu: EntitySpendData = {
+        ...mockSpendData,
+        metadata: { ...mockSpendData.metadata, total_ptu_hours: 2.5 },
+      };
+      const result = generateMetadata("team", mockDateRange, [], "daily", withPtu);
+      expect(result.summary.total_ptu_hours).toBeCloseTo(2.5, 4);
+    });
+
+    it("should omit total_ptu_hours when no PTU hours were consumed", () => {
+      const zeroPtu = { ...mockSpendData, metadata: { ...mockSpendData.metadata, total_ptu_hours: 0 } };
+      expect(generateMetadata("team", mockDateRange, [], "daily", zeroPtu).summary.total_ptu_hours).toBeUndefined();
+      expect(
+        generateMetadata("team", mockDateRange, [], "daily", mockSpendData).summary.total_ptu_hours,
+      ).toBeUndefined();
+    });
   });
 
   describe("generateDailyData PTU flat cost", () => {

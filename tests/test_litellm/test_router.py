@@ -17829,3 +17829,72 @@ def test_access_windows_filter_reserved_deployments_method():
             request_team_id="team-a",
         )
     ] == ["reserved-deployment", "open-deployment"]
+
+
+def _shared_ptu_model_list() -> list:
+    return [
+        {
+            "model_name": "gpt-4.1-ptu",
+            "litellm_params": {"model": "gpt-4.1", "mock_response": "shared"},
+            "model_info": {
+                "id": "shared-deployment",
+                "base_model": "azure/gpt-4.1",
+                "ptu_count": 50,
+                "cost_per_ptu_per_hour": 1.0,
+                "ptu_effective_from": "2026-01-01T00:00:00Z",
+                "ptu_shares": {"team-a": 30, "team-b": 20},
+            },
+        },
+        {
+            "model_name": "gpt-4.1-ptu",
+            "litellm_params": {"model": "gpt-4.1", "mock_response": "open"},
+            "model_info": {"id": "open-deployment"},
+        },
+    ]
+
+
+def test_ptu_shares_hide_the_shared_deployment_from_teams_holding_no_share(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    router = Router(model_list=_shared_ptu_model_list())
+    for request_kwargs in ({"metadata": {"user_api_key_team_id": "team-c"}}, {"metadata": {}}, {}):
+        _, deployments = router._common_checks_available_deployment(model="gpt-4.1-ptu", request_kwargs=request_kwargs)
+        assert [d["model_info"]["id"] for d in deployments] == ["open-deployment"]
+    for team_id in ("team-a", "team-b"):
+        _, deployments = router._common_checks_available_deployment(
+            model="gpt-4.1-ptu",
+            request_kwargs={"metadata": {"user_api_key_team_id": team_id}},
+        )
+        assert {d["model_info"]["id"] for d in deployments} == {"shared-deployment", "open-deployment"}
+
+
+def test_ptu_shares_raise_when_only_shared_deployments_remain(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    router = Router(model_list=_shared_ptu_model_list()[:1])
+    with pytest.raises(litellm.BadRequestError, match="reserved for the teams holding a PTU share"):
+        router._common_checks_available_deployment(
+            model="gpt-4.1-ptu",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-c"}},
+        )
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4.1-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["shared-deployment"]
+
+
+def test_ptu_shares_do_not_filter_while_the_feature_is_off(monkeypatch):
+    monkeypatch.delenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", raising=False)
+    router = Router(model_list=_shared_ptu_model_list())
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4.1-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-c"}},
+    )
+    assert {d["model_info"]["id"] for d in deployments} == {"shared-deployment", "open-deployment"}
+
+
+def test_a_shared_ptu_deployment_whose_shares_do_not_add_up_is_refused_at_registration(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["model_info"]["ptu_shares"] = {"team-a": 30}
+    with pytest.raises(ValueError, match=r"gpt-4\.1-ptu.*30 of 50 allocated"):
+        Router(model_list=model_list)

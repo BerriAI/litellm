@@ -56,9 +56,13 @@ PTU_ZEROED_PRICING: Final[Mapping[str, float | tuple[()] | Mapping[str, float]]]
 
 @dataclass(frozen=True, slots=True)
 class PTUTerms:
-    """The reservation a deployment declares, once every field has been validated."""
+    """The reservation a deployment declares, once every field has been validated.
 
-    team_id: str
+    ``shares`` maps every team the capacity is attributed to onto its PTUs and adds up to
+    ``ptu_count``: a deployment declaring a single ``team_id`` holds the whole count under it.
+    """
+
+    shares: Mapping[str, int]
     ptu_count: int
     cost_per_ptu_per_hour: float
     effective_from: datetime
@@ -127,7 +131,44 @@ def ptu_identity_error(
     return None
 
 
-PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effective_from", "ptu_effective_to")
+PTU_MODEL_INFO_FIELDS: Final = (
+    "ptu_count",
+    "cost_per_ptu_per_hour",
+    "ptu_effective_from",
+    "ptu_effective_to",
+    "ptu_shares",
+)
+
+
+def parsed_ptu_shares(raw: object) -> Mapping[str, int] | None:
+    """``ptu_shares`` as team id -> whole PTUs, else None when empty or any entry is unusable.
+
+    A share is a count of reserved units, so it has to be a positive integer; ``bool`` is
+    excluded because it is an ``int`` subclass and ``True`` would read as one PTU.
+    """
+    if not isinstance(raw, Mapping) or not raw:
+        return None
+    entries: Final = tuple((str(team_id), share) for team_id, share in raw.items())
+    if any(
+        not team_id or isinstance(share, bool) or not isinstance(share, int) or share <= 0 for team_id, share in entries
+    ):
+        return None
+    return MappingProxyType(dict(entries))
+
+
+def _declared_shares(model_info: Mapping[str, object], ptu_count: int) -> Mapping[str, int] | None:
+    """Who holds the capacity: the single ``team_id`` holding all of it, or the ``ptu_shares``
+    that add up to it, else None."""
+    team_id: Final = model_info.get("team_id")
+    raw_shares: Final = model_info.get("ptu_shares")
+    if team_id and raw_shares is None:
+        return MappingProxyType({str(team_id): ptu_count})
+    if team_id or raw_shares is None:
+        return None
+    shares: Final = parsed_ptu_shares(raw_shares)
+    if shares is None or sum(shares.values()) != ptu_count:
+        return None
+    return shares
 
 
 def declares_ptu(model_info: Mapping[str, object]) -> bool:
@@ -164,8 +205,37 @@ def ptu_config_error(model_info: Mapping[str, object], *, model_name: str | None
             "today could be billed for days it did not exist",
             model_name,
         )
-    if not model_info.get("team_id"):
-        return _named("team_id is required when PTU fields are set (one model maps to one team)", model_name)
+    return _ptu_holder_error(model_info, model_name)
+
+
+def _ptu_holder_error(model_info: Mapping[str, object], model_name: str | None) -> str | None:
+    """Why the teams this capacity is attributed to cannot be read, else None.
+
+    The shares have to add up to the count exactly: a shortfall would leave PTU-hours the
+    provider bills attributed to nobody, and a surplus would attribute capacity that was
+    never reserved.
+    """
+    team_id: Final = model_info.get("team_id")
+    raw_shares: Final = model_info.get("ptu_shares")
+    if team_id and raw_shares is not None:
+        return _named(
+            "team_id and ptu_shares cannot both be set; ptu_shares lists every team the capacity is split across",
+            model_name,
+        )
+    if not team_id and raw_shares is None:
+        return _named("team_id or ptu_shares is required when PTU fields are set", model_name)
+    if raw_shares is None:
+        return None
+    shares: Final = parsed_ptu_shares(raw_shares)
+    if shares is None:
+        return _named("ptu_shares must map at least one team_id to a positive whole number of PTUs", model_name)
+    try:
+        ptu_count: Final = int(str(model_info.get("ptu_count")))
+    except ValueError:
+        return None
+    allocated: Final = sum(shares.values())
+    if allocated != ptu_count:
+        return _named(f"ptu_shares must add up to ptu_count ({allocated} of {ptu_count} allocated)", model_name)
     return None
 
 
@@ -178,8 +248,7 @@ def ptu_terms(model_info: Mapping[str, object]) -> PTUTerms | None:
     """
     ptu_count: Final = model_info.get("ptu_count")
     cost_per_hour: Final = model_info.get("cost_per_ptu_per_hour")
-    team_id: Final = model_info.get("team_id")
-    if ptu_count is None or cost_per_hour is None or not team_id:
+    if ptu_count is None or cost_per_hour is None:
         return None
     try:
         ptu_count_int: Final = int(ptu_count)
@@ -199,8 +268,11 @@ def ptu_terms(model_info: Mapping[str, object]) -> PTUTerms | None:
         return None
     if effective_to is not None and effective_to <= effective_from:
         return None
+    shares: Final = _declared_shares(model_info, ptu_count_int)
+    if shares is None:
+        return None
     return PTUTerms(
-        team_id=str(team_id),
+        shares=shares,
         ptu_count=ptu_count_int,
         cost_per_ptu_per_hour=cost_per_hour_float,
         effective_from=effective_from,

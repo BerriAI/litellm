@@ -37,11 +37,13 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
     ModelResponse,
+    PromptTokensDetailsWrapper,
     TextCompletionResponse,
     Usage,
 )
@@ -7150,3 +7152,152 @@ async def test_success_tpm_accounting_keeps_the_admission_target_after_an_alias_
     charged: Final = {op["key"]: op["increment_value"] for op in ops}
     assert charged[admission_bucket] == 150 - stash.reserved_tokens
     assert not any(":target-b" in key for key in charged)
+
+
+# --- a team's PTU share on a shared Azure provisioned deployment ---------------------------
+
+
+def _ptu_ceiling_for(team_id: str, model_group: str, tpm_limit: int, ratio: float):
+    calls: list[tuple[str, str]] = []
+
+    def resolve(requested_team: str, requested_group: str) -> PTUTeamCeiling | None:
+        calls.append((requested_team, requested_group))
+        if (requested_team, requested_group) != (team_id, model_group):
+            return None
+        return PTUTeamCeiling(tpm_limit=tpm_limit, output_to_input_ratio=ratio)
+
+    return resolve, calls
+
+
+def _ptu_request(model: str = "test-model") -> dict:
+    return {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 300}
+
+
+@pytest.mark.asyncio
+async def test_a_teams_ptu_share_is_a_hard_tpm_ceiling_on_the_shared_model():
+    cache = DualCache()
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve)
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+
+    await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=_ptu_request(), call_type="acompletion")
+    with pytest.raises(HTTPException) as exc:
+        await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=_ptu_request(), call_type="acompletion")
+
+    assert exc.value.status_code == 429
+    assert "model_per_team_ptu" in str(exc.value.detail)
+    assert exc.value.headers["rate_limit_type"] == "tokens"
+
+
+@pytest.mark.asyncio
+async def test_a_ptu_ceiling_on_one_model_leaves_the_teams_other_models_alone():
+    cache = DualCache()
+    resolve, calls = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve)
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+
+    for _ in range(3):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=_ptu_request("other-model"), call_type="acompletion"
+        )
+
+    assert calls == [("t", "other-model")] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_team_without_a_share_and_a_key_without_a_team_get_no_ptu_ceiling():
+    cache = DualCache()
+    resolve, calls = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve)
+    other_team = UserAPIKeyAuth(api_key=hash_token("sk-other"), team_id="u")
+    no_team = UserAPIKeyAuth(api_key=hash_token("sk-no-team"))
+
+    for _ in range(3):
+        await handler.async_pre_call_hook(user_api_key_dict=other_team, cache=cache, data=_ptu_request(), call_type="acompletion")
+        await handler.async_pre_call_hook(user_api_key_dict=no_team, cache=cache, data=_ptu_request(), call_type="acompletion")
+
+    assert set(calls) == {("u", "test-model")}
+
+
+def _ptu_success_kwargs() -> dict:
+    return {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": hash_token("sk-ptu"), "user_api_key_team_id": "t"}},
+        "litellm_params": {"metadata": {"model_group": "test-model", "user_api_key_metadata": {}, "user_api_key_team_metadata": {}}},
+        "model": "test-model",
+    }
+
+
+def _ptu_response(usage: Usage) -> ModelResponse:
+    return ModelResponse(
+        id="ptu-share", object="chat.completion", created=int(datetime.now().timestamp()), model="test-model", usage=usage, choices=[]
+    )
+
+
+def _ptu_increment(handler: _PROXY_MaxParallelRequestsHandler, ops: list) -> float | None:
+    ptu_key = handler.create_rate_limit_keys("model_per_team_ptu", "t:test-model", "tokens")
+    return next((op["increment_value"] for op in ops if op["key"] == ptu_key), None)
+
+
+def test_success_accounting_settles_the_ptu_counter_in_azure_normalized_tokens():
+    """100 uncached input tokens plus 50 output tokens at a 4:1 output ratio are 300
+    normalized tokens, which is what the share was sized in."""
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), ptu_team_ceiling_resolver=resolve
+    )
+    response = _ptu_response(Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150))
+
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs=_ptu_success_kwargs(), response_obj=response, rate_limit_type="output"
+    )
+
+    assert _ptu_increment(handler, ops) == 300
+
+
+def test_cached_input_is_not_charged_to_the_ptu_counter():
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), ptu_team_ceiling_resolver=resolve
+    )
+    response = _ptu_response(
+        Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=40),
+        )
+    )
+
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs=_ptu_success_kwargs(), response_obj=response, rate_limit_type="output"
+    )
+
+    assert _ptu_increment(handler, ops) == 60 + 4 * 50
+
+
+def test_usage_that_only_reports_a_total_charges_that_total_to_the_ptu_counter():
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), ptu_team_ceiling_resolver=resolve
+    )
+    response = _ptu_response(Usage(prompt_tokens=0, completion_tokens=0, total_tokens=150))
+
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs=_ptu_success_kwargs(), response_obj=response, rate_limit_type="output"
+    )
+
+    assert _ptu_increment(handler, ops) == 150
+
+
+def test_success_accounting_charges_no_ptu_counter_without_a_ceiling():
+    resolve, _ = _ptu_ceiling_for("u", "test-model", tpm_limit=500, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), ptu_team_ceiling_resolver=resolve
+    )
+    response = _ptu_response(Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150))
+
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs=_ptu_success_kwargs(), response_obj=response, rate_limit_type="output"
+    )
+
+    assert _ptu_increment(handler, ops) is None

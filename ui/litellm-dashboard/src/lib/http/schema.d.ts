@@ -29312,6 +29312,11 @@ export interface components {
              */
             total_prompt_tokens: number;
             /**
+             * Total Ptu Hours
+             * @default 0
+             */
+            total_ptu_hours: number;
+            /**
              * Total Response Time Ms
              * @default 0
              */
@@ -42230,6 +42235,11 @@ export interface components {
              */
             prompt_tokens: number;
             /**
+             * Ptu Hours
+             * @default 0
+             */
+            ptu_hours: number;
+            /**
              * Spend
              * @default 0
              */
@@ -46156,6 +46166,10 @@ export interface components {
             ptu_effective_from?: string | null;
             /** Ptu Effective To */
             ptu_effective_to?: string | null;
+            /** Ptu Shares */
+            ptu_shares?: {
+                [key: string]: number;
+            } | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
