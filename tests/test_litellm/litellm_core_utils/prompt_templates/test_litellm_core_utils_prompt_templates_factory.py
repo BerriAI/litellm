@@ -185,6 +185,181 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     assert len(tool_use_blocks) == 2
 
 
+def test_bedrock_converse_preserves_redacted_thinking_in_content():
+    messages = [
+        {"role": "user", "content": "What is 2 + 2?"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Calculating 2 + 2",
+                    "signature": "sig_valid_123",
+                },
+                {
+                    "type": "redacted_thinking",
+                    "data": "opaque_redacted_data_token_abc",
+                },
+                {"type": "text", "text": "4"},
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    assert len(result) == 2
+    assistant_blocks = result[1]["content"]
+    assert len(assistant_blocks) == 3
+    assert "reasoningContent" in assistant_blocks[0]
+    assert assistant_blocks[0]["reasoningContent"]["reasoningText"] == {
+        "text": "Calculating 2 + 2",
+        "signature": "sig_valid_123",
+    }
+    assert "reasoningContent" in assistant_blocks[1]
+    assert assistant_blocks[1]["reasoningContent"]["redactedContent"] == "opaque_redacted_data_token_abc"
+    assert assistant_blocks[2] == {"text": "4"}
+
+
+def test_bedrock_converse_preserves_redacted_thinking_in_thinking_blocks_attribute():
+    messages = [
+        {"role": "user", "content": "Evaluate logic puzzle"},
+        {
+            "role": "assistant",
+            "content": "The answer is 42",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1 reasoning",
+                    "signature": "sig_step_1",
+                },
+                {
+                    "type": "redacted_thinking",
+                    "data": "opaque_redacted_step_2",
+                },
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    assert len(result) == 2
+    assistant_blocks = result[1]["content"]
+    assert len(assistant_blocks) == 3
+    assert "reasoningContent" in assistant_blocks[0]
+    assert assistant_blocks[0]["reasoningContent"]["reasoningText"]["signature"] == "sig_step_1"
+    assert "reasoningContent" in assistant_blocks[1]
+    assert assistant_blocks[1]["reasoningContent"]["redactedContent"] == "opaque_redacted_step_2"
+    assert assistant_blocks[2] == {"text": "The answer is 42"}
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_async_matches_sync_for_redacted_thinking():
+    messages = [
+        {"role": "user", "content": "Run tool"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "planning",
+                    "signature": "sig_plan",
+                },
+                {
+                    "type": "redacted_thinking",
+                    "data": "redacted_binary_blob",
+                },
+                {
+                    "type": "text",
+                    "text": "calling tool",
+                },
+            ],
+        },
+    ]
+
+    sync_result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    assert sync_result == async_result
+    assert async_result[1]["content"][1]["reasoningContent"]["redactedContent"] == "redacted_binary_blob"
+
+
+def test_bedrock_converse_multi_turn_tool_loop_with_redacted_thinking():
+    messages = [
+        {"role": "user", "content": "Fetch data"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Let's call the API", "signature": "sig_api_call"},
+                {"type": "redacted_thinking", "data": "redacted_safety_check_hash"},
+            ],
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "fetch_api", "arguments": '{"query": "data"}'},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": '{"status": "ok"}',
+        },
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    assert result[0]["role"] == "user"
+    assert result[1]["role"] == "assistant"
+    assistant_blocks = result[1]["content"]
+    assert any(b.get("reasoningContent", {}).get("redactedContent") == "redacted_safety_check_hash" for b in assistant_blocks)
+    assert any("toolUse" in b for b in assistant_blocks)
+
+
+def test_bedrock_converse_redacted_thinking_dropped_for_non_anthropic_model():
+    messages = [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "let me think", "signature": "sig123"},
+                {"type": "redacted_thinking", "data": "redacted_data_xyz"},
+                {"type": "text", "text": "answer"},
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="amazon.nova-pro-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    assert result[1]["content"] == [{"text": "answer"}]
+
+
 @pytest.mark.parametrize(
     "thinking_block",
     [

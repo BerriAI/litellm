@@ -4520,6 +4520,7 @@ class BedrockConverseMessagesProcessor:
                     assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
                         thinking_blocks=converted_thinking_blocks,
                         assistant_parts=assistant_content,
+                        model=model,
                     )
 
                 if _assistant_content is not None and isinstance(_assistant_content, list):
@@ -4539,6 +4540,7 @@ class BedrockConverseMessagesProcessor:
                                     BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
                                         thinking_blocks=thinking_block,
                                         assistant_parts=assistants_parts,
+                                        model=model,
                                     )
                                 )
                             elif element["type"] == "text":
@@ -4707,6 +4709,7 @@ class BedrockConverseMessagesProcessor:
     def add_thinking_blocks_to_assistant_content(
         thinking_blocks: list[BedrockContentBlock],
         assistant_parts: list[BedrockContentBlock],
+        model: str | None = None,
     ) -> list[BedrockContentBlock]:
         """
         If contains 'signature', it is a thinking block.
@@ -4716,10 +4719,15 @@ class BedrockConverseMessagesProcessor:
 
         Relevant Issue: https://github.com/BerriAI/litellm/issues/9063
         """
+        is_anthropic_model = (
+            model is None or "anthropic" in model.lower() or "claude" in model.lower()
+        )
         filtered_thinking_blocks: Final = []
         for block in thinking_blocks:
             reasoning_content = block.get("reasoningContent", None)
             if reasoning_content is not None and "redactedContent" in reasoning_content:
+                if not is_anthropic_model:
+                    continue
                 filtered_thinking_blocks.append(block)
                 continue
             reasoning_text = reasoning_content.get("reasoningText", None) if reasoning_content is not None else None
@@ -4729,6 +4737,8 @@ class BedrockConverseMessagesProcessor:
                     assistants_part = BedrockContentBlock(text=reasoning_text_text)
                     assistant_parts.append(assistants_part)
             else:
+                if not is_anthropic_model:
+                    continue
                 filtered_thinking_blocks.append(block)
         if len(filtered_thinking_blocks) > 0:
             assistant_parts.extend(filtered_thinking_blocks)
@@ -4912,6 +4922,7 @@ def _bedrock_converse_messages_pt(
                 assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
                     thinking_blocks=converted_thinking_blocks,
                     assistant_parts=assistant_content,
+                    model=model,
                 )
 
             if _assistant_content is not None and isinstance(_assistant_content, list):
@@ -4933,6 +4944,7 @@ def _bedrock_converse_messages_pt(
                                 BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
                                     thinking_blocks=thinking_block,
                                     assistant_parts=assistants_parts,
+                                    model=model,
                                 )
                             )
                         elif element["type"] == "text":
