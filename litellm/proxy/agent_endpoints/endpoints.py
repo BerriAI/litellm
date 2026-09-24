@@ -48,7 +48,10 @@ from litellm.proxy.agent_endpoints.agent_search import (
 )
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
 from litellm.proxy.agent_endpoints.kill_switch import (
+    KillSwitchAuditLogWriter,
     KillSwitchHttpClient,
+    build_kill_switch_audit_log,
+    default_kill_switch_audit_log_writer,
     default_kill_switch_http_client,
     fire_kill_switch,
     redact_kill_switch,
@@ -895,13 +898,15 @@ async def trigger_agent_kill_switch(
     agent_id: str,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     http_client: Annotated[KillSwitchHttpClient, Depends(default_kill_switch_http_client)],
+    audit_log_writer: Annotated[KillSwitchAuditLogWriter, Depends(default_kill_switch_audit_log_writer)],
 ):
     """
     Fire the agent's configured kill switch webhook. Proxy admin only.
 
     LiteLLM only makes the configured HTTP call and reports what came back; it
     does not change the agent's state in LiteLLM. Returns 200 when the webhook
-    answered 2xx, 502 with the same result body otherwise.
+    answered 2xx, 502 with the same result body otherwise. Every attempt is
+    written to the audit log as a `kill_switch_fired` row against the agent.
 
     Example Request:
     ```bash
@@ -909,6 +914,8 @@ async def trigger_agent_kill_switch(
         -H "Authorization: Bearer <your_api_key>"
     ```
     """
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
     await check_feature_access_for_user(user_api_key_dict, "agents")
     _check_agent_management_permission(user_api_key_dict)
 
@@ -920,6 +927,13 @@ async def trigger_agent_kill_switch(
         raise HTTPException(status_code=400, detail=f"Agent with ID {agent_id} has no kill_switch configured")
 
     result: Final = await fire_kill_switch(agent_id=resolved_agent_id, config=config, http_client=http_client)
+    await audit_log_writer(
+        build_kill_switch_audit_log(
+            result=result,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+    )
     if not result.succeeded:
         raise HTTPException(status_code=502, detail=result.model_dump())
     return result

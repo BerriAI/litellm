@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.constants import REDACTED_BY_LITELM_STRING
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     RestrictedAgentAccess,
@@ -1173,9 +1173,24 @@ class _FakeKillSwitchClient:
         return self._response
 
 
-def _kill_switch_app(role: LitellmUserRoles, http_client: _FakeKillSwitchClient) -> TestClient:
+class _AuditLogRecorder:
+    def __init__(self) -> None:
+        self.rows: list[LiteLLM_AuditLogs] = []  # mutable-ok: test double records writes
+
+    async def __call__(self, request_data: LiteLLM_AuditLogs) -> None:
+        self.rows.append(request_data)
+
+
+def _kill_switch_app(
+    role: LitellmUserRoles,
+    http_client: _FakeKillSwitchClient,
+    audit_log: _AuditLogRecorder | None = None,
+) -> TestClient:
     test_client: Final = _make_app_with_role(role)
     test_client.app.dependency_overrides[agent_endpoints.default_kill_switch_http_client] = lambda: http_client
+    test_client.app.dependency_overrides[agent_endpoints.default_kill_switch_audit_log_writer] = (
+        lambda: audit_log or _AuditLogRecorder()
+    )
     return test_client
 
 
@@ -1204,20 +1219,57 @@ def test_kill_switch_trigger_fires_the_configured_webhook_and_returns_the_result
     assert headers == {"X-Env": "prod", "Authorization": "Bearer tok-real"}
 
 
-def test_kill_switch_trigger_returns_502_when_the_webhook_rejects(monkeypatch) -> None:
+def test_kill_switch_trigger_writes_an_audit_log_row_naming_the_admin_and_the_sanitized_result(monkeypatch) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(202, text='{"stopped": true}'))
+    audit: Final = _AuditLogRecorder()
+    test_client: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake, audit)
+    test_client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="hashed-k"
+    )
+
+    resp: Final = test_client.post("/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"})
+
+    assert resp.status_code == 200, resp.text
+    (row,) = audit.rows
+    assert (row.action, row.table_name, row.object_id) == (
+        "kill_switch_fired",
+        LitellmTableNames.AGENT_TABLE_NAME,
+        "agent-123",
+    )
+    assert (row.changed_by, row.changed_by_api_key) == ("test-user", "hashed-k")
+    assert row.before_value is None
+    assert json.loads(row.updated_values) == {
+        "agent_id": "agent-123",
+        "url": "https://ops.example.com/kill",
+        "method": "POST",
+        "status_code": 202,
+        "response_body": '{"stopped": true}',
+    }
+    assert "tok-real" not in row.model_dump_json()
+
+
+def test_kill_switch_trigger_returns_502_and_still_audits_when_the_webhook_rejects(monkeypatch) -> None:
     registry: Final = MagicMock()
     registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
     monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     fake: Final = _FakeKillSwitchClient(httpx.Response(401, text="bad token"))
+    audit: Final = _AuditLogRecorder()
 
-    resp: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake).post(
+    resp: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake, audit).post(
         "/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"}
     )
 
     assert resp.status_code == 502, resp.text
     assert resp.json()["detail"]["status_code"] == 401
     assert resp.json()["detail"]["response_body"] == "bad token"
+    (row,) = audit.rows
+    assert row.action == "kill_switch_fired"
+    assert json.loads(row.updated_values)["status_code"] == 401
 
 
 @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
@@ -1227,13 +1279,15 @@ def test_kill_switch_trigger_is_refused_before_any_webhook_call_for_non_admins(m
     monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     fake: Final = _FakeKillSwitchClient(httpx.Response(200))
+    audit: Final = _AuditLogRecorder()
 
-    resp: Final = _kill_switch_app(role, fake).post(
+    resp: Final = _kill_switch_app(role, fake, audit).post(
         "/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"}
     )
 
     assert resp.status_code == 403, resp.text
     assert fake.calls == []
+    assert audit.rows == []
 
 
 def test_kill_switch_trigger_404s_unknown_agent_and_400s_an_agent_without_one(monkeypatch) -> None:
@@ -1242,7 +1296,8 @@ def test_kill_switch_trigger_404s_unknown_agent_and_400s_an_agent_without_one(mo
     monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     fake: Final = _FakeKillSwitchClient(httpx.Response(200))
-    test_client: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake)
+    audit: Final = _AuditLogRecorder()
+    test_client: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake, audit)
 
     missing: Final = test_client.post("/v1/agents/nope/kill_switch", headers={"Authorization": "Bearer k"})
     unconfigured: Final = test_client.post("/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"})
@@ -1251,6 +1306,7 @@ def test_kill_switch_trigger_404s_unknown_agent_and_400s_an_agent_without_one(mo
     assert unconfigured.status_code == 400
     assert "no kill_switch configured" in unconfigured.json()["detail"]
     assert fake.calls == []
+    assert audit.rows == []
 
 
 def test_kill_switch_trigger_fires_the_db_row_config_over_a_stale_in_memory_copy(monkeypatch) -> None:

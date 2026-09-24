@@ -24,6 +24,7 @@ export const AUDIT_TABLE_NAME_DISPLAY: Record<string, string> = {
   LiteLLM_UserTable: "Users",
   LiteLLM_OrganizationTable: "Organizations",
   LiteLLM_ProxyModelTable: "Models",
+  LiteLLM_AgentsTable: "Agents",
 };
 
 const ACTION_TONE: Record<string, StatusTone> = {
@@ -31,9 +32,13 @@ const ACTION_TONE: Record<string, StatusTone> = {
   updated: "info",
   deleted: "error",
   rotated: "warning",
+  kill_switch_fired: "error",
 };
 
-const capitalize = (value: string): string => (value ? value.charAt(0).toUpperCase() + value.slice(1) : value);
+export const auditActionLabel = (action: string): string => {
+  const words = action.replace(/_/g, " ");
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : words;
+};
 
 interface AuditLogsTableColumnsDeps {
   onViewLog: (log: AuditLogEntry) => void;
@@ -55,7 +60,7 @@ export const getAuditLogsTableColumns = ({ onViewLog }: AuditLogsTableColumnsDep
     size: 110,
     enableSorting: false,
     cell: ({ row }) => (
-      <StatusBadge tone={ACTION_TONE[row.original.action] ?? "neutral"} label={capitalize(row.original.action)} />
+      <StatusBadge tone={ACTION_TONE[row.original.action] ?? "neutral"} label={auditActionLabel(row.original.action)} />
     ),
   },
   {
