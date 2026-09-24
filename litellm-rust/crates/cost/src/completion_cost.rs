@@ -1,13 +1,12 @@
 use crate::error::CostError;
 use serde_json::Value;
 
-fn number(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(value) => value.as_f64(),
-        Value::String(value) => value.trim().parse().ok(),
-        Value::Bool(value) => Some(f64::from(*value)),
-        _ => None,
-    }
+use crate::wire::py_float;
+
+fn python_real(value: &Value) -> Option<f64> {
+    (value.is_number() || value.is_boolean())
+        .then(|| py_float(value))
+        .flatten()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,8 +31,9 @@ pub fn apply_cost_discount(
     config: &Value,
 ) -> (f64, f64, f64) {
     let percent = provider
+        .filter(|provider| !provider.is_empty())
         .and_then(|provider| config.get(provider))
-        .and_then(number)
+        .and_then(python_real)
         .unwrap_or(0.0);
     let amount = base_cost * percent;
     (base_cost - amount, percent, amount)
@@ -45,14 +45,15 @@ pub fn apply_cost_margin(
     config: &Value,
 ) -> (f64, f64, f64, f64) {
     let selected = provider
+        .filter(|provider| !provider.is_empty())
         .and_then(|provider| config.get(provider))
         .or_else(|| config.get("global"));
     let (percent, fixed) = match selected {
         Some(Value::Object(config)) => (
-            config.get("percentage").and_then(number).unwrap_or(0.0),
-            config.get("fixed_amount").and_then(number).unwrap_or(0.0),
+            config.get("percentage").and_then(py_float).unwrap_or(0.0),
+            config.get("fixed_amount").and_then(py_float).unwrap_or(0.0),
         ),
-        Some(value) => (number(value).unwrap_or(0.0), 0.0),
+        Some(value) => (python_real(value).unwrap_or(0.0), 0.0),
         None => (0.0, 0.0),
     };
     let total = base_cost * percent + fixed;
@@ -102,7 +103,7 @@ pub fn get_response_cost_from_hidden_params(
     if value.is_null() {
         return Ok(None);
     }
-    number(value)
+    py_float(value)
         .map(Some)
         .ok_or(CostError::InvalidProviderCost)
 }

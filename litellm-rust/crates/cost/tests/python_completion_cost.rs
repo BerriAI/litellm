@@ -152,3 +152,39 @@ fn model_info_catalog_completion_and_response_cost_use_selected_metadata() {
         Ok(0.0)
     );
 }
+
+#[rstest]
+#[case::number(json!({"provider": 0.1}), (1.8, 0.1, 0.2))]
+#[case::boolean_is_an_int(json!({"provider": true}), (0.0, 1.0, 2.0))]
+#[case::string_is_not_applied(json!({"provider": "0.1"}), (2.0, 0.0, 0.0))]
+fn apply_cost_discount_uses_only_numeric_config(
+    #[case] config: serde_json::Value,
+    #[case] expected: (f64, f64, f64),
+) {
+    let (cost, percent, amount) = apply_cost_discount(2.0, Some("provider"), &config);
+    assert!((cost - expected.0).abs() < 1e-12);
+    assert_eq!(percent, expected.1);
+    assert!((amount - expected.2).abs() < 1e-12);
+}
+
+#[rstest]
+#[case::scalar_number(json!({"provider": 0.1}), (2.2, 0.1, 0.0, 0.2))]
+#[case::scalar_string_is_ignored(json!({"provider": "0.1"}), (2.0, 0.0, 0.0, 0.0))]
+#[case::provider_null_does_not_fall_back_to_global(json!({"provider": null, "global": 0.5}), (2.0, 0.0, 0.0, 0.0))]
+#[case::dict_strings_convert_like_float(json!({"provider": {"percentage": " 0.1 ", "fixed_amount": "1"}}), (3.2, 0.1, 1.0, 1.2))]
+#[case::dict_with_only_a_fixed_amount(json!({"provider": {"fixed_amount": 0.5}}), (2.5, 0.0, 0.5, 0.5))]
+#[case::empty_provider_uses_global(json!({"": 0.9, "global": 0.5}), (3.0, 0.5, 0.0, 1.0))]
+fn apply_cost_margin_reads_config_like_python(
+    #[case] config: serde_json::Value,
+    #[case] expected: (f64, f64, f64, f64),
+) {
+    let provider = if config.get("").is_some() {
+        Some("")
+    } else {
+        Some("provider")
+    };
+    let (cost, percent, fixed, total) = apply_cost_margin(2.0, provider, &config);
+    assert!((cost - expected.0).abs() < 1e-12);
+    assert_eq!((percent, fixed), (expected.1, expected.2));
+    assert!((total - expected.3).abs() < 1e-12);
+}
