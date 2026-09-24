@@ -40,18 +40,10 @@ class TestGeminiModelInfo:
         # Test edge cases where model names end with characters from "models/"
         # These would be incorrectly processed if using strip("models/") instead of replace("models/", "")
         models = [
-            {
-                "name": "models/gemini-1.5-pro"
-            },  # ends with 'o' - would become "gemini-1.5-pr" with strip()
-            {
-                "name": "models/test-model"
-            },  # ends with 'l' - would become "gemini/test-mode" with strip()
-            {
-                "name": "models/custom-models"
-            },  # ends with 's' - would become "gemini/custom-model" with strip()
-            {
-                "name": "models/demo"
-            },  # ends with 'o' - would become "gemini/dem" with strip()
+            {"name": "models/gemini-1.5-pro"},  # ends with 'o' - would become "gemini-1.5-pr" with strip()
+            {"name": "models/test-model"},  # ends with 'l' - would become "gemini/test-mode" with strip()
+            {"name": "models/custom-models"},  # ends with 's' - would become "gemini/custom-model" with strip()
+            {"name": "models/demo"},  # ends with 'o' - would become "gemini/dem" with strip()
         ]
 
         result = gemini_model_info.process_model_name(models)
@@ -102,16 +94,10 @@ class TestGoogleAIStudioTokenCounter:
         token_counter = GoogleAIStudioTokenCounter()
 
         # Test with gemini provider - should return True
-        assert (
-            token_counter.should_use_token_counting_api(LlmProviders.GEMINI.value)
-            is True
-        )
+        assert token_counter.should_use_token_counting_api(LlmProviders.GEMINI.value) is True
 
         # Test with other providers - should return False
-        assert (
-            token_counter.should_use_token_counting_api(LlmProviders.OPENAI.value)
-            is False
-        )
+        assert token_counter.should_use_token_counting_api(LlmProviders.OPENAI.value) is False
         assert token_counter.should_use_token_counting_api("anthropic") is False
         assert token_counter.should_use_token_counting_api("vertex_ai") is False
 
@@ -162,11 +148,19 @@ class TestGoogleAIStudioTokenCounter:
 
             # Verify the mock was called correctly
             mock_acount_tokens.assert_called_once_with(
-                model=model_to_use, contents=contents, client=None
+                model=model_to_use,
+                api_key=None,
+                api_base=None,
+                contents=contents,
+                system_instruction=None,
+                tools=None,
+                client=None,
             )
 
     @staticmethod
-    def _counter_with_upstream(upstream_response: httpx.Response) -> tuple[GoogleAIStudioTokenCounter, list[httpx.Request]]:
+    def _counter_with_upstream(
+        upstream_response: httpx.Response,
+    ) -> tuple[GoogleAIStudioTokenCounter, list[httpx.Request]]:
         seen_requests: list[httpx.Request] = []
 
         def upstream(request: httpx.Request) -> httpx.Response:
@@ -186,7 +180,9 @@ class TestGoogleAIStudioTokenCounter:
             contents=None,
             deployment={"litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "test-key"}},
             request_model="gemini-flash",
-            tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}}],
+            tools=[
+                {"name": "get_weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}}
+            ],
             system="Be terse",
         )
 
@@ -199,7 +195,14 @@ class TestGoogleAIStudioTokenCounter:
                 "contents": [{"role": "user", "parts": [{"text": "What is the weather in Paris?"}]}],
                 "systemInstruction": {"parts": [{"text": "Be terse"}]},
                 "tools": [
-                    {"function_declarations": [{"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}]}
+                    {
+                        "function_declarations": [
+                            {
+                                "name": "get_weather",
+                                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                            }
+                        ]
+                    }
                 ],
             }
         }
@@ -210,6 +213,27 @@ class TestGoogleAIStudioTokenCounter:
             tokenizer_type="",
             original_response={"totalTokens": 42},
         )
+
+    @pytest.mark.asyncio
+    async def test_system_without_tools_still_wraps_in_generate_content_request(self):
+        counter, seen = self._counter_with_upstream(httpx.Response(200, json={"totalTokens": 9}))
+
+        await counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model="gemini-flash",
+            system=[{"type": "text", "text": "Be terse"}],
+        )
+
+        assert json.loads(seen[0].content) == {
+            "generateContentRequest": {
+                "model": "models/gemini-2.5-flash",
+                "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                "systemInstruction": {"parts": [{"text": "Be terse"}]},
+            }
+        }
 
     @pytest.mark.asyncio
     async def test_native_contents_are_sent_unchanged(self):
@@ -299,9 +323,7 @@ class TestGoogleAIStudioTokenCounter:
                         "functionResponse": {
                             "id": "read_many_files-1757526647518-730a691aac11c",  # This should be removed
                             "name": "read_many_files",
-                            "response": {
-                                "output": "No files matching the criteria were found or all were skipped."
-                            },
+                            "response": {"output": "No files matching the criteria were found or all were skipped."},
                         }
                     }
                 ],
@@ -310,9 +332,7 @@ class TestGoogleAIStudioTokenCounter:
         ]
 
         # Clean the contents
-        cleaned_contents = token_counter._clean_contents_for_gemini_api(
-            contents_with_id
-        )
+        cleaned_contents = token_counter._clean_contents_for_gemini_api(contents_with_id)
 
         # Verify the 'id' field was removed
         function_response = cleaned_contents[1]["parts"][0]["functionResponse"]
@@ -321,8 +341,7 @@ class TestGoogleAIStudioTokenCounter:
         assert "response" in function_response
         assert function_response["name"] == "read_many_files"
         assert (
-            function_response["response"]["output"]
-            == "No files matching the criteria were found or all were skipped."
+            function_response["response"]["output"] == "No files matching the criteria were found or all were skipped."
         )
 
     def test_clean_contents_for_gemini_api_preserves_other_fields(self):
@@ -338,9 +357,7 @@ class TestGoogleAIStudioTokenCounter:
         ]
 
         # Clean the contents
-        cleaned_contents = token_counter._clean_contents_for_gemini_api(
-            contents_without_function_response
-        )
+        cleaned_contents = token_counter._clean_contents_for_gemini_api(contents_without_function_response)
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response

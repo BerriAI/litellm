@@ -1,16 +1,48 @@
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Sequence
+from typing import Any, Final
 
 import httpx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
-from litellm.types.llms.vertex_ai import SystemInstructions, Tools
+from litellm.types.llms.gemini import GeminiCountTokensRequest
+from litellm.types.llms.vertex_ai import ContentType, SystemInstructions, Tools
 from litellm.types.utils import LlmProviders
 
-if TYPE_CHECKING:
-    from litellm.types.google_genai.main import GenerateContentContentListUnionDict
-else:
-    GenerateContentContentListUnionDict = Any
+
+def build_count_tokens_request(
+    model: str,
+    contents: Sequence[ContentType],
+    system_instruction: SystemInstructions | None,
+    tools: Sequence[Tools] | None,
+) -> GeminiCountTokensRequest:
+    model_name: Final = f"models/{model}"
+    if tools is None:
+        if system_instruction is None:
+            bare: Final[GeminiCountTokensRequest] = {"contents": contents}
+            return bare
+        with_system: Final[GeminiCountTokensRequest] = {
+            "generateContentRequest": {
+                "model": model_name,
+                "contents": contents,
+                "systemInstruction": system_instruction,
+            }
+        }
+        return with_system
+    if system_instruction is None:
+        with_tools: Final[GeminiCountTokensRequest] = {
+            "generateContentRequest": {"model": model_name, "contents": contents, "tools": tools}
+        }
+        return with_tools
+    with_both: Final[GeminiCountTokensRequest] = {
+        "generateContentRequest": {
+            "model": model_name,
+            "contents": contents,
+            "systemInstruction": system_instruction,
+            "tools": tools,
+        }
+    }
+    return with_both
 
 
 class GoogleAIStudioTokenCounter:
@@ -86,7 +118,7 @@ class GoogleAIStudioTokenCounter:
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
         system_instruction: SystemInstructions | None = None,
-        tools: list[Tools] | None = None,
+        tools: Sequence[Tools] | None = None,
         client: AsyncHTTPHandler | None = None,
         **kwargs: object,
     ) -> dict[str, Any]:
@@ -135,18 +167,11 @@ class GoogleAIStudioTokenCounter:
         )
 
         # Prepare request body - clean up contents to remove unsupported fields
-        cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
-        request_body: Final = (
-            {"contents": cleaned_contents}
-            if system_instruction is None and tools is None
-            else {
-                "generateContentRequest": {
-                    "model": f"models/{model}",
-                    "contents": cleaned_contents,
-                    **({"systemInstruction": system_instruction} if system_instruction is not None else {}),
-                    **({"tools": tools} if tools is not None else {}),
-                }
-            }
+        request_body: Final = build_count_tokens_request(
+            model=model,
+            contents=self._clean_contents_for_gemini_api(contents),
+            system_instruction=system_instruction,
+            tools=tools,
         )
 
         async_httpx_client: Final = client or get_async_httpx_client(
@@ -154,7 +179,11 @@ class GoogleAIStudioTokenCounter:
         )
 
         try:
-            response: Final = await async_httpx_client.post(url=url, headers=headers, json=request_body)
+            response: Final = await async_httpx_client.post(
+                url=url,
+                headers=headers,
+                json=request_body,  # pyright: ignore[reportArgumentType]  # post() takes a bare dict; a TypedDict is one at runtime
+            )
         except httpx.HTTPStatusError as e:
             error_msg = f"Google Gen AI Studio API error: {e.response.status_code} - {e.response.text}"
             raise litellm.APIError(

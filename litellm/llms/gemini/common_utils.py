@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -13,6 +14,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.gemini import GeminiCountTokensDeploymentParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
 
@@ -472,6 +474,10 @@ def get_api_key_from_env() -> str | None:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
 
 
+_COUNT_TOKENS_DEPLOYMENT_PARAMS: Final = TypeAdapter(GeminiCountTokensDeploymentParams)
+_NO_DEPLOYMENT_PARAMS: Final[GeminiCountTokensDeploymentParams] = {}
+
+
 class GoogleAIStudioTokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
 
@@ -496,31 +502,45 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
     ) -> TokenCountResponse | None:
-        import copy
-
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
-        from litellm.llms.gemini.count_tokens.transformation import build_count_tokens_payload
+        from litellm.llms.gemini.count_tokens.transformation import (
+            AnthropicCountTokensInput,
+            InvalidAnthropicRequest,
+            build_count_tokens_payload,
+        )
 
         if contents is None and not messages:
             return None
-
-        payload: Final = (
-            build_count_tokens_payload(model=model_to_use, messages=messages or [], system=system, tools=tools)
-            if contents is None
-            else None
-        )
-        deployment = deployment or {}
-        count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
-        count_tokens_params: Final = {
+        anthropic_input: Final[AnthropicCountTokensInput] = {
             "model": model_to_use,
-            "contents": payload.contents if payload is not None else contents,
-            **({"system_instruction": payload.system_instruction} if payload and payload.system_instruction else {}),
-            **({"tools": payload.tools} if payload and payload.tools else {}),
+            "messages": messages or (),
+            "system": system,
+            "tools": tools,
         }
-        count_tokens_params_request.update(count_tokens_params)
+        payload: Final = build_count_tokens_payload(anthropic_input) if contents is None else None
+        if isinstance(payload, InvalidAnthropicRequest):
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="gemini_api",
+                error=True,
+                error_message=payload.message,
+                status_code=400,
+            )
+        deployment_params: Final = (
+            _COUNT_TOKENS_DEPLOYMENT_PARAMS.validate_python(deployment["litellm_params"])
+            if deployment and "litellm_params" in deployment
+            else _NO_DEPLOYMENT_PARAMS
+        )
         try:
             result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-                **count_tokens_params_request,
+                model=model_to_use,
+                api_key=deployment_params.get("api_key") or deployment_params.get("gemini_api_key"),
+                api_base=deployment_params.get("api_base"),
+                contents=contents if payload is None else payload.contents,
+                system_instruction=None if payload is None else payload.system_instruction,
+                tools=None if payload is None else payload.tools,
                 client=self.client,
             )
         except (litellm.APIError, litellm.APIConnectionError) as e:

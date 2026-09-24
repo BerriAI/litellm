@@ -22,6 +22,7 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
@@ -29,7 +30,6 @@ from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.proxy.proxy_server import _try_provider_token_count, token_counter
 from litellm.types.utils import TokenCountResponse
 

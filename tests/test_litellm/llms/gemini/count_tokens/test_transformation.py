@@ -1,21 +1,28 @@
-from litellm.llms.gemini.count_tokens.transformation import build_count_tokens_payload
+from litellm.llms.gemini.count_tokens.transformation import (
+    GeminiCountTokensPayload,
+    InvalidAnthropicRequest,
+    build_count_tokens_payload,
+)
 
 MODEL = "gemini-2.5-flash"
 
 
+def _payload(messages, system=None, tools=None) -> GeminiCountTokensPayload:
+    payload = build_count_tokens_payload({"model": MODEL, "messages": messages, "system": system, "tools": tools})
+    assert isinstance(payload, GeminiCountTokensPayload), payload
+    return payload
+
+
 def test_anthropic_tool_turns_become_gemini_function_call_and_response_parts():
-    payload = build_count_tokens_payload(
-        model=MODEL,
-        messages=[
+    payload = _payload(
+        [
             {"role": "user", "content": "What is the weather in Paris?"},
             {
                 "role": "assistant",
                 "content": [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}],
             },
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Sunny"}]},
-        ],
-        system=None,
-        tools=None,
+        ]
     )
 
     assert payload.contents == [
@@ -30,12 +37,37 @@ def test_anthropic_tool_turns_become_gemini_function_call_and_response_parts():
     assert payload.tools is None
 
 
+def test_tool_result_with_block_list_content_keeps_its_text():
+    payload = _payload(
+        [
+            {"role": "user", "content": "Weather?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "content": [{"type": "text", "text": "Sunny"}, {"type": "text", "text": "21C"}],
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert payload.contents[2] == {
+        "role": "user",
+        "parts": [{"function_response": {"name": "get_weather", "response": {"content": "Sunny21C"}}}],
+    }, payload.contents
+
+
 def test_system_prompt_is_lifted_out_of_contents_into_system_instruction():
-    payload = build_count_tokens_payload(
-        model=MODEL,
-        messages=[{"role": "user", "content": "hi"}],
+    payload = _payload(
+        [{"role": "user", "content": "hi"}],
         system=[{"type": "text", "text": "Be terse"}, {"type": "text", "text": "Answer in French"}],
-        tools=None,
     )
 
     assert payload.contents == [{"role": "user", "parts": [{"text": "hi"}]}], payload
@@ -45,19 +77,15 @@ def test_system_prompt_is_lifted_out_of_contents_into_system_instruction():
 
 
 def test_string_system_prompt_becomes_system_instruction():
-    payload = build_count_tokens_payload(
-        model=MODEL, messages=[{"role": "user", "content": "hi"}], system="You are terse", tools=None
-    )
+    payload = _payload([{"role": "user", "content": "hi"}], system="You are terse")
 
     assert payload.system_instruction == {"parts": [{"text": "You are terse"}]}
     assert payload.contents == [{"role": "user", "parts": [{"text": "hi"}]}], payload
 
 
 def test_anthropic_tools_become_gemini_function_declarations():
-    payload = build_count_tokens_payload(
-        model=MODEL,
-        messages=[{"role": "user", "content": "hi"}],
-        system=None,
+    payload = _payload(
+        [{"role": "user", "content": "hi"}],
         tools=[
             {
                 "name": "get_weather",
@@ -89,10 +117,24 @@ def test_anthropic_tools_become_gemini_function_declarations():
     ], payload.tools
 
 
-def test_unrecognised_system_value_is_dropped_not_sent():
-    payload = build_count_tokens_payload(
-        model=MODEL, messages=[{"role": "user", "content": "hi"}], system={"unexpected": "shape"}, tools=None
+def test_system_of_an_unrecognised_shape_is_rejected_as_invalid_not_sent():
+    result = build_count_tokens_payload(
+        {
+            "model": MODEL,
+            "messages": [{"role": "user", "content": "hi"}],
+            "system": {"unexpected": "shape"},
+            "tools": None,
+        }
     )
 
-    assert payload.system_instruction is None
-    assert payload.contents == [{"role": "user", "parts": [{"text": "hi"}]}], payload
+    assert isinstance(result, InvalidAnthropicRequest), result
+    assert "system" in result.message, result.message
+
+
+def test_tools_that_are_not_a_list_are_rejected_as_invalid():
+    result = build_count_tokens_payload(
+        {"model": MODEL, "messages": [{"role": "user", "content": "hi"}], "system": None, "tools": {"name": "one"}}
+    )
+
+    assert isinstance(result, InvalidAnthropicRequest), result
+    assert "tools" in result.message, result.message
