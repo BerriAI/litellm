@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
+use crate::wire::lax_count;
+
 use crate::responses_usage::{
     CacheCreationTokenDetails, ChatUsage, CompletionTokenDetails, PromptTokenDetails,
 };
@@ -64,15 +66,16 @@ fn cache_creation_details(
     let Some(details) = usage.get("cache_creation").and_then(Value::as_object) else {
         return Ok(None);
     };
+    let pydantic_count = |field: &str| {
+        details
+            .get(field)
+            .filter(|value| !value.is_null())
+            .map(|value| lax_count(value).ok_or(CostError::InvalidUsage))
+            .transpose()
+    };
     Ok(Some(CacheCreationTokenDetails {
-        ephemeral_5m_input_tokens: details
-            .get("ephemeral_5m_input_tokens")
-            .map(|value| count(Some(value)))
-            .transpose()?,
-        ephemeral_1h_input_tokens: details
-            .get("ephemeral_1h_input_tokens")
-            .map(|value| count(Some(value)))
-            .transpose()?,
+        ephemeral_5m_input_tokens: pydantic_count("ephemeral_5m_input_tokens")?,
+        ephemeral_1h_input_tokens: pydantic_count("ephemeral_1h_input_tokens")?,
     }))
 }
 
@@ -81,7 +84,7 @@ fn thinking_tokens(usage: &Map<String, Value>) -> Option<u64> {
         .get("output_tokens_details")
         .and_then(Value::as_object)
         .and_then(|details| details.get("thinking_tokens"))
-        .and_then(Value::as_u64)
+        .and_then(lax_count)
 }
 
 pub fn transform_anthropic_usage_to_chat_usage(

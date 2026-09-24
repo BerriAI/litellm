@@ -155,3 +155,41 @@ fn iteration_sums_overflow_errors_where_python_yields_a_big_int() {
         "divergence: Python sums arbitrary-precision ints and returns a huge cost"
     );
 }
+
+#[rstest]
+#[case::integer(json!(5), Some(5), Some(5))]
+#[case::numeric_string(json!("5"), Some(5), Some(5))]
+#[case::integral_float(json!(5.0), Some(5), Some(5))]
+fn calculate_usage_reads_detail_counts_with_pydantic_lax_ints(
+    #[case] count: Value,
+    #[case] expected_thinking: Option<u64>,
+    #[case] expected_five_minute: Option<u64>,
+) {
+    let usage = transform_anthropic_usage_to_chat_usage(
+        &json!({
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "cache_creation_input_tokens": 5,
+            "cache_creation": {"ephemeral_5m_input_tokens": count},
+            "output_tokens_details": {"thinking_tokens": count}
+        }),
+        None,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        usage
+            .completion_tokens_details
+            .as_ref()
+            .and_then(|details| details.reasoning_tokens),
+        expected_thinking
+    );
+    assert_eq!(
+        usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|details| details.cache_creation_token_details.as_ref())
+            .and_then(|details| details.ephemeral_5m_input_tokens),
+        expected_five_minute
+    );
+}
