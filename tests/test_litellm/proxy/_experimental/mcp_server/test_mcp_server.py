@@ -10208,6 +10208,64 @@ async def test_active_request_ctx_var_feeds_get_current_session(_mcp_request_ctx
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "session_headers"),
+    (
+        ("POST", "/mcp", ()),
+        ("GET", "/mcp", (("mcp-session-id", "existing-session"),)),
+        ("DELETE", "/mcp", (("mcp-session-id", "existing-session"),)),
+        ("POST", "/server/mcp", ()),
+        ("GET", "/sse", ()),
+        ("POST", "/sse/messages", ()),
+    ),
+)
+@pytest.mark.parametrize(
+    ("allowed_origins", "origin_headers", "expected_status"),
+    (
+        (("https://allowed.example",), (("origin", "https://evil.example"),), 403),
+        (("https://allowed.example",), (("origin", "https://allowed.example.evil.example"),), 403),
+        (("https://allowed.example",), (("origin", "null"),), 403),
+        (("https://allowed.example",), (("origin", ""),), 403),
+        (
+            ("https://allowed.example",),
+            (("origin", "https://allowed.example"), ("origin", "https://evil.example")),
+            403,
+        ),
+        (("https://allowed.example",), (("origin", "https://allowed.example"),), 401),
+        (("https://allowed.example",), (), 401),
+        (("*",), (("origin", "https://another.example"),), 401),
+    ),
+)
+async def test_mcp_origin_admission_precedes_authentication(
+    method: str,
+    path: str,
+    session_headers: tuple[tuple[str, str], ...],
+    allowed_origins: tuple[str, ...],
+    origin_headers: tuple[tuple[str, str], ...],
+    expected_status: int,
+) -> None:
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server import server
+
+    authenticate: Final = AsyncMock(side_effect=HTTPException(status_code=401, detail="authentication required"))
+    with (
+        patch("litellm.proxy.proxy_server.origins", allowed_origins),
+        patch.object(server, "extract_mcp_auth_context", authenticate),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://gateway") as client:
+            response: Final = await client.request(method, path, headers=(*session_headers, *origin_headers))
+
+    assert response.status_code == expected_status
+    if expected_status == 403:
+        assert response.json() == {"detail": "Invalid Origin header"}
+        authenticate.assert_not_awaited()
+    else:
+        assert response.json() == {"detail": "authentication required"}
+        authenticate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_active_request_ctx_var_feeds_auth_resolution_recording(_mcp_request_ctx) -> None:
     from starlette.requests import Request
 

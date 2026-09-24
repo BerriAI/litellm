@@ -25,6 +25,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
+    get_daily_activity_export_rows,
     global_rollup_reconciled_through,
     update_metrics,
 )
@@ -2896,3 +2897,307 @@ def test_spend_logs_window_is_none_when_no_date_parses():
     from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
 
     assert _spend_logs_window({"garbage", ""}) is None
+
+
+_DAILY_TEAM_SPEND_DDL: Final = """
+    CREATE TABLE "LiteLLM_DailyTeamSpend" (
+        id TEXT PRIMARY KEY,
+        team_id TEXT,
+        date TEXT NOT NULL,
+        api_key TEXT NOT NULL,
+        model TEXT,
+        model_group TEXT,
+        custom_llm_provider TEXT,
+        mcp_namespaced_tool_name TEXT,
+        endpoint TEXT,
+        prompt_tokens BIGINT DEFAULT 0,
+        completion_tokens BIGINT DEFAULT 0,
+        cache_read_input_tokens BIGINT DEFAULT 0,
+        cache_creation_input_tokens BIGINT DEFAULT 0,
+        compression_saved_tokens BIGINT DEFAULT 0,
+        compression_savings_spend DOUBLE PRECISION DEFAULT 0,
+        prompt_caching_savings_spend DOUBLE PRECISION DEFAULT 0,
+        gateway_injected_caching_savings_spend DOUBLE PRECISION DEFAULT 0,
+        autorouter_savings_spend DOUBLE PRECISION DEFAULT 0,
+        spend DOUBLE PRECISION DEFAULT 0,
+        ptu_flat_cost DOUBLE PRECISION DEFAULT 0,
+        api_requests BIGINT DEFAULT 0,
+        successful_requests BIGINT DEFAULT 0,
+        failed_requests BIGINT DEFAULT 0,
+        total_response_time_ms BIGINT DEFAULT 0,
+        timed_requests BIGINT DEFAULT 0
+    )
+"""
+
+
+def _seed_daily_team_spend(conn: psycopg.Connection, rows: Sequence[tuple[object, ...]]) -> None:
+    with conn.cursor() as cur:
+        cur.execute(_DAILY_TEAM_SPEND_DDL)
+        cur.executemany(
+            """
+            INSERT INTO "LiteLLM_DailyTeamSpend"
+                (id, team_id, date, api_key, model, model_group, custom_llm_provider,
+                 endpoint, prompt_tokens, spend, ptu_flat_cost, api_requests, successful_requests)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            rows,
+        )
+    conn.commit()
+
+
+def _team_spend_row(
+    row_id: str,
+    team_id: str,
+    api_key: str,
+    spend: float,
+    *,
+    date: str = "2026-06-01",
+    model: str = "gpt-5",
+    ptu_flat_cost: float = 0.0,
+) -> tuple[object, ...]:
+    return (
+        row_id,
+        team_id,
+        date,
+        api_key,
+        model,
+        "",
+        "openai",
+        "/v1/chat/completions",
+        10,
+        spend,
+        ptu_flat_cost,
+        1,
+        1,
+    )
+
+
+def _export_prisma(conn: psycopg.Connection, token_rows: Sequence[SimpleNamespace] = ()) -> MagicMock:
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = _psycopg_query_raw(conn, [])
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(token_rows))
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    return mock_prisma
+
+
+@pytest.mark.asyncio
+async def test_export_keys_returns_every_key_beyond_the_top_n_cap(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """The export route exists because the aggregated route caps the per-key arm at
+    USAGE_TOP_API_KEYS_LIMIT. With more keys than the cap every one of them must
+    land in the export, while the PTU sentinel stays out of the key view."""
+    n_keys: Final = USAGE_TOP_API_KEYS_LIMIT + 7
+    _seed_daily_team_spend(
+        _aggregated_postgresql,
+        [
+            *[_team_spend_row(f"row-{i:03d}", "team-1", f"key-{i:03d}", float(i + 1)) for i in range(n_keys)],
+            _team_spend_row("row-ptu", "team-1", PTU_SENTINEL_API_KEY, 0.0, ptu_flat_cost=1000.0),
+        ],
+    )
+
+    rows = await get_daily_activity_export_rows(
+        prisma_client=_export_prisma(_aggregated_postgresql),
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        api_key=None,
+        exclude_entity_ids=None,
+        timezone_offset_minutes=None,
+        export_type="daily_with_keys",
+    )
+
+    assert {row.api_key for row in rows} == {f"key-{i:03d}" for i in range(n_keys)}
+    assert len(rows) == n_keys
+    assert all(row.team_id == "team-1" for row in rows)
+    by_key: Final = {row.api_key: row for row in rows}
+    assert by_key["key-000"].spend == pytest.approx(1.0)
+    assert sum(row.spend for row in rows) == pytest.approx(n_keys * (n_keys + 1) / 2)
+    assert all(row.total_tokens == 10 and row.api_requests == 1 for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_export_daily_keeps_ptu_sentinel_in_the_team_rollup(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """The plain daily export groups by (date, team), so the sentinel's flat cost
+    must land in the team row exactly like breakdown.entities on the aggregated
+    route; dropping it would silently under-report team spend."""
+    _seed_daily_team_spend(
+        _aggregated_postgresql,
+        [
+            _team_spend_row("row-1", "team-1", "key-1", 2.0),
+            _team_spend_row("row-ptu", "team-1", PTU_SENTINEL_API_KEY, 0.0, ptu_flat_cost=0.0),
+        ],
+    )
+    with _aggregated_postgresql.cursor() as cur:
+        cur.execute("UPDATE \"LiteLLM_DailyTeamSpend\" SET spend = 1000.0 WHERE id = 'row-ptu'")
+    _aggregated_postgresql.commit()
+
+    rows = await get_daily_activity_export_rows(
+        prisma_client=_export_prisma(_aggregated_postgresql),
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field={"team-1": {"team_alias": "Alpha"}},
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        api_key=None,
+        exclude_entity_ids=None,
+        timezone_offset_minutes=None,
+        export_type="daily",
+    )
+
+    assert len(rows) == 1
+    assert rows[0].team_id == "team-1"
+    assert rows[0].team_alias == "Alpha"
+    assert rows[0].api_key is None
+    assert rows[0].spend == pytest.approx(1002.0)
+
+
+@pytest.mark.asyncio
+async def test_export_users_folds_keys_into_one_row_per_user(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """daily_with_users runs the per-key rollup then folds in Python: two keys of
+    user-1 merge into one row with keys=2 and summed metrics, and the distinct
+    user keeps its own row."""
+    _seed_daily_team_spend(
+        _aggregated_postgresql,
+        [
+            _team_spend_row("row-1", "team-1", "key-1", 2.0),
+            _team_spend_row("row-2", "team-1", "key-2", 3.0),
+            _team_spend_row("row-3", "team-1", "key-3", 5.0),
+        ],
+    )
+    tokens: Final = tuple(
+        SimpleNamespace(token=token, key_alias=None, team_id="team-1", user_id=user_id)
+        for token, user_id in (("key-1", "user-1"), ("key-2", "user-1"), ("key-3", "user-2"))
+    )
+
+    rows = await get_daily_activity_export_rows(
+        prisma_client=_export_prisma(_aggregated_postgresql, tokens),
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        api_key=None,
+        exclude_entity_ids=None,
+        timezone_offset_minutes=None,
+        export_type="daily_with_users",
+    )
+
+    assert [(row.user_id, row.keys, row.spend, row.api_requests, row.total_tokens) for row in rows] == [
+        ("user-1", 2, 5.0, 2, 20),
+        ("user-2", 1, 5.0, 1, 10),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_export_models_rolls_up_per_team_and_model(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    _seed_daily_team_spend(
+        _aggregated_postgresql,
+        [
+            _team_spend_row("row-1", "team-1", "key-1", 2.0, model="gpt-5"),
+            _team_spend_row("row-2", "team-1", "key-2", 3.0, model="gpt-5"),
+            _team_spend_row("row-3", "team-1", "key-1", 5.0, model="claude"),
+        ],
+    )
+
+    rows = await get_daily_activity_export_rows(
+        prisma_client=_export_prisma(_aggregated_postgresql),
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        api_key=None,
+        exclude_entity_ids=None,
+        timezone_offset_minutes=None,
+        export_type="daily_with_models",
+    )
+
+    assert [(row.model, row.spend, row.api_requests) for row in rows] == [
+        ("claude", 5.0, 1),
+        ("gpt-5", 5.0, 2),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_export_daily_reports_ptu_flat_cost_on_the_team_row(
+    _aggregated_postgresql: psycopg.Connection, ptu_cost_attribution_enabled
+):
+    """The CSV the dashboard hands to finance must match the client-side export,
+    which shows flat cost columns once any PTU spend exists for the day."""
+    from litellm.proxy.management_endpoints.team_endpoints import _team_export_csv
+
+    _seed_daily_team_spend(
+        _aggregated_postgresql,
+        [
+            _team_spend_row("row-1", "team-1", "key-1", 2.0),
+            _team_spend_row("row-ptu", "team-1", PTU_SENTINEL_API_KEY, 0.0, ptu_flat_cost=240.0),
+        ],
+    )
+
+    rows = await get_daily_activity_export_rows(
+        prisma_client=_export_prisma(_aggregated_postgresql),
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        api_key=None,
+        exclude_entity_ids=None,
+        timezone_offset_minutes=None,
+        export_type="daily",
+    )
+
+    assert len(rows) == 1
+    assert rows[0].flat_cost == pytest.approx(240.0)
+    header: Final = _team_export_csv("daily", rows).splitlines()[0]
+    assert "Spend ($),Flat Cost ($),Total Cost ($)" in header
+    record: Final = _team_export_csv("daily", rows).splitlines()[1].split(",")
+    spend_index: Final = header.split(",").index("Spend ($)")
+    assert record[spend_index : spend_index + 3] == ["2.0000", "240.0000", "242.0000"]
+
+
+@pytest.mark.asyncio
+async def test_export_csv_omits_flat_cost_columns_when_no_ptu_spend_exists(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    from litellm.proxy.management_endpoints.team_endpoints import _team_export_csv
+
+    _seed_daily_team_spend(
+        _aggregated_postgresql,
+        [_team_spend_row("row-1", "team-1", "key-1", 2.0)],
+    )
+
+    rows = await get_daily_activity_export_rows(
+        prisma_client=_export_prisma(_aggregated_postgresql),
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        api_key=None,
+        exclude_entity_ids=None,
+        timezone_offset_minutes=None,
+        export_type="daily",
+    )
+
+    assert rows[0].flat_cost == 0.0
+    header: Final = _team_export_csv("daily", rows).splitlines()[0]
+    assert "Flat Cost" not in header
+    assert "Total Cost" not in header

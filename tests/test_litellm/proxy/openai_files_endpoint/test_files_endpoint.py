@@ -5671,3 +5671,241 @@ def test_model_routed_file_retrieve_allows_key_with_model_grant(mocker: MockerFi
     assert response.status_code == 200, response.text
     assert captured_kwargs["api_key"] == "mistral-key"
     assert captured_kwargs["custom_llm_provider"] == "mistral"
+
+
+NATIVE_VERTEX_BATCH_LINE = (
+    b'{"request": {"contents": [{"role": "user", "parts": [{"text": "What is the tallest building?"}]}],'
+    b' "tools": [{"googleSearch": {"excludeDomains": ["example.com"]}}]}}\n'
+)
+
+
+def _passthrough_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "vertex-batch",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "proj",
+                    "vertex_location": "us-central1",
+                },
+                "model_info": {"id": "vertex-batch-id"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "openai_api_key"},
+                "model_info": {"id": "gpt-3.5-turbo-id"},
+            },
+        ]
+    )
+
+
+def _setup_passthrough_upload_endpoint(monkeypatch, llm_router: Router) -> list:
+    """Like _setup_batch_upload_endpoint, but reads the forwarded file bytes while the spool is open."""
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+
+    async def fake_route_create_file(**kwargs):
+        upload_source = kwargs["_create_file_request"]["file"][1]
+        upload_source.seek(0)
+        forwarded_calls.append({**kwargs, "file_bytes": upload_source.read()})
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    return forwarded_calls
+
+
+def _upload(content: bytes, form: dict):
+    return client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", content, "application/jsonl")},
+        data=form,
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+
+def test_create_file_passthrough_forwards_native_vertex_rows_untouched(monkeypatch):
+    forwarded_calls = _setup_passthrough_upload_endpoint(monkeypatch, _passthrough_router())
+    content = NATIVE_VERTEX_BATCH_LINE * 2
+
+    try:
+        response = _upload(content, {"purpose": "batch", "target_model_names": "vertex-batch", "passthrough": "true"})
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    (call,) = forwarded_calls
+    assert call["_create_file_request"]["passthrough"] is True
+    assert call["file_bytes"] == content
+    assert call["target_model_names_list"] == ["vertex-batch"]
+
+
+def test_create_file_passthrough_rejects_rows_without_a_request(monkeypatch):
+    forwarded_calls = _setup_passthrough_upload_endpoint(monkeypatch, _passthrough_router())
+
+    try:
+        response = _upload(
+            NATIVE_VERTEX_BATCH_LINE + VALID_BATCH_LINE,
+            {"purpose": "batch", "target_model_names": "vertex-batch", "passthrough": "true"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["param"] == "request"
+    assert "line 2" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_without_passthrough_still_rejects_native_vertex_rows(monkeypatch):
+    forwarded_calls = _setup_passthrough_upload_endpoint(monkeypatch, _passthrough_router())
+
+    try:
+        response = _upload(NATIVE_VERTEX_BATCH_LINE, {"purpose": "batch", "target_model_names": "vertex-batch"})
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["param"] == "custom_id"
+    assert forwarded_calls == []
+
+
+@pytest.mark.parametrize(
+    "form, expected_param, expected_fragment",
+    [
+        ({"purpose": "batch", "passthrough": "true"}, "target_model_names", "target_model_names"),
+        (
+            {"purpose": "batch", "target_model_names": "gpt-3.5-turbo", "passthrough": "true"},
+            "target_model_names",
+            "'gpt-3.5-turbo'",
+        ),
+        (
+            {"purpose": "batch", "target_model_names": "vertex-batch,gpt-3.5-turbo", "passthrough": "true"},
+            "target_model_names",
+            "'gpt-3.5-turbo'",
+        ),
+        ({"purpose": "user_data", "target_model_names": "vertex-batch", "passthrough": "true"}, "passthrough", "batch"),
+        (
+            {"purpose": "batch", "target_model_names": "vertex-batch", "passthrough": "true", "target_storage": "s3"},
+            "target_storage",
+            "'s3'",
+        ),
+        (
+            {"purpose": "batch", "model": "gpt-3.5-turbo", "passthrough": "true"},
+            "model",
+            "'gpt-3.5-turbo'",
+        ),
+    ],
+    ids=[
+        "no-model",
+        "non-vertex-model",
+        "mixed-models",
+        "non-batch-purpose",
+        "target-storage",
+        "non-vertex-model-param",
+    ],
+)
+def test_create_file_passthrough_rejected_outside_a_vertex_batch(monkeypatch, form, expected_param, expected_fragment):
+    forwarded_calls = _setup_passthrough_upload_endpoint(monkeypatch, _passthrough_router())
+
+    try:
+        response = _upload(NATIVE_VERTEX_BATCH_LINE, form)
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == expected_param
+    assert expected_fragment in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_passthrough_accepts_the_model_param_as_the_deployment(monkeypatch):
+    forwarded_calls = _setup_passthrough_upload_endpoint(monkeypatch, _passthrough_router())
+
+    try:
+        response = _upload(
+            NATIVE_VERTEX_BATCH_LINE, {"purpose": "batch", "model": "vertex-batch", "passthrough": "true"}
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    (call,) = forwarded_calls
+    assert call["model"] == "vertex-batch"
+    assert call["_create_file_request"]["passthrough"] is True
+
+
+def test_create_file_passthrough_rejects_a_model_group_with_a_non_vertex_deployment(monkeypatch):
+    mixed_router = Router(
+        model_list=[
+            {
+                "model_name": "vertex-batch",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "proj",
+                    "vertex_location": "us-central1",
+                },
+                "model_info": {"id": "vertex-batch-id"},
+            },
+            {
+                "model_name": "vertex-batch",
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "openai_api_key"},
+                "model_info": {"id": "vertex-batch-openai-id"},
+            },
+        ]
+    )
+    forwarded_calls = _setup_passthrough_upload_endpoint(monkeypatch, mixed_router)
+
+    try:
+        response = _upload(
+            NATIVE_VERTEX_BATCH_LINE, {"purpose": "batch", "target_model_names": "vertex-batch", "passthrough": "true"}
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["param"] == "target_model_names"
+    assert "'vertex-batch'" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_passthrough_fails_closed_when_guardrails_would_scan_the_batch(monkeypatch):
+    """Batch guardrails read OpenAI-shaped rows, so a passthrough upload on a guardrailed
+    key is refused rather than forwarded unscanned."""
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Redactor(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            return data
+
+    forwarded_calls = _setup_passthrough_upload_endpoint(monkeypatch, _passthrough_router())
+    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    try:
+        response = _upload(
+            NATIVE_VERTEX_BATCH_LINE, {"purpose": "batch", "target_model_names": "vertex-batch", "passthrough": "true"}
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["param"] == "passthrough"
+    assert "guardrails" in error["message"]
+    assert forwarded_calls == []

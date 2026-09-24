@@ -529,6 +529,39 @@ async def test_async_router_acreate_file_with_jsonl():
 
 
 @pytest.mark.asyncio
+async def test_async_router_acreate_file_passthrough_keeps_the_file_and_forwards_the_flag():
+    """A passthrough batch upload must reach the provider byte for byte: the router
+    neither rewrites body.model to the deployment model nor drops the flag."""
+    from io import BytesIO
+    from unittest.mock import MagicMock, patch
+
+    jsonl_content = b'{"custom_id": "r1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "vertex-batch"}}\n'
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-batch",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "vertex_project": "p"},
+            }
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(
+            model="vertex-batch", purpose="batch", file=BytesIO(jsonl_content), passthrough=True
+        )
+        forwarded = mock_acreate_file.call_args.kwargs
+        assert forwarded["passthrough"] is True
+        forwarded["file"].seek(0)
+        assert forwarded["file"].read() == jsonl_content
+
+        mock_acreate_file.reset_mock()
+        await router.acreate_file(model="vertex-batch", purpose="batch", file=BytesIO(jsonl_content))
+        rewritten = mock_acreate_file.call_args.kwargs["file"]
+        rewritten.seek(0)
+        assert b'"gemini-2.5-flash"' in rewritten.read()
+
+
+@pytest.mark.asyncio
 async def test_async_router_acreate_file_does_not_fall_back_across_model_groups():
     """A file created for batches only exists under the credentials of the model group
     the caller named. A cross-group fallback silently stores it with the wrong provider
