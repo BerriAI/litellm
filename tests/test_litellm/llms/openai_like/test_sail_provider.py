@@ -1,6 +1,9 @@
 """Tests for the Sail (sailresearch.com) JSON-configured provider."""
 
+import io
 import json
+import wave
+from typing import Final
 
 import pytest
 import respx
@@ -97,15 +100,11 @@ class TestSailRequestShape:
         assert request.url == SAIL_CHAT_COMPLETIONS
         assert request.headers["Authorization"] == "Bearer sk-sail-test"
 
-        _, provider, _, _ = get_llm_provider(
-            model=MODEL, custom_llm_provider=None, api_base=None, api_key=None
-        )
+        _, provider, _, _ = get_llm_provider(model=MODEL, custom_llm_provider=None, api_base=None, api_key=None)
         assert provider == "sail"
 
     @pytest.mark.respx()
-    def test_sail_api_base_env_overrides_url(
-        self, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_sail_api_base_env_overrides_url(self, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("SAIL_API_BASE", "https://sail.internal.example/v2")
         route = respx_mock.post("https://sail.internal.example/v2/chat/completions").respond(
             json=_chat_completion_payload()
@@ -219,6 +218,23 @@ class TestSailRequestShape:
         body = json.loads(request.content)
         assert body["metadata"] == {"completion_window": "flex"}
         assert body["background"] is True
+
+    @pytest.mark.respx(assert_all_called=False)
+    def test_sail_transcription_rejected_without_hitting_sail(self, respx_mock: respx.Router):
+        route = respx_mock.post(f"{SAIL_BASE_URL}/audio/transcriptions")
+
+        wav: Final = io.BytesIO()
+        with wave.open(wav, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(8000)
+            wav_file.writeframes(b"\x00" * 1600)
+        wav.seek(0)
+
+        with pytest.raises(ValueError, match="Unmapped provider"):
+            litellm.transcription(model=MODEL, file=wav)
+
+        assert not route.called
 
 
 class TestSailCostTracking:
