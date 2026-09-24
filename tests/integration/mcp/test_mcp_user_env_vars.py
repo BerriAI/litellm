@@ -197,7 +197,7 @@ def test_malformed_bodies_missing_users_and_foreign_servers_are_rejected(gateway
         path: Final = f"/v1/mcp/server/{identity}/user-env-vars"
         payload: Final[dict[str, JsonValue]] = {"values": {TOKEN: "x"}}
         malformed: Final[tuple[dict[str, JsonValue], ...]] = ({"values": {TOKEN: 7}}, {"values": ["a"]}, {})
-        assert [gateway.request("POST", path, body, key=key).status_code for body in malformed] == [422, 422, 422]
+        assert [gateway.request("POST", path, bad, key=key).status_code for bad in malformed] == [422, 422, 422]
         assert set_names(env_status(gateway, key, identity)) == {TOKEN: False}
         assert [gateway.client.request(method, path, json=payload).status_code for method in METHODS] == [401, 401, 401]
         no_user: Final = tuple(gateway.request(method, path, payload, key=userless) for method in METHODS)
