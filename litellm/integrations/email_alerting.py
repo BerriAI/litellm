@@ -51,7 +51,7 @@ async def get_all_team_member_emails(team_id: str | None = None) -> list:
         WHERE user_id = ANY($1::TEXT[]);
     """
 
-    _result: Final = await prisma_client.db.query_raw(sql_query, _team_member_user_ids)
+    _result: Final = await prisma_client.replica_db.query_raw(sql_query, _team_member_user_ids)
 
     verbose_logger.debug("Email Alerting: Got all Emails for team, emails=%s", _result)
 

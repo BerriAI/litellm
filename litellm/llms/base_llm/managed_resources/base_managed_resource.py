@@ -90,7 +90,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self.prisma_client = prisma_client
 
     def _resource_table(self) -> _ManagedResourceTable[ResourceObjectType]:
-        return getattr(self.prisma_client.db, self.table_name)
+        return getattr(self.prisma_client.replica_db, self.table_name)
 
     # ============================================================================
     #                          ABSTRACT METHODS

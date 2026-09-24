@@ -93,7 +93,7 @@ class LiteLLMDatabase:
             query += " LIMIT $3"
 
         try:
-            db_response: Final = await client.db.query_raw(query, *params)
+            db_response: Final = await client.replica_db.query_raw(query, *params)
             from litellm.proxy.spend_tracking.key_metadata_recovery import (
                 fill_missing_api_key_aliases,
             )

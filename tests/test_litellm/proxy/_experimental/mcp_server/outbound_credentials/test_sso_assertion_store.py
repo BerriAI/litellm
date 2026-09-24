@@ -60,6 +60,7 @@ def _make_prisma(stored: dict, db_has_id_jag_server: bool = False):
     ``db_has_id_jag_server`` drives the retention gate's authoritative DB fallback;
     it is wired explicitly so the gate never reads a truthy bare MagicMock."""
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=MagicMock() if db_has_id_jag_server else None)
 
     async def _upsert(where, data):
@@ -417,6 +418,7 @@ async def test_retain_none_assertion_never_consults_gate_or_store():
 @pytest.mark.asyncio
 async def test_retain_swallows_store_failure():
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_ssoidentityassertion.upsert = AsyncMock(side_effect=RuntimeError("db down"))
     with (
         patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
@@ -465,6 +467,7 @@ async def test_db_store_converts_a_driver_failure_into_assertion_store_unavailab
     """The live store must not let a raw driver error escape: the resolver distinguishes an outage
     from an absent assertion, and only a typed failure lets it do that."""
     prisma = MagicMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_ssoidentityassertion.find_unique = AsyncMock(side_effect=RuntimeError("connection refused"))
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         with pytest.raises(AssertionStoreUnavailable):

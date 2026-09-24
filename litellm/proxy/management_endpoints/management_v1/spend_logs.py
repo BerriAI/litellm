@@ -143,7 +143,7 @@ async def _list_spend_log_facet(
             f" ORDER BY {column_sql} ASC"
             f" LIMIT ${scan_idx + 1} OFFSET ${scan_idx + 2}"
         )
-        rows: Final = await prisma_client.db.query_raw(facet_sql, *params)
+        rows: Final = await prisma_client.replica_db.query_raw(facet_sql, *params)
         values: Final[list[str]] = [row[column] for row in rows if row.get(column)]
         has_more: Final = len(values) > page_size
 

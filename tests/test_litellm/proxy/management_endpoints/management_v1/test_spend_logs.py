@@ -51,6 +51,7 @@ WINDOW = "filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=202
 @pytest.fixture
 def mock_prisma_client(monkeypatch):
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.query_raw = AsyncMock(return_value=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     return prisma_client

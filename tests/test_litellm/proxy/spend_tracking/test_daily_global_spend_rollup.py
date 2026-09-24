@@ -107,6 +107,7 @@ class _FakePrisma:
         self.marker_landing_on_day: dict[str, str] = {}
         self.reconciled: list[str] = []
         self.db = _FakeDb(self)
+        self.replica_db = self.db
 
     def write_late_row(self, day: str) -> None:
         """A per-key row for ``day`` lands now, after whatever scans already happened."""

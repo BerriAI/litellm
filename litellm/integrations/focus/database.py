@@ -95,7 +95,7 @@ class FocusLiteLLMDatabase:
         """
 
         try:
-            db_response: Final = await client.db.query_raw(query, *query_params)
+            db_response: Final = await client.replica_db.query_raw(query, *query_params)
             from litellm.proxy.spend_tracking.key_metadata_recovery import (
                 fill_missing_api_key_aliases,
             )
@@ -123,7 +123,7 @@ class FocusLiteLLMDatabase:
         ORDER BY ordinal_position;
         """
         try:
-            columns_response: Final = await client.db.query_raw(info_query)
+            columns_response: Final = await client.replica_db.query_raw(info_query)
             return {"columns": columns_response, "table_name": "LiteLLM_DailyUserSpend"}
         except Exception as exc:
             raise RuntimeError(f"Error getting table info: {exc}") from exc

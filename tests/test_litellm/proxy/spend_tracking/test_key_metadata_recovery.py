@@ -73,6 +73,7 @@ def _query_raw_by_table(
 async def test_recover_double_hashed_key_metadata_via_active_token_digest():
     double_hashed = hash_token("a" * 64)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _query_raw_by_table(
         active_rows=[_digest_row(double_hashed, "batch-worker", "team-1", "alice")],
         deleted_rows=[],
@@ -91,6 +92,7 @@ async def test_recover_double_hashed_key_metadata_via_active_token_digest():
 async def test_recover_double_hashed_key_metadata_falls_back_to_deleted_tokens():
     double_hashed = hash_token("y" * 64)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _query_raw_by_table(
         active_rows=[],
         deleted_rows=[_digest_row(double_hashed, "deleted-key", "team-del", "erin")],
@@ -109,6 +111,7 @@ async def test_recover_only_asks_deleted_tokens_for_digests_active_keys_missed()
     found_active = hash_token("1" * 64)
     found_deleted = hash_token("2" * 64)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _query_raw_by_table(
         active_rows=[_digest_row(found_active, "active-key", None, None)],
         deleted_rows=[_digest_row(found_deleted, "deleted-key", None, None)],
@@ -128,6 +131,7 @@ async def test_recover_only_asks_deleted_tokens_for_digests_active_keys_missed()
 async def test_recover_permanent_miss_costs_two_digest_lookups_and_no_table_walk():
     double_hashed = hash_token("b" * 64)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _query_raw_by_table(active_rows=[], deleted_rows=[])
 
     result = await recover_double_hashed_key_metadata(mock_prisma, {double_hashed})
@@ -141,6 +145,7 @@ async def test_recover_permanent_miss_costs_two_digest_lookups_and_no_table_walk
 @pytest.mark.asyncio
 async def test_recover_skips_keys_that_are_not_sha256_digests():
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     result = await recover_double_hashed_key_metadata(mock_prisma, {"sk-plain-key", "key-hash-short"})
@@ -153,6 +158,7 @@ async def test_recover_skips_keys_that_are_not_sha256_digests():
 async def test_recover_returns_empty_when_digest_lookup_raises_prisma_error():
     double_hashed = hash_token("c" * 64)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(side_effect=PrismaError("db down"))
 
     result = await recover_double_hashed_key_metadata(mock_prisma, {double_hashed})
@@ -164,6 +170,7 @@ async def test_recover_returns_empty_when_digest_lookup_raises_prisma_error():
 async def test_fill_missing_api_key_aliases_updates_null_alias_and_email_rows():
     double_hashed = hash_token("d" * 64)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _query_raw_by_table(
         active_rows=[_digest_row(double_hashed, "recovered-alias", "team-9", "bob")],
         deleted_rows=[],
@@ -202,6 +209,7 @@ async def test_fill_missing_api_key_aliases_updates_null_alias_and_email_rows():
 @pytest.mark.asyncio
 async def test_fill_missing_api_key_aliases_leaves_rows_untouched_when_nothing_is_missing():
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
     rows = ({"api_key": hash_token("e" * 64), "api_key_alias": "named", "user_email": "x@example.com"},)
 
@@ -215,6 +223,7 @@ async def test_fill_missing_api_key_aliases_leaves_rows_untouched_when_nothing_i
 async def test_fill_missing_api_key_aliases_keeps_spend_user_email_when_alias_is_missing():
     double_hashed = hash_token("f" * 64)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = _query_raw_by_table(
         active_rows=[_digest_row(double_hashed, "team-key", "team-9", "key-owner")],
         deleted_rows=[],
@@ -243,6 +252,7 @@ async def test_fill_missing_api_key_aliases_keeps_spend_user_email_when_alias_is
 @pytest.mark.asyncio
 async def test_fill_missing_api_key_aliases_skips_named_keys_that_have_no_email():
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
     rows = (
         {
@@ -264,6 +274,7 @@ async def test_recover_key_metadata_from_spend_logs_resolves_session_token_from_
     session_digest = hash_token("cli-session-repro-user-6852")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(
         mock_prisma,
         _query_raw_spend_logs(
@@ -284,6 +295,7 @@ async def test_recover_key_metadata_from_spend_logs_resolves_session_token_from_
 async def test_recover_key_metadata_from_spend_logs_skips_query_when_no_missing_keys():
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(mock_prisma, AsyncMock(return_value=[]))
 
     result = await recover_key_metadata_from_spend_logs(mock_prisma, set(), window, cache=InMemoryCache())
@@ -296,6 +308,7 @@ async def test_recover_key_metadata_from_spend_logs_skips_query_when_no_missing_
 async def test_recover_key_metadata_from_spend_logs_returns_empty_on_prisma_error():
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(mock_prisma, AsyncMock(side_effect=PrismaError("db down")))
 
     result = await recover_key_metadata_from_spend_logs(
@@ -312,6 +325,7 @@ async def test_recover_key_metadata_from_spend_logs_ignores_foreign_and_all_null
     foreign = hash_token("cli-session-foreign")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(
         mock_prisma,
         _query_raw_spend_logs(
@@ -334,6 +348,7 @@ async def test_recover_key_metadata_from_spend_logs_ignores_foreign_and_all_null
 async def test_recover_key_metadata_from_spend_logs_skips_non_sha256_keys():
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(mock_prisma, AsyncMock(return_value=[]))
 
     result = await recover_key_metadata_from_spend_logs(
@@ -349,6 +364,7 @@ async def test_recover_key_metadata_from_spend_logs_accepts_hashed_jwt_digests()
     jwt_digest = f"hashed-jwt-{hash_token('jwt-subject-1')}"
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(jwt_digest, None, "team-jwt", "jwt-user")]))
 
     result = await recover_key_metadata_from_spend_logs(mock_prisma, {jwt_digest}, window, cache=InMemoryCache())
@@ -366,6 +382,7 @@ async def test_recover_key_metadata_from_spend_logs_serves_repeat_lookups_from_t
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     cache = InMemoryCache()
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(found, "found-alias", None, "owner-1")]))
 
     first = await recover_key_metadata_from_spend_logs(mock_prisma, {found, unknown}, window, cache=cache)
@@ -384,6 +401,7 @@ async def test_recover_key_metadata_from_spend_logs_only_queries_digests_the_cac
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     cache = InMemoryCache()
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(cached_digest, "cached-alias", None, None)]))
     await recover_key_metadata_from_spend_logs(mock_prisma, {cached_digest}, window, cache=cache)
     query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(new_digest, "new-alias", None, None)]))
@@ -401,6 +419,7 @@ async def test_recover_key_metadata_from_spend_logs_rescans_when_the_window_chan
     digest = hash_token("cli-session-windowed")
     cache = InMemoryCache()
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([]))
     await recover_key_metadata_from_spend_logs(
         mock_prisma, {digest}, (datetime(2026, 9, 1), datetime(2026, 9, 4)), cache=cache
@@ -421,6 +440,7 @@ async def test_recover_key_metadata_from_spend_logs_retries_a_failed_query_only_
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     cache = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(mock_prisma, AsyncMock(side_effect=PrismaError("statement timeout")))
     started = time.time()
     assert await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache) == {}
@@ -442,6 +462,7 @@ async def test_recover_key_metadata_from_spend_logs_drops_the_owner_of_a_digest_
     shared_ui_digest = hash_token("ui-token")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(
         mock_prisma,
         _query_raw_spend_logs(
@@ -461,6 +482,7 @@ async def test_recover_key_metadata_from_spend_logs_keeps_the_owner_when_every_n
     digest = hash_token("cli-session-one-owner")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(
         mock_prisma,
         _query_raw_spend_logs(
@@ -480,6 +502,7 @@ async def test_recover_key_metadata_from_spend_logs_forgets_a_miss_long_before_a
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     cache = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(found, "found-alias", None, None)]))
     started = time.time()
 
@@ -498,6 +521,7 @@ async def test_recover_key_metadata_from_spend_logs_runs_one_query_for_concurren
     cache = InMemoryCache()
     lock = asyncio.Lock()
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     async def slow_query_raw(sql: str, *params: object) -> list[dict[str, str | None]]:
         await asyncio.sleep(0.01)
@@ -522,6 +546,7 @@ async def test_recover_key_metadata_from_spend_logs_keeps_a_repeated_miss_as_lon
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     cache = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([]))
     await recover_key_metadata_from_spend_logs(mock_prisma, {unknown}, window, cache=cache)
     first_miss_key = next(key for key in cache.ttl_dict if unknown in key and not key.endswith(":missed-before"))
@@ -539,6 +564,7 @@ async def test_recover_key_metadata_from_spend_logs_keeps_the_owner_older_rows_a
     digest = hash_token("cli-session-owner-from-older-rows")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(digest, None, "team-x", "alice")]))
 
     result = await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=InMemoryCache())
@@ -551,6 +577,7 @@ async def test_recover_key_metadata_from_spend_logs_names_nothing_for_a_field_wh
     digest = hash_token("cli-session-disagreeing-rows")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     _spend_log_transaction(
         mock_prisma,
         _query_raw_spend_logs(
@@ -576,6 +603,7 @@ async def test_recover_key_metadata_from_spend_logs_bounds_the_scan_with_a_state
     digest = hash_token("cli-session-bounded-scan")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     calls: list[str] = []
     transaction = MagicMock()
     transaction.execute_raw = AsyncMock(side_effect=lambda sql: calls.append(sql) or 0)

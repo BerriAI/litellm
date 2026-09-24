@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class _BudgetDb(Protocol):
-    """The single Prisma table this repository reaches for on ``prisma_client.db``."""
+    """The single Prisma table this repository reaches for on ``prisma_client.replica_db``."""
 
     @property
     def litellm_budgettable(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]: ...
@@ -24,7 +24,7 @@ class _PrismaClientView(Protocol):
     """The one attribute this repository reads off the untyped Prisma client wrapper."""
 
     @property
-    def db(self) -> _BudgetDb: ...
+    def replica_db(self) -> _BudgetDb: ...
 
 
 class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
@@ -33,7 +33,7 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]:
         client: Final[_PrismaClientView] = self.prisma_client
-        return client.db.litellm_budgettable
+        return client.replica_db.litellm_budgettable
 
     @property
     def model_class(self) -> type[LiteLLM_BudgetTable]:

@@ -59,7 +59,7 @@ class ManagedVectorStoreTable(Protocol):
 
 def managed_vector_store_table(prisma_client: "PrismaClient") -> ManagedVectorStoreTable:
     """The Prisma table actions for managed vector stores, behind a typed surface."""
-    return prisma_client.db.litellm_managedvectorstorestable
+    return prisma_client.replica_db.litellm_managedvectorstorestable
 
 
 ########################################################

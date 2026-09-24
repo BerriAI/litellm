@@ -68,6 +68,7 @@ class _FakeDB:
 class _FakePrismaClient:
     def __init__(self, db: _FakeDB) -> None:
         self.db = db
+        self.replica_db = self.db
 
 
 class _RecordingAggregate:

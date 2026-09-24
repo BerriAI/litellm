@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 class AutoRouterSessionRepository(BaseRepository[LiteLLM_AutoRouterSession]):
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_AutoRouterSession"]:
-        return self.prisma_client.db.litellm_autoroutersession
+        return self.prisma_client.replica_db.litellm_autoroutersession
 
     @property
     def model_class(self) -> type[LiteLLM_AutoRouterSession]:

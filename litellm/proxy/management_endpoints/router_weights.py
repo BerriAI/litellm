@@ -26,7 +26,7 @@ class _ModelDb(Protocol):
 class _PrismaClient(Protocol):
     @property
     @abstractmethod
-    def db(self) -> _ModelDb:
+    def replica_db(self) -> _ModelDb:
         pass
 
 
@@ -112,7 +112,7 @@ async def validate_router_settings_weights(
         return
     if prisma_client is None:
         raise HTTPException(status_code=503, detail="Database unavailable while validating router weights")
-    stored_models: Final = await prisma_client.db.litellm_proxymodeltable.find_many(
+    stored_models: Final = await prisma_client.replica_db.litellm_proxymodeltable.find_many(
         where={"model_id": {"in": list(deployment_ids)}}
     )
     stored_by_id: Final = {

@@ -59,12 +59,12 @@ class _MCPServerTable(Protocol):
 
 def _assertion_table(prisma_client: PrismaClient) -> _SSOAssertionTable:
     """The SSO assertion table, typed so the untyped prisma client surface stops here."""
-    return prisma_client.db.litellm_ssoidentityassertion
+    return prisma_client.replica_db.litellm_ssoidentityassertion
 
 
 def _mcp_server_table(prisma_client: PrismaClient) -> _MCPServerTable:
     """The MCP server table, typed so the untyped prisma client surface stops here."""
-    return prisma_client.db.litellm_mcpservertable
+    return prisma_client.replica_db.litellm_mcpservertable
 
 
 class SSOIdentityAssertion(BaseModel):

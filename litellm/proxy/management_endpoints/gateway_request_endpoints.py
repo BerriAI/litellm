@@ -122,7 +122,7 @@ async def get_gateway_daily_activity(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     default_start, default_end = _default_range()
-    raw_rows: Final = await prisma_client.db.query_raw(  # pyright: ignore[reportAny]  # untyped prisma client
+    raw_rows: Final = await prisma_client.replica_db.query_raw(  # pyright: ignore[reportAny]  # untyped prisma client
         _AGGREGATE_SQL,
         start_date or default_start,
         end_date or default_end,

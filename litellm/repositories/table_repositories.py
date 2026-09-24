@@ -32,7 +32,7 @@ class PrismaTableRepository(Generic[RowT_co]):
 
     @property
     def table(self) -> TableActions[RowT_co]:
-        actions: Final[TableActions[RowT_co]] = getattr(self.prisma_client.db, self.table_name)
+        actions: Final[TableActions[RowT_co]] = getattr(self.prisma_client.replica_db, self.table_name)
         return wrap_table_actions_for_config_sync(actions=actions, table_name=self.table_name)
 
 

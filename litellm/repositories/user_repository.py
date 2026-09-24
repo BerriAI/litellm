@@ -40,7 +40,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_UserTable"]:
-        return self.prisma_client.db.litellm_usertable
+        return self.prisma_client.replica_db.litellm_usertable
 
     @property
     def model_class(self) -> type[LiteLLM_UserTable]:

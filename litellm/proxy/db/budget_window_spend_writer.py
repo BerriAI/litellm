@@ -147,9 +147,9 @@ async def spend_logs_seed_totals(
     else:
         return None
     rows: Final = (
-        await prisma_client.db.query_raw(unbounded_sql, entity_id, window_start)
+        await prisma_client.replica_db.query_raw(unbounded_sql, entity_id, window_start)
         if batch_started_at is None
-        else await prisma_client.db.query_raw(
+        else await prisma_client.replica_db.query_raw(
             bounded_sql,
             entity_id,
             window_start,
@@ -182,7 +182,7 @@ async def _existing_primary_keys(
     prisma_client: "PrismaClient",
     transactions: tuple[WindowSpendTransaction, ...],
 ) -> frozenset[tuple[str, str, str]]:
-    rows: Final = await prisma_client.db.query_raw(
+    rows: Final = await prisma_client.replica_db.query_raw(
         _SELECT_EXISTING_ROWS_SQL,
         tuple(transaction["entity_type"] for transaction in transactions),
         tuple(transaction["entity_id"] for transaction in transactions),

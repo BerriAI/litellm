@@ -156,6 +156,7 @@ class MockPrismaClient:
         }
         self.get_data_calls: List[Dict[str, Any]] = []
         self.db = MockDB()
+        self.replica_db = self.db
 
     async def get_data(self, table_name, query_type, **kwargs):
         self.get_data_calls.append({"table_name": table_name, "query_type": query_type, **kwargs})
@@ -933,6 +934,7 @@ def _make_reset_budget_windows_job(
     Returns (job, prisma_client_mock, spend_counter_cache_mock).
     """
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     async def fake_query_raw(query: str, *args, **kwargs):
         # Dispatch by table name in the SQL so a single stub covers both calls.
@@ -1239,6 +1241,7 @@ def test_reset_budget_windows_query_error_does_not_break_team_path(monkeypatch):
     expired = (now - timedelta(minutes=1)).isoformat() + "Z"
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     async def fake_query_raw(query: str, *args, **kwargs):
         if '"LiteLLM_VerificationToken"' in query:
@@ -1468,6 +1471,7 @@ def test_reset_does_not_zero_counter_when_db_write_fails(monkeypatch):
 
     now = datetime.now(timezone.utc)
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     matching_key = type(
         "Key",
@@ -1940,6 +1944,7 @@ def _job_with_expired_budget(db, proxy_logging=None):
     something to invalidate and its absence is a real signal."""
     prisma_client = MockPrismaClient()
     prisma_client.db = db
+    prisma_client.replica_db = prisma_client.db
     prisma_client.data["budget"] = [_budget_row(budget_id="budget-1", budget_duration="7d")]
     db.litellm_tagtable.set_find_many_results([type("Tag", (), {"tag_name": "tenant-42"})])
     job = ResetBudgetJob(
@@ -2344,6 +2349,7 @@ def test_budget_table_reset_stops_when_the_cascade_fails(monkeypatch):
     monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
     client, job = _chunked_job({"budget": [[_budget_row("b1"), _budget_row("b2")]]})
     client.db = FailingCommitDB()
+    client.replica_db = client.db
 
     asyncio.run(job.reset_budget_for_litellm_budget_table())
 
@@ -2620,6 +2626,7 @@ def _paginating_window_job(monkeypatch, pages_by_table: Dict[str, List[List[Dict
     Returns (job, calls) where calls is a list of (sql, cursor, limit).
     """
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     remaining = {table: list(pages) for table, pages in pages_by_table.items()}
     calls: List[Dict[str, Any]] = []
 
@@ -2696,6 +2703,7 @@ def test_reset_budget_windows_pages_to_the_end_of_a_large_table(monkeypatch):
 def test_reset_budget_windows_survives_one_table_failing(monkeypatch):
     """A broken key scan must not cost the team scan its sweep."""
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     async def fake_query_raw(query: str, *args, **kwargs):
         if '"LiteLLM_VerificationToken"' in query:
@@ -2759,6 +2767,7 @@ def _cursor_paginating_window_job(monkeypatch, key_rows: List[Dict[str, Any]]):
     genuinely re-reads the same prefix.
     """
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     ordered = sorted(key_rows, key=lambda r: r["token"])
     visited: List[str] = []
 

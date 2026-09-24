@@ -76,6 +76,7 @@ def query_raw(monkeypatch):
     """Mocks the one call the executor makes. `count` reads the first result, `find_many` the second."""
     mock = AsyncMock(side_effect=[[{"count": 0}], []])
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.query_raw = mock
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     return mock

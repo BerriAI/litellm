@@ -466,6 +466,7 @@ class _FakePrismaDB:
 class _FakePrismaClient:
     def __init__(self, results):
         self.db = _FakePrismaDB(results)
+        self.replica_db = self.db
 
 
 def _spend_log(request_id: str, session_id: str, prompt: str, answer: str) -> dict:

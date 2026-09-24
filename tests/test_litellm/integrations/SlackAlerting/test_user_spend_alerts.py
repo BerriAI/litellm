@@ -152,6 +152,7 @@ async def test_send_user_spend_alerts_sends_and_dedupes():
         alerting_args={"daily_spend_per_user_threshold": 50.0, "spend_anomaly_min_spend": 1000.0},
     )
     mock_prisma: Final = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(
         return_value=[
             {
@@ -189,5 +190,6 @@ async def test_send_user_spend_alerts_noop_when_alert_types_disabled():
         alerting_args={"daily_spend_per_user_threshold": 50.0},
     )
     mock_prisma: Final = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
     await slack_alerting.send_user_spend_alerts(prisma_client=mock_prisma)
     mock_prisma.db.query_raw.assert_not_called()

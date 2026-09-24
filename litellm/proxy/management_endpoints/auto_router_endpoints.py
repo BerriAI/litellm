@@ -183,31 +183,31 @@ def _team_table(prisma_client: "PrismaClient") -> _TeamTable:
 
 
 def _verification_tokens(prisma_client: "PrismaClient") -> _VerificationTokenTable:
-    return prisma_client.db.litellm_verificationtoken
+    return prisma_client.replica_db.litellm_verificationtoken
 
 
 def _team_rows(prisma_client: "PrismaClient") -> _TeamRowsTable:
-    return prisma_client.db.litellm_teamtable
+    return prisma_client.replica_db.litellm_teamtable
 
 
 def _user_rows(prisma_client: "PrismaClient") -> _UserRowsTable:
-    return prisma_client.db.litellm_usertable
+    return prisma_client.replica_db.litellm_usertable
 
 
 def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
-    return prisma_client.db.litellm_shadowevaljob
+    return prisma_client.replica_db.litellm_shadowevaljob
 
 
 def _shadow_eval_funnel(prisma_client: "PrismaClient") -> _ShadowEvalFunnelTable:
-    return prisma_client.db.litellm_shadowevalfunnel  # pyright: ignore[reportAttributeAccessIssue]  # generated client
+    return prisma_client.replica_db.litellm_shadowevalfunnel  # pyright: ignore[reportAttributeAccessIssue]  # generated client
 
 
 def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTable:
-    return prisma_client.db.litellm_shadowevalattempt
+    return prisma_client.replica_db.litellm_shadowevalattempt
 
 
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
-    return await prisma_client.db.query_raw(query, *args)
+    return await prisma_client.replica_db.query_raw(query, *args)
 
 
 async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> LiteLLM_TeamTable | None:

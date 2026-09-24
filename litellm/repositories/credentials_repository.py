@@ -27,7 +27,7 @@ class _PrismaCredentialsDb(Protocol):
 
 class _PrismaClientView(Protocol):
     @property
-    def db(self) -> _PrismaCredentialsDb: ...
+    def replica_db(self) -> _PrismaCredentialsDb: ...
 
 
 class CredentialsRepository:
@@ -46,7 +46,7 @@ class CredentialsRepository:
     @property
     def table(self) -> "_CredentialsTable":
         return wrap_table_actions_for_config_sync(
-            actions=self.prisma_client.db.litellm_credentialstable,
+            actions=self.prisma_client.replica_db.litellm_credentialstable,
             table_name="litellm_credentialstable",
         )
 

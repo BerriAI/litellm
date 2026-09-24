@@ -223,6 +223,10 @@ class _ModelTransactionClient(BaseModel):
 class _TransactionClient:
     db: _TxModelTables
 
+    @property
+    def replica_db(self) -> _TxModelTables:
+        return self.db
+
 
 _RowT = TypeVar("_RowT")
 
@@ -260,7 +264,7 @@ def _repo_team_table(prisma_client: PrismaClient) -> _TeamLookupTable:
 
 
 def _db_team_table(prisma_client: PrismaClient) -> _TeamTable:
-    return prisma_client.db.litellm_teamtable
+    return prisma_client.replica_db.litellm_teamtable
 
 
 def _model_alias_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_ModelTable]":

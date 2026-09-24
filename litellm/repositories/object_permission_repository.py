@@ -17,7 +17,7 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ObjectPermissionTable"]:
-        return self.prisma_client.db.litellm_objectpermissiontable
+        return self.prisma_client.replica_db.litellm_objectpermissiontable
 
     @property
     def model_class(self) -> type[LiteLLM_ObjectPermissionTable]:
