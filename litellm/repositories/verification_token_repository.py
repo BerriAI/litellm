@@ -124,10 +124,13 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"user_id": user_id})
         return self._to_model_list(records)
 
-    async def find_latest_llm_api_row_by_user_id(self, user_id: str) -> "PrismaVerificationToken | None":
+    async def find_latest_llm_api_row_by_user_id(
+        self, user_id: str, team_id: str | None
+    ) -> "PrismaVerificationToken | None":
         row: Final = await self.table.find_first(
             where={  # mutable-ok: the prisma where clause contract is a plain dict
                 "user_id": user_id,
+                "team_id": team_id,
                 "AND": [  # mutable-ok: prisma filter literal
                     {"OR": [{"blocked": False}, {"blocked": None}]},  # mutable-ok: prisma filter literal
                     {  # mutable-ok: prisma filter literal

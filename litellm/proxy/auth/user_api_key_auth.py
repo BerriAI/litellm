@@ -930,8 +930,10 @@ class _PendingAutoRegister(NamedTuple):
     jwt_issuer: str | None = None
 
 
-async def _latest_active_key_hash_for_user(prisma_client: PrismaClient, user_id: str) -> str | None:
-    row: Final = await VerificationTokenRepository(prisma_client).find_latest_llm_api_row_by_user_id(user_id)
+async def _latest_active_key_hash_for_user(
+    prisma_client: PrismaClient, user_id: str, team_id: str | None
+) -> str | None:
+    row: Final = await VerificationTokenRepository(prisma_client).find_latest_llm_api_row_by_user_id(user_id, team_id)
     return None if row is None else row.token
 
 
@@ -973,7 +975,7 @@ async def _auto_register_jwt_mapping(
     )
 
     existing_token_hash: Final = (
-        await _latest_active_key_hash_for_user(prisma_client, user_id)
+        await _latest_active_key_hash_for_user(prisma_client, user_id, team_id)
         if jwt_handler.litellm_jwtauth.auto_register_map_existing_key and user_id is not None
         else None
     )
@@ -1772,8 +1774,8 @@ async def _user_api_key_auth_builder(
                     # mapping + virtual key from the *validated* identity, then
                     # replace valid_token with the new key so downstream checks
                     # use the key-scoped path.
-                    if pending_auto_register is not None and prisma_client is not None:
-                        auto_registered: Final = await _auto_register_jwt_mapping(
+                    auto_registered: Final = (
+                        await _auto_register_jwt_mapping(
                             virtual_key_claim_field=pending_auto_register.claim_field,
                             claim_value=pending_auto_register.claim_value,
                             jwt_handler=jwt_handler,
@@ -1789,72 +1791,76 @@ async def _user_api_key_auth_builder(
                             end_user_id=end_user_id,
                             agent_id=agent_id,
                         )
-                        if auto_registered is not None:
-                            auto_registered.jwt_claims = jwt_claims
-                            auto_registered.user_email = user_email
-                            # The auto-registered token is built from the new key's
-                            # columns, which carry no user budget. Carry over the
-                            # already-loaded user row rather than re-reading it, or
-                            # the budget check below has nothing to enforce.
-                            auto_registered.user_model_max_budget = (
-                                user_object.model_max_budget if user_object is not None else None
-                            )
-                            valid_token = auto_registered
-                            api_key = valid_token.token or ""
-
-                    # Check if model has zero cost - if so, skip all budget checks
-                    model = _get_model_from_request_context(
-                        request_data=request_data,
-                        route=route,
-                        request=request,
-                        llm_router=llm_router,
-                        team_id=valid_token.team_id,
+                        if pending_auto_register is not None and prisma_client is not None
+                        else None
                     )
-                    skip_budget_checks = False
-                    if model is not None and llm_router is not None:
-                        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-
-                        skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
-                        if skip_budget_checks:
-                            verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
-
-                    # Fetch project object for JWT path if project_id is set
-                    _jwt_project_obj = None
-                    if valid_token.project_id is not None:
-                        _jwt_project_obj = await get_project_object(
-                            project_id=valid_token.project_id,
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
-                            proxy_logging_obj=proxy_logging_obj,
+                    if auto_registered is not None:
+                        auto_registered.jwt_claims = jwt_claims
+                        auto_registered.user_email = user_email
+                        # The auto-registered token is built from the new key's
+                        # columns, which carry no user budget. Carry over the
+                        # already-loaded user row rather than re-reading it, or
+                        # the budget check below has nothing to enforce.
+                        auto_registered.user_model_max_budget = (
+                            user_object.model_max_budget if user_object is not None else None
                         )
-                        if _jwt_project_obj is not None:
-                            valid_token.project_metadata = _jwt_project_obj.metadata
-                            valid_token.project_alias = _jwt_project_obj.project_alias
+                        valid_token = auto_registered
+                        api_key = valid_token.token or ""
 
-                    # JWT auth returns here rather than falling through to the
-                    # virtual-key checks below, so the user's per-model budget
-                    # has to be enforced on this path too. Without it the
-                    # post-call increment still charges the counter and nothing
-                    # ever reads it, which is worse than not tracking at all.
-                    # Guarded by the same flag the virtual-key path uses, or a
-                    # zero-cost model would be refused here and allowed there,
-                    # while the log above claims all budget checks were skipped.
-                    if not skip_budget_checks:
-                        await _check_user_model_budget(
-                            valid_token=cast(UserAPIKeyAuth, valid_token),
-                            model_max_budget_limiter=model_max_budget_limiter,
-                            models=_get_model_names_for_budget_checks(
-                                model=_get_model_from_request_context(
-                                    request_data=request_data,
-                                    route=route,
-                                    request=request,
-                                    llm_router=llm_router,
-                                    team_id=valid_token.team_id,
-                                )
-                            ),
+                    if auto_registered is None or not jwt_handler.litellm_jwtauth.auto_register_map_existing_key:
+                        # Check if model has zero cost - if so, skip all budget checks
+                        model = _get_model_from_request_context(
+                            request_data=request_data,
+                            route=route,
+                            request=request,
+                            llm_router=llm_router,
+                            team_id=valid_token.team_id,
                         )
+                        skip_budget_checks = False
+                        if model is not None and llm_router is not None:
+                            from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
-                    return cast(UserAPIKeyAuth, valid_token)
+                            skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
+                            if skip_budget_checks:
+                                verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
+
+                        # Fetch project object for JWT path if project_id is set
+                        _jwt_project_obj = None
+                        if valid_token.project_id is not None:
+                            _jwt_project_obj = await get_project_object(
+                                project_id=valid_token.project_id,
+                                prisma_client=prisma_client,
+                                user_api_key_cache=user_api_key_cache,
+                                proxy_logging_obj=proxy_logging_obj,
+                            )
+                            if _jwt_project_obj is not None:
+                                valid_token.project_metadata = _jwt_project_obj.metadata
+                                valid_token.project_alias = _jwt_project_obj.project_alias
+
+                        # JWT auth returns here rather than falling through to the
+                        # virtual-key checks below, so the user's per-model budget
+                        # has to be enforced on this path too. Without it the
+                        # post-call increment still charges the counter and nothing
+                        # ever reads it, which is worse than not tracking at all.
+                        # Guarded by the same flag the virtual-key path uses, or a
+                        # zero-cost model would be refused here and allowed there,
+                        # while the log above claims all budget checks were skipped.
+                        if not skip_budget_checks:
+                            await _check_user_model_budget(
+                                valid_token=cast(UserAPIKeyAuth, valid_token),
+                                model_max_budget_limiter=model_max_budget_limiter,
+                                models=_get_model_names_for_budget_checks(
+                                    model=_get_model_from_request_context(
+                                        request_data=request_data,
+                                        route=route,
+                                        request=request,
+                                        llm_router=llm_router,
+                                        team_id=valid_token.team_id,
+                                    )
+                                ),
+                            )
+
+                        return cast(UserAPIKeyAuth, valid_token)
 
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
