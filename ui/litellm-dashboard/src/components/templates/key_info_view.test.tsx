@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { keyDeleteCall, keyUpdateCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
-import KeyInfoView from "./key_info_view";
+import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
 
 const editViewMocks = vi.hoisted(() => ({
   onSubmit: undefined as ((v: Record<string, any>) => Promise<void>) | undefined,
@@ -288,6 +288,57 @@ describe("KeyInfoView", () => {
 
     expect(await screen.findByText("$0.2500")).toBeInTheDocument();
     expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $340.5000");
+  });
+
+  it("shows the backfill hint when lifetime spend trails the period spend", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, spend: 10, total_spend: 4 }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByTestId("key-lifetime-spend-backfill-hint")).toBeInTheDocument();
+    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $4.0000");
+  });
+
+  it("hides the backfill hint when lifetime spend covers the period spend", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, spend: 0.25, total_spend: 340.5 }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByTestId("key-lifetime-spend")).toBeInTheDocument();
+    expect(screen.queryByTestId("key-lifetime-spend-backfill-hint")).not.toBeInTheDocument();
+  });
+
+  describe("needsLifetimeSpendBackfill", () => {
+    it("returns true when total spend is below the period spend", () => {
+      expect(needsLifetimeSpendBackfill(10, 4)).toBe(true);
+    });
+
+    it("returns false when total spend equals or exceeds the period spend", () => {
+      expect(needsLifetimeSpendBackfill(10, 10)).toBe(false);
+      expect(needsLifetimeSpendBackfill(10, 12)).toBe(false);
+    });
+
+    it("treats a missing total spend as zero", () => {
+      expect(needsLifetimeSpendBackfill(10, null)).toBe(true);
+      expect(needsLifetimeSpendBackfill(10, undefined)).toBe(true);
+      expect(needsLifetimeSpendBackfill(0, null)).toBe(false);
+    });
   });
 
   it("should render the key's saved router fallbacks", async () => {
