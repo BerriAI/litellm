@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import HiddenParams
-from litellm.types.proxy.auth.jwt_algorithms import ApprovedJwtAlgorithm
 
 if TYPE_CHECKING:
     import httpx2
@@ -252,7 +251,7 @@ class MCPCredentials(TypedDict, total=False):
     Key id (kid) advertised in the client_assertion JWT header
     """
 
-    client_assertion_signing_alg: ApprovedJwtAlgorithm | None
+    client_assertion_signing_alg: str | None
     """
     Signing algorithm for the client_assertion JWT. Default: RS256
     """

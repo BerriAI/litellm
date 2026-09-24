@@ -86,28 +86,3 @@ async def test_the_hook_drops_the_slot_only_once_the_origin_changes() -> None:
     await hook(foreign)
     assert "esb-oauth" not in foreign.headers
 
-
-def test_new_mcp_server_request_rejects_non_approved_client_assertion_signing_alg() -> None:
-    from pydantic import ValidationError
-
-    from litellm.proxy._types import NewMCPServerRequest
-
-    with pytest.raises(ValidationError) as exc:
-        NewMCPServerRequest(
-            transport="http",
-            url="https://mcp.example.com",
-            credentials={"client_assertion_signing_alg": "HS256"},
-        )
-    assert "client_assertion_signing_alg" in str(exc.value)
-
-
-def test_new_mcp_server_request_accepts_approved_client_assertion_signing_alg() -> None:
-    from litellm.proxy._types import NewMCPServerRequest
-
-    request = NewMCPServerRequest(
-        transport="http",
-        url="https://mcp.example.com",
-        credentials={"client_assertion_signing_alg": "ES256"},
-    )
-    assert request.credentials is not None
-    assert request.credentials["client_assertion_signing_alg"] == "ES256"

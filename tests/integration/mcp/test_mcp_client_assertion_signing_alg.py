@@ -1,10 +1,12 @@
 import json
+import os
 import uuid
 from typing import Final
 
+import psycopg
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.mcp import forget_mcp, mcp_peer, register_mcp
 
@@ -85,3 +87,34 @@ def test_approved_client_assertion_signing_alg_round_trips(gateway: Gateway) -> 
         identity: Final = str(created.json()["server_id"])
         scenario.cleanups.callback(forget_mcp, gateway, identity)
         assert _stored_client_assertion_signing_alg(identity) == "ES256"
+
+
+def test_server_row_with_stale_client_assertion_signing_alg_still_loads(gateway: Gateway) -> None:
+    """A row persisted before the allowlist (credentials.client_assertion_signing_alg = "HS256")
+    must keep loading with the RS256 fallback instead of disappearing on upgrade."""
+    identity: Final = "stalealg" + uuid.uuid4().hex[:8]
+    with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
+        connection.execute(
+            'INSERT INTO "LiteLLM_MCPServerTable" (server_id, server_name, url, transport, credentials,'
+            " created_at, updated_at) VALUES (%s, %s, %s, %s, %s::jsonb, NOW(), NOW())",
+            (
+                identity,
+                "stalealg" + uuid.uuid4().hex[:8],
+                "https://mcp.integration.invalid",
+                "http",
+                json.dumps({"client_assertion_signing_alg": "HS256"}),
+            ),
+        )
+    try:
+        with mcp_peer() as peer, gateway.scenario() as scenario:
+            register_mcp(scenario, peer, "staletrigger" + uuid.uuid4().hex[:8])
+            listed: Final = eventually(
+                lambda: gateway.request("GET", "/v1/mcp/server"),
+                lambda response: response.status_code == 200
+                and any(server.get("server_id") == identity for server in response.json()),
+                seconds=30,
+            )
+            assert listed.status_code == 200, listed.text
+    finally:
+        with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
+            connection.execute('DELETE FROM "LiteLLM_MCPServerTable" WHERE server_id = %s', (identity,))

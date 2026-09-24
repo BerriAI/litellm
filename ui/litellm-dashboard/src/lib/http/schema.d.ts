@@ -34841,7 +34841,7 @@ export interface components {
             /** Aws Session Token */
             aws_session_token?: string | null;
             /** Client Assertion Signing Alg */
-            client_assertion_signing_alg?: ("RS256" | "RS384" | "RS512" | "PS256" | "PS384" | "PS512" | "ES256" | "ES384" | "ES512") | null;
+            client_assertion_signing_alg?: string | null;
             /** Client Id */
             client_id?: string | null;
             /** Client Private Key */

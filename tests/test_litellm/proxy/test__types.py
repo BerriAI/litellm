@@ -377,3 +377,33 @@ def test_change_password_request_passwords_hidden_from_repr():
     for rendered in (repr(request), str(request)):
         assert "hunter2hunter2" not in rendered
         assert "NewP@ssw0rd-2026" not in rendered
+
+
+def test_mcp_server_requests_reject_non_approved_client_assertion_signing_alg() -> None:
+    """The REST boundary is strict even though the stored blob stays lenient:
+    a write carrying HS256/hs256/"" must 422 naming the field."""
+    from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
+
+    for cls, base in (
+        (NewMCPServerRequest, {"transport": "http", "url": "https://mcp.example.com"}),
+        (UpdateMCPServerRequest, {"server_id": "srv-1", "transport": "http", "url": "https://mcp.example.com"}),
+    ):
+        for alg in ("HS256", "hs256", "", "EdDSA"):
+            with pytest.raises(ValidationError) as exc:
+                cls(**base, credentials={"client_assertion_signing_alg": alg})
+            assert "client_assertion_signing_alg" in str(exc.value), f"{cls.__name__} accepted {alg!r}"
+
+
+def test_mcp_server_requests_accept_approved_client_assertion_signing_alg() -> None:
+    from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
+
+    for alg in ("ES256", "PS384", "RS256", None):
+        request = NewMCPServerRequest(
+            transport="http",
+            url="https://mcp.example.com",
+            credentials={"client_assertion_signing_alg": alg},
+        )
+        assert request.credentials is not None
+        assert request.credentials["client_assertion_signing_alg"] == alg
+    update = UpdateMCPServerRequest(server_id="srv-1")
+    assert update.credentials is None
