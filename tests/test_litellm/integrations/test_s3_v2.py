@@ -3195,3 +3195,16 @@ def test_invalid_callback_params_flush_attempts_falls_back_to_default() -> None:
     logger = _override_logger(s3_max_flush_attempts="abc")
 
     assert logger.s3_max_flush_attempts == DEFAULT_S3_MAX_FLUSH_ATTEMPTS
+
+
+def test_invalid_callback_params_flush_attempts_falls_back_to_constructor_value() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_flush_attempts=2,
+        s3_callback_params_override={"s3_max_flush_attempts": "abc"},
+    )
+
+    assert logger.s3_max_flush_attempts == 2

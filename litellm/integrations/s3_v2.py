@@ -296,10 +296,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         )
 
         configured_attempts: Final = params.get("s3_max_flush_attempts")
-        self.s3_max_flush_attempts = resolve_s3_max_flush_attempts(
-            configured_attempts if configured_attempts not in (None, "") else s3_max_flush_attempts,
-            DEFAULT_S3_MAX_FLUSH_ATTEMPTS,
+        constructor_attempts: Final = resolve_s3_max_flush_attempts(
+            s3_max_flush_attempts, DEFAULT_S3_MAX_FLUSH_ATTEMPTS
         )
+        self.s3_max_flush_attempts = resolve_s3_max_flush_attempts(configured_attempts, constructor_attempts)
 
         self.s3_batch_file_upload = s3_batch_file_upload or resolve_s3_batch_file_upload(
             params.get("s3_batch_file_upload")
