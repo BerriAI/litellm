@@ -817,6 +817,7 @@ _EXPECTED_CUSTOMER = {
         "mcp_servers": ["s1"],
         "mcp_access_groups": [],
         "mcp_tool_permissions": None,
+        "mcp_tool_denied_tools": None,
         "vector_stores": [],
         "agents": [],
         "agent_access_groups": [],
