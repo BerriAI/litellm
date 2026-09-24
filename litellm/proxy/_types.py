@@ -1183,6 +1183,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_access_groups: list[str] | None = None
     mcp_tool_permissions: dict[str, list[str]] | None = None
     mcp_tool_denied_tools: dict[str, list[str]] | None = None
+    mcp_tool_approved_tools: dict[str, list[str]] | None = None
     mcp_toolsets: list[str] | None = None
     blocked_tools: list[str] | None = None
     vector_stores: list[str] | None = None

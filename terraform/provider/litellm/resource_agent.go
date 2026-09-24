@@ -87,7 +87,7 @@ func resourceLiteLLMAgent() *schema.Resource {
 				Optional:         true,
 				DiffSuppressFunc: agentSuppressEquivalentJSON,
 				Description: "Access control permissions as a JSON object string " +
-					"(mcp_servers, mcp_access_groups, mcp_tool_permissions, mcp_tool_denied_tools, models, agents).",
+					"(mcp_servers, mcp_access_groups, mcp_tool_permissions, mcp_tool_denied_tools, mcp_tool_approved_tools, models, agents).",
 			},
 			"static_headers": {
 				Type:        schema.TypeMap,

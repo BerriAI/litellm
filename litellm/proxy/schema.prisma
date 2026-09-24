@@ -283,6 +283,7 @@ model LiteLLM_ObjectPermissionTable {
   mcp_access_groups     String[]       @default([])
   mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
   mcp_tool_denied_tools Json?          // Tool-level denylists for MCP servers, same key shape as mcp_tool_permissions. A tool is denied when any level names it
+  mcp_tool_approved_tools Json?        // Per-server explicit approvals for delete-classified MCP tools; presence of the key activates the approval policy at that level
   vector_stores         String[]       @default([])
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])

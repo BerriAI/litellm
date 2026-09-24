@@ -1386,6 +1386,38 @@ async def test_new_organization_rejects_shared_alias_tool_denylist_key():
 
 
 @pytest.mark.asyncio
+async def test_new_organization_rejects_shared_alias_tool_approvallist_key():
+    """mcp_tool_approved_tools gets the same ambiguous-key rejection as the denylist:
+    a shared alias must not silently scope a delete approval to a second server."""
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, NewOrganizationRequest
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        _set_object_permission,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(server_id="wiki-a-id", alias="wiki", server_name="wiki_a"),
+            MagicMock(server_id="wiki-b-id", alias="wiki", server_name="wiki_b"),
+        ]
+    )
+    prisma_client.db.litellm_objectpermissiontable.create = AsyncMock()
+    data = NewOrganizationRequest(
+        organization_alias="org",
+        object_permission=LiteLLM_ObjectPermissionBase(mcp_tool_approved_tools={"wiki": ["delete_issue"]}),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _set_object_permission(data=data, prisma_client=prisma_client)
+
+    assert exc_info.value.status_code == 400
+    assert "mcp_tool_approved_tools" in str(exc_info.value.detail)
+    assert "wiki-a-id" in str(exc_info.value.detail)
+    assert "wiki-b-id" in str(exc_info.value.detail)
+    prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_new_organization_temp_budget_fields_go_to_budget_row_not_metadata(monkeypatch):
     """temp_budget_increase/expiry are budget columns and also key-metadata field names, so
     /organization/new must write them to the budget row and keep the datetime out of the org

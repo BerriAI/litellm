@@ -1366,6 +1366,47 @@ class TestObjectPermissionRepository:
         }
 
     @pytest.mark.asyncio
+    async def test_create_permission_persists_mcp_tool_approved_tools(self, repo):
+        perm = await repo.create_permission(
+            mcp_tool_approved_tools={"server-1": ["delete_issue"]},
+        )
+        assert perm.mcp_tool_approved_tools == {"server-1": ["delete_issue"]}
+        assert repo._prisma_client.db.litellm_objectpermissiontable._records[perm.object_permission_id][
+            "mcp_tool_approved_tools"
+        ] == {"server-1": ["delete_issue"]}
+
+    @pytest.mark.asyncio
+    async def test_update_permission_writes_and_clears_mcp_tool_approved_tools(self, repo):
+        repo._prisma_client.db.litellm_objectpermissiontable._records["perm-approve"] = {
+            "object_permission_id": "perm-approve",
+        }
+        updated = await repo.update_permission(
+            object_permission_id="perm-approve",
+            mcp_tool_approved_tools={"server-1": ["delete_issue"]},
+        )
+        assert updated.mcp_tool_approved_tools == {"server-1": ["delete_issue"]}
+
+        cleared = await repo.update_permission(
+            object_permission_id="perm-approve",
+            mcp_tool_approved_tools={},
+        )
+        assert cleared.mcp_tool_approved_tools == {}
+        assert (
+            "mcp_tool_approved_tools" in repo._prisma_client.db.litellm_objectpermissiontable._records["perm-approve"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_permission_omitted_mcp_tool_approved_tools_leaves_row_untouched(self, repo):
+        repo._prisma_client.db.litellm_objectpermissiontable._records["perm-keep-approved"] = {
+            "object_permission_id": "perm-keep-approved",
+            "mcp_tool_approved_tools": {"server-1": ["delete_issue"]},
+        }
+        await repo.update_permission(object_permission_id="perm-keep-approved", models=["gpt-4"])
+        assert repo._prisma_client.db.litellm_objectpermissiontable._records["perm-keep-approved"][
+            "mcp_tool_approved_tools"
+        ] == {"server-1": ["delete_issue"]}
+
+    @pytest.mark.asyncio
     async def test_delete_permission(self, repo):
         repo._prisma_client.db.litellm_objectpermissiontable._records["perm-1"] = {
             "object_permission_id": "perm-1",

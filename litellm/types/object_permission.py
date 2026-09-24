@@ -16,6 +16,7 @@ class ObjectPermissionDict(TypedDict, total=False):
     mcp_access_groups: list[str] | None
     mcp_tool_permissions: dict[str, list[str]] | None
     mcp_tool_denied_tools: ReadOnly[dict[str, list[str]] | None]
+    mcp_tool_approved_tools: ReadOnly[dict[str, list[str]] | None]
     mcp_toolsets: list[str] | None
     blocked_tools: list[str] | None
     vector_stores: list[str] | None

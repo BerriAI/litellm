@@ -34,6 +34,7 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         mcp_access_groups: list[str] | None = None,
         mcp_tool_permissions: dict[str, list[str]] | None = None,
         mcp_tool_denied_tools: dict[str, list[str]] | None = None,
+        mcp_tool_approved_tools: dict[str, list[str]] | None = None,
         vector_stores: list[str] | None = None,
         agents: list[str] | None = None,
         agent_access_groups: list[str] | None = None,
@@ -53,6 +54,8 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
             data["mcp_tool_permissions"] = mcp_tool_permissions
         if mcp_tool_denied_tools is not None:
             data["mcp_tool_denied_tools"] = mcp_tool_denied_tools
+        if mcp_tool_approved_tools is not None:
+            data["mcp_tool_approved_tools"] = mcp_tool_approved_tools
         if vector_stores is not None:
             data["vector_stores"] = vector_stores
         if agents is not None:
@@ -79,6 +82,7 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         mcp_access_groups: list[str] | None = None,
         mcp_tool_permissions: dict[str, list[str]] | None = None,
         mcp_tool_denied_tools: dict[str, list[str]] | None = None,
+        mcp_tool_approved_tools: dict[str, list[str]] | None = None,
         vector_stores: list[str] | None = None,
         agents: list[str] | None = None,
         agent_access_groups: list[str] | None = None,
@@ -98,6 +102,8 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
             data["mcp_tool_permissions"] = mcp_tool_permissions
         if mcp_tool_denied_tools is not None:
             data["mcp_tool_denied_tools"] = mcp_tool_denied_tools
+        if mcp_tool_approved_tools is not None:
+            data["mcp_tool_approved_tools"] = mcp_tool_approved_tools
         if vector_stores is not None:
             data["vector_stores"] = vector_stores
         if agents is not None:

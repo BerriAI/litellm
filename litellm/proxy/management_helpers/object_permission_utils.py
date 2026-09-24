@@ -92,7 +92,8 @@ async def prepare_object_permission_upsert(
     returns the id plus the full record to upsert. The id is pinned inside the record
     because the column has ``@default(uuid())``, so a create without it would mint a
     different id than the one the caller links. ``mcp_tool_permissions`` and
-    ``mcp_tool_denied_tools`` are serialized to JSON strings to avoid GraphQL parsing
+    ``mcp_tool_denied_tools`` and ``mcp_tool_approved_tools`` are serialized to JSON
+    strings to avoid GraphQL parsing
     issues (e.g. server IDs starting with "3e64" being interpreted as floats).
 
     Keeping this separate from the write lets callers run the upsert inside the same
@@ -119,6 +120,12 @@ async def prepare_object_permission_upsert(
         prisma_client=prisma_client,
         field_name="mcp_tool_denied_tools",
     )
+    await reject_ambiguous_mcp_tool_permission_keys(
+        new_mcp_tool_permissions=new_object_permission.get("mcp_tool_approved_tools"),
+        existing_mcp_tool_permissions=existing_fields.get("mcp_tool_approved_tools"),
+        prisma_client=prisma_client,
+        field_name="mcp_tool_approved_tools",
+    )
     merged: Final[dict[str, object]] = {
         **existing_fields,
         **new_object_permission,
@@ -130,7 +137,7 @@ async def prepare_object_permission_upsert(
         **merged,
         **{
             field: safe_dumps(merged[field])
-            for field in ("mcp_tool_permissions", "mcp_tool_denied_tools")
+            for field in ("mcp_tool_permissions", "mcp_tool_denied_tools", "mcp_tool_approved_tools")
             if field in merged
         },
     }
@@ -239,9 +246,15 @@ async def _set_object_permission(
         prisma_client=prisma_client,
         field_name="mcp_tool_denied_tools",
     )
+    await reject_ambiguous_mcp_tool_permission_keys(
+        new_mcp_tool_permissions=clean_data.get("mcp_tool_approved_tools"),
+        existing_mcp_tool_permissions=None,
+        prisma_client=prisma_client,
+        field_name="mcp_tool_approved_tools",
+    )
 
     # Serialize the tool permission maps to JSON strings for GraphQL compatibility
-    for field in ("mcp_tool_permissions", "mcp_tool_denied_tools"):
+    for field in ("mcp_tool_permissions", "mcp_tool_denied_tools", "mcp_tool_approved_tools"):
         if field in clean_data:
             clean_data[field] = safe_dumps(clean_data[field])
 
@@ -426,6 +439,16 @@ def _drop_stale_object_permission_mcp_tool_permissions(
         ] = {  # mutable-ok: stored map must stay a plain dict for JSON serialization; one-shot rebuild like the allowlist above
             identifier: _dedupe_preserving_order(tools if isinstance(tools, list) else [])
             for identifier, tools in mcp_tool_denied_tools.items()
+            if identifier_to_server_ids.get(identifier)
+        }
+
+    mcp_tool_approved_tools: Final = object_permission.get("mcp_tool_approved_tools")
+    if isinstance(mcp_tool_approved_tools, dict):
+        object_permission[
+            "mcp_tool_approved_tools"
+        ] = {  # mutable-ok: stored map must stay a plain dict for JSON serialization; one-shot rebuild like the denylist above
+            identifier: _dedupe_preserving_order(tools if isinstance(tools, list) else [])
+            for identifier, tools in mcp_tool_approved_tools.items()
             if identifier_to_server_ids.get(identifier)
         }
 
@@ -634,6 +657,12 @@ def _extract_requested_mcp_server_ids(
     mcp_tool_denied_tools: Final = object_permission.get("mcp_tool_denied_tools")
     if isinstance(mcp_tool_denied_tools, dict):
         server_ids.update(mcp_tool_denied_tools.keys())
+
+    # Same for approval-map keys: they scope the delete-approval policy to a
+    # server without granting it, and must resolve for the stale-key dropper.
+    mcp_tool_approved_tools: Final = object_permission.get("mcp_tool_approved_tools")
+    if isinstance(mcp_tool_approved_tools, dict):
+        server_ids.update(mcp_tool_approved_tools.keys())
 
     return server_ids
 

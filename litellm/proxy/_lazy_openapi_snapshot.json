@@ -2631,6 +2631,23 @@
               ],
               "title": "Mcp Servers"
             },
+            "mcp_tool_approved_tools": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Approved Tools"
+            },
             "mcp_tool_denied_tools": {
               "anyOf": [
                 {

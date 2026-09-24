@@ -655,6 +655,12 @@ async def _set_object_permission(
             prisma_client=prisma_client,
             field_name="mcp_tool_denied_tools",
         )
+        await reject_ambiguous_mcp_tool_permission_keys(
+            new_mcp_tool_permissions=data.object_permission.mcp_tool_approved_tools,
+            existing_mcp_tool_permissions=None,
+            prisma_client=prisma_client,
+            field_name="mcp_tool_approved_tools",
+        )
         created_object_permission: Final = await _table(ObjectPermissionRepository(prisma_client)).create(
             data=data.object_permission.model_dump(exclude_none=True),
         )
