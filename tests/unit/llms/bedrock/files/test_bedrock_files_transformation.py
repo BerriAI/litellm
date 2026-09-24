@@ -1672,6 +1672,26 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert "input" not in model_input
         assert "max_output_tokens" not in model_input
 
+    def test_anthropic_responses_record_accepts_a_function_tool_without_strict(self):
+        """Clients omit the SDK's required `strict`; the record is forwarded like real time, not validated."""
+        parameters = {"type": "object", "properties": {"city": {"type": "string"}}}
+        model_input = self._transform(
+            {
+                "custom_id": "4a",
+                "method": "POST",
+                "url": "/v1/responses",
+                "body": {
+                    "model": self.ANTHROPIC_MODEL,
+                    "input": "Weather in Paris?",
+                    "tools": [{"type": "function", "name": "get_weather", "parameters": parameters}],
+                },
+            }
+        )
+
+        assert model_input["messages"][0]["content"] == [{"type": "text", "text": "Weather in Paris?"}]
+        assert model_input["tools"][0]["function"]["name"] == "get_weather"
+        assert model_input["tools"][0]["function"]["parameters"] == parameters
+
     def test_responses_record_keeps_metadata(self):
         """`metadata` reaches the bridge, which reads it as its own kwarg."""
         model_input = self._transform(

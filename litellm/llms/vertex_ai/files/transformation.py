@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -529,19 +530,28 @@ def is_passthrough_batch_upload(create_file_data: Mapping[str, object], litellm_
     return create_file_data.get("purpose") == "batch" and litellm_params.get("passthrough") is True
 
 
-def _is_embeddings_batch_entry(openai_entry: Mapping[str, object]) -> bool:
+def _batch_entry_route_path(openai_entry: Mapping[str, object]) -> str:
     """
-    Whether an OpenAI batch JSONL line targets the embeddings endpoint.
+    The route an OpenAI batch JSONL line targets, without query string or trailing slash.
 
     OpenAI puts the target route on each line's `url` (e.g. `/v1/embeddings`); Vertex
     has no equivalent per-line field, so the route decides which Vertex request shape
     the line has to be translated into.
     """
-    url = openai_entry.get("url")
+    url: Final = openai_entry.get("url")
     if not isinstance(url, str):
-        return False
-    path = url.split("?")[0].rstrip("/")
+        return ""
+    return url.split("?")[0].rstrip("/")
+
+
+def _is_embeddings_batch_entry(openai_entry: Mapping[str, object]) -> bool:
+    path: Final = _batch_entry_route_path(openai_entry)
     return path == "embeddings" or path.endswith("/embeddings")
+
+
+def _is_responses_batch_entry(openai_entry: Mapping[str, object]) -> bool:
+    path: Final = _batch_entry_route_path(openai_entry)
+    return path == "responses" or path.endswith("/responses")
 
 
 def _openai_embedding_input_elements(
@@ -665,10 +675,15 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         return _openai_batch_jsonl_entry_to_vertex_embeddings_rows(openai_entry)
 
     openai_request_body: Final = openai_entry.get("body") or {}
+    chat_request_body: Final = (
+        responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai")
+        if _is_responses_batch_entry(openai_entry)
+        else openai_request_body
+    )
     vertex_request_body: Final = _transform_request_body(
-        messages=openai_request_body.get("messages", []),
-        model=openai_request_body.get("model", ""),
-        optional_params=map_openai_to_vertex_params(openai_request_body),
+        messages=chat_request_body.get("messages", []),
+        model=chat_request_body.get("model", ""),
+        optional_params=map_openai_to_vertex_params(chat_request_body),
         custom_llm_provider="vertex_ai",
         litellm_params={},
         cached_content=None,

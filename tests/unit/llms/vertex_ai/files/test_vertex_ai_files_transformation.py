@@ -1447,6 +1447,126 @@ class TestVertexEmbeddingsBatchInputTranslation:
         assert "content" in embeddings_row["request"]
 
 
+def _responses_entry(body=None, custom_id="resp-1", url="/v1/responses"):
+    return {
+        "custom_id": custom_id,
+        "method": "POST",
+        "url": url,
+        "body": body
+        if body is not None
+        else {"model": "gemini-2.5-flash", "input": "What was the top headline in world news yesterday?"},
+    }
+
+
+class TestVertexResponsesBatchInputTranslation:
+    """
+    /v1/responses batch lines carry `input`, not `messages`, so they go through the
+    Responses-to-Chat bridge before the Gemini translation instead of uploading as an
+    empty text part.
+    """
+
+    def test_string_input_becomes_the_user_prompt(self):
+        (row,) = _wrap_entries([_responses_entry()])
+
+        assert row["request"]["contents"] == [
+            {"role": "user", "parts": [{"text": "What was the top headline in world news yesterday?"}]}
+        ]
+        assert row["request"]["labels"]["litellm_custom_id"] == "resp-1"
+
+    def test_instructions_and_input_items_map_like_real_time(self):
+        (row,) = _wrap_entries(
+            [
+                _responses_entry(
+                    body={
+                        "model": "gemini-2.5-flash",
+                        "instructions": "be terse",
+                        "input": [
+                            {"role": "user", "content": "what is 2+2?"},
+                            {"role": "assistant", "content": "4"},
+                            {"role": "user", "content": "and 3+3?"},
+                        ],
+                        "max_output_tokens": 32,
+                        "temperature": 0.2,
+                    }
+                )
+            ]
+        )
+
+        request = row["request"]
+        assert request["system_instruction"] == {"parts": [{"text": "be terse"}]}
+        assert [content["role"] for content in request["contents"]] == ["user", "model", "user"]
+        assert request["contents"][-1]["parts"] == [{"text": "and 3+3?"}]
+        assert request["generationConfig"]["max_output_tokens"] == 32
+        assert request["generationConfig"]["temperature"] == 0.2
+
+    def test_web_search_tool_keeps_the_prompt(self):
+        (row,) = _wrap_entries(
+            [
+                _responses_entry(
+                    body={
+                        "model": "gemini-2.5-flash",
+                        "input": "What was the top headline in world news yesterday?",
+                        "tools": [{"type": "web_search"}],
+                    }
+                )
+            ]
+        )
+
+        assert row["request"]["contents"] == [
+            {"role": "user", "parts": [{"text": "What was the top headline in world news yesterday?"}]}
+        ]
+        assert row["request"]["tools"]
+
+    def test_sdk_optional_keys_are_not_required_like_real_time(self):
+        (row,) = _wrap_entries(
+            [
+                _responses_entry(
+                    body={
+                        "model": "gemini-2.5-flash",
+                        "input": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "input_text", "text": "Weather in the pictured city?"},
+                                    {"type": "input_image", "image_url": "https://example.com/paris.png"},
+                                ],
+                            }
+                        ],
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "get_weather",
+                                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                            }
+                        ],
+                    }
+                )
+            ]
+        )
+
+        request = row["request"]
+        assert request["contents"][0]["parts"] == [
+            {"text": "Weather in the pictured city?"},
+            {"file_data": {"mime_type": "image/png", "file_uri": "https://example.com/paris.png"}},
+        ]
+        assert request["tools"][0]["function_declarations"][0]["name"] == "get_weather"
+
+    @pytest.mark.parametrize(
+        "url",
+        ["/v1/responses", "/v1/responses/", "/v1/responses?beta=1", "responses", "https://api.openai.com/v1/responses"],
+    )
+    def test_route_spellings_are_all_responses(self, url):
+        (row,) = _wrap_entries([_responses_entry(url=url)])
+
+        assert row["request"]["contents"][0]["parts"] == [
+            {"text": "What was the top headline in world news yesterday?"}
+        ]
+
+    def test_missing_input_fails_the_upload(self):
+        with pytest.raises(ValueError, match="missing required `input` field"):
+            _wrap_entries([_responses_entry(body={"model": "gemini-2.5-flash"})])
+
+
 class TestVertexEmbeddingsBatchOutputTranslation:
     """Vertex Gemini Embedding batch output rows must come back as OpenAI batch rows."""
 
