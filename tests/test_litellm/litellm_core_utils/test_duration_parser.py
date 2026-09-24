@@ -320,6 +320,59 @@ class TestResetTimeOfDay(unittest.TestCase):
             datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc),
         )
 
+    def test_boundary_alignment_is_independent_of_sub_unit_precision(self):
+        """Reset alignment must depend only on the unit being aligned on.
+
+        _handle_hour_reset, _handle_minute_reset and _handle_second_reset each
+        used to branch on whether the sub-unit fields were exactly zero, but
+        both branches computed the same value. These cases pin that the
+        sub-unit fields genuinely do not affect the result, so the dead
+        branches cannot be reintroduced silently.
+        """
+        # --- hours: minutes/seconds/microseconds must not shift the result ---
+        for minute, second, micro in [
+            (0, 0, 0),
+            (0, 0, 1),
+            (30, 15, 500000),
+            (59, 59, 999999),
+        ]:
+            t = datetime(
+                2023, 5, 15, 14, minute, second, micro, tzinfo=timezone.utc
+            )
+            self.assertEqual(
+                get_next_standardized_reset_time("2h", t, "UTC"),
+                datetime(2023, 5, 15, 16, 0, 0, tzinfo=timezone.utc),
+                f"2h reset shifted for minute={minute} "
+                f"second={second} micro={micro}",
+            )
+
+        # --- minutes: seconds/microseconds must not shift the result ---
+        for second, micro in [
+            (0, 0),
+            (0, 1),
+            (30, 500000),
+            (59, 999999),
+        ]:
+            t = datetime(
+                2023, 5, 15, 14, 30, second, micro, tzinfo=timezone.utc
+            )
+            self.assertEqual(
+                get_next_standardized_reset_time("30m", t, "UTC"),
+                datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc),
+                f"30m reset shifted for second={second} micro={micro}",
+            )
+
+        # --- seconds: microseconds must not shift the result ---
+        for micro in [0, 1, 500000, 999999]:
+            t = datetime(
+                2023, 5, 15, 14, 30, 45, micro, tzinfo=timezone.utc
+            )
+            self.assertEqual(
+                get_next_standardized_reset_time("15s", t, "UTC"),
+                datetime(2023, 5, 15, 14, 31, 0, tzinfo=timezone.utc),
+                f"15s reset shifted for micro={micro}",
+            )
+
 
 class TestWordFormBudgetDurations(unittest.TestCase):
     """The Admin UI historically persisted word-form budget durations
