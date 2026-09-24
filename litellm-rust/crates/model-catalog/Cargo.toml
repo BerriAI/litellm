@@ -19,7 +19,6 @@ thiserror.workspace = true
 criterion.workspace = true
 rstest.workspace = true
 time.workspace = true
-litellm-model-catalog = { path = ".", features = ["schema"] }
 
 [[bench]]
 name = "catalog"

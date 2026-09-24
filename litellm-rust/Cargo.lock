@@ -3117,7 +3117,6 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "indexmap 2.14.0",
- "litellm-model-catalog",
  "rstest",
  "schemars 1.2.2",
  "serde",
