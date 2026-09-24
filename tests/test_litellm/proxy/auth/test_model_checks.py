@@ -941,6 +941,83 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
 
 
+VERTEX_PARTNER_IMAGE_VIDEO_AND_EMBEDDING_LABELS = frozenset(
+    {
+        "vertex_ai-ai21_models",
+        "vertex_ai-embedding-models",
+        "vertex_ai-image-models",
+        "vertex_ai-llama_models",
+        "vertex_ai-mistral_models",
+        "vertex_ai-openai_models",
+        "vertex_ai-qwen_models",
+        "vertex_ai-video-models",
+    }
+)
+
+
+def test_vertex_wildcard_lists_every_priced_partner_image_video_and_embedding_row():
+    """A `vertex_ai/*` grant listed only the Gemini, Claude, PaLM, DeepSeek, MiniMax, Moonshot and
+    Z.ai families, leaving the 68 priced Mistral, Llama, AI21, OpenAI, Qwen, image, video and
+    embedding rows out of GET /v1/models (LIT-8171)."""
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    expected_per_label = {
+        label: {
+            f"vertex_ai/{name.removeprefix('vertex_ai/')}"
+            for name, info in litellm.model_cost.items()
+            if info.get("litellm_provider") == label
+        }
+        for label in VERTEX_PARTNER_IMAGE_VIDEO_AND_EMBEDDING_LABELS
+    }
+    assert all(expected_per_label.values()), "every family needs priced rows for this test to mean anything"
+
+    listed = set(get_known_models_from_wildcard("vertex_ai/*"))
+
+    missing_per_label = {label: sorted(rows - listed) for label, rows in expected_per_label.items() if rows - listed}
+    assert missing_per_label == {}
+
+
+@pytest.mark.parametrize(
+    "wildcard_model, litellm_params_model, expected",
+    [
+        (
+            "vertex_ai/*",
+            "vertex_ai/*",
+            ["vertex_ai/meta/llama-3.1-405b-instruct-maas", "vertex_ai/openai/gpt-oss-120b-maas"],
+        ),
+        (
+            "my_vertex/*",
+            "vertex_ai/*",
+            ["my_vertex/meta/llama-3.1-405b-instruct-maas", "my_vertex/openai/gpt-oss-120b-maas"],
+        ),
+    ],
+)
+def test_wildcard_keeps_publisher_segment_that_names_another_provider(
+    monkeypatch, wildcard_model, litellm_params_model, expected
+):
+    """Vertex partner ids carry a publisher segment (`meta/`, `openai/`) that is also a litellm
+    provider name. Stripping it produced unroutable ids such as `vertex_ai/llama-3.1-405b-instruct-maas`;
+    only the listed provider's own prefix (or its `<base>_<variant>` base, `ollama` for `ollama_chat`)
+    is replaced."""
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["meta/llama-3.1-405b-instruct-maas", "openai/gpt-oss-120b-maas"],
+    )
+
+    result = get_known_models_from_wildcard(
+        wildcard_model=wildcard_model,
+        litellm_params=LiteLLM_Params(model=litellm_params_model, custom_llm_provider="vertex_ai"),
+    )
+
+    assert result == expected
+
+
 def test_get_complete_model_list_drops_no_default_models_sentinel():
     from litellm.proxy.auth.model_checks import get_complete_model_list
 

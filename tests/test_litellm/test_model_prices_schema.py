@@ -410,18 +410,6 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
 
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
 MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation"})
-VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
-    {
-        "vertex_ai-ai21_models",
-        "vertex_ai-embedding-models",
-        "vertex_ai-image-models",
-        "vertex_ai-llama_models",
-        "vertex_ai-mistral_models",
-        "vertex_ai-openai_models",
-        "vertex_ai-qwen_models",
-        "vertex_ai-video-models",
-    }
-)
 
 
 def is_registered_provider(label: str, model_names: tuple[str, ...]) -> bool:
@@ -443,7 +431,6 @@ def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
         and "litellm_provider" in entry
         and entry.get("mode") not in MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY
         and entry["litellm_provider"] not in PROVIDER_LABELS_WITHOUT_A_MODEL_SET
-        and entry["litellm_provider"] not in VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST
     )
     return sorted(
         label

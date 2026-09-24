@@ -15,6 +15,8 @@ from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
 from litellm.utils import get_valid_models
 
+LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in LlmProviders)
+
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 
@@ -304,23 +306,19 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
             # add model prefix to wildcard models
             wildcard_models = [f"{model_prefix}{model}" for model in wildcard_models]
 
-    known_providers: Final = {provider.value for provider in LlmProviders}
-    suffix_appended_wildcard_models: Final = []
-    for model in wildcard_models:
-        if not model.startswith(wildcard_provider_prefix):
-            # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
-            # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
-            # multiple instances), replace that existing provider prefix instead of stacking
-            # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
-            # Only strip the leading segment when it is a known provider, so ids whose first
-            # segment is an org rather than a provider (e.g. "meta-llama/Llama-3-8B") keep it.
-            leading, sep, model_suffix = model.partition("/")
-            if sep and leading in known_providers:
-                model = f"{wildcard_provider_prefix}/{model_suffix}"
-            else:
-                model = f"{wildcard_provider_prefix}/{model}"
-        suffix_appended_wildcard_models.append(model)
-    return suffix_appended_wildcard_models or []
+    return [_under_wildcard_prefix(model, wildcard_provider_prefix, provider) for model in wildcard_models]
+
+
+def _under_wildcard_prefix(model: str, wildcard_provider_prefix: str, listed_provider: str) -> str:
+    if model.startswith(wildcard_provider_prefix):
+        return model
+    leading, sep, model_suffix = model.partition("/")
+    leading_is_listed_providers_own_prefix: Final = (
+        sep != ""
+        and leading in LLM_PROVIDER_PREFIXES
+        and (leading == listed_provider or listed_provider.startswith(f"{leading}_"))
+    )
+    return f"{wildcard_provider_prefix}/{model_suffix if leading_is_listed_providers_own_prefix else model}"
 
 
 def expand_wildcard_deployments_for_model_info(
