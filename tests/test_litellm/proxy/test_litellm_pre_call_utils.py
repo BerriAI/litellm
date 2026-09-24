@@ -8246,6 +8246,40 @@ async def test_promoted_caller_trace_ids_beat_traceparent_and_baggage(path: str,
 
 
 @pytest.mark.asyncio
+async def test_missing_session_id_reject_ignores_requester_session_id_shadowed_by_empty_litellm_metadata():
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data={
+                "model": "gpt-4o",
+                "input": "hi",
+                "metadata": {"session_id": "caller-session"},
+                "litellm_metadata": {"session_id": ""},
+            },
+            request=_request_for("/v1/responses"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"missing_session_id": "reject"},
+        )
+    assert exc_info.value.code == "400"
+
+
+def test_add_litellm_metadata_from_request_headers_empty_litellm_metadata_field_falls_back_to_headers():
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {
+        "metadata": {"trace_id": "caller-trace", "session_id": "caller-session"},
+        "litellm_metadata": {"trace_id": "", "session_id": ""},
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["litellm_session_id"] == "baggage-session-42"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "client_body",
     [

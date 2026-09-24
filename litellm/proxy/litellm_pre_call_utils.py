@@ -151,12 +151,13 @@ def _session_id_from_baggage(baggage: str) -> str | None:
 
 
 def _caller_set_trace_field(data: Mapping[str, object], metadata_variable_name: str, field: str) -> bool:
+    active: Final = data.get(metadata_variable_name)
+    active_mapping: Final = cast(Mapping[str, object], active) if isinstance(active, Mapping) else None
+    if active_mapping is not None and field in active_mapping:
+        return bool(active_mapping.get(field))
     promoted: Final = metadata_variable_name == "litellm_metadata" and field in LITELLM_TRACE_CONTROL_METADATA_FIELDS
-    sources: Final = (metadata_variable_name, "metadata") if promoted else (metadata_variable_name,)
-    return any(
-        isinstance(container := data.get(name), Mapping) and bool(cast(Mapping[str, object], container).get(field))
-        for name in sources
-    )
+    requester: Final = data.get("metadata")
+    return promoted and isinstance(requester, Mapping) and bool(cast(Mapping[str, object], requester).get(field))
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
