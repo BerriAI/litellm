@@ -7,6 +7,7 @@ legacy_flags=(
   caching-local
   enterprise-package
   enterprise-routing
+  mcp-integration
   proxy-db-auth-checks
   proxy-db-budgets
   proxy-db-custom-logging
@@ -46,6 +47,10 @@ legacy_paths() {
       echo tests/unit/enterprise/proxy/test_file_deletion_blocking.py
       echo tests/unit/enterprise/proxy/test_managed_files_access_check.py
       echo tests/unit/enterprise/proxy/test_managed_files_hook.py ;;
+    mcp-integration)
+      echo tests/unit/proxy/_experimental/mcp_server
+      echo tests/unit/responses/mcp
+      echo tests/mcp_tests/test_proxy_mcp_e2e.py ;;
     proxy-db-auth-checks)
       echo tests/unit/proxy/auth/test_auth_checks.py
       echo tests/unit/proxy/auth/test_user_api_key_auth.py
