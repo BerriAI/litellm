@@ -32,6 +32,8 @@ pub enum CostError {
     MissingProvider,
     #[error("no rate for the priced unit")]
     MissingRate,
+    #[error("image steps are not a number")]
+    InvalidSteps,
     #[error("no usage on the response")]
     MissingUsage,
     #[error("model is not in the cost map")]

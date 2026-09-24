@@ -25,6 +25,7 @@ use crate::image_cost_router::{
     ImageCostRouteRequest, call_type_has_image_response, route_image_generation_cost_calculator,
 };
 use crate::mcp_cost::calculate_mcp_tool_call_cost;
+use crate::model_selection::get_provider_for_cost_calc;
 use crate::per_second::{DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND, get_replicate_completion_pricing};
 use crate::provider::LlmProviders;
 use crate::realtime_cost::{
@@ -647,13 +648,7 @@ pub fn completion_cost_from_response(
             .model_candidates
             .iter()
             .flatten()
-            .find_map(|model| {
-                catalog.get_provider_for_cost_calc(
-                    Some(model),
-                    None,
-                    request.input.model_selection.known_providers,
-                )
-            })
+            .find_map(|model| get_provider_for_cost_calc(Some(model), None, catalog))
     });
     let provider = inferred_provider.as_deref();
     let deployment_info = request

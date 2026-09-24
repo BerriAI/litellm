@@ -142,7 +142,7 @@ pub fn vertex_cost(
 ) -> Result<(f64, f64), CostError> {
     if let Some(cost) = catalog
         .entry(request.model, request.provider, request.region)
-        .and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
+        .and_then(|info| per_second_pricing_cost(&info, request.response_time_ms))
     {
         return Ok(cost);
     }
@@ -164,7 +164,7 @@ pub fn vertex_cost(
     Ok(cost_per_character(
         model_without_prefix,
         request.usage,
-        entry,
+        &entry,
         (prompt_characters, completion_characters),
         request.service_tier,
         request.vertex_location,

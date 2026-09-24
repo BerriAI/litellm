@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use jiff::Timestamp;
@@ -7,6 +8,11 @@ use crate::completion_input::{
     CompletionInputRequest, PreparedCompletionInput, prepare_completion_input,
 };
 use crate::error::CostError;
+use crate::fallback_generalizations::FallbackGeneralizations;
+use crate::get_llm_provider::{LlmProvider, ProviderModelSets, get_llm_provider};
+use crate::model_info::{ModelCost, ModelInfo, get_model_info_helper, lowercase_key_map};
+
+const FALLBACK_GENERALIZATIONS_KEY: &str = "fallback_generalizations";
 use crate::model_selection::{
     ModelSelectionRequest, get_provider_for_cost_calc, select_model_name_for_cost_calc,
 };
@@ -15,6 +21,9 @@ use crate::responses_usage::ChatUsage;
 #[derive(Clone, Debug, Default)]
 pub struct ModelInfoCatalog {
     entries: HashMap<String, Value>,
+    lowercase_keys: HashMap<String, String>,
+    model_sets: ProviderModelSets,
+    generalizations: FallbackGeneralizations,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -63,33 +72,13 @@ pub enum CostCall<'a> {
     },
 }
 
-pub fn check_provider_match(model_info: &Value, provider: Option<&str>) -> bool {
-    let Some(provider) = provider.filter(|provider| !provider.is_empty()) else {
-        return true;
-    };
-    let Some(entry_provider) = model_info.get("litellm_provider").and_then(Value::as_str) else {
-        return true;
-    };
-    entry_provider == provider
-        || (provider == "vertex_ai" && entry_provider.starts_with("vertex_ai"))
-        || (provider == "fireworks_ai" && entry_provider.starts_with("fireworks_ai"))
-        || (provider.starts_with("bedrock") && entry_provider.starts_with("bedrock"))
-        || provider == "litellm_proxy"
-        || (provider == "azure_ai" && matches!(entry_provider, "azure" | "openai"))
-        || provider == "github"
-}
-
-fn select_model_key<'a>(
-    entries: &'a HashMap<String, Value>,
-    model: &str,
+fn cost_map_model<'m>(
+    entries: &HashMap<String, Value>,
+    model: &'m str,
     provider: Option<&str>,
     region: Option<&str>,
-) -> Option<&'a str> {
-    let match_provider = provider.map(|provider| match provider {
-        "vertex_ai_beta" => "vertex_ai",
-        provider => provider,
-    });
-    let normalized = match provider {
+) -> Cow<'m, str> {
+    let model = match provider {
         Some(provider) => {
             let prefix = format!("{provider}/");
             let mut name = model;
@@ -106,44 +95,94 @@ fn select_model_key<'a>(
     let model_with_provider = match provider {
         Some(provider) => {
             let prefix = format!("{provider}/");
-            let bare = normalized.strip_prefix(&prefix).unwrap_or(normalized);
+            let bare = model.strip_prefix(&prefix).unwrap_or(model);
             let regional = region.map(|region| format!("{provider}/{region}/{bare}"));
             if let Some(regional) = regional.filter(|key| entries.contains_key(key)) {
-                regional
-            } else if normalized.starts_with(&prefix) {
-                normalized.to_owned()
+                Cow::Owned(regional)
+            } else if model.starts_with(&prefix) {
+                Cow::Borrowed(model)
             } else {
-                format!("{provider}/{normalized}")
+                Cow::Owned(format!("{provider}/{model}"))
             }
         }
-        None => normalized.to_owned(),
+        None => Cow::Borrowed(model),
     };
-    let without_prefix = normalized
+    let without_prefix = model
         .split_once('/')
-        .map_or(normalized, |(_, remainder)| remainder);
-    [model_with_provider.as_str(), normalized, without_prefix]
-        .into_iter()
-        .find_map(|candidate| {
-            entries
-                .get_key_value(candidate)
-                .filter(|(_, model_info)| check_provider_match(model_info, match_provider))
-                .map(|(key, _)| key.as_str())
-        })
+        .map_or(model, |(_, remainder)| remainder);
+    if entries.contains_key(model_with_provider.as_ref()) {
+        model_with_provider
+    } else if entries.contains_key(model) {
+        Cow::Borrowed(model)
+    } else if entries.contains_key(without_prefix) {
+        Cow::Borrowed(without_prefix)
+    } else {
+        Cow::Borrowed(model)
+    }
 }
 
 impl ModelInfoCatalog {
-    pub fn new(entries: HashMap<String, Value>) -> Self {
-        Self { entries }
+    pub fn new(mut entries: HashMap<String, Value>) -> Self {
+        let generalizations = FallbackGeneralizations::from_block(
+            entries.remove(FALLBACK_GENERALIZATIONS_KEY).as_ref(),
+        );
+        Self {
+            lowercase_keys: lowercase_key_map(&entries),
+            model_sets: ProviderModelSets::from_model_cost(&entries),
+            generalizations,
+            entries,
+        }
+    }
+
+    fn model_cost(&self) -> ModelCost<'_> {
+        ModelCost {
+            entries: &self.entries,
+            lowercase_keys: &self.lowercase_keys,
+            sets: &self.model_sets,
+            generalizations: &self.generalizations,
+        }
     }
 
     pub fn entries(&self) -> &HashMap<String, Value> {
         &self.entries
     }
 
-    pub fn entry_for_key(&self, key: &str) -> &Value {
-        self.entries
-            .get(key)
-            .expect("key came from select_model_key")
+    pub fn get_llm_provider(&self, model: &str) -> Option<LlmProvider> {
+        get_llm_provider(model, &self.model_sets, &self.generalizations)
+    }
+
+    pub fn get_model_info(
+        &self,
+        model: &str,
+        provider: Option<&str>,
+    ) -> Result<ModelInfo<'_>, CostError> {
+        get_model_info_helper(self.model_cost(), model, provider)
+    }
+
+    pub fn cost_map_model<'m>(
+        &self,
+        model: &'m str,
+        provider: Option<&str>,
+        region: Option<&str>,
+    ) -> Cow<'m, str> {
+        cost_map_model(&self.entries, model, provider, region)
+    }
+
+    pub fn select_model_info(
+        &self,
+        model: &str,
+        provider: Option<&str>,
+        region: Option<&str>,
+    ) -> Option<ModelInfo<'_>> {
+        let selected = cost_map_model(&self.entries, model, provider, region);
+        let inferred = provider
+            .is_none()
+            .then(|| self.get_llm_provider(model))
+            .flatten();
+        let provider = provider.or(inferred
+            .as_ref()
+            .map(|inferred| inferred.custom_llm_provider.as_str()));
+        self.get_model_info(&selected, provider).ok()
     }
 
     pub fn entry(
@@ -151,45 +190,27 @@ impl ModelInfoCatalog {
         model: &str,
         provider: Option<&str>,
         region: Option<&str>,
-    ) -> Option<&Value> {
-        self.select_model_key(model, provider, region)
-            .and_then(|key| self.entries.get(key))
-    }
-
-    pub fn select_model_key<'a>(
-        &'a self,
-        model: &str,
-        provider: Option<&str>,
-        region: Option<&str>,
-    ) -> Option<&'a str> {
-        select_model_key(&self.entries, model, provider, region)
+    ) -> Option<Cow<'_, Value>> {
+        self.select_model_info(model, provider, region)
+            .map(|model_info| model_info.info)
     }
 
     pub fn contains_exact_model(&self, model: &str) -> bool {
         self.entries.contains_key(model)
     }
 
-    pub fn get_provider_for_cost_calc(
-        &self,
-        model: Option<&str>,
-        provider: Option<&str>,
-        known_providers: &[&str],
-    ) -> Option<String> {
-        get_provider_for_cost_calc(model, provider, known_providers, &self.entries)
-    }
-
     pub fn select_model_name_for_cost_calc(
         &self,
         request: ModelSelectionRequest<'_>,
     ) -> Option<String> {
-        select_model_name_for_cost_calc(request, &self.entries)
+        select_model_name_for_cost_calc(request, self)
     }
 
     pub fn pricing_entry_for_cost_calc<'a>(
         &'a self,
         request: ModelSelectionRequest<'a>,
         logging_details: Option<&'a Value>,
-    ) -> Option<(&'a str, &'a Value)> {
+    ) -> Option<ModelInfo<'a>> {
         let deployment_info = if request.custom_pricing {
             request
                 .router_model_id
@@ -209,15 +230,13 @@ impl ModelInfoCatalog {
         if let (Some(key), Some(info)) =
             (request.router_model_id.or(request.model), deployment_info)
         {
-            return Some((key, info));
+            return Some(ModelInfo {
+                key: Cow::Borrowed(key),
+                info: Cow::Borrowed(info),
+            });
         }
         let selected = self.select_model_name_for_cost_calc(request);
-        let provider = get_provider_for_cost_calc(
-            request.model,
-            request.provider,
-            request.known_providers,
-            &self.entries,
-        );
+        let provider = get_provider_for_cost_calc(request.model, request.provider, self);
         [
             selected.as_deref(),
             request
@@ -228,16 +247,13 @@ impl ModelInfoCatalog {
         ]
         .into_iter()
         .flatten()
-        .find_map(|model| {
-            self.select_model_key(model, provider.as_deref(), None)
-                .and_then(|key| self.entries.get(key).map(|info| (key, info)))
-        })
+        .find_map(|model| self.select_model_info(model, provider.as_deref(), None))
     }
 
     pub fn prepare_completion_input(
         &self,
         request: CompletionInputRequest<'_>,
     ) -> Result<PreparedCompletionInput, CostError> {
-        prepare_completion_input(request, &self.entries)
+        prepare_completion_input(request, self)
     }
 }

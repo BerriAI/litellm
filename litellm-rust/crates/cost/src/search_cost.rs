@@ -141,7 +141,7 @@ pub fn search_provider_cost_per_query(
         .entry(model, provider, None)
         .ok_or(CostError::ModelNotFound)?;
     Ok(search_provider_cost_from_model_info(
-        model_info,
+        &model_info,
         number_of_queries,
         optional_params,
     ))

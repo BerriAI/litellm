@@ -7,7 +7,8 @@ use litellm_cost::error::CostError;
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog, check_provider_match};
+use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::model_info::check_provider_match;
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
 use serde_json::json;
@@ -84,7 +85,10 @@ fn cost_per_token_resolves_model_key_in_python_order(
     #[case] expected: Option<&str>,
 ) {
     assert_eq!(
-        catalog().select_model_key(model, provider, region),
+        catalog()
+            .select_model_info(model, provider, region)
+            .map(|selected| selected.key.into_owned())
+            .as_deref(),
         expected
     );
 }
@@ -221,7 +225,11 @@ fn model_info_catalog_applies_xai_inclusive_threshold_policy() {
 #[case::vertex_family_is_one_way(Some("vertex_ai"), Some("vertex_ai-language-models"), false)]
 #[case::fireworks_family(Some("fireworks_ai-embedding-models"), Some("fireworks_ai"), true)]
 #[case::fireworks_request_rejects_other_providers(Some("openai"), Some("fireworks_ai"), false)]
-#[case::fireworks_entry_needs_a_fireworks_request(Some("fireworks_ai-embedding-models"), Some("together_ai"), false)]
+#[case::fireworks_entry_needs_a_fireworks_request(
+    Some("fireworks_ai-embedding-models"),
+    Some("together_ai"),
+    false
+)]
 #[case::bedrock_family(Some("bedrock_converse"), Some("bedrock"), true)]
 #[case::bedrock_request_rejects_other_providers(Some("openai"), Some("bedrock"), false)]
 #[case::bedrock_entry_needs_a_bedrock_request(Some("bedrock"), Some("sagemaker"), false)]
@@ -252,7 +260,10 @@ fn select_model_key_skips_entries_owned_by_another_provider(
         json!({"litellm_provider": "gemini", "input_cost_per_token": 1e-6}),
     )]));
     assert_eq!(
-        catalog.select_model_key("gemini/gemini-x", provider, None),
+        catalog
+            .select_model_info("gemini/gemini-x", provider, None)
+            .map(|selected| selected.key.into_owned())
+            .as_deref(),
         expected
     );
 }
@@ -264,7 +275,10 @@ fn select_model_key_lets_vertex_ai_beta_use_vertex_entries() {
         json!({"litellm_provider": "vertex_ai-language-models"}),
     )]));
     assert_eq!(
-        catalog.select_model_key("vertex_ai/gemini-x", Some("vertex_ai_beta"), None),
+        catalog
+            .select_model_info("vertex_ai/gemini-x", Some("vertex_ai_beta"), None)
+            .map(|selected| selected.key.into_owned())
+            .as_deref(),
         Some("vertex_ai/gemini-x")
     );
 }

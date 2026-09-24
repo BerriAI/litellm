@@ -98,7 +98,7 @@ fn flat_cost_per_image_rounds_each_response_to_megapixels() {
 
 #[rstest]
 fn fal_image_cost_uses_deployment_rate_before_keyed_and_base_prices() {
-    let entries = HashMap::from([
+    let catalog = ModelInfoCatalog::new(HashMap::from([
         (
             "fal_ai/high/1024-x-768/openai/model".to_owned(),
             json!({"output_cost_per_image": 0.10}),
@@ -107,42 +107,42 @@ fn fal_image_cost_uses_deployment_rate_before_keyed_and_base_prices() {
             "fal_ai/openai/model".to_owned(),
             json!({"output_cost_per_image": 0.50}),
         ),
-    ]);
+    ]));
     let response = json!({"data": [{}, {}]});
     let supplied = json!({"output_cost_per_image": 0.25});
     assert_eq!(
         cost_calculator(
+            &catalog,
             "fal_ai/openai/model",
             &response,
             &json!({}),
             Some(&supplied),
-            &entries
         ),
         Some(0.50)
     );
     assert_eq!(
-        cost_calculator("fal_ai/openai/model", &response, &json!({}), None, &entries),
+        cost_calculator(&catalog, "fal_ai/openai/model", &response, &json!({}), None),
         Some(0.20)
     );
 }
 
 #[rstest]
 fn fal_image_cost_falls_back_to_base_megapixel_and_flat_rates_per_image() {
-    let entries = HashMap::from([(
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
         "fal_ai/fal-ai/flux/dev".to_owned(),
         json!({"output_cost_per_image": 0.5, "output_cost_per_pixel": 0.0001}),
-    )]);
+    )]));
     let response = json!({"data": [
         image(json!(1024), json!(1024)),
         image(json!(1920), json!(1080)),
         image(json!(true), json!(1024))
     ]});
     let cost = cost_calculator(
+        &catalog,
         "fal_ai/fal-ai/flux/dev",
         &response,
         &json!({}),
         None,
-        &entries,
     )
     .unwrap();
     let expected = 0.0001 * PIXELS_PER_MEGAPIXEL as f64 * 3.0 + 0.5;
@@ -208,5 +208,35 @@ fn fal_passthrough_selects_resolution_rate_and_falls_back_to_base() {
             &json!({"resolution": 512})
         ),
         None
+    );
+}
+
+// expected values recorded from litellm/llms/fal_ai/cost_calculator.py::cost_calculator
+#[rstest]
+#[case::bare_key_owned_by_fal("fal_ai/flux-zz", Some(0.4))]
+#[case::case_insensitive_key("FLUX-ZZ", Some(0.4))]
+#[case::bool_rate_counts_as_int("fal_ai/flag-zz", Some(2.0))]
+#[case::string_rate_is_not_a_number("fal_ai/str-zz", Some(0.0))]
+#[case::unmapped_model("fal_ai/missing", None)]
+fn fal_image_flat_fallback_resolves_through_get_model_info(
+    #[case] model: &str,
+    #[case] expected: Option<f64>,
+) {
+    let entry = |rate: Value| json!({"output_cost_per_image": rate, "litellm_provider": "fal_ai"});
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        ("flux-zz".to_owned(), entry(json!(0.2))),
+        ("fal_ai/flag-zz".to_owned(), entry(json!(true))),
+        ("fal_ai/str-zz".to_owned(), entry(json!("0.3"))),
+    ]));
+    let response = json!({"data": [{"url": "x"}, {"url": "y"}]});
+    assert_eq!(
+        cost_calculator(
+            &catalog,
+            model,
+            &response,
+            &json!({"image_size": "weird"}),
+            None
+        ),
+        expected
     );
 }

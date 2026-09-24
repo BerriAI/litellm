@@ -138,7 +138,6 @@ fn finding_request<'a>(response: &'a Value) -> ZeroCostFindingRequest<'a> {
             provider: Some("openai"),
             router_model_id: None,
             region_name: None,
-            known_providers: &["openai"],
         },
         logging_details: None,
         metadata: None,

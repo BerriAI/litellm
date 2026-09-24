@@ -190,12 +190,12 @@ pub fn calculate_token_type_cost_breakdown(
 }
 
 fn billed_rates_request<'a>(
-    catalog: &'a ModelInfoCatalog,
+    model_info: Option<&'a Value>,
     request: ModelCostRequest<'a>,
     custom_cost_per_token: Option<CustomTokenRates>,
 ) -> BilledRatesRequest<'a> {
     BilledRatesRequest {
-        model_info: catalog.entry(request.model, request.provider, request.region),
+        model_info,
         usage: request.usage,
         provider: request.provider,
         service_tier: request.service_tier,
@@ -211,8 +211,9 @@ pub fn get_billed_token_rates(
     request: ModelCostRequest<'_>,
     custom_cost_per_token: Option<CustomTokenRates>,
 ) -> Option<BilledTokenRates> {
+    let model_info = catalog.entry(request.model, request.provider, request.region);
     calculate_billed_token_rates(billed_rates_request(
-        catalog,
+        model_info.as_deref(),
         request,
         custom_cost_per_token,
     ))
@@ -223,8 +224,9 @@ pub fn get_token_type_cost_breakdown(
     request: ModelCostRequest<'_>,
     custom_cost_per_token: Option<CustomTokenRates>,
 ) -> TokenTypeCostBreakdown {
+    let model_info = catalog.entry(request.model, request.provider, request.region);
     calculate_token_type_cost_breakdown(billed_rates_request(
-        catalog,
+        model_info.as_deref(),
         request,
         custom_cost_per_token,
     ))

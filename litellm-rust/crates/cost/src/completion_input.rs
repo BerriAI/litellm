@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::catalog::ModelInfoCatalog;
 
 use serde_json::Value;
 
@@ -106,7 +106,7 @@ pub fn select_service_tier(
 
 pub fn prepare_completion_input(
     request: CompletionInputRequest<'_>,
-    cost_map: &HashMap<String, Value>,
+    catalog: &ModelInfoCatalog,
 ) -> Result<PreparedCompletionInput, CostError> {
     let response = request.model_selection.response;
     let call_type =
@@ -126,7 +126,7 @@ pub fn prepare_completion_input(
             model,
             ..request.model_selection
         },
-        cost_map,
+        catalog,
     );
     let response_model = get_response_model(response).map(str::to_owned);
     let requested_model = model.map(str::to_owned);

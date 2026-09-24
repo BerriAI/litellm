@@ -19,17 +19,6 @@ use litellm_token_counter::{Error as TokenCounterError, TokenCounter, Tokenizer}
 use rstest::rstest;
 use serde_json::{Value, json};
 
-const PROVIDERS: &[&str] = &[
-    "anthropic",
-    "azure_ai",
-    "exa_ai",
-    "openai",
-    "recraft",
-    "replicate",
-    "vertex_ai",
-    "xai",
-];
-
 struct CharacterTokenizer;
 
 impl Tokenizer for CharacterTokenizer {
@@ -56,7 +45,6 @@ fn request<'a>(
                 provider,
                 router_model_id: None,
                 region_name: None,
-                known_providers: PROVIDERS,
             },
             call_type: None,
             response_kind: Some(ResponseKind::Completion),
@@ -165,12 +153,13 @@ fn response_cost_calculator_prices_response_without_provider_override() {
 }
 
 #[rstest]
-#[case("xai/served", json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}))]
-#[case("served", json!({"litellm_provider": "xai", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02}))]
-fn response_cost_infers_provider_for_specialized_pricing(#[case] model: &str, #[case] info: Value) {
-    let catalog = ModelInfoCatalog::new(HashMap::from([(model.to_owned(), info)]));
+fn response_cost_infers_provider_for_specialized_pricing() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "xai/served".to_owned(),
+        json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}),
+    )]));
     let response = json!({
-        "model": model,
+        "model": "xai/served",
         "usage": {
             "prompt_tokens": 100,
             "completion_tokens": 10,
@@ -181,10 +170,31 @@ fn response_cost_infers_provider_for_specialized_pricing(#[case] model: &str, #[
     let empty = json!({});
     let result = completion_cost_from_response(
         &catalog,
-        request(Some(&response), Some(model), None, &empty, &empty),
+        request(Some(&response), Some("xai/served"), None, &empty, &empty),
     )
     .unwrap();
     assert!((result.cost.total - (100.0 * 0.01 + 30.0 * 0.02)).abs() < 1e-12);
+}
+
+#[rstest]
+fn response_cost_rejects_a_bare_model_get_llm_provider_cannot_route() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "served".to_owned(),
+        json!({"litellm_provider": "xai", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02}),
+    )]));
+    let response = json!({
+        "model": "served",
+        "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110}
+    });
+    let empty = json!({});
+    assert_eq!(
+        completion_cost_from_response(
+            &catalog,
+            request(Some(&response), Some("served"), None, &empty, &empty),
+        )
+        .map(|result| result.cost.total),
+        Err(CostError::MissingProvider)
+    );
 }
 
 #[rstest]

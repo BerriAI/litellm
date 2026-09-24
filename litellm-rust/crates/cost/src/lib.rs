@@ -15,6 +15,7 @@ pub mod background_cost_polling;
 pub mod base_rate_selection;
 #[allow(clippy::disallowed_types)]
 pub mod batch;
+pub mod bedrock_common_utils;
 #[allow(clippy::disallowed_types)]
 pub mod bedrock_image_cost;
 #[allow(clippy::disallowed_types)]
@@ -40,6 +41,8 @@ pub mod error;
 #[allow(clippy::disallowed_types)]
 pub mod fal_ai_image_cost;
 #[allow(clippy::disallowed_types)]
+pub mod fallback_generalizations;
+#[allow(clippy::disallowed_types)]
 pub mod fireworks_cost;
 #[allow(clippy::disallowed_types)]
 pub mod gemini_cost;
@@ -50,6 +53,8 @@ pub mod generic_input;
 #[allow(clippy::disallowed_types)]
 pub mod generic_output;
 pub mod generic_usage;
+#[allow(clippy::disallowed_types)]
+pub mod get_llm_provider;
 #[allow(clippy::disallowed_types)]
 pub mod groq_cost;
 #[allow(clippy::disallowed_types)]
@@ -64,6 +69,8 @@ pub mod interactions_usage;
 pub mod lemonade_cost;
 #[allow(clippy::disallowed_types)]
 pub mod mcp_cost;
+#[allow(clippy::disallowed_types)]
+pub mod model_info;
 #[allow(clippy::disallowed_types)]
 pub mod model_selection;
 pub mod non_token;

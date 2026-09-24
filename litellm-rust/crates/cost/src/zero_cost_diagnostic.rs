@@ -103,12 +103,12 @@ pub fn zero_cost_finding(
         return None;
     }
     let usage = get_usage_object(response).ok().flatten()?;
-    let (pricing_model, pricing_entry) =
+    let pricing =
         catalog.pricing_entry_for_cost_calc(request.model_selection, request.logging_details)?;
     let diagnostic = diagnose_zero_cost(
         &usage,
-        pricing_model,
-        pricing_entry,
+        &pricing.key,
+        &pricing.info,
         request.calculation_failed,
     )?;
     let model = request.model_selection.model.unwrap_or("None");

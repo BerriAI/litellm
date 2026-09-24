@@ -15,8 +15,6 @@ use litellm_cost::model_selection::ModelSelectionRequest;
 use rstest::rstest;
 use serde_json::{Value, json};
 
-const PROVIDERS: &[&str] = &["anthropic", "vertex_ai"];
-
 #[rstest]
 #[case("ON_DEMAND_PRIORITY", Some("priority"))]
 #[case("on_demand_flex", Some("flex"))]
@@ -108,7 +106,6 @@ fn prepared_input_prices_served_priority_rate() {
                 provider: Some("anthropic"),
                 router_model_id: None,
                 region_name: None,
-                known_providers: PROVIDERS,
             },
             call_type: None,
             response_kind: Some(ResponseKind::Completion),

@@ -45,10 +45,17 @@ fn usage_reports_web_search(usage: &ChatUsage) -> bool {
         )
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ResolvedModelInfo<'a> {
-    pub model_info: Option<&'a Value>,
-    pub provider: Option<&'a str>,
+    pub model_info: Option<Cow<'a, Value>>,
+    pub provider: Option<Cow<'a, str>>,
+}
+
+fn litellm_provider<'a>(model_info: &Value) -> Option<Cow<'a, str>> {
+    model_info
+        .get("litellm_provider")
+        .and_then(Value::as_str)
+        .map(|provider| Cow::Owned(provider.to_owned()))
 }
 
 pub fn resolve_model_info<'a>(
@@ -57,14 +64,13 @@ pub fn resolve_model_info<'a>(
     provider: Option<&'a str>,
     region: Option<&str>,
 ) -> ResolvedModelInfo<'a> {
-    let litellm_provider =
-        |model_info: &'a Value| model_info.get("litellm_provider").and_then(Value::as_str);
     if let Some(direct) = catalog.entry(model, provider, region) {
         return ResolvedModelInfo {
-            model_info: Some(direct),
             provider: provider
                 .filter(|provider| !provider.is_empty())
-                .or_else(|| litellm_provider(direct)),
+                .map(Cow::Borrowed)
+                .or_else(|| litellm_provider(&direct)),
+            model_info: Some(direct),
         };
     }
     let by_prefix = model
@@ -73,12 +79,12 @@ pub fn resolve_model_info<'a>(
         .flatten();
     match by_prefix {
         Some(by_prefix) => ResolvedModelInfo {
+            provider: litellm_provider(&by_prefix),
             model_info: Some(by_prefix),
-            provider: litellm_provider(by_prefix),
         },
         None => ResolvedModelInfo {
             model_info: None,
-            provider,
+            provider: provider.map(Cow::Borrowed),
         },
     }
 }
@@ -158,24 +164,27 @@ fn usage_with_anthropic_web_search<'a>(
     Some(Cow::Owned(ChatUsage { extra, ..base }))
 }
 
-fn maps_cost(usage: Option<&ChatUsage>, resolved: ResolvedModelInfo<'_>) -> f64 {
+fn maps_cost(usage: Option<&ChatUsage>, resolved: &ResolvedModelInfo<'_>) -> f64 {
     let Some(usage) = usage.filter(|usage| google_maps_grounding_requests(Some(usage)).is_some())
     else {
         return 0.0;
     };
-    match resolved {
-        ResolvedModelInfo {
-            model_info: Some(model_info),
-            provider: Some(provider),
-        } => get_cost_for_google_maps_grounding_request(provider, usage, model_info).unwrap_or(0.0),
+    match (resolved.model_info.as_deref(), resolved.provider.as_deref()) {
+        (Some(model_info), Some(provider)) => {
+            get_cost_for_google_maps_grounding_request(provider, usage, model_info).unwrap_or(0.0)
+        }
         _ => 0.0,
     }
 }
 
-fn web_search_cost(request: BuiltInToolCostRequest<'_>, resolved: ResolvedModelInfo<'_>) -> f64 {
+fn web_search_cost(request: BuiltInToolCostRequest<'_>, resolved: &ResolvedModelInfo<'_>) -> f64 {
     let usage =
         usage_with_anthropic_web_search(request.usage, request.response, request.response_kind);
-    let routed = match (resolved.model_info, usage.as_deref(), resolved.provider) {
+    let routed = match (
+        resolved.model_info.as_deref(),
+        usage.as_deref(),
+        resolved.provider.as_deref(),
+    ) {
         (Some(model_info), Some(usage), Some(provider)) => {
             get_cost_for_web_search_request(provider, usage, model_info, request.defaults)
         }
@@ -184,7 +193,7 @@ fn web_search_cost(request: BuiltInToolCostRequest<'_>, resolved: ResolvedModelI
     routed.unwrap_or_else(|| {
         get_cost_for_web_search(
             request.params.get("web_search_options"),
-            resolved.model_info,
+            resolved.model_info.as_deref(),
         ) * count_web_search_calls(request.response, request.response_kind) as f64
     })
 }
@@ -243,17 +252,17 @@ pub fn get_cost_for_built_in_tools(
     request: BuiltInToolCostRequest<'_>,
 ) -> f64 {
     let resolved = resolve_model_info(catalog, model, request.provider, region);
-    let maps = maps_cost(request.usage, resolved);
+    let maps = maps_cost(request.usage, &resolved);
     let web_search =
         response_object_includes_web_search_call(request.response, request.response_kind, None)
             || (request.response_kind != ResponseKind::Responses
                 && request.usage.is_some_and(usage_reports_web_search));
     if web_search {
-        return maps + web_search_cost(request, resolved);
+        return maps + web_search_cost(request, &resolved);
     }
     let direct = catalog.entry(model, request.provider, region);
     if response_object_includes_file_search_call(request.response, request.response_kind) {
-        return maps + file_search_cost(request, direct);
+        return maps + file_search_cost(request, direct.as_deref());
     }
-    maps + azure_assistant_cost(request, direct)
+    maps + azure_assistant_cost(request, direct.as_deref())
 }

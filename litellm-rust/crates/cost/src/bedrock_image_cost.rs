@@ -1,6 +1,8 @@
-use std::collections::HashMap;
-
 use serde_json::Value;
+
+use crate::catalog::ModelInfoCatalog;
+use crate::error::CostError;
+use crate::wire::py_real;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BedrockImageFamily {
@@ -22,57 +24,48 @@ pub fn get_config_class(model: &str) -> BedrockImageFamily {
     }
 }
 
-pub fn stability1_pricing_key(model: &str, size: Option<&str>, optional_params: &Value) -> String {
-    let steps = optional_params
-        .get("steps")
-        .and_then(Value::as_f64)
-        .unwrap_or(50.0);
+pub fn stability1_pricing_key(
+    model: &str,
+    size: Option<&str>,
+    optional_params: &Value,
+) -> Result<String, CostError> {
+    let steps = match optional_params.get("steps") {
+        None => 50.0,
+        Some(steps) => py_real(steps).ok_or(CostError::InvalidSteps)?,
+    };
     let tier = if steps > 50.0 {
         "max-steps"
     } else {
         "50-steps"
     };
-    format!("{}/{tier}/{model}", size.unwrap_or("1024-x-1024"))
-}
-
-fn model_info<'a>(
-    entries: &'a HashMap<String, Value>,
-    model: &str,
-    family: BedrockImageFamily,
-    size: Option<&str>,
-    optional_params: &Value,
-) -> Option<&'a Value> {
-    let bare = model.strip_prefix("bedrock/").unwrap_or(model);
-    match family {
-        BedrockImageFamily::Stability1 => {
-            let key = stability1_pricing_key(model, size, optional_params);
-            let bare_key = stability1_pricing_key(bare, size, optional_params);
-            [key, bare_key]
-                .into_iter()
-                .find_map(|candidate| entries.get(&candidate))
-        }
-        _ => [model.to_owned(), format!("bedrock/{bare}"), bare.to_owned()]
-            .into_iter()
-            .find_map(|candidate| entries.get(&candidate)),
-    }
+    Ok(format!("{}/{tier}/{model}", size.unwrap_or("1024-x-1024")))
 }
 
 pub fn cost_calculator(
+    catalog: &ModelInfoCatalog,
     model: &str,
     image_response: &Value,
     size: Option<&str>,
     optional_params: &Value,
-    entries: &HashMap<String, Value>,
-) -> Option<f64> {
-    let family = get_config_class(model);
-    let info = model_info(entries, model, family, size, optional_params)?;
-    let rate = info
+) -> Result<f64, CostError> {
+    let model_info = match get_config_class(model) {
+        BedrockImageFamily::Titan => catalog.get_model_info(model, None)?,
+        BedrockImageFamily::NovaCanvas | BedrockImageFamily::Stability3 => {
+            catalog.get_model_info(model, Some("bedrock"))?
+        }
+        BedrockImageFamily::Stability1 => catalog.get_model_info(
+            &stability1_pricing_key(model, size.filter(|size| !size.is_empty()), optional_params)?,
+            Some("bedrock"),
+        )?,
+    };
+    let rate = model_info
+        .info
         .get("output_cost_per_image")
-        .and_then(Value::as_f64)
+        .and_then(py_real)
         .unwrap_or(0.0);
     let images = image_response
         .get("data")
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
-    Some(rate * images as f64)
+    Ok(rate * images as f64)
 }

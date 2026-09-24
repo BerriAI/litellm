@@ -282,21 +282,20 @@ pub fn route_image_generation_cost_calculator<'a>(
             pricing.as_ref(),
         ),
         Some(LlmProviders::FAL_AI) => fal_ai_image_cost_calculator(
+            catalog,
             request.model,
             request.image_response,
             request.optional_params,
             pricing.as_ref(),
-            catalog.entries(),
         )
         .ok_or(CostError::ModelNotFound),
         Some(LlmProviders::BEDROCK) => bedrock_image_cost_calculator(
+            catalog,
             request.model,
             request.image_response,
             Some(resolved_size),
             request.optional_params,
-            catalog.entries(),
-        )
-        .ok_or(CostError::ModelNotFound),
+        ),
         Some(provider @ (LlmProviders::OPENAI | LlmProviders::AZURE))
             if request.model.to_ascii_lowercase().contains("gpt-image") =>
         {
@@ -330,7 +329,11 @@ fn resolved_model_info(
     supplied_model_info: Option<&Value>,
 ) -> Result<Value, CostError> {
     resolve_image_model_info(
-        catalog.entry(model, Some(provider), None),
+        catalog
+            .get_model_info(model, Some(provider))
+            .ok()
+            .map(|model_info| model_info.info)
+            .as_deref(),
         supplied_model_info,
     )
     .ok_or(CostError::ModelNotFound)
@@ -374,9 +377,8 @@ pub fn google_image_edit_cost(
             Ok(gemini_image_edit_cost(image_response, &model_info, at))
         }
         "vertex_ai" => catalog
-            .entry(model, Some(provider), None)
-            .map(|model_info| vertex_image_edit_cost(image_response, model_info))
-            .ok_or(CostError::ModelNotFound),
+            .get_model_info(model, Some(provider))
+            .map(|model_info| vertex_image_edit_cost(image_response, &model_info.info)),
         _ => Err(CostError::ModelNotFound),
     }
 }
@@ -385,7 +387,8 @@ pub fn azure_ai_image_generation_cost(
     catalog: &ModelInfoCatalog,
     request: AzureAiImageCatalogRequest<'_>,
 ) -> Result<f64, CostError> {
-    let shared = catalog.entry(request.model, Some("azure_ai"), None);
+    let selected = catalog.get_model_info(request.model, Some("azure_ai")).ok();
+    let shared = selected.as_ref().map(|selected| &*selected.info);
     let model_info = resolve_image_model_info(shared, request.supplied_model_info)
         .ok_or(CostError::ModelNotFound)?;
     let shared_pricing = model_info
@@ -395,9 +398,9 @@ pub fn azure_ai_image_generation_cost(
         .or(shared);
     azure_ai_image_cost_calculator(AzureAiImageRequest {
         catalog,
-        model: catalog
-            .select_model_key(request.model, Some("azure_ai"), None)
-            .unwrap_or(request.model),
+        model: selected
+            .as_ref()
+            .map_or(request.model, |selected| &selected.key),
         image_response: request.image_response,
         model_info: &model_info,
         supplied_model_info: request.supplied_model_info,

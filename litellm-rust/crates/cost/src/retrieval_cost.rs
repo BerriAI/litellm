@@ -47,7 +47,7 @@ pub fn rerank_cost(
 ) -> (f64, f64) {
     rerank_cost_from_model_info(
         provider,
-        catalog.entry(model, Some(provider), region),
+        catalog.entry(model, Some(provider), region).as_deref(),
         billed_units,
     )
 }

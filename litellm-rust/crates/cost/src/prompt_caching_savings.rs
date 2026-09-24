@@ -60,7 +60,7 @@ pub fn prompt_caching_savings_for_model(
     let model_info = catalog.entry(request.model, request.provider, request.region)?;
     Some(calculate_prompt_caching_savings(
         PromptCachingSavingsRequest {
-            model_info,
+            model_info: &model_info,
             usage: request.usage,
             provider: request.provider,
             service_tier: request.service_tier,

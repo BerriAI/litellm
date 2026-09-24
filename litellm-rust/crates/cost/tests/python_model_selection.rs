@@ -12,7 +12,15 @@ use litellm_cost::model_selection::{
 use rstest::rstest;
 use serde_json::{Value, json};
 
-const PROVIDERS: &[&str] = &["openai", "bedrock", "vertex_ai", "anthropic", "dashscope"];
+fn pricing<'a>(
+    catalog: &'a ModelInfoCatalog,
+    request: ModelSelectionRequest<'a>,
+    logging_details: Option<&'a Value>,
+) -> Option<(String, Value)> {
+    catalog
+        .pricing_entry_for_cost_calc(request, logging_details)
+        .map(|selected| (selected.key.into_owned(), selected.info.into_owned()))
+}
 
 fn request<'a>(model: Option<&'a str>, provider: Option<&'a str>) -> ModelSelectionRequest<'a> {
     ModelSelectionRequest {
@@ -24,7 +32,6 @@ fn request<'a>(model: Option<&'a str>, provider: Option<&'a str>) -> ModelSelect
         provider,
         router_model_id: None,
         region_name: None,
-        known_providers: PROVIDERS,
     }
 }
 
@@ -166,31 +173,64 @@ fn model_selection_helpers_ignore_invalid_hidden_values_and_stop_at_provider_seg
         get_hidden_str_for_cost_calc(Some(&json!({"model": ""})), "model"),
         None
     );
-    assert!(model_contains_known_llm_provider("openai/model", PROVIDERS));
-    assert!(!model_contains_known_llm_provider("team/model", PROVIDERS));
-    let catalog = HashMap::from([(
+    assert!(model_contains_known_llm_provider("openai/model"));
+    assert!(!model_contains_known_llm_provider("team/model"));
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
         "vertex_ai/claude".to_owned(),
         json!({"input_cost_per_token": 1e-6}),
-    )]);
+    )]));
     assert_eq!(
-        strip_unregistered_leading_segments("vertex_ai/openai/claude", None, PROVIDERS, &catalog,),
+        strip_unregistered_leading_segments("vertex_ai/openai/claude", None, &catalog),
         "vertex_ai/openai/claude"
     );
 }
 
 #[rstest]
-#[case(Some("xai/model"), None, Some("xai"))]
-#[case(Some("custom"), None, Some("xai"))]
-#[case(Some("xai/model"), Some("anthropic"), Some("anthropic"))]
-#[case(Some("unknown"), None, None)]
-fn provider_inference_uses_explicit_prefix_or_catalog_metadata(
+#[case::provider_prefix(Some("xai/model"), None, Some("xai"))]
+#[case::explicit_provider_wins(Some("xai/model"), Some("anthropic"), Some("anthropic"))]
+#[case::no_model(None, None, None)]
+#[case::unlisted_bare_provider_is_not_inferred(Some("custom-xai"), None, None)]
+#[case::unknown_bare_model(Some("unknown"), None, None)]
+#[case::bedrock_converse_routes_to_bedrock(Some("converse-model"), None, Some("bedrock"))]
+#[case::vertex_family_routes_to_vertex_ai(Some("vertex-model"), None, Some("vertex_ai"))]
+#[case::ai21_chat(Some("ai21-model"), None, Some("ai21_chat"))]
+#[case::ai21_prefix(Some("ai21/any"), None, Some("ai21_chat"))]
+#[case::cohere_chat_under_cohere_prefix(Some("cohere/chat-model"), None, Some("cohere_chat"))]
+#[case::azure_hosted_mistral(Some("azure/mistral-model"), None, Some("openai"))]
+#[case::anthropic_text(Some("anthropic/claude-2"), None, Some("anthropic_text"))]
+#[case::openai_finetune(Some("ft:gpt-4o:org::id"), None, Some("openai"))]
+#[case::replicate_version_id(Some(&*format!("owner/model:{}", "a".repeat(64))), None, Some("replicate"))]
+#[case::wildcard(Some("*"), None, Some("openai"))]
+fn provider_inference_follows_get_llm_provider(
     #[case] model: Option<&str>,
     #[case] explicit: Option<&str>,
     #[case] expected: Option<&str>,
 ) {
-    let catalog = HashMap::from([("custom".to_owned(), json!({"litellm_provider": "xai"}))]);
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        ("custom-xai".to_owned(), json!({"litellm_provider": "xai"})),
+        (
+            "converse-model".to_owned(),
+            json!({"litellm_provider": "bedrock_converse"}),
+        ),
+        (
+            "vertex-model".to_owned(),
+            json!({"litellm_provider": "vertex_ai-language-models"}),
+        ),
+        (
+            "ai21-model".to_owned(),
+            json!({"litellm_provider": "ai21", "mode": "chat"}),
+        ),
+        (
+            "chat-model".to_owned(),
+            json!({"litellm_provider": "cohere_chat"}),
+        ),
+        (
+            "mistral/mistral-model".to_owned(),
+            json!({"litellm_provider": "mistral"}),
+        ),
+    ]));
     assert_eq!(
-        get_provider_for_cost_calc(model, explicit, &["xai", "anthropic"], &catalog).as_deref(),
+        get_provider_for_cost_calc(model, explicit, &catalog).as_deref(),
         expected
     );
 }
@@ -215,8 +255,11 @@ fn pricing_entry_prefers_registered_deployment_to_served_model() {
         ..request(Some("requested"), Some("openai"))
     };
     assert_eq!(
-        catalog.pricing_entry_for_cost_calc(request, None),
-        Some(("router-id", &json!({"input_cost_per_token": 0.03})))
+        pricing(&catalog, request, None),
+        Some((
+            "router-id".to_owned(),
+            json!({"input_cost_per_token": 0.03})
+        ))
     );
 }
 
@@ -237,18 +280,25 @@ fn pricing_entry_reads_deployment_metadata_before_published_price() {
         ..request(Some("requested"), Some("openai"))
     };
     assert_eq!(
-        catalog.pricing_entry_for_cost_calc(selected, Some(&logging)),
-        Some(("requested", &json!({"input_cost_per_token": 0.02})))
+        pricing(&catalog, selected, Some(&logging)),
+        Some((
+            "requested".to_owned(),
+            json!({"input_cost_per_token": 0.02})
+        ))
     );
     assert_eq!(
-        catalog.pricing_entry_for_cost_calc(
+        pricing(
+            &catalog,
             ModelSelectionRequest {
                 custom_pricing: false,
                 ..selected
             },
             Some(&logging)
         ),
-        Some(("openai/served", &json!({"input_cost_per_token": 0.01})))
+        Some((
+            "openai/served".to_owned(),
+            json!({"input_cost_per_token": 0.01})
+        ))
     );
 }
 
@@ -260,7 +310,8 @@ fn pricing_entry_falls_back_from_unpriced_base_to_served_model() {
     )]));
     let response = json!({"model": "served"});
     assert_eq!(
-        catalog.pricing_entry_for_cost_calc(
+        pricing(
+            &catalog,
             ModelSelectionRequest {
                 response: Some(&response),
                 base_model: Some("unpriced"),
@@ -268,7 +319,10 @@ fn pricing_entry_falls_back_from_unpriced_base_to_served_model() {
             },
             None,
         ),
-        Some(("openai/served", &json!({"input_cost_per_token": 0.01})))
+        Some((
+            "openai/served".to_owned(),
+            json!({"input_cost_per_token": 0.01})
+        ))
     );
 }
 

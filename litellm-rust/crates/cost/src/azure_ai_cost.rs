@@ -57,6 +57,7 @@ pub fn azure_ai_cost_per_token(
     request_model: Option<&str>,
 ) -> Result<(f64, f64), CostError> {
     let model_info = catalog.entry(request.model, Some("azure_ai"), request.region);
+    let model_info = model_info.as_deref();
     if let Some(cost) =
         model_info.and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
     {
@@ -98,6 +99,6 @@ pub fn azure_ai_router_fee(
     let entry = catalog
         .entry(fee_entry, Some("azure_ai"), None)
         .ok_or(CostError::ModelNotFound)?;
-    let fee = calculate_azure_model_router_flat_cost(fee_name, prompt_tokens, entry);
+    let fee = calculate_azure_model_router_flat_cost(fee_name, prompt_tokens, &entry);
     Ok((fee > 0.0).then_some(fee))
 }

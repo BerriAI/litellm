@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use crate::catalog::ModelInfoCatalog;
 use crate::image_response_cost::resolve_image_model_info;
+use crate::wire::py_real;
 
 pub const PIXELS_PER_MEGAPIXEL: u64 = 1_048_576;
 
@@ -136,12 +137,13 @@ pub fn fal_ai_passthrough_cost_from_model_info(
 }
 
 pub fn cost_calculator(
+    catalog: &ModelInfoCatalog,
     model: &str,
     image_response: &Value,
     optional_params: &Value,
     deployment_prices: Option<&Value>,
-    entries: &HashMap<String, Value>,
 ) -> Option<f64> {
+    let entries = catalog.entries();
     let images = image_response.get("data").and_then(Value::as_array);
     let count = images.map_or(0, Vec::len);
     if let Some(rate) = deployment_prices
@@ -160,15 +162,16 @@ pub fn cost_calculator(
     if keyed.iter().all(Option::is_some) {
         return Some(keyed.into_iter().flatten().sum());
     }
-    let shared = entries.get(&format!("fal_ai/{normalized_model}"));
-    let resolved = resolve_image_model_info(shared, deployment_prices)?;
+    let shared = catalog
+        .get_model_info(normalized_model, Some("fal_ai"))
+        .ok()
+        .map(|model_info| model_info.info);
+    let resolved = resolve_image_model_info(shared.as_deref(), deployment_prices)?;
     let flat_rate = resolved
         .get("output_cost_per_image")
-        .and_then(Value::as_f64)
+        .and_then(py_real)
         .unwrap_or(0.0);
-    let pixel_rate = resolved
-        .get("output_cost_per_pixel")
-        .and_then(Value::as_f64);
+    let pixel_rate = resolved.get("output_cost_per_pixel").and_then(py_real);
     Some(
         images
             .into_iter()

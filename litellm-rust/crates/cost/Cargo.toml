@@ -10,6 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 litellm-python-compat = { path = "../python-compat" }
 litellm-token-counter = { path = "../token-counter", default-features = false }
+fancy-regex.workspace = true
 jiff = "=0.2.37"
 regex = "=1.13.1"
 strum.workspace = true

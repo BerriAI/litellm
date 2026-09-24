@@ -97,6 +97,16 @@ pub fn cost_per_token_for_call(
     request: ModelCostRequest<'_>,
     call: CostCall<'_>,
 ) -> Result<(f64, f64), CostError> {
+    with_inferred_provider(catalog, request, |catalog, request| {
+        cost_per_token_for_provider(catalog, request, call)
+    })
+}
+
+fn cost_per_token_for_provider(
+    catalog: &ModelInfoCatalog,
+    request: ModelCostRequest<'_>,
+    call: CostCall<'_>,
+) -> Result<(f64, f64), CostError> {
     let provider = request
         .provider
         .and_then(|provider| provider.parse::<LlmProviders>().ok());
@@ -119,7 +129,7 @@ pub fn cost_per_token_for_call(
             if provider == Some(LlmProviders::AZURE_AI) {
                 return azure_ai_cost_per_token(catalog, request, request_model);
             }
-            Ok(cost_per_token(catalog, request)?)
+            token_cost_per_token(catalog, request)
         }
         CostCall::Speech { prompt_characters } => speech_cost(catalog, request, prompt_characters),
         CostCall::Transcription { duration_seconds } => {
@@ -154,7 +164,7 @@ pub fn cost_per_token_for_call(
             deployment_info,
         } => {
             let published = catalog.entry(request.model, request.provider, request.region);
-            Ok(ocr_cost(response, deployment_info, published)?)
+            Ok(ocr_cost(response, deployment_info, published.as_deref())?)
         }
         CostCall::Batch { deployment_info } => {
             let published = catalog.entry(request.model, request.provider, request.region);
@@ -171,7 +181,7 @@ pub fn cost_per_token_for_call(
             let info = if has_deployment_rates {
                 deployment_info
             } else {
-                published.or(deployment_info)
+                published.as_deref().or(deployment_info)
             };
             let Some(info) = info else {
                 return Ok((0.0, 0.0));
@@ -191,9 +201,38 @@ pub fn cost_per_token(
     catalog: &ModelInfoCatalog,
     request: ModelCostRequest<'_>,
 ) -> Result<(f64, f64), CostError> {
+    with_inferred_provider(catalog, request, token_cost_per_token)
+}
+
+fn with_inferred_provider(
+    catalog: &ModelInfoCatalog,
+    request: ModelCostRequest<'_>,
+    price: impl FnOnce(&ModelInfoCatalog, ModelCostRequest<'_>) -> Result<(f64, f64), CostError>,
+) -> Result<(f64, f64), CostError> {
+    if request.provider.is_some() {
+        return price(catalog, request);
+    }
+    let inferred = catalog
+        .get_llm_provider(request.model)
+        .ok_or(CostError::MissingProvider)?;
+    let selected = catalog.cost_map_model(request.model, None, request.region);
+    price(
+        catalog,
+        ModelCostRequest {
+            model: &selected,
+            provider: Some(&inferred.custom_llm_provider),
+            ..request
+        },
+    )
+}
+
+fn token_cost_per_token(
+    catalog: &ModelInfoCatalog,
+    request: ModelCostRequest<'_>,
+) -> Result<(f64, f64), CostError> {
     if let Some(cost) = catalog
         .entry(request.model, request.provider, request.region)
-        .and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
+        .and_then(|info| per_second_pricing_cost(&info, request.response_time_ms))
     {
         return Ok(cost);
     }
@@ -219,18 +258,17 @@ pub fn cost_per_token(
     {
         return Ok((0.0, cost));
     }
-    let key = catalog
-        .select_model_key(request.model, request.provider, request.region)
+    let selected = catalog
+        .select_model_info(request.model, request.provider, request.region)
         .or_else(|| {
             (provider == Some(LlmProviders::FIREWORKS_AI))
                 .then(|| get_base_model_for_pricing(request.model, FireworksThresholds::default()))
                 .and_then(|category| {
-                    catalog.select_model_key(category, request.provider, request.region)
+                    catalog.select_model_info(category, request.provider, request.region)
                 })
         })
         .ok_or(CostError::ModelNotFound)?;
-    let model_info =
-        apply_provider_cache_read_default(catalog.entry_for_key(key), request.provider);
+    let model_info = apply_provider_cache_read_default(&selected.info, request.provider);
     if let Some(cost) = per_second_pricing_cost(&model_info, request.response_time_ms) {
         return Ok(cost);
     }
@@ -262,7 +300,7 @@ pub fn cost_per_token(
         Some(LlmProviders::FIREWORKS_AI) => {
             return Ok(fireworks_cost_per_token(
                 request.usage,
-                catalog.entry_for_key(key),
+                &selected.info,
                 request.at,
             ));
         }
@@ -313,7 +351,7 @@ pub fn cost_per_token(
         _ => (request.service_tier, request.data_residency),
     };
     let cost = generic_cost_per_token(GenericCostRequest {
-        model_info: catalog.entry_for_key(key),
+        model_info: &selected.info,
         usage: request.usage,
         provider: request.provider,
         service_tier,
@@ -369,6 +407,7 @@ pub fn speech_cost(
     let model_info = catalog
         .entry(request.model, request.provider, request.region)
         .ok_or(CostError::ModelNotFound)?;
+    let model_info = &*model_info;
     match select_cost_metric_for_model(model_info)? {
         SpeechCostMetric::PerCharacter => {
             let characters = prompt_characters.ok_or(CostError::MissingPromptCharacters)?;
@@ -399,6 +438,7 @@ pub fn transcription_cost(
     let model_info = catalog
         .entry(request.model, request.provider, request.region)
         .ok_or(CostError::ModelNotFound)?;
+    let model_info = &*model_info;
     if transcription_usage_has_token_details(request.usage) {
         return Ok(generic_cost_per_token(GenericCostRequest {
             model_info,
@@ -421,6 +461,7 @@ pub fn handle_realtime_transcription_cost_calculation(
 ) -> f64 {
     let model = get_transcription_model_name_from_results(results).unwrap_or(requested_model);
     let model_info = catalog.entry(model, Some(provider), None);
+    let model_info = model_info.as_deref();
     results
         .iter()
         .filter(|event| {
@@ -467,7 +508,7 @@ pub fn handle_realtime_stream_cost_calculation(
         .find_map(|model| {
             let model_info = catalog.entry(model, Some(provider), None)?;
             let cost = generic_cost_per_token(GenericCostRequest {
-                model_info,
+                model_info: &model_info,
                 usage: combined_usage,
                 provider: Some(provider),
                 service_tier: None,

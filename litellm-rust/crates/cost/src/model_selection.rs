@@ -1,6 +1,9 @@
-use std::collections::HashMap;
+use std::str::FromStr;
 
 use serde_json::Value;
+
+use crate::catalog::ModelInfoCatalog;
+use crate::provider::LlmProviders;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ModelSelectionRequest<'a> {
@@ -12,7 +15,6 @@ pub struct ModelSelectionRequest<'a> {
     pub provider: Option<&'a str>,
     pub router_model_id: Option<&'a str>,
     pub region_name: Option<&'a str>,
-    pub known_providers: &'a [&'a str],
 }
 
 pub fn get_response_model(response: Option<&Value>) -> Option<&str> {
@@ -29,17 +31,20 @@ pub fn get_hidden_str_for_cost_calc<'a>(
         .filter(|value| !value.is_empty())
 }
 
-pub fn model_contains_known_llm_provider(model: &str, known_providers: &[&str]) -> bool {
-    let prefix = model.split('/').next().unwrap_or(model);
-    known_providers.contains(&prefix)
+fn is_llm_provider(name: &str) -> bool {
+    LlmProviders::from_str(name).is_ok()
+}
+
+pub fn model_contains_known_llm_provider(model: &str) -> bool {
+    model.split('/').next().is_some_and(is_llm_provider)
 }
 
 pub fn strip_unregistered_leading_segments(
     model: &str,
     region_name: Option<&str>,
-    known_providers: &[&str],
-    cost_map: &HashMap<String, Value>,
+    catalog: &ModelInfoCatalog,
 ) -> String {
+    let cost_map = catalog.entries();
     let segments: Vec<&str> = model.split('/').collect();
     if segments.len() < 2 || cost_map.contains_key(&segments[1..].join("/")) {
         return model.to_owned();
@@ -55,7 +60,7 @@ pub fn strip_unregistered_leading_segments(
     let tail = &segments[head_len..];
     let first_provider = tail
         .iter()
-        .position(|segment| known_providers.contains(segment))
+        .position(|segment| is_llm_provider(segment))
         .unwrap_or(tail.len());
     (0..=first_provider.min(tail.len().saturating_sub(1)))
         .map(|start| format!("{head}/{}", tail[start..].join("/")))
@@ -76,38 +81,22 @@ fn has_explicit_pricing(entry: &Value) -> bool {
 
 pub fn get_provider_for_cost_calc(
     model: Option<&str>,
-    explicit_provider: Option<&str>,
-    known_providers: &[&str],
-    cost_map: &HashMap<String, Value>,
+    custom_llm_provider: Option<&str>,
+    catalog: &ModelInfoCatalog,
 ) -> Option<String> {
-    explicit_provider
-        .map(str::to_owned)
-        .or_else(|| {
-            model
-                .and_then(|model| model.split_once('/'))
-                .map(|(provider, _)| provider)
-                .filter(|provider| known_providers.contains(provider))
-                .map(str::to_owned)
-        })
-        .or_else(|| {
-            model
-                .and_then(|model| cost_map.get(model))
-                .and_then(|info| info.get("litellm_provider"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
+    custom_llm_provider.map(str::to_owned).or_else(|| {
+        catalog
+            .get_llm_provider(model?)
+            .map(|resolved| resolved.custom_llm_provider)
+    })
 }
 
 pub fn select_model_name_for_cost_calc(
     request: ModelSelectionRequest<'_>,
-    cost_map: &HashMap<String, Value>,
+    catalog: &ModelInfoCatalog,
 ) -> Option<String> {
-    let provider = get_provider_for_cost_calc(
-        request.model,
-        request.provider,
-        request.known_providers,
-        cost_map,
-    );
+    let cost_map = catalog.entries();
+    let provider = get_provider_for_cost_calc(request.model, request.provider, catalog);
     let response_model = get_response_model(request.response);
     let private_model =
         get_hidden_str_for_cost_calc(request.hidden_params, "provider_response_model");
@@ -135,7 +124,7 @@ pub fn select_model_name_for_cost_calc(
     let Some(provider) = provider else {
         return Some(selected.to_owned());
     };
-    if model_contains_known_llm_provider(selected, request.known_providers) {
+    if model_contains_known_llm_provider(selected) {
         return Some(selected.to_owned());
     }
     let prefix =
@@ -143,7 +132,6 @@ pub fn select_model_name_for_cost_calc(
     Some(strip_unregistered_leading_segments(
         &format!("{prefix}/{selected}"),
         priced_region,
-        request.known_providers,
-        cost_map,
+        catalog,
     ))
 }

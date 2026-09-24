@@ -34,7 +34,7 @@ pub fn databricks_cost_per_token(
 ) -> Result<(f64, f64), CostError> {
     if let Some(cost) = catalog
         .entry(request.model, Some("databricks"), request.region)
-        .and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
+        .and_then(|info| per_second_pricing_cost(&info, request.response_time_ms))
     {
         return Ok(cost);
     }
@@ -47,7 +47,7 @@ pub fn databricks_cost_per_token(
         .ok_or(CostError::ModelNotFound)?;
     Ok(calculate_generic_cost_from_model_info_with_region(
         request.usage,
-        entry,
+        &entry,
         None,
         false,
         None,

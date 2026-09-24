@@ -2979,6 +2979,7 @@ name = "litellm-cost"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "fancy-regex 0.19.2",
  "jiff",
  "litellm-python-compat",
  "litellm-token-counter",
