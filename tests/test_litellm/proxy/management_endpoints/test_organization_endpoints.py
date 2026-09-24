@@ -647,6 +647,7 @@ async def test_organization_member_add_budget_omission_and_null_leave_budget_uns
     from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 
     user = LiteLLM_UserTable(user_id="user-1", user_role="internal_user")
+
     async def create_membership(data):
         return LiteLLM_OrganizationMembershipTable(
             user_id="user-1",
@@ -1347,6 +1348,38 @@ async def test_new_organization_rejects_shared_alias_tool_permission_key():
         await _set_object_permission(data=data, prisma_client=prisma_client)
 
     assert exc_info.value.status_code == 400
+    assert "wiki-a-id" in str(exc_info.value.detail)
+    assert "wiki-b-id" in str(exc_info.value.detail)
+    prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_organization_rejects_shared_alias_tool_denylist_key():
+    """mcp_tool_denied_tools gets the same ambiguous-key rejection as the allowlist:
+    a shared alias must not silently block a tool on a second server."""
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, NewOrganizationRequest
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        _set_object_permission,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(server_id="wiki-a-id", alias="wiki", server_name="wiki_a"),
+            MagicMock(server_id="wiki-b-id", alias="wiki", server_name="wiki_b"),
+        ]
+    )
+    prisma_client.db.litellm_objectpermissiontable.create = AsyncMock()
+    data = NewOrganizationRequest(
+        organization_alias="org",
+        object_permission=LiteLLM_ObjectPermissionBase(mcp_tool_denied_tools={"wiki": ["delete_issue"]}),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _set_object_permission(data=data, prisma_client=prisma_client)
+
+    assert exc_info.value.status_code == 400
+    assert "mcp_tool_denied_tools" in str(exc_info.value.detail)
     assert "wiki-a-id" in str(exc_info.value.detail)
     assert "wiki-b-id" in str(exc_info.value.detail)
     prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()

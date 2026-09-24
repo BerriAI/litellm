@@ -633,6 +633,42 @@ class TestMCPRequestHandler:
         assert blocked is False
         assert open_tool is True
 
+    async def test_user_denylist_narrows_unrestricted_key(self):
+        """The internal user's denylist rides the same row the user tool ceiling loads: a deny at
+        the user level blocks its tools for a key with no restriction of its own"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="user-1")
+        user_object_permission = self._toolset_only_object_permission([])
+        user_object_permission.mcp_tool_denied_tools = {"server-a": ["user_blocked"]}
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=user_object_permission)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            blocked = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="user_blocked", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            open_tool = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="anything_else", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert blocked is False
+        assert open_tool is True
+
     async def test_org_denylist_read_fault_skips_only_the_org_level(self):
         """An indeterminate org read fault for key auth skips the org level entirely, ceiling AND
         denylist together: a team-denied tool stays denied while an org-only-denied tool is allowed,
