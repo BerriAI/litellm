@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -187,22 +188,28 @@ export default function PromptCachingRequestsTable({ accessToken, dateValue }: P
                   </SelectContent>
                 </Select>
               </div>
-              <div className="flex items-center gap-3">
-                <Button
-                  variant="outline"
-                  disabled={page === 1}
-                  onClick={() => setPagination({ scope, cursors: cursors.slice(0, -1) })}
-                >
-                  Previous
-                </Button>
-                <span className="text-sm text-muted-foreground">Page {page}</span>
-                <Button
-                  variant="outline"
-                  disabled={!requests.data.has_more || !nextCursor}
-                  onClick={() => nextCursor && setPagination({ scope, cursors: [...cursors, nextCursor] })}
-                >
-                  Next
-                </Button>
+              <div className="flex items-center gap-4">
+                <span className="text-sm text-muted-foreground tabular-nums">Page {page}</span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label="Go to previous page"
+                    disabled={page === 1}
+                    onClick={() => setPagination({ scope, cursors: cursors.slice(0, -1) })}
+                  >
+                    <ChevronLeft />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label="Go to next page"
+                    disabled={!requests.data.has_more || !nextCursor}
+                    onClick={() => nextCursor && setPagination({ scope, cursors: [...cursors, nextCursor] })}
+                  >
+                    <ChevronRight />
+                  </Button>
+                </div>
               </div>
             </div>
           </>
