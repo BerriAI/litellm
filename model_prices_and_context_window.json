@@ -26057,7 +26057,7 @@
         "supports_image_size": false
     },
     "gemini-2.5-flash-image": {
-        "deprecation_date": "2026-10-02",
+        "deprecation_date": "2027-03-15",
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
@@ -49110,6 +49110,7 @@
     },
     "vertex_ai/deepseek-ai/deepseek-v3.1-maas": {
         "cache_read_input_token_cost": 6e-08,
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 6e-07,
         "input_cost_per_token_batches": 3e-07,
         "litellm_provider": "vertex_ai-deepseek_models",
@@ -49131,6 +49132,7 @@
     },
     "vertex_ai/deepseek-ai/deepseek-v3.2-maas": {
         "cache_read_input_token_cost": 5.6e-08,
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 5.6e-07,
         "input_cost_per_token_batches": 2.8e-07,
         "litellm_provider": "vertex_ai-deepseek_models",
@@ -49151,6 +49153,7 @@
         "supports_tool_choice": true
     },
     "vertex_ai/deepseek-ai/deepseek-r1-0528-maas": {
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 1.35e-06,
         "input_cost_per_token_batches": 6.75e-07,
         "litellm_provider": "vertex_ai-deepseek_models",
@@ -49171,7 +49174,7 @@
         "supports_tool_choice": true
     },
     "vertex_ai/gemini-2.5-flash-image": {
-        "deprecation_date": "2026-10-02",
+        "deprecation_date": "2027-03-15",
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
@@ -49858,6 +49861,7 @@
     },
     "vertex_ai/minimaxai/minimax-m2-maas": {
         "cache_read_input_token_cost": 3e-08,
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "vertex_ai-minimax_models",
         "max_input_tokens": 196608,
@@ -49871,6 +49875,7 @@
     },
     "vertex_ai/moonshotai/kimi-k2-thinking-maas": {
         "cache_read_input_token_cost": 6e-08,
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "vertex_ai-moonshot_models",
         "max_input_tokens": 256000,
@@ -49885,6 +49890,7 @@
     },
     "vertex_ai/zai-org/glm-4.7-maas": {
         "cache_read_input_token_cost": 6e-08,
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "vertex_ai-zai_models",
         "max_input_tokens": 200000,
@@ -49902,6 +49908,7 @@
     },
     "vertex_ai/zai-org/glm-5-maas": {
         "cache_read_input_token_cost": 1e-07,
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-zai_models",
         "max_input_tokens": 200000,
@@ -50067,6 +50074,7 @@
         "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
     },
     "vertex_ai/deepseek-ai/deepseek-ocr-maas": {
+        "deprecation_date": "2026-10-21",
         "litellm_provider": "vertex_ai",
         "mode": "ocr",
         "input_cost_per_token": 3e-07,
@@ -50107,6 +50115,7 @@
         "supports_reasoning": true
     },
     "vertex_ai/openai/gpt-oss-20b-maas": {
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 7e-08,
         "litellm_provider": "vertex_ai-openai_models",
         "max_input_tokens": 131072,
@@ -50237,6 +50246,7 @@
         "supports_vision": true
     },
     "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas": {
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_batches": 1.1e-07,
         "litellm_provider": "vertex_ai-qwen_models",
@@ -50256,6 +50266,7 @@
     },
     "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas": {
         "cache_read_input_token_cost": 2.2e-08,
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_batches": 1.1e-07,
         "litellm_provider": "vertex_ai-qwen_models",
@@ -50273,6 +50284,7 @@
         "supports_tool_choice": true
     },
     "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-qwen_models",
         "max_input_tokens": 262144,
@@ -50288,6 +50300,7 @@
         "supports_tool_choice": true
     },
     "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas": {
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-qwen_models",
         "max_input_tokens": 262144,
@@ -75522,6 +75535,7 @@
         "supports_tool_choice": true
     },
     "vertex_ai/meta/llama-3.3-70b-instruct-maas": {
+        "deprecation_date": "2026-10-21",
         "input_cost_per_token": 7.2e-07,
         "input_cost_per_token_batches": 3.6e-07,
         "litellm_provider": "vertex_ai-llama_models",
