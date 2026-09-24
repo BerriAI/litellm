@@ -66,6 +66,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     is_valid_fallback_model,
     jwt_key_mapping_cache_key,
+    mcp_request_cannot_spend,
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
 )
@@ -2328,7 +2329,7 @@ async def _user_api_key_auth_builder(
                     )
 
                     # Check 5. Token Spend is under budget
-                    if RouteChecks.is_llm_api_route(route=route):
+                    if RouteChecks.is_llm_api_route(route=route) and not mcp_request_cannot_spend(route=route):
                         await _virtual_key_max_budget_check(
                             valid_token=valid_token,
                             proxy_logging_obj=proxy_logging_obj,

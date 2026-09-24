@@ -59,11 +59,14 @@ from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_user_object,
     invalidate_team_member_spend_state,
+    mcp_request_cannot_spend,
     request_skips_budget_checks,
     route_skips_budget_checks,
     vector_store_access_check,
 )
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.types.mcp import MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.constants import (
@@ -8979,6 +8982,91 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
 def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:
     assert request_skips_budget_checks(route="/v1/models", model=None, llm_router=None) is True
     assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
+
+
+def _mcp_registry(*, priced: bool) -> dict[str, MCPServer]:
+    mcp_info: Final = {"mcp_server_cost_info": {"default_cost_per_query": 0.01}} if priced else None
+    return {"s1": MCPServer(server_id="s1", name="wiki", transport=MCPTransport.http, mcp_info=mcp_info)}
+
+
+def _use_mcp_registry(monkeypatch, *, priced: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    monkeypatch.setattr(global_mcp_server_manager, "get_registry", lambda: _mcp_registry(priced=priced))
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+
+
+@pytest.mark.parametrize(
+    ("route", "priced", "cannot_spend"),
+    [
+        pytest.param("/v1/chat/completions", False, False, id="not an MCP route"),
+        pytest.param("/mcp/", False, True, id="MCP while nothing is priced"),
+        pytest.param("/mcp/", True, False, id="MCP once a server is priced"),
+        pytest.param("/mcp-rest/tools/call", False, True, id="REST tool call while nothing is priced"),
+        pytest.param("/mcp-rest/tools/call", True, False, id="REST tool call once a server is priced"),
+        pytest.param("/mcp-rest/tools/list", True, True, id="REST tool listing even with a server priced"),
+        pytest.param("/v1/mcp/tools", True, True, id="tool listing even with a server priced"),
+    ],
+)
+def test_mcp_request_cannot_spend_until_something_can_price_a_tool_call(
+    monkeypatch, route, priced, cannot_spend
+) -> None:
+    _use_mcp_registry(monkeypatch, priced=priced)
+    assert mcp_request_cannot_spend(route=route) is cannot_spend
+
+
+async def _common_checks_for_over_budget_user(*, route: str) -> bool:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    user: Final = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=1.0)
+    token: Final = UserAPIKeyAuth(token="k1", user_id="u1")
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 5.0 if counter_key == "spend:user:u1" else 0.0
+
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.get_current_spend", _spend_by_counter),
+    ):
+        result: Final = await common_checks(
+            request_body={},
+            team_object=None,
+            user_object=user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=token,
+            request=MagicMock(spec=Request),
+        )
+        await asyncio.sleep(0)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_over_budget_user_keeps_mcp_while_nothing_can_price_a_tool_call(monkeypatch):
+    """Same reasoning as the zero-cost model rule: an exhausted budget refuses what can add
+    spend, and an MCP request cannot while no server is priced."""
+    _use_mcp_registry(monkeypatch, priced=False)
+
+    assert await _common_checks_for_over_budget_user(route="/mcp/") is True
+    with pytest.raises(litellm.BudgetExceededError):
+        await _common_checks_for_over_budget_user(route="/v1/chat/completions")
+
+
+@pytest.mark.asyncio
+async def test_over_budget_user_keeps_only_tool_listing_once_a_server_is_priced(monkeypatch):
+    _use_mcp_registry(monkeypatch, priced=True)
+
+    assert await _common_checks_for_over_budget_user(route="/mcp-rest/tools/list") is True
+    with pytest.raises(litellm.BudgetExceededError):
+        await _common_checks_for_over_budget_user(route="/mcp/")
 
 
 def _agent_model_ceiling_resolver(

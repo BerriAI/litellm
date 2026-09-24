@@ -2,9 +2,14 @@
 Cost calculator for MCP tools.
 """
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.mcp import MCPServerCostInfo
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import StandardLoggingMCPToolCall
 
 if TYPE_CHECKING:
@@ -67,3 +72,35 @@ class MCPCostCalculator:
         elif default_cost_per_query is not None:
             cost_per_query = default_cost_per_query
         return cost_per_query
+
+    @staticmethod
+    def tool_calls_may_cost(servers: Iterable[MCPServer], callbacks: Iterable[object]) -> bool:
+        """Whether any MCP tool call could be charged: a server priced above zero, or a
+        callback overriding the post-call hook, which can set the cost of any call."""
+        return any(_may_price_mcp_calls(callback) for callback in callbacks) or any(
+            _is_priced(server) for server in servers
+        )
+
+
+_SERVER_COST_INFO: Final = TypeAdapter(MCPServerCostInfo)
+_POST_CALL_HOOK: Final = "async_post_mcp_tool_call_hook"
+
+
+def _is_priced(server: MCPServer) -> bool:
+    raw_cost_info: Final = None if server.mcp_info is None else server.mcp_info.get("mcp_server_cost_info")
+    if raw_cost_info is None:
+        return False
+    try:
+        cost_info: Final = _SERVER_COST_INFO.validate_python(raw_cost_info, strict=True)
+    except ValidationError:
+        return True
+    tool_costs: Final = cost_info.get("tool_name_to_cost_per_query")
+    tool_prices: Final = () if tool_costs is None else tuple(tool_costs.values())
+    return any(price is not None and price > 0 for price in (cost_info.get("default_cost_per_query"), *tool_prices))
+
+
+def _may_price_mcp_calls(callback: object) -> bool:
+    if not isinstance(callback, CustomLogger):
+        return False
+    mro: Final = type(callback).__mro__
+    return any(_POST_CALL_HOOK in vars(cls) for cls in mro[: mro.index(CustomLogger)])

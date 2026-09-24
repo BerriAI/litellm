@@ -9131,3 +9131,123 @@ async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
     assert result.budget_reservation == reservation
     assert websocket.state.budget_reservation is reservation
     assert websocket.scope["state"]["budget_reservation"] is reservation
+
+
+def _proxy_server_attrs_for_over_budget_key() -> dict:
+    """The proxy_server globals _user_api_key_auth_builder reads while enforcing a key budget."""
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    mock_proxy_logging_obj.budget_alerts = AsyncMock()
+
+    return {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+
+
+async def _auth_key_that_spent_its_budget(*, route: str) -> UserAPIKeyAuth:
+    """Authenticate a key that has spent its budget. The body is empty, which is also what the
+    MCP transport hands auth for a JSON-RPC request, whatever the method."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.proxy_server import hash_token
+
+    api_key = "sk-key-that-spent-its-budget"
+    spent_key = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hash_token(api_key),
+        user_id="u1",
+        max_budget=1.0,
+        spend=5.0,
+    )
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 5.0
+
+    attrs = _proxy_server_attrs_for_over_budget_key()
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+        with (
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new_callable=AsyncMock,
+                return_value=spent_key,
+            ),
+            patch("litellm.proxy.proxy_server.get_current_spend", _spend_by_counter),
+        ):
+            request = Request(scope={"type": "http"})
+            request._url = URL(url=route)
+            return await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+def _use_mcp_registry(monkeypatch, *, priced: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mcp_info = {"mcp_server_cost_info": {"default_cost_per_query": 0.01}} if priced else None
+    server = MCPServer(server_id="s1", name="wiki", transport=MCPTransport.http, mcp_info=mcp_info)
+    monkeypatch.setattr(global_mcp_server_manager, "get_registry", lambda: {"s1": server})
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+
+
+@pytest.mark.asyncio
+async def test_key_that_spent_its_budget_keeps_mcp_while_nothing_can_price_a_tool_call(monkeypatch):
+    """An exhausted budget has no reason to refuse a request that cannot add spend, the same
+    way a zero-cost model is never refused."""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    _use_mcp_registry(monkeypatch, priced=False)
+
+    connected = await _auth_key_that_spent_its_budget(route="/mcp/")
+    assert connected.user_id == "u1"
+    with pytest.raises(ProxyException) as model_call:
+        await _auth_key_that_spent_its_budget(route="/v1/chat/completions")
+    assert model_call.value.type == ProxyErrorTypes.budget_exceeded
+
+
+@pytest.mark.asyncio
+async def test_key_that_spent_its_budget_is_refused_mcp_once_a_server_is_priced(monkeypatch):
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    _use_mcp_registry(monkeypatch, priced=True)
+
+    listed = await _auth_key_that_spent_its_budget(route="/mcp-rest/tools/list")
+    assert listed.user_id == "u1"
+    with pytest.raises(ProxyException) as mcp_request:
+        await _auth_key_that_spent_its_budget(route="/mcp/")
+    assert mcp_request.value.type == ProxyErrorTypes.budget_exceeded

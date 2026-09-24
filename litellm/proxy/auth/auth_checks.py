@@ -868,9 +868,36 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
 )
 
 
+_MCP_ROUTES_THAT_CANNOT_CALL_A_TOOL: Final = frozenset(
+    {"/mcp/tools", "/mcp/tools/list", "/mcp-rest/tools/list", "/v1/mcp/tools", "/introspect"}
+)
+
+
 def route_skips_budget_checks(route: str) -> bool:
     return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
-        route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route)
+        route in MODEL_DISCOVERY_ROUTES
+        or mcp_request_cannot_spend(route=route)
+        or not RouteChecks.is_llm_api_route(route=route)
+    )
+
+
+def mcp_request_cannot_spend(route: str) -> bool:
+    """Whether an MCP request provably cannot add spend, so an exhausted budget has no reason
+    to refuse it, just as a zero-cost model is never refused.
+
+    Only a tool call can be charged, and auth cannot tell a JSON-RPC tool call from a handshake
+    because the MCP transport hands it a stub body. So outside the listing routes, a request
+    counts as free only while no server is priced and no callback can price a call afterwards."""
+    if not RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value):
+        return False
+    if route in _MCP_ROUTES_THAT_CANNOT_CALL_A_TOOL:
+        return True
+    from litellm.proxy._experimental.mcp_server.cost_calculator import MCPCostCalculator
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    return not MCPCostCalculator.tool_calls_may_cost(
+        servers=global_mcp_server_manager.get_registry().values(),
+        callbacks=(*litellm.callbacks, *litellm.success_callback),
     )
 
 
