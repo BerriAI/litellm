@@ -8,7 +8,6 @@ from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
-from functools import cache
 from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypeAlias, TypedDict
@@ -17,7 +16,7 @@ from urllib.parse import quote, unquote, urlencode
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
@@ -41,7 +40,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
 )
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -56,8 +57,6 @@ from litellm.types.llms.openai import (
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
     PathLike,
-    ResponseInputParam,
-    ResponsesAPIOptionalRequestParams,
 )
 from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
 from litellm.utils import get_llm_provider
@@ -128,22 +127,6 @@ class _S3UploadResponse(TypedDict, total=False):
     Key: ReadOnly[str]
     Bucket: ReadOnly[str]
     ContentLength: ReadOnly[int]
-
-
-# JSONL batch records are untyped json, so the `/v1/responses` fields are
-# validated into their concrete Responses API types before being handed to the
-# Responses-to-Chat bridge. Both adapters drop keys the Responses API doesn't
-# define, which is what the bridge would ignore anyway. Built on first use
-# rather than at import: `ResponseInputParam` is a deep union and only batch
-# files carrying `/v1/responses` records need it.
-@cache
-def _responses_input_adapter() -> TypeAdapter[str | ResponseInputParam]:
-    return TypeAdapter(str | ResponseInputParam)
-
-
-@cache
-def _responses_request_adapter() -> TypeAdapter[ResponsesAPIOptionalRequestParams]:
-    return TypeAdapter(ResponsesAPIOptionalRequestParams)
 
 
 class _BedrockS3RequestParams(AwsAuthParams):
@@ -859,33 +842,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         Delegates to the same Responses-to-Chat bridge the real-time path uses
         for providers without a native Responses API (which is every Bedrock
         model), so `input`, `instructions`, `max_output_tokens` and the tool
-        params translate identically in batch and real time. The bridge always
-        emits a `tools` key; an empty one is dropped rather than shipped as an
-        empty array inside `modelInput`.
+        params translate identically in batch and real time.
         """
-        from litellm.responses.litellm_completion_transformation.transformation import (
-            LiteLLMCompletionResponsesConfig,
-        )
-
-        responses_input: Final = openai_request_body.get("input")
-        if responses_input is None:
-            raise ValueError(
-                "Batch record for /v1/responses is missing required `input` field: "
-                f"model={openai_request_body.get('model', '')}"
-            )
-        chat_body: Final[Mapping[str, object]] = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
-                model=openai_request_body.get("model", ""),
-                input=_responses_input_adapter().validate_python(responses_input),
-                responses_api_request=_responses_request_adapter().validate_python(
-                    _frozen_mapping(
-                        (key, value) for key, value in openai_request_body.items() if key not in ("model", "input")
-                    )
-                ),
-                metadata=openai_request_body.get("metadata"),
-            )
-        )
-        return _frozen_mapping((key, value) for key, value in chat_body.items() if key != "tools" or value)
+        return responses_batch_body_to_chat_body(openai_request_body)
 
     @staticmethod
     def _transform_batch_body_to_chat_body(
@@ -922,7 +881,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         from litellm.types.utils import LlmProviders
 
-        messages: Final = openai_request_body.get("messages", [])
+        messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
