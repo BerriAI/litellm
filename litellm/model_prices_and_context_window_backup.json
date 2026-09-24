@@ -57157,7 +57157,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_tool_choice": true,
         "supports_reasoning": true,
@@ -57189,7 +57188,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_tool_choice": true,
         "supports_reasoning": true,
@@ -57221,7 +57219,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_tool_choice": true,
         "supports_reasoning": true,
@@ -57253,7 +57250,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_tool_choice": true,
         "supports_reasoning": true,
