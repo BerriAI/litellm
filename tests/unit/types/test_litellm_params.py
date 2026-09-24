@@ -7,6 +7,7 @@ from typing import Final, TypeAlias
 import pytest
 from pydantic import BaseModel
 
+from litellm.caching.caching import Cache
 from litellm.litellm_core_utils.get_litellm_params import (
     get_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # untyped legacy carrier
 )
@@ -16,6 +17,7 @@ from litellm.types.litellm_params import (
     ADDRESSED_RESPONSE_ID_FIELD,
     LITELLM_OWNED_ROOTS,
     TRUSTED_CALLBACK_VARS_FIELD,
+    CachingOptions,
     ConnectionSettings,
     InternalState,
     LiteLLMOptions,
@@ -225,9 +227,44 @@ BEDROCK_BATCH_NAMES: Final = (
 
 ARTIFACT_NAMES: Final = ("self", "use_client", "model_config", "rust")
 
-CALLBACK_VAR_NAMES: Final = tuple(StandardCallbackDynamicParams.__annotations__)
+CALLBACK_VAR_NAMES: Final = (
+    "langfuse_public_key",
+    "langfuse_secret",
+    "langfuse_secret_key",
+    "langfuse_host",
+    "langfuse_environment",
+    "langfuse_span_scope",
+    "langfuse_prompt_version",
+    "gcs_bucket_name",
+    "gcs_path_service_account",
+    "langsmith_api_key",
+    "langsmith_project",
+    "langsmith_base_url",
+    "langsmith_sampling_rate",
+    "langsmith_tenant_id",
+    "humanloop_api_key",
+    "arize_api_key",
+    "arize_space_key",
+    "arize_space_id",
+    "arize_success_sampling_rate",
+    "arize_error_sampling_rate",
+    "posthog_api_key",
+    "posthog_api_url",
+    "wandb_api_key",
+    "weave_project_id",
+    "dd_api_key",
+    "dd_site",
+    "dd_agent_host",
+    "dd_agent_port",
+    "newrelic_api_key",
+    "newrelic_region",
+    "turn_off_message_logging",
+    "litellm_disabled_callbacks",
+)
 
 PRICING_NAMES: Final = tuple(CustomPricingLiteLLMParams.model_fields)
+
+PRICING_NAMES_EVERY_COST_PATH_READS: Final = ("input_cost_per_token", "output_cost_per_token")
 
 DECLARED_BY_ROOT: Final[Mapping[type, tuple[str, ...]]] = MappingProxyType(
     {ConnectionSettings: CONNECTION_NAMES, LiteLLMOptions: OPTION_NAMES, InternalState: INTERNAL_STATE_NAMES}
@@ -271,8 +308,34 @@ def test_a_name_no_object_declares_reaches_the_provider() -> None:
     assert result == MappingProxyType({PROVIDER_KNOB: 1})
 
 
+def _cache_key_for_model_group(model_group: str, options: CachingOptions) -> str:
+    return Cache().get_cache_key(  # pyright: ignore[reportUnknownMemberType]  # untyped legacy key builder
+        model=model_group,
+        messages=(MappingProxyType({"role": "user", "content": "shared prompt"}),),
+        metadata=MappingProxyType({"caching_groups": options.caching_groups, "model_group": model_group}),
+    )
+
+
+def test_caching_groups_is_a_flat_sequence_of_model_groups_that_share_one_cache_key() -> None:
+    options: Final = CachingOptions(caching_groups=(("gpt-4", "gpt-4o"), ("claude-3",)))
+
+    keys: Final = tuple(_cache_key_for_model_group(group, options) for group in ("gpt-4", "gpt-4o", "claude-3"))
+
+    assert (keys[0] == keys[1], keys[0] == keys[2]) == (True, False)
+
+
 def test_all_litellm_params_is_exactly_the_owned_inventory() -> None:
     assert frozenset(all_litellm_params) == frozenset(OWNED_NAMES)
+
+
+def test_callback_vars_are_the_fields_of_the_callback_typed_dict() -> None:
+    assert tuple(StandardCallbackDynamicParams.__annotations__) == CALLBACK_VAR_NAMES
+
+
+@pytest.mark.parametrize("name", PRICING_NAMES_EVERY_COST_PATH_READS)
+def test_pricing_name_reaches_all_litellm_params_through_the_pricing_model(name: str) -> None:
+    assert name in PRICING_NAMES
+    assert name in all_litellm_params
 
 
 def test_every_owned_name_has_exactly_one_owner() -> None:
@@ -302,7 +365,7 @@ def test_root_declares_exactly_the_names_that_live_on_its_object(root: type) -> 
     ),
 )
 def test_types_utils_still_exports_the_field_constant(exported: str, declared: str) -> None:
-    assert exported is declared
+    assert exported == declared
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

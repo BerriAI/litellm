@@ -115,7 +115,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import Usage
+from litellm.types.utils import Usage, all_litellm_params
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
     is_tinyfish_agent_url,
@@ -133,6 +133,9 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
+
+_OWNED_KWARG_NAMES: Final = frozenset(all_litellm_params)
+_METADATA_CARRIERS: Final = frozenset(("litellm_metadata", "metadata"))
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -579,20 +582,21 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         """
         Filter out litellm params from the request body
         """
-        from litellm.types.utils import all_litellm_params
-
         _parsed_body = _parsed_body or {}
 
-        owned: Final = frozenset(all_litellm_params)
-        body_keys: Final = tuple(k for k in _parsed_body if isinstance(k, str))
-        litellm_params_in_body: Final = {k: _parsed_body.pop(k) for k in body_keys if k in owned}
+        owned_in_body: Final = MappingProxyType(
+            {k: _parsed_body.pop(k) for k in tuple(_parsed_body) if k in _OWNED_KWARG_NAMES}
+        )
+        litellm_params_in_body: Final = MappingProxyType(
+            {k: v for k, v in owned_in_body.items() if k not in _METADATA_CARRIERS}
+        )
 
         _metadata = dict(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
 
-        litellm_metadata: Final = litellm_params_in_body.pop("litellm_metadata", None)
-        metadata: Final = litellm_params_in_body.pop("metadata", None)
+        litellm_metadata: Final = owned_in_body.get("litellm_metadata")
+        metadata: Final = owned_in_body.get("metadata")
         if litellm_metadata:
             _metadata.update(litellm_metadata)
         if metadata:
