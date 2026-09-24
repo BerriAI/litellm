@@ -4996,7 +4996,7 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     if len(valid_string) > BEDROCK_MAX_TOOL_NAME_LENGTH:
         name_hash = hashlib.sha256(valid_string.encode()).hexdigest()[:8]
         prefix_length = BEDROCK_MAX_TOOL_NAME_LENGTH - len(name_hash) - 1
-        final_name: Final = f"{valid_string[:prefix_length]}_{name_hash}"
+        final_name = f"{valid_string[:prefix_length]}_{name_hash}"
     else:
         final_name = valid_string
 
