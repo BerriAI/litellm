@@ -6,7 +6,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, assert_never
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from opentelemetry import _logs, baggage, metrics, trace
 from opentelemetry._logs import Logger, LoggerProvider, NoOpLoggerProvider
@@ -36,6 +36,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.trace import Span, SpanContext, SpanKind, Status, Tracer
 from opentelemetry.util.re import parse_env_headers
 from opentelemetry.util.types import Attributes, AttributeValue
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
