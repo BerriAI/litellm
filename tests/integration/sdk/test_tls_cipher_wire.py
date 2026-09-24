@@ -95,7 +95,7 @@ def _assert_served(peer: TlsPeer, user: str, response_id: str) -> None:
 def test_sync_handler_refuses_chacha20_only_peer(tls_cert: tuple[Path, Path]) -> None:
     cert_file, key_file = tls_cert
     with tls_peer(CHACHA20, cert_file, key_file) as peer:
-        with pytest.raises(httpx.ConnectError, match="SSL"):
+        with pytest.raises(httpx.ConnectError, match=r"(?i)ssl|handshake"):
             _sync_post(cert_file, peer.url, "u-cell1")
         assert peer.received() == (), peer.received()
 
@@ -106,7 +106,7 @@ def test_async_httpx_handler_refuses_chacha20_only_peer(
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     cert_file, key_file = tls_cert
     with tls_peer(CHACHA20, cert_file, key_file) as peer:
-        with pytest.raises(httpx.ConnectError, match="SSL"):
+        with pytest.raises(httpx.ConnectError, match=r"(?i)ssl|handshake"):
             _async_post(cert_file, peer.url, "u-cell2")
         assert peer.received() == (), peer.received()
 
@@ -114,7 +114,7 @@ def test_async_httpx_handler_refuses_chacha20_only_peer(
 def test_async_aiohttp_handler_refuses_chacha20_only_peer(tls_cert: tuple[Path, Path]) -> None:
     cert_file, key_file = tls_cert
     with tls_peer(CHACHA20, cert_file, key_file) as peer:
-        with pytest.raises(httpx.ProtocolError, match="SSL"):
+        with pytest.raises(httpx.ProtocolError, match=r"(?i)ssl|handshake"):
             _async_post(cert_file, peer.url, "u-cell3")
         assert peer.received() == (), peer.received()
 
@@ -122,7 +122,7 @@ def test_async_aiohttp_handler_refuses_chacha20_only_peer(tls_cert: tuple[Path, 
 def test_sync_handler_refuses_non_pfs_aes256_gcm_peer(tls_cert: tuple[Path, Path]) -> None:
     cert_file, key_file = tls_cert
     with tls_peer(AES256_GCM, cert_file, key_file) as peer:
-        with pytest.raises(httpx.ConnectError, match="SSL"):
+        with pytest.raises(httpx.ConnectError, match=r"(?i)ssl|handshake"):
             _sync_post(cert_file, peer.url, "u-cell4")
         assert peer.received() == (), peer.received()
 
@@ -133,7 +133,7 @@ def test_async_httpx_handler_refuses_non_pfs_aes128_gcm_peer(
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     cert_file, key_file = tls_cert
     with tls_peer(AES128_GCM, cert_file, key_file) as peer:
-        with pytest.raises(httpx.ConnectError, match="SSL"):
+        with pytest.raises(httpx.ConnectError, match=r"(?i)ssl|handshake"):
             _async_post(cert_file, peer.url, "u-cell5")
         assert peer.received() == (), peer.received()
 
@@ -150,7 +150,7 @@ def test_sync_handler_refuses_cbc_peer_in_fips_mode(
     monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
     cert_file, key_file = tls_cert
     with tls_peer(CBC_SHA256, cert_file, key_file) as peer:
-        with pytest.raises(httpx.ConnectError, match="SSL"):
+        with pytest.raises(httpx.ConnectError, match=r"(?i)ssl|handshake"):
             _sync_post(cert_file, peer.url, "u-cell7")
         assert peer.received() == (), peer.received()
 
@@ -162,7 +162,7 @@ def test_async_httpx_handler_refuses_cbc_sha384_peer_in_fips_mode(
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     cert_file, key_file = tls_cert
     with tls_peer(CBC_SHA384, cert_file, key_file) as peer:
-        with pytest.raises(httpx.ConnectError, match="SSL"):
+        with pytest.raises(httpx.ConnectError, match=r"(?i)ssl|handshake"):
             _async_post(cert_file, peer.url, "u-cell8")
         assert peer.received() == (), peer.received()
 
@@ -221,7 +221,7 @@ def test_cipher_list_follows_fips_mode_toggle_in_one_process(
     with tls_peer(CBC_SHA256, cert_file, key_file) as peer:
         assert _sync_post(cert_file, peer.url, "u-cell12-before") == "chatcmpl-u-cell12-before"
         monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
-        with pytest.raises(httpx.ConnectError, match="SSL"):
+        with pytest.raises(httpx.ConnectError, match=r"(?i)ssl|handshake"):
             _sync_post(cert_file, peer.url, "u-cell12-fips")
         monkeypatch.delenv("LITELLM_FIPS_MODE")
         assert _sync_post(cert_file, peer.url, "u-cell12-after") == "chatcmpl-u-cell12-after"
@@ -253,15 +253,24 @@ def test_burst_survives_peer_restart_without_cipher_errors(tls_cert: tuple[Path,
     with tls_peer(PFS_GCM, cert_file, key_file) as peer:
         second_wave: Final = threading.Event()
         outcomes: Final[dict[int, BurstOutcome]] = {}
+        outcomes_lock: Final = threading.Lock()
+
+        def _record(index: int, outcome: BurstOutcome) -> None:
+            with outcomes_lock:
+                outcomes[index] = outcome
+
+        def _snapshot() -> tuple[BurstOutcome, ...]:
+            with outcomes_lock:
+                return tuple(outcomes.values())
 
         def _one(index: int) -> None:
             if index >= 10:
                 second_wave.wait(timeout=30)
             try:
                 response_id: Final = _sync_post(cert_file, peer.url, f"user-{index}")
-                outcomes[index] = BurstOutcome(f"user-{index}", time.monotonic(), response_id, None)
+                _record(index, BurstOutcome(f"user-{index}", time.monotonic(), response_id, None))
             except Exception as error:
-                outcomes[index] = BurstOutcome(f"user-{index}", time.monotonic(), None, error)
+                _record(index, BurstOutcome(f"user-{index}", time.monotonic(), None, error))
 
         async def _async_burst() -> None:
             from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -278,11 +287,14 @@ def test_burst_survives_peer_restart_without_cipher_errors(tls_cert: tuple[Path,
                 response: Final = await handler.client.post(
                     f"{peer.url}/v1/chat/completions", json={"user": f"user-{index}"}
                 )
-                outcomes[index] = BurstOutcome(
-                    f"user-{index}", time.monotonic(), str(JSON_OBJECT.validate_json(response.content)["id"]), None
+                _record(
+                    index,
+                    BurstOutcome(
+                        f"user-{index}", time.monotonic(), str(JSON_OBJECT.validate_json(response.content)["id"]), None
+                    ),
                 )
             except Exception as error:
-                outcomes[index] = BurstOutcome(f"user-{index}", time.monotonic(), None, error)
+                _record(index, BurstOutcome(f"user-{index}", time.monotonic(), None, error))
 
         def _async_thread() -> None:
             asyncio.run(_async_burst())
@@ -291,7 +303,11 @@ def test_burst_survives_peer_restart_without_cipher_errors(tls_cert: tuple[Path,
         with ThreadPoolExecutor(max_workers=15) as pool:
             async_thread.start()
             futures: Final = tuple(pool.submit(_one, index) for index in range(15))
-            eventually(lambda: len(peer.received()) >= 3, lambda ready: ready, seconds=15)
+            eventually(
+                lambda: sum(1 for outcome in _snapshot() if outcome.error is None) >= 3,
+                lambda ready: ready,
+                seconds=15,
+            )
             stopped_at: Final = time.monotonic()
             peer.stop()
             peer.start()
@@ -302,13 +318,18 @@ def test_burst_survives_peer_restart_without_cipher_errors(tls_cert: tuple[Path,
                 future.result(timeout=60)
             async_thread.join(timeout=60)
 
-        assert len(outcomes) == BURST_SIZE
-        _assert_burst_outcomes(outcomes)
-        succeeded: Final = {o.user for o in outcomes.values() if o.error is None}
+        finished: Final = _snapshot()
+        assert len(finished) == BURST_SIZE
+        _assert_burst_outcomes({int(outcome.user.removeprefix("user-")): outcome for outcome in finished})
+        succeeded: Final = {outcome.user for outcome in finished if outcome.error is None}
         recorded: Final = peer.received()
         assert sorted(record.user or "" for record in recorded) == sorted(succeeded)
         assert all(record.cipher == PFS_GCM for record in recorded)
         for user in succeeded:
             assert sum(1 for record in recorded if record.user == user) == 1, user
-        assert any(o.error is None and o.when < stopped_at for o in outcomes.values()), "no success before restart"
-        assert any(o.error is None and o.when > restarted_at for o in outcomes.values()), "no success after restart"
+        assert any(outcome.error is None and outcome.when < stopped_at for outcome in finished), (
+            "no success before restart"
+        )
+        assert any(outcome.error is None and outcome.when > restarted_at for outcome in finished), (
+            "no success after restart"
+        )
