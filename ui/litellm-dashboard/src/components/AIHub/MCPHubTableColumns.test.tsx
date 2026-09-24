@@ -52,6 +52,7 @@ describe("getMCPHubTableColumns", () => {
     expect(screen.getByText("Server Name")).toBeInTheDocument();
     expect(screen.getByText("Transport")).toBeInTheDocument();
     expect(screen.getByText("Auth Type")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Listed in hub" })).toBeInTheDocument();
   });
 
   it("does not expose a URL column", () => {

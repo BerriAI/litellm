@@ -18,6 +18,31 @@ function renderCard(overrides: Partial<MCPServer>) {
   render(<MCPServerCard server={{ ...baseServer, ...overrides } as MCPServer} onClick={vi.fn()} />);
 }
 
+describe("MCPServerCard publication", () => {
+  it.each([true, false])("separates hub membership from internet access (%s)", (internetAccessible) => {
+    const { rerender } = render(
+      <MCPServerCard
+        server={{ ...baseServer, available_on_public_internet: internetAccessible, mcp_info: { is_public: false } }}
+        onClick={vi.fn()}
+      />,
+    );
+    const networkLabel = internetAccessible ? "Internet-accessible" : "Internal network";
+    expect(screen.getByText(networkLabel)).toBeInTheDocument();
+    expect(screen.getByText("Not listed in hub")).toBeInTheDocument();
+    expect(screen.queryByText("Listed in hub")).not.toBeInTheDocument();
+
+    rerender(
+      <MCPServerCard
+        server={{ ...baseServer, available_on_public_internet: internetAccessible, mcp_info: { is_public: true } }}
+        onClick={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(networkLabel)).toBeInTheDocument();
+    expect(screen.getByText("Listed in hub")).toBeInTheDocument();
+    expect(screen.queryByText("Not listed in hub")).not.toBeInTheDocument();
+  });
+});
+
 describe("MCPServerCard OAuth flow indicator", () => {
   it("shows the 'OAuth flow not set' badge for an oauth2 server with no oauth2_flow", () => {
     renderCard({ auth_type: "oauth2", oauth2_flow: null });

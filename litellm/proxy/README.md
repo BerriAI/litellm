@@ -30,6 +30,29 @@ print(response)
 
 [**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/simple_proxy)
 
+## Publish MCP servers in the AI Hub
+
+Pin each server's `server_id` and list that ID under `litellm_settings.public_mcp_servers` in your proxy config
+
+```yaml
+mcp_servers:
+  example:
+    server_id: example-hub-id
+    url: https://example.invalid/mcp
+    transport: http
+    auth_type: none
+
+litellm_settings:
+  public_mcp_servers:
+    - example-hub-id
+```
+
+Replace the example URL with your MCP endpoint, start or restart the proxy with `litellm --config config.yaml`, and check `GET /public/mcp_hub`. The publication list uses server IDs, not YAML map names. A pinned ID stays stable when the URL, transport, authentication or alias changes
+
+The default strict hub mode lists only these IDs. An empty or absent list publishes no servers. The legacy `public_mcp_hub_strict_whitelist: false` setting also lists internet-accessible servers. `available_on_public_internet` controls network access policy separately from hub listing; publishing does not remove authentication or tool permissions
+
+When `public_mcp_servers` is declared in YAML, edit that file and restart to change the list. Dashboard or `/v1/mcp/make_public` requests that change this config-owned value are rejected. To manage publication through the dashboard instead, remove the key from YAML and restart
+
 
 ---
 

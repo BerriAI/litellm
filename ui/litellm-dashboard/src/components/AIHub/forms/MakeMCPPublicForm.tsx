@@ -145,6 +145,29 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
           Virtual Key to use these servers.
         </p>
 
+        <details className="rounded-lg border p-3 text-sm">
+          <summary className="cursor-pointer font-medium">Publish from config.yaml</summary>
+          <p className="mt-2 text-muted-foreground">
+            Pin a server_id and list that ID under litellm_settings.public_mcp_servers, then restart the proxy. Use the
+            ID, not the YAML server name. In the default strict mode, an empty or absent list publishes no servers.
+            Internet accessibility is separate from hub listing
+          </p>
+          <pre className="mt-2 overflow-x-auto rounded bg-muted p-3 text-xs">{`mcp_servers:
+  example:
+    server_id: example-hub-id
+    url: https://example.invalid/mcp
+    transport: http
+    auth_type: none
+
+litellm_settings:
+  public_mcp_servers:
+    - example-hub-id`}</pre>
+          <p className="mt-2 text-muted-foreground">
+            When this setting is in YAML, change it there. Dashboard changes are rejected. To manage it here, remove
+            public_mcp_servers from YAML and restart
+          </p>
+        </details>
+
         <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
           <div className="space-y-3">
             {mcpHubData.length === 0 ? (
@@ -166,7 +189,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                     <div className="flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium break-words">{server.server_name}</p>
-                        {isPublic && <Badge>Public</Badge>}
+                        {isPublic && <Badge>Listed in hub</Badge>}
                         <Badge variant="secondary">{server.transport}</Badge>
                         <Badge variant={statusVariant(server.status)}>{server.status || "unknown"}</Badge>
                       </div>

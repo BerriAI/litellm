@@ -69,7 +69,8 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
     server.auth_type === AUTH_TYPE.OAUTH2 && !server.oauth2_flow && !server.delegate_auth_to_upstream;
   const status = server.status || "unknown";
   const healthTone = HEALTH_TONE[status] ?? HEALTH_TONE.unknown;
-  const isPublic = server.available_on_public_internet;
+  const isInternetAccessible = server.available_on_public_internet;
+  const isListedInHub = server.mcp_info?.is_public === true;
   const accessGroups = (server.mcp_access_groups ?? []).filter((g): g is string => typeof g === "string");
 
   const missing = missingUserFields ?? [];
@@ -236,9 +237,10 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
             </Tooltip>
           )}
           <Badge variant="outline">
-            <span className={cn("h-1.5 w-1.5 rounded-full", isPublic ? "bg-success" : "bg-warning")} />
-            {isPublic ? "Public" : "Internal"}
+            <span className={cn("h-1.5 w-1.5 rounded-full", isInternetAccessible ? "bg-success" : "bg-warning")} />
+            {isInternetAccessible ? "Internet-accessible" : "Internal network"}
           </Badge>
+          <Badge variant="outline">{isListedInHub ? "Listed in hub" : "Not listed in hub"}</Badge>
           {accessGroups.slice(0, 2).map((g) => (
             <Tooltip key={g}>
               <TooltipTrigger

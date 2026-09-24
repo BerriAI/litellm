@@ -4,6 +4,7 @@ import types
 import json
 import logging
 from contextlib import ExitStack
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final, List, Optional, cast
@@ -31,6 +32,120 @@ from litellm.proxy._types import (
 )
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view", ["admin", "team", "member", "virtual_key"])
+@pytest.mark.parametrize(
+    "strict,public_ids,expected",
+    [(True, ["listed"], {"listed"}), (True, None, set()), (True, [], set()),
+     (False, None, {"internet"}), (False, ["listed"], {"internet", "listed"})],
+)
+async def test_list_publication_matches_hub_without_mutating_source(
+    monkeypatch: pytest.MonkeyPatch,
+    view: str,
+    strict: bool,
+    public_ids: list[str] | None,
+    expected: set[str],
+) -> None:
+    import litellm
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    manager.config_mcp_servers = {
+        server_id: MCPServer(
+            server_id=server_id, name=server_id, transport=MCPTransport.http,
+            available_on_public_internet=server_id == "internet",
+            mcp_info={"is_public": server_id != "listed", "description": "preserve me"},
+        )
+        for server_id in ("listed", "internet", "internal")
+    }
+    records: Final = [manager._build_mcp_server_table(server) for server in manager.get_registry().values()]
+    original: Final = [record.model_dump() for record in records]
+    monkeypatch.setattr(litellm, "public_mcp_servers", public_ids)
+    monkeypatch.setattr(litellm, "public_mcp_hub_strict_whitelist", strict)
+    monkeypatch.setattr(mgmt_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mgmt_endpoints, "_resolve_accessible_mcp_servers", AsyncMock(return_value=records))
+    monkeypatch.setattr(
+        mgmt_endpoints, "_get_team_scoped_mcp_server_list",
+        AsyncMock(side_effect=lambda _: mgmt_endpoints._redact_mcp_credentials_list(records)),
+    )
+
+    result: Final = await mgmt_endpoints.fetch_all_mcp_servers(
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER if view in ("member", "virtual_key") else LitellmUserRoles.PROXY_ADMIN,
+            allowed_routes=["/v1/mcp/server"] if view == "virtual_key" else [],
+        ),
+        team_id="test-team" if view == "team" else None,
+    )
+
+    assert {server.server_id for server in manager.get_public_mcp_servers()} == expected
+    assert {server.server_id for server in result if server.mcp_info["is_public"]} == expected
+    assert all(server.mcp_info["is_public"] is (server.server_id in expected) for server in result)
+    if view == "virtual_key":
+        assert all(server.mcp_info == {"is_public": server.server_id in expected} for server in result)
+    else:
+        assert all(server.mcp_info["description"] == "preserve me" for server in result)
+    assert [record.model_dump() for record in records] == original
+    assert manager.config_mcp_servers["internet"].mcp_info["is_public"] is True
+    assert manager.config_mcp_servers["listed"].mcp_info["is_public"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial", [None, ["original"]])
+@pytest.mark.parametrize("outcome", ["config_owned", "save_failed", "missing_server", "forbidden", "success"])
+async def test_make_public_commits_runtime_only_after_persistence(
+    monkeypatch: pytest.MonkeyPatch, initial: list[str] | None, outcome: str
+) -> None:
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._types import MakeMCPServersPublicRequest
+
+    manager: Final = mcp_server_manager.MCPServerManager()
+    manager.config_mcp_servers = {
+        "selected": MCPServer(server_id="selected", name="selected", transport=MCPTransport.http)
+    }
+    config: Final = proxy_server.ProxyConfig()
+    config._load_yaml_settings_stores(
+        {"litellm_settings": {"public_mcp_servers": initial}} if outcome == "config_owned" else {}
+    )
+
+    async def save_config(new_config: Mapping[str, Mapping[str, object]]) -> None:
+        assert litellm.public_mcp_servers == initial
+        assert new_config["litellm_settings"]["public_mcp_servers"] == ["selected"]
+        if outcome == "save_failed":
+            raise RuntimeError("persistence unavailable")
+
+    save: Final = AsyncMock(side_effect=save_config)
+    monkeypatch.setattr(proxy_server, "proxy_config", SimpleNamespace(
+        get_config=AsyncMock(return_value={"litellm_settings": {"public_mcp_servers": initial}}),
+        reject_config_owned_writes=config.reject_config_owned_writes,
+        save_config=save,
+    ))
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(litellm, "public_mcp_servers", initial)
+    request: Final = MakeMCPServersPublicRequest(
+        mcp_server_ids=["missing"] if outcome == "missing_server" else ["selected"]
+    )
+    auth: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER if outcome == "forbidden" else LitellmUserRoles.PROXY_ADMIN
+    )
+
+    if outcome == "success":
+        response: Final = await mgmt_endpoints.make_mcp_servers_public(request, auth)
+        assert response["public_mcp_servers"] == ["selected"]
+        assert litellm.public_mcp_servers == ["selected"]
+        save.assert_awaited_once()
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await mgmt_endpoints.make_mcp_servers_public(request, auth)
+        assert exc.value.status_code == {
+            "config_owned": 400, "save_failed": 500, "missing_server": 404, "forbidden": 403,
+        }[outcome]
+        assert litellm.public_mcp_servers == initial
+        if outcome != "save_failed":
+            save.assert_not_awaited()
 
 
 def generate_mock_mcp_server_db_record(

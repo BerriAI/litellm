@@ -197,9 +197,9 @@ export const getMCPHubTableColumns = ({ onServerClick }: MCPHubTableColumnsDeps)
   {
     id: "is_public",
     accessorFn: (row) => row.mcp_info?.is_public === true,
-    meta: { title: "Public", skeleton: "badge", className: "hidden md:table-cell" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Public" />,
-    size: 100,
+    meta: { title: "Listed in hub", skeleton: "badge", className: "hidden md:table-cell" },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Listed in hub" />,
+    size: 140,
     enableSorting: true,
     sortingFn: (rowA, rowB) => {
       const publicA = rowA.original.mcp_info?.is_public === true ? 1 : 0;

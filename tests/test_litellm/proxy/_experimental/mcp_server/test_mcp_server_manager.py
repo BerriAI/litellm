@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Final, Literal, Optional
@@ -12234,6 +12235,23 @@ class TestConfigServerIdPinning:
                 **overrides,
             }
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("public_ids", [["docs-prod-1"], ["docs_server"], [], None])
+    async def test_publication_uses_pinned_id_after_fresh_config_load(
+        self,
+        config_only_mcp_manager_factory: Callable[[], MCPServerManager],
+        public_ids: list[str] | None,
+    ) -> None:
+        with patch("litellm.public_mcp_servers", public_ids), patch("litellm.public_mcp_hub_strict_whitelist", True):
+            for url in ("https://example.invalid/mcp", "https://updated.example.invalid/mcp"):
+                manager: Final = config_only_mcp_manager_factory()
+                await manager.load_servers_from_config(self._config(server_id="docs-prod-1", url=url))
+
+                assert [server.server_id for server in manager.get_public_mcp_servers()] == (
+                    ["docs-prod-1"] if public_ids == ["docs-prod-1"] else []
+                )
+                assert manager.config_mcp_servers["docs-prod-1"].url == url
 
     @pytest.mark.asyncio
     async def test_derived_id_churns_when_connection_fields_change(self, config_only_mcp_manager_factory):

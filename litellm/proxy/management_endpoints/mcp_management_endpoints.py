@@ -833,7 +833,7 @@ if MCP_AVAILABLE:
         is_public = False
         if isinstance(sanitized.mcp_info, dict):
             is_public = bool(sanitized.mcp_info.get("is_public"))
-        sanitized.mcp_info = {"is_public": True} if is_public else None
+        sanitized.mcp_info = {"is_public": is_public}
 
         return sanitized
 
@@ -1258,13 +1258,11 @@ if MCP_AVAILABLE:
             for server in redacted_mcp_servers:
                 server.connected_app_reachable = server.server_id in reachable_ids
 
-        # augment the mcp servers with public status
-        if litellm.public_mcp_servers is not None:
-            for server in redacted_mcp_servers:
-                if server.server_id in litellm.public_mcp_servers:
-                    if server.mcp_info is None:
-                        server.mcp_info = {}
-                    server.mcp_info["is_public"] = True
+        public_server_ids: Final = frozenset(
+            server.server_id for server in global_mcp_server_manager.get_public_mcp_servers()
+        )
+        for server in redacted_mcp_servers:
+            server.mcp_info = {**(server.mcp_info or {}), "is_public": server.server_id in public_server_ids}
 
         # Annotate has_user_credential for BYOK servers (single batched query)
         from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
@@ -3026,8 +3024,9 @@ if MCP_AVAILABLE:
                     },
                 )
 
-            if litellm.public_mcp_servers is None:
-                litellm.public_mcp_servers = []
+            proxy_config.reject_config_owned_writes(
+                section_name="litellm_settings", changed_keys={"public_mcp_servers": request.mcp_server_ids}
+            )
 
             for server_id in request.mcp_server_ids:
                 server = global_mcp_server_manager.get_mcp_server_by_id(server_id=server_id)
@@ -3037,16 +3036,15 @@ if MCP_AVAILABLE:
                         detail=f"MCP Server with ID {server_id} not found",
                     )
 
-            litellm.public_mcp_servers = request.mcp_server_ids
-
             # Update config with new settings
             if "litellm_settings" not in config or config["litellm_settings"] is None:
                 config["litellm_settings"] = {}
 
-            config["litellm_settings"]["public_mcp_servers"] = litellm.public_mcp_servers
+            config["litellm_settings"]["public_mcp_servers"] = request.mcp_server_ids
 
             # Save the updated config
             await proxy_config.save_config(new_config=config)
+            litellm.public_mcp_servers = request.mcp_server_ids
 
             verbose_proxy_logger.debug(
                 "Updated public mcp servers to: %s by user: %s", litellm.public_mcp_servers, user_api_key_dict.user_id
