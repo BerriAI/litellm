@@ -4507,7 +4507,7 @@ class BedrockConverseMessagesProcessor:
                 )
                 _assistant_content = assistant_message_block.get("content", None)
                 thinking_blocks = cast(
-                    list[ChatCompletionThinkingBlock] | None,
+                    list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
                     assistant_message_block.get("thinking_blocks"),
                 )
 
@@ -4526,9 +4526,14 @@ class BedrockConverseMessagesProcessor:
                     assistants_parts: list[BedrockContentBlock] = []
                     for element in _assistant_content:
                         if isinstance(element, dict):
-                            if element["type"] == "thinking":
+                            if element["type"] in ("thinking", "redacted_thinking"):
                                 thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[cast(ChatCompletionThinkingBlock, element)]
+                                    thinking_blocks=[
+                                        cast(
+                                            ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+                                            element,
+                                        )
+                                    ]
                                 )
                                 assistants_parts = (
                                     BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -4592,22 +4597,31 @@ class BedrockConverseMessagesProcessor:
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
-        thinking_blocks: list[ChatCompletionThinkingBlock],
+        thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
     ) -> list[BedrockContentBlock]:
         reasoning_content_blocks: Final[list[BedrockContentBlock]] = []
         for thinking_block in thinking_blocks:
-            reasoning_text = thinking_block.get("thinking")
-            reasoning_signature = thinking_block.get("signature")
-            text_block = BedrockConverseReasoningTextBlock(
-                text=reasoning_text or "",
-            )
-            if reasoning_signature is not None:
-                text_block["signature"] = reasoning_signature
-            reasoning_content_block = BedrockConverseReasoningContentBlock(
-                reasoningText=text_block,
-            )
-            bedrock_content_block = BedrockContentBlock(reasoningContent=reasoning_content_block)
-            reasoning_content_blocks.append(bedrock_content_block)
+            if thinking_block.get("type") == "redacted_thinking" or "data" in thinking_block:
+                redacted_data = thinking_block.get("data")
+                if redacted_data is not None:
+                    reasoning_content_block = BedrockConverseReasoningContentBlock(
+                        redactedContent=redacted_data,
+                    )
+                    bedrock_content_block = BedrockContentBlock(reasoningContent=reasoning_content_block)
+                    reasoning_content_blocks.append(bedrock_content_block)
+            else:
+                reasoning_text = thinking_block.get("thinking")
+                reasoning_signature = thinking_block.get("signature")
+                text_block = BedrockConverseReasoningTextBlock(
+                    text=reasoning_text or "",
+                )
+                if reasoning_signature is not None:
+                    text_block["signature"] = reasoning_signature
+                reasoning_content_block = BedrockConverseReasoningContentBlock(
+                    reasoningText=text_block,
+                )
+                bedrock_content_block = BedrockContentBlock(reasoningContent=reasoning_content_block)
+                reasoning_content_blocks.append(bedrock_content_block)
         return reasoning_content_blocks
 
     @staticmethod
@@ -4705,6 +4719,9 @@ class BedrockConverseMessagesProcessor:
         filtered_thinking_blocks: Final = []
         for block in thinking_blocks:
             reasoning_content = block.get("reasoningContent", None)
+            if reasoning_content is not None and "redactedContent" in reasoning_content:
+                filtered_thinking_blocks.append(block)
+                continue
             reasoning_text = reasoning_content.get("reasoningText", None) if reasoning_content is not None else None
             if reasoning_text and not reasoning_text.get("signature"):
                 reasoning_text_text = reasoning_text["text"]
@@ -4882,7 +4899,7 @@ def _bedrock_converse_messages_pt(
             )
             _assistant_content = assistant_message_block.get("content", None)
             thinking_blocks = cast(
-                list[ChatCompletionThinkingBlock] | None,
+                list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
                 assistant_message_block.get("thinking_blocks"),
             )
 
@@ -4901,10 +4918,15 @@ def _bedrock_converse_messages_pt(
                 assistants_parts: list[BedrockContentBlock] = []
                 for element in _assistant_content:
                     if isinstance(element, dict):
-                        if element["type"] == "thinking":
+                        if element["type"] in ("thinking", "redacted_thinking"):
                             thinking_block = (
                                 BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[cast(ChatCompletionThinkingBlock, element)]
+                                    thinking_blocks=[
+                                        cast(
+                                            ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+                                            element,
+                                        )
+                                    ]
                                 )
                             )
                             assistants_parts = (
