@@ -47,7 +47,7 @@ def _python_without_grpc_stack(directory: Path) -> Generator[str, None, None]:
     (shim / "sitecustomize.py").write_text(SITECUSTOMIZE)
     pythonpath: Final = f"{shim}{os.pathsep}{os.environ['PYTHONPATH']}"
     probe: Final = subprocess.run(
-        [sys.executable, "-c", "import grpc"],
+        [sys.executable, "-P", "-c", "import grpc"],
         env={**os.environ, "PYTHONPATH": pythonpath},
         capture_output=True,
         text=True,
