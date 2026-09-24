@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
@@ -225,6 +226,10 @@ class AgenticAnthropicStreamingIterator:
     def __aiter__(self):
         return self
 
+    def _record_completion_start_time(self) -> None:
+        if self._logging_obj.completion_start_time is None:
+            self._logging_obj._update_completion_start_time(completion_start_time=datetime.now())
+
     async def __anext__(self) -> bytes:
         if self._hold_back:
             return await self._anext_held_back()
@@ -233,6 +238,7 @@ class AgenticAnthropicStreamingIterator:
         if not self._stream_exhausted:
             try:
                 chunk = await self._inner.__anext__()
+                self._record_completion_start_time()
                 self._collected_bytes.append(chunk)
                 return chunk
             except StopAsyncIteration:
@@ -250,7 +256,9 @@ class AgenticAnthropicStreamingIterator:
     async def _drain_upstream(self) -> None:
         try:
             while True:
-                self._collected_bytes.append(await self._inner.__anext__())
+                chunk = await self._inner.__anext__()
+                self._record_completion_start_time()
+                self._collected_bytes.append(chunk)
         except StopAsyncIteration:
             return
 
