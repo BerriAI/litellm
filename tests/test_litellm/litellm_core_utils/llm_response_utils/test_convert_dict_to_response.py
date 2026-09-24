@@ -117,6 +117,7 @@ def test_non_openai_error_ignores_non_decimal_unicode_status():
         (99, None),
         (" 201 ", 201),
         ("²00", None),
+        ("١٠٠", None),
         ("99", None),
         (None, None),
         (3.14, None),
