@@ -58,14 +58,14 @@ from litellm.types.mcp import MCPServerCostInfo
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
-from .litellm_params import (  # noqa: F401  # the FIELD constants are a public re-export for out-of-tree code
-    ADDRESSED_RESPONSE_ID_FIELD,
+from .litellm_params import ADDRESSED_RESPONSE_ID_FIELD as ADDRESSED_RESPONSE_ID_FIELD
+from .litellm_params import (
     AGENTIC_LOOP_KWARG_NAMES,
     BEDROCK_BATCH_KWARG_NAMES,
     KWARG_ARTIFACTS,
     OWNED_KWARG_NAMES,
-    TRUSTED_CALLBACK_VARS_FIELD,
 )
+from .litellm_params import TRUSTED_CALLBACK_VARS_FIELD as TRUSTED_CALLBACK_VARS_FIELD
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
 from .llms.openai import (

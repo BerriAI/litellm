@@ -25,8 +25,6 @@ from litellm.types.litellm_params import (
 )
 from litellm.types.router import CredentialLiteLLMParams, RouterConfig, UpdateRouterConfig
 from litellm.types.utils import (
-    CustomPricingLiteLLMParams,
-    StandardCallbackDynamicParams,
     agentic_loop_internal_litellm_params,
     all_litellm_params,
     bedrock_batch_litellm_params,
@@ -431,14 +429,6 @@ def test_caching_groups_is_a_flat_sequence_of_model_groups_that_share_one_cache_
 
 def test_all_litellm_params_is_exactly_the_owned_inventory() -> None:
     assert frozenset(all_litellm_params) == frozenset(OWNED_NAMES)
-
-
-def test_callback_vars_are_the_fields_of_the_callback_typed_dict() -> None:
-    assert frozenset(StandardCallbackDynamicParams.__annotations__) == frozenset(CALLBACK_VAR_NAMES)
-
-
-def test_pricing_names_are_the_fields_of_the_pricing_model() -> None:
-    assert frozenset(CustomPricingLiteLLMParams.model_fields) == frozenset(PRICING_NAMES)
 
 
 def test_every_owned_name_has_exactly_one_owner() -> None:

@@ -1,14 +1,5 @@
-"""The LiteLLM-owned half of a request, declared as typed objects.
-
-Every kwarg LiteLLM consumes itself, and so must never reach a provider request body, is a
-field on exactly one leaf below. The fields are the registry: `all_litellm_params` is
-derived from them. Three roots partition the names by where a value lives: `ConnectionSettings`
-(how the SDK reaches the provider), `LiteLLMOptions` (what the caller or deployment asks
-LiteLLM to do) and `InternalState` (what LiteLLM stamps on a call and never accepts from a
-client). A field's kwarg name is its field name unless it carries `wire(...)` metadata, and its
-type is what its readers accept, so a reader that takes a model or its mapping form gets both.
-`KWARG_ARTIFACTS` names the four registered kwargs that are not request fields.
-"""
+"""LiteLLM-owned request kwargs declared as typed fields; types/utils.py splices these with the callback and pricing
+models and KWARG_ARTIFACTS into all_litellm_params."""
 
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, fields
@@ -57,8 +48,6 @@ def wire(name: str) -> Mapping[str, str]:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ProviderConnection:
-    """How the SDK reaches the provider."""
-
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
@@ -86,8 +75,6 @@ class ProviderConnection:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BedrockBatchConnection:
-    """S3 and IAM settings a Bedrock batch deployment needs."""
-
     aws_batch_role_arn: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
@@ -108,8 +95,6 @@ class ConnectionSettings:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DispatchOptions:
-    """Which provider API surface the call goes to and which request params may pass through."""
-
     custom_llm_provider: str | None = None
     azure: bool | None = None
     use_litellm_proxy: bool | None = None
@@ -120,8 +105,6 @@ class DispatchOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RoutingOptions:
-    """Retries, fallbacks and deployment selection."""
-
     fallbacks: Sequence[str | Mapping[str, Sequence[str]]] | None = None
     context_window_fallback_dict: Mapping[str, str] | None = None
     num_retries: int | None = None
@@ -139,8 +122,6 @@ class RoutingOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DeploymentOptions:
-    """Per-deployment limits and metadata the Router copies onto the call from the model list."""
-
     model_info: Mapping[str, object] | None = None
     rpm: int | None = None
     tpm: int | None = None
@@ -155,8 +136,6 @@ class DeploymentOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SpecializedRouterOptions:
-    """Configuration for the auto, complexity, adaptive and quality routers."""
-
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
@@ -174,8 +153,6 @@ class SpecializedRouterOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CachingOptions:
-    """Response and prompt caching controls."""
-
     caching: bool | None = None
     cache: "DynamicCacheControl | None" = None
     ttl: float | None = None
@@ -185,8 +162,6 @@ class CachingOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CostOptions:
-    """Cost attribution and budget controls."""
-
     cost_per_query: float | None = None
     base_model: str | None = None
     max_budget: float | None = None
@@ -195,8 +170,6 @@ class CostOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ObservabilityOptions:
-    """Identifiers, metadata and logging switches."""
-
     id: str | None = None
     metadata: MutableMapping[str, object] | None = None  # mutable-ok: the router and logging write keys into it
     litellm_metadata: MutableMapping[str, object] | None = None  # mutable-ok: the proxy writes keys into it
@@ -211,22 +184,16 @@ class ObservabilityOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgenticLoopOptions:
-    """Deployment-level ceiling on a server-side tool loop."""
-
     max_agentic_loops: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GuardrailOptions:
-    """Which guardrails run on the call."""
-
     guardrails: Sequence[str] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PromptOptions:
-    """Prompt management and prompt template shaping."""
-
     prompt_id: str | None = None
     prompt_variables: Mapping[str, object] | None = None
     prompt_version: str | None = None
@@ -248,8 +215,6 @@ class PromptOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResponseOptions:
-    """How LiteLLM shapes the response it hands back."""
-
     merge_reasoning_content_in_choices: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
@@ -260,8 +225,6 @@ class ResponseOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MockOptions:
-    """Short-circuit the provider call with a canned result."""
-
     mock_response: "MockResponse | None" = None
     mock_timeout: bool | None = None
 
@@ -284,8 +247,6 @@ class LiteLLMOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CallState:
-    """Identity and bookkeeping LiteLLM attaches to one call."""
-
     litellm_call_id: str | None = None
     completion_call_id: str | None = None  # TODO: no reader; kept only so the owned set stays unchanged
     model_alias_map: Mapping[str, str] | None = None  # TODO: stamped from litellm.model_alias_map, never read back
@@ -299,8 +260,6 @@ class CallState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgenticLoopState:
-    """Carried between the hops of a server-side tool loop and its interception handlers."""
-
     depth: int | None = field(default=None, metadata=wire("_agentic_loop_depth"))
     fingerprints: Sequence[str] | None = field(default=None, metadata=wire("_agentic_loop_fingerprints"))
     api_surface: Literal["chat_completions", "responses"] | None = field(
@@ -329,8 +288,6 @@ class AgenticLoopState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RouterState:
-    """Set by the Router while it walks fallbacks and applies request-scoped weights."""
-
     weights: "RouterWeights | None" = field(default=None, metadata=wire("_router_weights"))
     fallback_depth: int | None = None
     max_fallbacks: int | None = None
@@ -339,8 +296,6 @@ class RouterState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ProxyState:
-    """Stamped by the proxy from the authenticated key, team and request; stripped from client bodies."""
-
     proxy_server_request: Mapping[str, object] | None = None
     secret_fields: "SecretFields | None" = None
     trusted_callback_vars: Mapping[str, str] | None = field(default=None, metadata=wire(TRUSTED_CALLBACK_VARS_FIELD))
@@ -352,8 +307,6 @@ class ProxyState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class EntrypointState:
-    """Which public entrypoint a call came through."""
-
     acompletion: bool | None = None
     aembedding: bool | None = None
     aimg_generation: bool | None = None
