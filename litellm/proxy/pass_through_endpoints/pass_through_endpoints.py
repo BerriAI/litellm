@@ -882,44 +882,37 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         self._log_warning: Final = log_warning
         self._enqueue: Final = enqueue
         self._collected: Final[list[bytes]] = []  # mutable-ok: preview prefix accumulated while relaying
-        self._reported = False
-        self._enqueued = False
+        self._dispatched = False
 
-    async def _report_once(self) -> None:
-        if self._reported:
+    def _dispatch_report(self) -> None:
+        if self._dispatched:
             return
-        self._reported = True
-        await self._report(b"".join(self._collected))
-
-    def _enqueue_pending_report(self) -> None:
-        if self._reported or self._enqueued:
-            return
-        self._enqueued = True
-        self._enqueue(self._report_once())
+        self._dispatched = True
+        self._enqueue(self._report(b"".join(self._collected)))
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         total = 0  # rebind-ok: running byte count against the preview budget
         try:
             async for chunk in self._upstream.aiter_bytes():
-                if not self._reported:
+                if not self._dispatched:
                     self._collected.append(chunk)
                     total += len(chunk)
                     if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
-                        await self._report_once()
+                        self._dispatch_report()
                 yield chunk
-            await self._report_once()
+            self._dispatch_report()
         except httpx.HTTPError as err:
             self._log_warning(
                 "pass_through_endpoint: upstream error body read failed after %d bytes: %s",
                 sum(len(part) for part in self._collected),
                 type(err).__name__,
             )
-            await self._report_once()
+            self._dispatch_report()
         finally:
-            self._enqueue_pending_report()
+            self._dispatch_report()
 
     async def aclose(self) -> None:
-        self._enqueue_pending_report()
+        self._dispatch_report()
         await self._upstream.aclose()
 
 
