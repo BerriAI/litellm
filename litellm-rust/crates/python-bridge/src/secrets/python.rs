@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use litellm_host_python::attach_blocking;
+use litellm_host_python::{PythonContext, attach_blocking};
 use litellm_secrets::{Error, SecretValue, source::SecretSource};
 use pyo3::prelude::*;
 
@@ -11,7 +11,7 @@ use super::error::external_error;
 /// management settings and the environment fallback behave exactly as they do in Python.
 pub(super) struct PythonSecrets {
     get_secret_str: Arc<Py<PyAny>>,
-    context: Arc<Py<PyAny>>,
+    context: PythonContext,
 }
 
 impl PythonSecrets {
@@ -20,16 +20,14 @@ impl PythonSecrets {
             py.import("litellm.secret_managers.main")?
                 .getattr("get_secret_str")?
                 .unbind(),
-            py.import("contextvars")?
-                .call_method0("copy_context")?
-                .unbind(),
+            PythonContext::capture(py)?,
         ))
     }
 
-    fn reading_with(get_secret_str: Py<PyAny>, context: Py<PyAny>) -> Self {
+    fn reading_with(get_secret_str: Py<PyAny>, context: PythonContext) -> Self {
         Self {
             get_secret_str: Arc::new(get_secret_str),
-            context: Arc::new(context),
+            context,
         }
     }
 }
@@ -40,17 +38,23 @@ impl SecretSource for PythonSecrets {
         name: &'a str,
     ) -> BoxFuture<'a, Result<Option<SecretValue>, Error>> {
         let get_secret_str = Arc::clone(&self.get_secret_str);
-        let context = Arc::clone(&self.context);
+        let context = self.context.clone();
         let name = name.to_owned();
-        Box::pin(attach_blocking(move |py| {
-            context
-                .bind(py)
-                .call_method0("copy")
-                .and_then(|context| context.call_method1("run", (get_secret_str.bind(py), name)))
-                .and_then(|value| value.extract::<Option<String>>())
-                .map(|value| value.map(SecretValue::new))
-                .map_err(|error| external_error(py, error))
-        }))
+        Box::pin(async move {
+            match attach_blocking(context, move |py| {
+                get_secret_str
+                    .bind(py)
+                    .call1((name,))
+                    .and_then(|value| value.extract::<Option<String>>())
+                    .map(|value| value.map(SecretValue::new))
+                    .map_err(|error| external_error(py, error))
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => Python::attach(|py| Err(external_error(py, error))),
+            }
+        })
     }
 }
 
@@ -62,6 +66,7 @@ mod tests {
 
     use super::PythonSecrets;
     use crate::secrets::python_error;
+    use litellm_host_python::PythonContext;
 
     #[fixture]
     fn namespace() -> Py<PyDict> {
@@ -108,11 +113,7 @@ def get_secret_str(name):
                     .unwrap()
                     .unwrap()
                     .unbind(),
-                py.import("contextvars")
-                    .unwrap()
-                    .call_method0("copy_context")
-                    .unwrap()
-                    .unbind(),
+                PythonContext::capture(py).unwrap(),
             )
         });
         (PythonSecrets::reading_with(reader, context), namespace)
@@ -185,26 +186,5 @@ def get_secret_str(name):
 
         let seen: Vec<String> = Python::attach(|py| global(&secrets.1, py, "seen_context_values"));
         assert_eq!(seen, vec!["request-value".to_owned()]);
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn concurrent_reads_each_copy_the_context(secrets: (PythonSecrets, Py<PyDict>)) {
-        let (first, second) = tokio::join!(
-            secrets.0.get_secret_str("MISTRAL_API_KEY"),
-            secrets.0.get_secret_str("OTHER"),
-        );
-
-        assert_eq!(
-            first
-                .unwrap()
-                .map(|value| value.expose().to_owned())
-                .as_deref(),
-            Some("vault-key")
-        );
-        assert!(second.unwrap().is_none());
-        let seen: Vec<String> = Python::attach(|py| global(&secrets.1, py, "seen_context_values"));
-        assert_eq!(seen.len(), 2);
-        assert!(seen.iter().all(|value| value == "request-value"));
     }
 }

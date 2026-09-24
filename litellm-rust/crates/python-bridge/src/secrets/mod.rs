@@ -26,7 +26,8 @@ const NATIVE: FieldSpec<bool> = FieldSpec::new("native", |field| field.schema_bo
 /// native secret manager.
 pub(crate) fn source(py: Python<'_>) -> PyResult<Arc<dyn SecretSource>> {
     if PythonSettings::SecretManager.read(py)?.read(&NATIVE)? {
-        return Ok(Arc::new(ResolvedSecrets::new(config::read(py)?)));
+        let context = litellm_host_python::PythonContext::capture(py)?;
+        return Ok(Arc::new(ResolvedSecrets::new(config::read(py)?, context)));
     }
     Ok(Arc::new(PythonSecrets::new(py)?))
 }

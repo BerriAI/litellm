@@ -1,7 +1,7 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use litellm_core_utils::settings::Lookup;
-use litellm_host_python::attach_blocking;
+use litellm_host_python::{PythonContext, attach_blocking};
 use litellm_secrets::{
     Error, ExternalSecretManager, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
 };
@@ -21,6 +21,7 @@ const ENVIRONMENT_FALLBACK_LOG: &str =
 /// client, or a manually assigned SDK client.
 pub(crate) struct PythonSecretManager {
     client: Arc<PythonClient>,
+    context: PythonContext,
 }
 
 struct PythonClient {
@@ -34,6 +35,7 @@ impl PythonSecretManager {
         client: Py<PyAny>,
         system: Option<KeyManagementSystem>,
         settings: Option<Py<PyAny>>,
+        context: PythonContext,
     ) -> Self {
         Self {
             client: Arc::new(PythonClient {
@@ -41,6 +43,7 @@ impl PythonSecretManager {
                 system,
                 settings,
             }),
+            context,
         }
     }
 }
@@ -95,18 +98,26 @@ impl ExternalSecretManager for PythonSecretManager {
         _environment: &'a (dyn Lookup + Send + Sync),
     ) -> Pin<Box<dyn Future<Output = Result<Option<Secret>, Error>> + Send + 'a>> {
         let client = Arc::clone(&self.client);
+        let context = self.context.clone();
         let name = name.to_owned();
-        Box::pin(attach_blocking(move |py| match client.read(py, &name) {
-            Ok(value) => Ok(value.map(SecretValue::new).map(Secret::String)),
-            // `get_secret` answers a failed manager read from the process environment, but
-            // only for `Exception`: cancellation and other `BaseException`s propagate.
-            Err(error) if error.is_instance_of::<PyException>(py) => {
-                log_environment_fallback(py, &name, &error)
-                    .map_err(|error| external_error(py, error))?;
-                Err(read_error(py, error))
+        Box::pin(async move {
+            match attach_blocking(context, move |py| match client.read(py, &name) {
+                Ok(value) => Ok(value.map(SecretValue::new).map(Secret::String)),
+                // `get_secret` answers a failed manager read from the process environment, but
+                // only for `Exception`: cancellation and other `BaseException`s propagate.
+                Err(error) if error.is_instance_of::<PyException>(py) => {
+                    log_environment_fallback(py, &name, &error)
+                        .map_err(|error| external_error(py, error))?;
+                    Err(read_error(py, error))
+                }
+                Err(error) => Err(external_error(py, error)),
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => Python::attach(|py| Err(external_error(py, error))),
             }
-            Err(error) => Err(external_error(py, error)),
-        }))
+        })
     }
 }
 
@@ -125,8 +136,9 @@ fn log_environment_fallback(py: Python<'_>, name: &str, error: &PyErr) -> PyResu
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, MutexGuard};
 
     use litellm_secrets::{
         FailurePolicy, KeyManagementSettings, KeyManagementSystem, OidcResolver, SecretManager,
@@ -135,15 +147,27 @@ mod tests {
     use pyo3::{prelude::*, types::PyDict};
     use rstest::rstest;
 
+    use litellm_host_python::PythonContext;
+
     use super::{HANDLER_MODULE, PythonSecretManager, python_name};
     use crate::secrets::python_error;
 
+    /// `sys.modules` is interpreter-global, so tests that install or rely on the handler module
+    /// cannot overlap with any other test on this list.
+    static HANDLER_LOCK: Mutex<()> = Mutex::new(());
+
+    fn handler_guard() -> MutexGuard<'static, ()> {
+        HANDLER_LOCK.lock().expect("handler lock poisoned")
+    }
+
     /// A resolver over a Python manager whose reads raise `failure_type`, with the chained
-    /// exceptions Python attaches, and `fallback` as the process environment.
+    /// exceptions Python attaches, and `fallback` as the process environment. The returned guard
+    /// keeps other module-mutating tests out for the lifetime of the returned resolver.
     fn failing_resolver(
         failure_type: &str,
         fallback: Option<&'static str>,
-    ) -> (SecretResolver, Py<PyDict>) {
+    ) -> (SecretResolver, Py<PyDict>, MutexGuard<'static, ()>) {
+        let handler = handler_guard();
         Python::initialize();
         let (reader, locals) = Python::attach(|py| {
             let locals = PyDict::new(py);
@@ -176,6 +200,7 @@ handler.get_secret_from_manager = get_secret_from_manager
                 locals.get_item("manager").unwrap().unwrap().unbind(),
                 None,
                 None,
+                PythonContext::capture(py).unwrap(),
             );
             (reader, locals.unbind())
         });
@@ -188,7 +213,7 @@ handler.get_secret_from_manager = get_secret_from_manager
             OidcResolver::default(),
         )
         .with_failure_policy(FailurePolicy::EnvironmentFallback);
-        (resolver, locals)
+        (resolver, locals, handler)
     }
 
     #[rstest]
@@ -200,7 +225,7 @@ handler.get_secret_from_manager = get_secret_from_manager
         #[case] failure_type: &str,
         #[case] fallback: Option<&'static str>,
     ) {
-        let (resolver, locals) = failing_resolver(failure_type, fallback);
+        let (resolver, locals, _handler) = failing_resolver(failure_type, fallback);
         let error = resolver.get_secret("API_KEY", None).await.unwrap_err();
         Python::attach(|py| {
             let original = python_error(py, &error).unwrap();
@@ -273,7 +298,7 @@ sys.modules.setdefault('litellm._logging', logging)
         #[case] fallback: Option<&'static str>,
         #[case] name: &str,
     ) {
-        let (resolver, _locals) = failing_resolver(failure_type, fallback);
+        let (resolver, _locals, _handler) = failing_resolver(failure_type, fallback);
         Python::attach(|py| assert!(logged_errors(py, name).is_empty()));
         let secret = resolver.get_secret(name, None).await.unwrap();
         assert_eq!(
@@ -299,6 +324,7 @@ sys.modules.setdefault('litellm._logging', logging)
 
     /// Installs a fake `get_secret_from_manager` that records its kwargs, runs `body`, and
     /// removes the fake handler again; parent package stubs persist for concurrent tests.
+    /// Callers hold `handler_guard` before attaching so the GIL is never held while waiting on it.
     fn with_fake_handler<'py>(py: Python<'py>, body: impl FnOnce(&Bound<'py, PyDict>)) {
         let locals = PyDict::new(py);
         py.run(
@@ -339,6 +365,7 @@ else:
     #[case("123")]
     #[case("{'key': 'value'}")]
     fn nonstring_results_are_absent_without_a_read_failure(#[case] expression: &str) {
+        let _handler = handler_guard();
         Python::initialize();
         Python::attach(|py| {
             with_fake_handler(py, |locals| {
@@ -349,7 +376,12 @@ else:
                     Some(locals),
                 )
                 .unwrap();
-                let reader = PythonSecretManager::new(py.None(), None, None);
+                let reader = PythonSecretManager::new(
+                    py.None(),
+                    None,
+                    None,
+                    PythonContext::capture(py).unwrap(),
+                );
                 assert_eq!(reader.client.read(py, "KEY").unwrap(), None);
             });
         });
@@ -374,6 +406,7 @@ else:
 
     #[test]
     fn configured_systems_dispatch_through_the_python_handler_with_the_original_settings() {
+        let _handler = handler_guard();
         Python::initialize();
         Python::attach(|py| {
             with_fake_handler(py, |locals| {
@@ -383,6 +416,7 @@ else:
                     client.clone().unbind(),
                     Some(KeyManagementSystem::AzureKeyVault),
                     Some(settings.clone().unbind()),
+                    PythonContext::capture(py).unwrap(),
                 );
                 assert_eq!(
                     reader.client.read(py, "API_KEY").unwrap().as_deref(),
@@ -425,6 +459,7 @@ else:
         #[case] system: Option<KeyManagementSystem>,
         #[case] key_manager: &str,
     ) {
+        let _handler = handler_guard();
         Python::initialize();
         Python::attach(|py| {
             with_fake_handler(py, |locals| {
@@ -443,7 +478,12 @@ manager = Manager()
                 )
                 .unwrap();
                 let manager = locals.get_item("manager").unwrap().unwrap();
-                let reader = PythonSecretManager::new(manager.clone().unbind(), system, None);
+                let reader = PythonSecretManager::new(
+                    manager.clone().unbind(),
+                    system,
+                    None,
+                    PythonContext::capture(py).unwrap(),
+                );
                 assert_eq!(
                     reader.client.read(py, "API_KEY").unwrap().as_deref(),
                     Some("handled-API_KEY")

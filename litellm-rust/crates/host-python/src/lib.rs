@@ -25,7 +25,7 @@ pub use execution::{
     runtime_started,
 };
 pub use fork_gate::RuntimeAlreadyStarted;
-pub use gil::{attach_blocking, release_count, release_gil};
+pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
 pub use handle::{Execution, ExecutionBody, ExecutionStep};
 pub use marshal::{
     Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
