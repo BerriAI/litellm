@@ -2427,3 +2427,38 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 429, response.text
         assert response.json()["error"]["message"] == "rate limited"
+
+
+def test_responses_routes_document_response_models_in_openapi_schema():
+    from typing import cast
+
+    from fastapi import FastAPI
+
+    from litellm.proxy.response_api_endpoints.endpoints import router
+
+    def as_object(value: object) -> dict[str, object]:
+        assert isinstance(value, dict)
+        return cast(dict[str, object], value)
+
+    openapi_app = FastAPI()
+    openapi_app.include_router(router)
+    openapi: Final = cast(dict[str, object], openapi_app.openapi())
+
+    def ok_200_properties(path: str, method: str) -> dict[str, object]:
+        operation: Final = as_object(as_object(as_object(openapi)["paths"])[path])[method]
+        schema: Final = as_object(
+            as_object(
+                as_object(as_object(as_object(as_object(operation)["responses"])["200"])["content"])["application/json"]
+            )["schema"]
+        )
+        ref: Final = schema["$ref"]
+        assert isinstance(ref, str)
+        component: Final = ref.rsplit("/", 1)[-1]
+        return as_object(
+            as_object(as_object(as_object(as_object(openapi)["components"])["schemas"])[component])["properties"]
+        )
+
+    assert "output" in ok_200_properties("/v1/responses", "post")
+    assert "output" in ok_200_properties("/v1/responses/{response_id}", "get")
+    assert "deleted" in ok_200_properties("/v1/responses/{response_id}", "delete")
+    assert "data" in ok_200_properties("/v1/responses/{response_id}/input_items", "get")
