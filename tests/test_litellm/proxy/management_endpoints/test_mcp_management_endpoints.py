@@ -4293,7 +4293,9 @@ async def test_health_discovery_respects_route_restricted_key_grants(
 
     assert {row["server_id"] for row in result} == set(expected)
     assert {server_id for server_id, route in routes.items() if route.called} == set(expected)
-    expected_status: Final = "healthy" if probe_kind == "liveness" else {200: "healthy", 503: "unhealthy"}[upstream_status]
+    expected_status: Final = (
+        "healthy" if probe_kind == "liveness" else {200: "healthy", 503: "unhealthy"}[upstream_status]
+    )
     assert all(row["status"] == expected_status for row in result)
 
     assert all(row["last_health_check"] is not None for row in result)
