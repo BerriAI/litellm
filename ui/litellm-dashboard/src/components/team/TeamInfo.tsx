@@ -1243,6 +1243,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       console.error("Error applying member budgets:", error);
       toast.fromError("Team updated, but member budgets could not be reset");
       setIsApplyingMemberBudgets(false);
+      refreshTeamData();
     }
   };
 

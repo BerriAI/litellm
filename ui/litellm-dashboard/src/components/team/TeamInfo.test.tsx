@@ -3132,6 +3132,22 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
     await waitFor(() => expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument());
   });
 
+  it("refreshes team data when the reset request fails after the save", async () => {
+    const user = userEvent.setup({ delay: null });
+    const input = await openEditorWithCustomMembers(user);
+    bulkUpdatePOST.mockRejectedValue(new Error("bulk update down"));
+
+    await submitNewDefault(user, input, "20");
+    await user.click(await screen.findByRole("button", { name: "Reset to $20" }));
+
+    await waitFor(() =>
+      expect(toast.fromError).toHaveBeenCalledWith("Team updated, but member budgets could not be reset"),
+    );
+    expect(screen.getByText("Reset member budgets?")).toBeInTheDocument();
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(networking.teamInfoCall).mock.calls.length).toBeGreaterThan(1));
+  });
+
   it("surfaces a failure toast when some members cannot be reset", async () => {
     const user = userEvent.setup({ delay: null });
     const input = await openEditorWithCustomMembers(user, ["user-a@x.com", "user-b@x.com"]);
