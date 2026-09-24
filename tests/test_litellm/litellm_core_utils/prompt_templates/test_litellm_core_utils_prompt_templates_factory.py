@@ -281,6 +281,17 @@ async def test_bedrock_converse_async_matches_sync_for_redacted_thinking():
                     "text": "calling tool",
                 },
             ],
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "planning attribute",
+                    "signature": "sig_plan_attr",
+                },
+                {
+                    "type": "redacted_thinking",
+                    "data": "redacted_attr_blob",
+                },
+            ],
         },
     ]
 
@@ -297,7 +308,8 @@ async def test_bedrock_converse_async_matches_sync_for_redacted_thinking():
     )
 
     assert sync_result == async_result
-    assert async_result[1]["content"][1]["reasoningContent"]["redactedContent"] == "redacted_binary_blob"
+    assert any(b.get("reasoningContent", {}).get("redactedContent") == "redacted_binary_blob" for b in async_result[1]["content"])
+    assert any(b.get("reasoningContent", {}).get("redactedContent") == "redacted_attr_blob" for b in async_result[1]["content"])
 
 
 def test_bedrock_converse_multi_turn_tool_loop_with_redacted_thinking():
@@ -358,6 +370,56 @@ def test_bedrock_converse_redacted_thinking_dropped_for_non_anthropic_model():
     )
 
     assert result[1]["content"] == [{"text": "answer"}]
+
+
+def test_bedrock_converse_preserves_reasoning_for_application_inference_profile():
+    messages = [
+        {"role": "user", "content": "hello from profile"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "profile reasoning", "signature": "sig_prof_1"},
+                {"type": "redacted_thinking", "data": "opaque_profile_data"},
+                {"type": "text", "text": "profile response"},
+            ],
+        },
+    ]
+
+    for model_arn in (
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/0a1b2c3d4e",
+        "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/0a1b2c3d4e",
+    ):
+        result = _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model_arn,
+            llm_provider="bedrock_converse",
+        )
+        assistant_blocks = result[1]["content"]
+        assert len(assistant_blocks) == 3
+        assert assistant_blocks[0]["reasoningContent"]["reasoningText"]["signature"] == "sig_prof_1"
+        assert assistant_blocks[1]["reasoningContent"]["redactedContent"] == "opaque_profile_data"
+        assert assistant_blocks[2] == {"text": "profile response"}
+
+
+def test_bedrock_converse_unsigned_thinking_converted_to_text():
+    messages = [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "unsigned thought", "signature": None},
+                {"type": "text", "text": "final answer"},
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    assert result[1]["content"] == [{"text": "unsigned thought"}, {"text": "final answer"}]
 
 
 @pytest.mark.parametrize(
