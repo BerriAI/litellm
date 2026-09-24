@@ -173,6 +173,34 @@ def _check_passthrough_routes_caller_permission(
         )
 
 
+def _check_disable_global_guardrails_caller_permission(
+    disable_global_guardrails: bool | None,
+    metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """
+    Only proxy admins may opt a key or team out of default-on guardrails, whether the
+    flag is top-level or under `metadata`. Re-sending a flag that is already stored is
+    not an opt-out, so non-admin edits of an already exempted object still go through.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    requested: Final = bool(disable_global_guardrails) or (
+        metadata is not None and bool(metadata.get("disable_global_guardrails"))
+    )
+    if not requested:
+        return
+    if existing_metadata is not None and existing_metadata.get("disable_global_guardrails") is True:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can set `disable_global_guardrails` on a {entity}."},
+    )
+
+
 def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
     for member in team_obj.members_with_roles:
         if (member.user_id is not None and member.user_id == user_api_key_dict.user_id) and member.role == "admin":
@@ -500,7 +528,7 @@ def _prisma_value(value: object) -> object:
     return list(value) if isinstance(value, tuple) else value
 
 
-def member_budget_patch(source: BaseModel) -> dict[str, Any]:
+def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
     """Map the per-member limit fields a request actually set to their budget-table
     columns (merge-patch: a sent value updates, an explicit null clears, an absent
     field is left untouched)."""
@@ -533,7 +561,7 @@ async def _upsert_budget_and_membership(
     user_id: str,
     existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    budget_patch: dict[str, Any],
+    budget_patch: Mapping[str, object],
     team_default_budget_id: str | None = None,
     shared_budget_ids: frozenset[str] | None = None,
 ):
@@ -596,9 +624,9 @@ async def _upsert_budget_and_membership(
         if is_shared_default and not temp_only
         else None
     )
-    source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
+    source: Final[Mapping[str, object]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
 
-    create_data: Final[dict[str, Any]] = {  # mutable-ok: Prisma create payloads are dict-shaped
+    create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
         **MappingProxyType(

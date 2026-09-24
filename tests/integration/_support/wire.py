@@ -43,7 +43,9 @@ class Wire:
 
 
 @contextmanager
-def wire_server(respond: Callable[[Request], Reply], tls: ssl.SSLContext | None = None) -> Generator[Wire, None, None]:
+def wire_server(
+    respond: Callable[[Request], Reply], tls: ssl.SSLContext | None = None, port: int = 0
+) -> Generator[Wire, None, None]:
     """Owned TCP peer; requests traverse the real HTTP client and serialization."""
     received: Final[SimpleQueue[Request]] = SimpleQueue()
     errors: Final[SimpleQueue[Exception]] = SimpleQueue()
@@ -114,7 +116,7 @@ def wire_server(respond: Callable[[Request], Reply], tls: ssl.SSLContext | None 
             if tls is not None:
                 self.socket = tls.wrap_socket(self.socket, server_side=True)
 
-    with OwnedHTTPServer(("127.0.0.1", 0), Handler) as server:
+    with OwnedHTTPServer(("127.0.0.1", port), Handler) as server:
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
         try:

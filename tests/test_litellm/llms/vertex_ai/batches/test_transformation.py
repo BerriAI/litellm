@@ -13,13 +13,14 @@ There are no real I/O seams here; ``uuid.uuid4`` is the only nondeterministic
 dependency and is patched where the displayName is asserted.
 """
 
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import patch
 
 import pytest
 
 from litellm.llms.vertex_ai.batches.transformation import (  # noqa: E402
     VertexAIBatchTransformation,
-    vertex_prompt_tokens_details,
 )
 from litellm.llms.vertex_ai.common_utils import (  # noqa: E402
     VertexAIError,
@@ -36,30 +37,8 @@ INPUT_FILE = (
 
 ENDPOINT_ID = "7768560373388541952"
 ENDPOINT_INPUT_FILE = (
-    f"gs://litellm-testing-bucket/litellm-vertex-files/endpoints/{ENDPOINT_ID}/"
-    "e9412502-2c91-42a6-8e61-f5c294cc0fc8"
+    f"gs://litellm-testing-bucket/litellm-vertex-files/endpoints/{ENDPOINT_ID}/e9412502-2c91-42a6-8e61-f5c294cc0fc8"
 )
-
-
-def test_vertex_prompt_tokens_details_rejects_malformed_details():
-    assert vertex_prompt_tokens_details({"promptTokensDetails": [1]}) is None
-    assert vertex_prompt_tokens_details({"promptTokensDetails": [{"modality": "AUDIO"}]}) is None
-    assert (
-        vertex_prompt_tokens_details(
-            {
-                "promptTokensDetails": [
-                    {"modality": "AUDIO", "tokenCount": 1},
-                    "malformed",
-                ]
-            }
-        )
-        is None
-    )
-
-
-# =========================================================================== #
-# transform_openai_batch_request_to_vertex_ai_batch_request
-# =========================================================================== #
 
 
 def test_transform_openai_request_builds_full_vertex_job():
@@ -270,8 +249,77 @@ def test_get_input_file_id_empty_uris():
 
 
 # =========================================================================== #
-# _get_output_file_id_from_vertex_ai_batch_response
+# _get_output_file_id_from_vertex_ai_batch_response: None until Vertex reports outputInfo
 # =========================================================================== #
+
+SHARED_OUTPUT_PREFIX: Final = "gs://bucket/litellm-vertex-files/publishers/google/models/gemini-2.5-flash"
+SUCCEEDED_OUTPUT_DIRECTORY: Final = f"{SHARED_OUTPUT_PREFIX}/prediction-model-2026-09-24T19:41:00.000000Z"
+
+
+def _vertex_job(state: str) -> dict[str, object]:
+    return {
+        "name": "projects/510528649030/locations/us-central1/batchPredictionJobs/3814889423749775360",
+        "state": state,
+        "createTime": "2026-09-24T19:37:25.775603Z",
+        "inputConfig": {
+            "instancesFormat": "jsonl",
+            "gcsSource": {"uris": [f"{SHARED_OUTPUT_PREFIX}/0586ba52-4f8b-4988-aa8d-3573550a4b0f"]},
+        },
+        "outputConfig": {
+            "predictionsFormat": "jsonl",
+            "gcsDestination": {"outputUriPrefix": SHARED_OUTPUT_PREFIX},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "vertex_state,output_info_field,expected_status,expected_output_file_id",
+    [
+        ("JOB_STATE_PENDING", {}, "validating", None),
+        ("JOB_STATE_RUNNING", {"outputInfo": {}}, "in_progress", None),
+        ("JOB_STATE_CANCELLED", {"outputInfo": None}, "cancelled", None),
+        (
+            "JOB_STATE_SUCCEEDED",
+            {"outputInfo": {"gcsOutputDirectory": SUCCEEDED_OUTPUT_DIRECTORY}},
+            "completed",
+            f"{SUCCEEDED_OUTPUT_DIRECTORY}/predictions.jsonl",
+        ),
+    ],
+    ids=["create_or_pending", "running", "cancelled", "succeeded"],
+)
+def test_transform_vertex_response_output_file_id_is_none_until_output_info(
+    vertex_state: str,
+    output_info_field: Mapping[str, object],
+    expected_status: str,
+    expected_output_file_id: str | None,
+) -> None:
+    batch: Final = T.transform_vertex_ai_batch_response_to_openai_batch_response(
+        {**_vertex_job(vertex_state), **output_info_field}
+    )
+
+    assert batch.status == expected_status
+    assert batch.output_file_id == expected_output_file_id
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {},
+        {"outputConfig": {}},
+        {"outputInfo": None},
+        {"outputInfo": {"gcsOutputDirectory": ""}},
+        {"outputInfo": {"gcsOutputDirectory": None}},
+    ],
+    ids=[
+        "no_fields",
+        "output_config_without_destination",
+        "null_output_info",
+        "empty_output_directory",
+        "null_output_directory",
+    ],
+)
+def test_get_output_file_id_is_none_without_output_directory(response: Mapping[str, object]) -> None:
+    assert T._get_output_file_id_from_vertex_ai_batch_response(response) is None
 
 
 def test_get_output_file_id_from_output_info():
@@ -289,49 +337,7 @@ def test_get_output_file_id_output_info_no_trailing_slash():
     )
 
 
-def test_get_output_file_id_empty_output_info_falls_through_to_output_config():
-    # gcsOutputDirectory missing -> "" -> the "/predictions.jsonl" guard skips
-    # the outputInfo branch, falls through to outputConfig
-    resp = {
-        "outputInfo": {},
-        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://b/cfg"}},
-    }
-    assert T._get_output_file_id_from_vertex_ai_batch_response(resp) == "gs://b/cfg/predictions.jsonl"
-
-
-def test_get_output_file_id_output_info_explicit_none_falls_through_to_output_config():
-    resp = {
-        "outputInfo": None,
-        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://b/cfg"}},
-    }
-    assert T._get_output_file_id_from_vertex_ai_batch_response(resp) == "gs://b/cfg/predictions.jsonl"
-
-
-def test_get_output_file_id_output_info_explicit_none_and_no_output_config():
-    assert T._get_output_file_id_from_vertex_ai_batch_response({"outputInfo": None}) == ""
-
-
-def test_get_output_file_id_no_output_info_and_no_output_config():
-    assert T._get_output_file_id_from_vertex_ai_batch_response({}) == ""
-
-
-def test_get_output_file_id_output_config_missing_gcs_destination():
-    # outputConfig present but no gcsDestination -> returns the running "" value
-    assert T._get_output_file_id_from_vertex_ai_batch_response({"outputConfig": {}}) == ""
-
-
-def test_get_output_file_id_output_config_already_has_suffix():
-    # outputUriPrefix already ends in /predictions.jsonl -> returned as-is (no double append)
-    resp = {"outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://b/cfg/predictions.jsonl"}}}
-    assert T._get_output_file_id_from_vertex_ai_batch_response(resp) == "gs://b/cfg/predictions.jsonl"
-
-
-def test_get_output_file_id_output_config_strips_trailing_slash():
-    resp = {"outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://b/cfg/"}}}
-    assert T._get_output_file_id_from_vertex_ai_batch_response(resp) == "gs://b/cfg/predictions.jsonl"
-
-
-def test_get_output_file_id_output_info_takes_precedence_over_output_config():
+def test_get_output_file_id_output_info_ignores_output_uri_prefix():
     resp = {
         "outputInfo": {"gcsOutputDirectory": "gs://from-info"},
         "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://from-config"}},
@@ -477,3 +483,19 @@ def test_list_response_none_jobs_treated_as_empty():
     out = T.transform_vertex_ai_batch_list_response_to_openai_list_response({"batchPredictionJobs": None})
     assert out["data"] == []
     assert out["first_id"] is None
+
+
+PASSTHROUGH_INPUT_FILE = (
+    "gs://litellm-testing-bucket/litellm-vertex-files/passthrough/publishers/google/models/gemini-2.5-flash/uuid-1"
+)
+
+
+def test_get_model_from_passthrough_gcs_file():
+    assert T._get_model_from_gcs_file(PASSTHROUGH_INPUT_FILE) == "publishers/google/models/gemini-2.5-flash"
+
+
+def test_get_gcs_uri_prefix_keeps_passthrough_segment_so_output_lands_beside_input():
+    assert (
+        T._get_gcs_uri_prefix_from_file(PASSTHROUGH_INPUT_FILE)
+        == "gs://litellm-testing-bucket/litellm-vertex-files/passthrough/publishers/google/models/gemini-2.5-flash"
+    )
