@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     AttemptedFallbackTargets,
@@ -1384,3 +1385,17 @@ def test_get_fallback_model_group_prefixed_match_skips_prefixed_model_group():
     fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4o")
 
     assert fallback_model_group is None
+
+
+def test_get_fallback_model_group_never_resolves_a_provider_without_a_prefixed_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An alias-style group name has no provider, and resolving it prints the SDK's provider-list banner,
+    so the lookup only infers a provider when some key is spelled <provider>/<group>."""
+
+    resolver: Final = MagicMock(return_value=("my-alias", "openai", None, None))
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", resolver)
+    fallbacks: Final = [{"gpt-5.5-pro": ["claude-sonnet-4-6"]}, {"*": ["gpt-5.5-mini"]}]
+
+    assert get_fallback_model_group(fallbacks=fallbacks, model_group="my-alias") == (["gpt-5.5-mini"], 1)
+    resolver.assert_not_called()

@@ -17862,3 +17862,40 @@ def test_access_windows_filter_reserved_deployments_method():
             request_team_id="team-a",
         )
     ] == ["reserved-deployment", "open-deployment"]
+
+
+@pytest.mark.asyncio
+async def test_bare_model_group_served_by_wildcard_deployment_uses_provider_prefixed_fallback_key() -> None:
+    """Claude Code sends the bare "claude-sonnet-4-6" to /v1/messages; routing serves it through the
+    "anthropic/*" wildcard, so a fallback keyed the way that wildcard is written ("anthropic/claude-sonnet-4-6",
+    which is what the Admin UI offers) must catch the failure instead of surfacing the provider error."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+            {
+                "model_name": "openai/gpt-5.5-pro",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5-pro",
+                    "api_key": "sk-fake",
+                    "mock_response": "served by the fallback",
+                },
+            },
+        ],
+        fallbacks=[{"anthropic/claude-sonnet-4-6": ["openai/gpt-5.5-pro"]}],
+        num_retries=0,
+    )
+
+    result = await router.aanthropic_messages(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=64,
+    )
+
+    assert result["content"][0]["text"] == "served by the fallback"
