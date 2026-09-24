@@ -203,7 +203,7 @@ def test_require_legacy_reader_refuses_rewrite_passes_without_pynacl(monkeypatch
     monkeypatch.setitem(sys.modules, "nacl", None)
     monkeypatch.setitem(sys.modules, "nacl.secret", None)
 
-    with pytest.raises(LegacyEncryptionUnavailableError, match="rotate the master key.*legacy-encryption"):
+    with pytest.raises(LegacyEncryptionUnavailableError, match=r"rotate the master key.*legacy-encryption"):
         require_legacy_reader("rotate the master key")
 
 

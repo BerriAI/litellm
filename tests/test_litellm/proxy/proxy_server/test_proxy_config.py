@@ -3509,7 +3509,7 @@ def test_ProxyConfig__encrypt_env_variables_for_db_refuses_without_pynacl_instea
     monkeypatch.setitem(sys.modules, "nacl", None)
     monkeypatch.setitem(sys.modules, "nacl.secret", None)
     pc = ProxyConfig()
-    with pytest.raises(LegacyEncryptionUnavailableError, match="config save.*legacy-encryption"):
+    with pytest.raises(LegacyEncryptionUnavailableError, match=r"config save.*legacy-encryption"):
         pc._encrypt_env_variables_for_db({"A": "1"})
 
 
