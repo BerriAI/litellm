@@ -3154,6 +3154,13 @@ jobs:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
           server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
       - start_redis
+      - when:
+          condition:
+            equal: [database, << parameters.suite >>]
+          steps:
+            - run:
+                name: Install the system libpq the pure Python psycopg loads
+                command: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libpq5
       - run:
           name: Run owned integration contracts
           command: bash .circleci/scripts/run_integration.sh << parameters.suite >> << parameters.mode >>
