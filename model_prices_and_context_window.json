@@ -48131,6 +48131,20 @@
             "/v1/realtime"
         ]
     },
+    "vertex_ai/chirp_2": {
+        "input_cost_per_second": 0.00026667,
+        "litellm_provider": "vertex_ai",
+        "metadata": {
+            "calculation": "$0.016/60 seconds = $0.00026667 per second",
+            "original_pricing_per_minute": 0.016
+        },
+        "mode": "audio_transcription",
+        "source": "https://cloud.google.com/speech-to-text/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions",
+            "/v1/realtime"
+        ]
+    },
     "vertex_ai/claude-3-5-haiku": {
         "deprecation_date": "2026-07-05",
         "input_cost_per_token": 1e-06,
@@ -50155,6 +50169,7 @@
         ]
     },
     "vertex_ai/google/gemma-4-26b-a4b-it-maas": {
+        "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-openai_models",
         "max_input_tokens": 262144,

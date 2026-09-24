@@ -115,7 +115,7 @@ def _commands(config: VertexChirpRealtimeConfig, payload: str) -> list[object]:
     [
         ("vertex_ai/chirp_3", True),
         ("chirp_3", True),
-        ("chirp_2", False),
+        ("chirp_2", True),
         ("gemini-live-2.5-flash", False),
         ("vertex_ai/gemini-2.0-flash-live-preview-04-09", False),
         ("vertex_ai/gemini-3.5-transcribe-live-preview", False),
