@@ -202,7 +202,7 @@ def test_price_map_has_no_duplicate_keys(path: Path):
 
 
 DATED_VARIANT = re.compile(r"^(.*?)-(\d{4}-\d{2}-\d{2})$")
-SERVICE_TIER_SUFFIXES = ("_flex", "_priority")
+SERVICE_TIER_SUFFIXES = ("_balanced", "_flex", "_priority")
 
 
 def tier_anchor(tier_key: str) -> str:
