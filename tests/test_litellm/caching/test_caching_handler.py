@@ -592,7 +592,6 @@ async def test_embedding_cache_hit_sets_custom_llm_provider_on_logging_obj():
 
 
 def test_sync_stream_responses_cache_hit_sets_custom_llm_provider_on_logging_obj(monkeypatch):
-    """A streaming responses cache hit served by _sync_get_cache must stamp the resolved provider on the logging obj."""
     import litellm
     from litellm.caching.caching import Cache
     from litellm.types.utils import CallTypes
