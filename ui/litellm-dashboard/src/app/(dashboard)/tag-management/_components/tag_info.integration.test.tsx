@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { tagInfoCall, tagUpdateCall } from "@/components/networking";
@@ -10,6 +11,14 @@ import TagInfoView from "./tag_info";
 vi.mock("@/components/networking", () => ({
   tagInfoCall: vi.fn(),
   tagUpdateCall: vi.fn(),
+  getProxyBaseUrl: () => "",
+  getGlobalLitellmHeaderName: () => "Authorization",
+  deriveErrorMessage: (errorData: unknown) => JSON.stringify(errorData),
+  handleError: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ accessToken: "sk-test" }),
 }));
 
 vi.mock("@/components/organisms/create_key_button", () => ({
@@ -34,9 +43,20 @@ const tag: Tag = {
   litellm_budget_table: { max_budget: 10, budget_duration: "7d", tpm_limit: 1000, rpm_limit: 60 },
 };
 
+const keyListFetch = vi.fn();
+
+const renderTagInfo = (editTag: boolean) => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin editTag={editTag} />
+    </QueryClientProvider>,
+  );
+};
+
 const renderEditor = async () => {
   const user = userEvent.setup();
-  render(<TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin editTag />);
+  renderTagInfo(true);
   const nameInput = await screen.findByLabelText("Tag Name");
   return { user, nameInput };
 };
@@ -46,6 +66,11 @@ describe("TagInfoView save payload", () => {
     vi.clearAllMocks();
     mockTagInfoCall.mockResolvedValue({ "prod-tag": tag });
     mockTagUpdateCall.mockResolvedValue(undefined);
+    keyListFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ keys: [], total_count: 0, current_page: 1, total_pages: 0 }),
+    });
+    vi.stubGlobal("fetch", keyListFetch);
   });
 
   it("should send the edited fields and omit the budget fields while the budget section is collapsed", async () => {
@@ -148,5 +173,48 @@ describe("TagInfoView save payload", () => {
 
     expect(await screen.findByText("Tag Details")).toBeInTheDocument();
     expect(mockTagUpdateCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("TagInfoView virtual keys", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTagInfoCall.mockResolvedValue({ "prod-tag": tag });
+    vi.stubGlobal("fetch", keyListFetch);
+  });
+
+  it("should list the keys that /key/list returns for this tag, each linking to its key page", async () => {
+    keyListFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        keys: [{ token: "tok-1", key_alias: "batch-key-1", key_name: "sk-...0001", team_id: "team-a", spend: 2 }],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      }),
+    });
+    renderTagInfo(false);
+
+    expect(await screen.findByRole("link", { name: "batch-key-1" })).toHaveAttribute("href", "/ui/api-keys?key=tok-1");
+    const requestUrl = new URL(keyListFetch.mock.calls[0][0], "http://localhost");
+    expect(requestUrl.pathname).toBe("/key/list");
+    expect(requestUrl.searchParams.get("tag")).toBe("prod-tag");
+  });
+
+  it("should say no virtual keys use the tag when /key/list returns none", async () => {
+    keyListFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ keys: [], total_count: 0, current_page: 1, total_pages: 0 }),
+    });
+    renderTagInfo(false);
+
+    expect(await screen.findByText("No virtual keys use this tag")).toBeInTheDocument();
+  });
+
+  it("should show an error in the section when /key/list fails", async () => {
+    keyListFetch.mockResolvedValue({ ok: false, json: async () => ({ error: "boom" }) });
+    renderTagInfo(false);
+
+    expect(await screen.findByText("Could not load the virtual keys for this tag")).toBeInTheDocument();
   });
 });

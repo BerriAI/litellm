@@ -22,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, ChevronRight, CopyIcon } from "lucide-react";
+import TagKeysSection from "./TagKeysSection";
 
 const tagEditShape = {
   name: z.string().min(1, "Please input a tag name"),
@@ -337,6 +338,8 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               </CardContent>
             </Card>
           )}
+
+          <TagKeysSection tagName={tagDetails.name} />
         </div>
       )}
     </div>

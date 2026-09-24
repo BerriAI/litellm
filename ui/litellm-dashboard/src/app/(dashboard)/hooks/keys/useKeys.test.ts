@@ -424,6 +424,22 @@ describe("useKeys", () => {
     expect(result.current.data?.keys[0].project_id).toBe("project-1");
   });
 
+  it("should pass the tag filter to the API", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result } = renderHook(() => useKeys(1, 10, { tag: "prod batch" }), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const callUrl = new URL(mockFetch.mock.calls[0][0], "http://localhost");
+    expect(callUrl.searchParams.get("tag")).toBe("prod batch");
+  });
+
   it("should pass both projectID and teamID filters to the API", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
