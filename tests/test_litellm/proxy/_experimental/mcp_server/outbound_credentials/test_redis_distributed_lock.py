@@ -1,6 +1,7 @@
 """Tests for the Redis lock: acquire NX/PX with a token, owner-only extend and release, namespacing.
 
-The happy paths run against a real ``redis-server`` because every operation is a Lua script; the
+The happy paths run against a real ``redis-server``, once standalone and once as a one-node cluster,
+because every operation is a Lua script and the cluster client registers scripts on its own path; the
 degrade paths use a fake ``RedisCache`` whose scripts fail.
 """
 
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -23,29 +25,62 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_c
     LockAcquisition,
 )
 
+_ALL_HASH_SLOTS: Final = (0, 16383)
 
-@pytest.fixture
-def redis_port(tmp_path: Path, unused_tcp_port_factory: Callable[[], int]) -> Iterator[int]:
+
+@dataclass(frozen=True, slots=True)
+class _Server:
+    port: int
+    cluster: bool
+
+
+def _wait_until(ready: Callable[[], bool], failure: str, log_path: Path) -> None:
+    for _ in range(100):
+        if ready():
+            return
+        time.sleep(0.1)
+    pytest.fail(f"{failure}: {log_path.read_text()}")
+
+
+def _pings(admin: redis.Redis) -> bool:
+    try:
+        return bool(admin.ping())
+    except redis.ConnectionError:
+        return False
+
+
+def _cluster_is_ok(admin: redis.Redis) -> bool:
+    return b"cluster_state:ok" in admin.execute_command("CLUSTER", "INFO")
+
+
+@pytest.fixture(params=("standalone", "cluster"))
+def redis_server(
+    request: pytest.FixtureRequest, tmp_path: Path, unused_tcp_port_factory: Callable[[], int]
+) -> Iterator[_Server]:
     server: Final = shutil.which("redis-server")
     if server is None:
         pytest.skip("redis-server is required for the lock's Lua scripts")
+    cluster: Final = request.param == "cluster"
     port: Final = unused_tcp_port_factory()
     log_path: Final = tmp_path / "redis.log"
     config: Final = tmp_path / "redis.conf"
-    config.write_text(f'bind 127.0.0.1\nport {port}\ndir "{tmp_path}"\nsave ""\nappendonly no\n')
+    config.write_text(
+        f'bind 127.0.0.1\nport {port}\ndir "{tmp_path}"\nsave ""\nappendonly no\n'
+        + (
+            f"cluster-enabled yes\ncluster-config-file nodes.conf\ncluster-port {unused_tcp_port_factory()}\n"
+            if cluster
+            else ""
+        )
+    )
     with log_path.open("w") as log:
         process: Final = subprocess.Popen((server, str(config)), stdout=log, stderr=subprocess.STDOUT)
         try:
             with redis.Redis(host="127.0.0.1", port=port, socket_timeout=1, socket_connect_timeout=1) as admin:
-                for _ in range(100):
-                    try:
-                        admin.ping()
-                        break
-                    except redis.ConnectionError:
-                        time.sleep(0.1)
-                else:
-                    pytest.fail(f"Redis did not start: {log_path.read_text()}")
-            yield port
+                _wait_until(lambda: _pings(admin), "Redis did not start", log_path)
+                if cluster:
+                    admin.execute_command("CLUSTER", "ADDSLOTSRANGE", *_ALL_HASH_SLOTS)
+                    _wait_until(lambda: _cluster_is_ok(admin), "Cluster never became ok", log_path)
+            yield _Server(port=port, cluster=cluster)
         finally:
             process.terminate()
             try:
@@ -56,7 +91,7 @@ def redis_port(tmp_path: Path, unused_tcp_port_factory: Callable[[], int]) -> It
 
 
 @pytest.fixture
-def redis_cache(redis_port: int, monkeypatch: pytest.MonkeyPatch) -> RedisCache:
+def redis_cache(redis_server: _Server, monkeypatch: pytest.MonkeyPatch) -> RedisCache:
     for name in (
         "REDIS_URL",
         "REDIS_HOST",
@@ -66,12 +101,18 @@ def redis_cache(redis_port: int, monkeypatch: pytest.MonkeyPatch) -> RedisCache:
         "REDIS_SENTINEL_NODES",
     ):
         monkeypatch.delenv(name, raising=False)
-    return RedisCache(host="127.0.0.1", port=redis_port, namespace="tenant")
+    if redis_server.cluster:
+        return RedisCache(startup_nodes=[{"host": "127.0.0.1", "port": redis_server.port}], namespace="tenant")
+    return RedisCache(host="127.0.0.1", port=redis_server.port, namespace="tenant")
 
 
 @pytest.fixture
-def raw(redis_port: int) -> Iterator[redis.Redis]:
-    with redis.Redis(host="127.0.0.1", port=redis_port) as client:
+def raw(redis_server: _Server) -> Iterator[redis.Redis | redis.RedisCluster]:
+    if redis_server.cluster:
+        with redis.RedisCluster(host="127.0.0.1", port=redis_server.port) as cluster_client:
+            yield cluster_client
+        return
+    with redis.Redis(host="127.0.0.1", port=redis_server.port) as client:
         yield client
 
 
@@ -85,7 +126,7 @@ class _FailingScriptsCache:
         return run
 
 
-async def test_acquire_wins_once_and_reports_held_to_the_next_caller(redis_cache: RedisCache, raw: redis.Redis) -> None:
+async def test_acquire_wins_once_and_reports_held_to_the_next_caller(redis_cache: RedisCache, raw: redis.Redis | redis.RedisCluster) -> None:
     lock = RedisDistributedLock(redis_cache)
 
     assert await lock.acquire("k", "tok-1", 10.0) is LockAcquisition.ACQUIRED
@@ -111,7 +152,7 @@ async def test_release_deletes_only_when_the_token_matches(redis_cache: RedisCac
     assert await lock.is_held("k") is False
 
 
-async def test_extend_refreshes_ttl_only_when_the_token_matches(redis_cache: RedisCache, raw: redis.Redis) -> None:
+async def test_extend_refreshes_ttl_only_when_the_token_matches(redis_cache: RedisCache, raw: redis.Redis | redis.RedisCluster) -> None:
     lock = RedisDistributedLock(redis_cache)
     await lock.acquire("k", "owner-B", 1.0)
 

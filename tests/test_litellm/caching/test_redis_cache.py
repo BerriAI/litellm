@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -281,26 +281,6 @@ async def test_async_register_script_not_shared_across_namespaces(monkeypatch, r
     assert (result_a, result_b) == ("a", "b")
     reg_a.assert_awaited_once_with(keys=("ns_a:k",), args=[], client=None)
     reg_b.assert_awaited_once_with(keys=("ns_b:k",), args=[], client=None)
-
-
-@pytest.mark.asyncio
-async def test_async_register_script_cluster_path_uses_evalsha(monkeypatch, redis_no_ping):
-    """Redis Cluster exposes script_load/evalsha rather than register_script.
-    The script is loaded once and invoked via evalsha with namespaced keys."""
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache(namespace="ns")
-
-    cluster_client = MagicMock(spec=["script_load", "evalsha"])
-    cluster_client.script_load = MagicMock(return_value="sha123")
-    cluster_client.evalsha = AsyncMock(return_value="cluster-ok")
-
-    with patch.object(redis_cache, "init_async_client", return_value=cluster_client):
-        script = redis_cache.async_register_script("return 'cluster'")
-        result = await script(keys=["{k:v}:tokens"], args=[5, 60])
-
-    assert result == "cluster-ok"
-    cluster_client.script_load.assert_called_once_with("return 'cluster'")
-    cluster_client.evalsha.assert_awaited_once_with("sha123", 1, "ns:{k:v}:tokens", 5, 60)
 
 
 @pytest.mark.asyncio
@@ -1611,3 +1591,76 @@ def test_connection_pool_status_reports_the_sync_pool(socket_redis_cache: RedisC
 
     assert status["max_connections"] == socket_redis_cache.redis_client.connection_pool.max_connections
     assert status["connection_class"] == socket_redis_cache.redis_client.connection_pool.connection_class.__name__
+
+
+class _FrameSequencePubSub:
+    """A redis-py pubsub whose polls yield canned frames; a None frame is an empty poll slice."""
+
+    def __init__(self, frames: Iterable[object]) -> None:
+        self.frames = iter(frames)
+
+    async def get_message(self, *, timeout: float | None) -> object:
+        return next(self.frames)
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_get_message_without_timeout_waits_through_empty_polls() -> None:
+    from litellm.caching.redis_cache import RedisMessage, RedisSubscription
+
+    late_message = {"type": "message", "channel": b"events", "data": b"late"}
+    subscription = RedisSubscription(_FrameSequencePubSub((None, None, late_message)))  # pyright: ignore[reportArgumentType]  # duck-typed fake
+
+    assert await subscription.get_message(timeout=None) == RedisMessage(channel="events", payload=b"late")
+
+
+class _RefusingPubSub:
+    """A redis-py pubsub whose SUBSCRIBE fails after it has checked a connection out of the pool."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def subscribe(self, *channels: str) -> None:
+        raise ConnectionError("socket dropped after checkout")
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _RefusingClient:
+    def __init__(self, pubsub: _RefusingPubSub) -> None:
+        self._pubsub = pubsub
+
+    def pubsub(self) -> _RefusingPubSub:
+        return self._pubsub
+
+    async def ping(self) -> bool:
+        return True
+
+
+@pytest.mark.asyncio
+async def test_async_subscribe_closes_the_pubsub_when_subscribe_fails(
+    fake_redis_port: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in (
+        "REDIS_URL",
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "REDIS_PASSWORD",
+        "REDIS_CLUSTER_NODES",
+        "REDIS_SENTINEL_NODES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    pubsub = _RefusingPubSub()
+
+    class _RefusingClientCache(RedisCache):
+        def init_async_client(self):
+            return _RefusingClient(pubsub)
+
+    cache = _RefusingClientCache(host="127.0.0.1", port=fake_redis_port)
+
+    with pytest.raises(ConnectionError):
+        await cache.async_subscribe("events")
+    assert pubsub.closed, "a subscription that never completed must hand its connection back to the pool"

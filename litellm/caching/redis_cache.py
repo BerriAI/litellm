@@ -631,6 +631,8 @@ class RedisSubscription:
         while True:
             remaining = _PUBSUB_WAIT_SLICE_SECONDS if deadline is None else max(deadline - clock(), 0.0)
             frame: object = await self.pubsub.get_message(timeout=remaining)
+            if frame is None and deadline is None:
+                continue
             if frame is None:
                 return None
             message = _redis_message(frame)
@@ -1065,33 +1067,19 @@ class RedisCache(BaseCache):
         executor; see that method for why the binding must be per loop.
         """
         _redis_client: Final[Any] = self.init_async_client()
-        if hasattr(_redis_client, "register_script"):
-            registered_script: Final = _redis_client.register_script(script)
+        if not hasattr(_redis_client, "register_script"):
+            raise ValueError("Redis client does not support Lua script registration")
+        registered_script: Final = _redis_client.register_script(script)
 
-            async def standalone_executor(
-                keys: Sequence[str],
-                args: Sequence[str | bytes | int | float],
-                client: object = None,
-            ) -> object:
-                namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
-                return await registered_script(keys=namespaced_keys, args=args, client=client)
+        async def executor(
+            keys: Sequence[str],
+            args: Sequence[str | bytes | int | float],
+            client: object = None,
+        ) -> object:
+            namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
+            return await registered_script(keys=namespaced_keys, args=args, client=client)
 
-            return standalone_executor
-
-        if hasattr(_redis_client, "script_load"):
-            script_sha: Final = _redis_client.script_load(script)
-
-            async def cluster_executor(
-                keys: Sequence[str],
-                args: Sequence[str | bytes | int | float],
-                client: object = None,
-            ) -> object:
-                namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
-                return await _redis_client.evalsha(script_sha, len(namespaced_keys), *namespaced_keys, *args)
-
-            return cluster_executor
-
-        raise ValueError("Redis client does not support Lua script registration")
+        return executor
 
     @_redis_circuit_breaker_guard
     async def async_set_cache(self, key, value, **kwargs):
@@ -1918,7 +1906,11 @@ class RedisCache(BaseCache):
     @_redis_circuit_breaker_guard
     async def async_subscribe(self, *channels: str) -> RedisSubscription:
         pubsub: Final = self._standalone_async_client().pubsub()
-        await pubsub.subscribe(*channels)
+        try:
+            await pubsub.subscribe(*channels)
+        except BaseException:
+            await pubsub.aclose()  # pyright: ignore[reportAttributeAccessIssue]  # types-redis 4.6 stubs predate PubSub.aclose
+            raise
         return RedisSubscription(pubsub)
 
     def connection_pool_status(self) -> "RedisPoolStatus":
