@@ -2,8 +2,11 @@
 Tests for JSON-based provider configuration system.
 """
 
+import json
 import os
+import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 try:
@@ -20,9 +23,6 @@ import litellm
 
 
 def _providers_json() -> dict:
-    import json
-    from pathlib import Path
-
     return json.loads(
         (Path(litellm.__file__).parent / "llms" / "openai_like" / "providers.json").read_text()
     )
@@ -555,3 +555,58 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("✓ All tests passed!")
     print("=" * 50)
+
+
+_LOADER_SNAPSHOT_SCRIPT = """
+import json
+import os
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+import litellm
+from litellm.llms.openai_like.dynamic_config import create_config_class
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+snapshot = {
+    slug: {
+        "supported_openai_params": sorted(create_config_class(provider)().get_supported_openai_params(model="snapshot-model")),
+        "special_handling": dict(provider.special_handling),
+    }
+    for slug in sorted(JSONProviderRegistry.list_providers())
+    for provider in [JSONProviderRegistry.get(slug)]
+}
+print(json.dumps({"litellm_file": litellm.__file__, "snapshot": snapshot}, sort_keys=True))
+"""
+
+
+def _loader_snapshot(checkout: Path) -> dict:
+    completed = subprocess.run(
+        [sys.executable, "-P", "-c", _LOADER_SNAPSHOT_SCRIPT],
+        cwd=checkout,
+        env={**os.environ, "PYTHONPATH": str(checkout), "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=600,
+    )
+    payload = json.loads(completed.stdout.splitlines()[-1])
+    assert Path(payload["litellm_file"]).resolve() == (checkout / "litellm" / "__init__.py").resolve()
+    return payload["snapshot"]
+
+
+def test_json_loader_yields_the_merge_base_params_and_special_handling_for_every_non_sail_slug(tmp_path):
+    tip = Path(litellm.__file__).parents[1]
+    merge_base = subprocess.run(
+        ["git", "-C", str(tip), "merge-base", "HEAD", "origin/main"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    base = tmp_path / "merge_base"
+    subprocess.run(["git", "-C", str(tip), "worktree", "add", "--detach", str(base), merge_base], check=True)
+    try:
+        base_snapshot = _loader_snapshot(base)
+        tip_snapshot = _loader_snapshot(tip)
+    finally:
+        subprocess.run(["git", "-C", str(tip), "worktree", "remove", "--force", str(base)], check=True)
+
+    assert {slug: entry for slug, entry in tip_snapshot.items() if slug != "sail"} == base_snapshot
+    assert "sail" in tip_snapshot
+    assert "sail" not in base_snapshot
+    assert tip_snapshot["sail"]["special_handling"] == {"service_tier_as_completion_window": True}
+    assert len(base_snapshot) > 0

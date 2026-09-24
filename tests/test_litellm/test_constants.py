@@ -68,3 +68,11 @@ def _build_constant_env_var_map() -> dict[str, str]:
             env_var_map[constant_name] = env_var_name
 
     return env_var_map
+
+
+def test_openai_transcription_providers_are_the_openai_compatible_set_minus_sail():
+    assert "sail" in constants.openai_compatible_providers
+    assert constants.OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS == frozenset(("openai",)) | (
+        frozenset(constants.openai_compatible_providers) - frozenset(("sail",))
+    )
+    assert "sail" not in constants.OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS

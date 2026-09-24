@@ -4,6 +4,8 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Mapping
+from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -40,6 +42,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
     AmazonAnthropicClaudeMessagesConfig,
 )
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -4176,3 +4179,187 @@ async def test_chat_completion_agentic_followup_does_not_repeat_request_params_f
     assert followup_calls[0]["temperature"] == 0.2
     assert followup_calls[0]["api_base"] == "https://a"
     assert followup_calls[0]["model"] == "openai/gpt-5"
+
+
+_EXTRA_BODY: Final[Mapping[str, object]] = {"metadata": {"from_extra_body": "1"}, "vendor_only_field": "x"}
+_RESPONSES_API_RESPONSE: Final[Mapping[str, object]] = {
+    "id": "resp_1",
+    "object": "response",
+    "created_at": 1734366691,
+    "status": "completed",
+    "model": "m",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "usage": {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "total_tokens": 15,
+        "output_tokens_details": {"reasoning_tokens": 0},
+    },
+    "error": None,
+    "incomplete_details": None,
+    "instructions": None,
+    "metadata": None,
+    "temperature": None,
+    "tool_choice": "auto",
+    "tools": [],
+    "top_p": None,
+    "max_output_tokens": None,
+    "previous_response_id": None,
+    "reasoning": None,
+    "truncation": None,
+    "user": None,
+}
+
+
+class _NestingChatConfig(litellm.OpenAIGPTConfig):
+    def merge_extra_body(
+        self, request: dict[str, object], extra_body: Mapping[str, object] | None
+    ) -> dict[str, object]:
+        return {**request, "nested_by_hook": dict(extra_body or {})}
+
+
+class _NestingResponsesConfig(OpenAIResponsesAPIConfig):
+    def merge_extra_body(
+        self, request: dict[str, object], extra_body: Mapping[str, object] | None
+    ) -> dict[str, object]:
+        return {**request, "nested_by_hook": dict(extra_body or {})}
+
+
+class _RecordingTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
+    def __init__(self, response_json: Mapping[str, object]) -> None:
+        self._response_json = response_json
+        self.bodies: tuple[dict, ...] = ()
+
+    def _record(self, request: httpx.Request) -> httpx.Response:
+        self.bodies = (*self.bodies, json.loads(request.content))
+        return httpx.Response(200, json=dict(self._response_json), request=request)
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        return self._record(request)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return self._record(request)
+
+
+def _real_logging_obj(call_type: str):
+    from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+
+    return LitellmLogging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.now(),
+        litellm_call_id="extra-body-call",
+        function_id="extra-body-fn",
+    )
+
+
+def _chat_wire_body(config: BaseConfig) -> dict:
+    transport = _RecordingTransport(A_COMPLETION)
+    BaseLLMHTTPHandler().completion(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat/completions",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=_real_logging_obj("completion"),
+        optional_params={"temperature": 0.2, "metadata": {"from_kwarg": "0"}, "extra_body": dict(_EXTRA_BODY)},
+        timeout=10.0,
+        litellm_params={},
+        acompletion=False,
+        api_key="sk-test",
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+        provider_config=config,
+    )
+    assert len(transport.bodies) == 1
+    return transport.bodies[0]
+
+
+def test_completion_merges_extra_body_through_the_real_config_hook():
+    assert _chat_wire_body(litellm.OpenAIGPTConfig()) == {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": 0.2,
+        "metadata": {"from_extra_body": "1"},
+        "vendor_only_field": "x",
+    }
+    assert _chat_wire_body(_NestingChatConfig()) == {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": 0.2,
+        "metadata": {"from_kwarg": "0"},
+        "nested_by_hook": dict(_EXTRA_BODY),
+    }
+
+
+def _responses_wire_body(config: BaseResponsesAPIConfig) -> dict:
+    transport = _RecordingTransport(_RESPONSES_API_RESPONSE)
+    BaseLLMHTTPHandler().response_api_handler(
+        model="m",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={"max_output_tokens": 50, "metadata": {"from_kwarg": "0"}},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(api_key="sk-test"),
+        logging_obj=_real_logging_obj("responses"),
+        extra_body=dict(_EXTRA_BODY),
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+    )
+    assert len(transport.bodies) == 1
+    return transport.bodies[0]
+
+
+async def _async_responses_wire_body(config: BaseResponsesAPIConfig) -> dict:
+    transport = _RecordingTransport(_RESPONSES_API_RESPONSE)
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=transport)
+    await BaseLLMHTTPHandler().async_response_api_handler(
+        model="m",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={"max_output_tokens": 50, "metadata": {"from_kwarg": "0"}},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(api_key="sk-test"),
+        logging_obj=_real_logging_obj("responses"),
+        extra_body=dict(_EXTRA_BODY),
+        client=client,
+    )
+    assert len(transport.bodies) == 1
+    return transport.bodies[0]
+
+
+_SHALLOW_MERGED_RESPONSES_BODY: Final[Mapping[str, object]] = {
+    "model": "m",
+    "input": "hi",
+    "max_output_tokens": 50,
+    "metadata": {"from_extra_body": "1"},
+    "vendor_only_field": "x",
+}
+_HOOK_NESTED_RESPONSES_BODY: Final[Mapping[str, object]] = {
+    "model": "m",
+    "input": "hi",
+    "max_output_tokens": 50,
+    "metadata": {"from_kwarg": "0"},
+    "nested_by_hook": dict(_EXTRA_BODY),
+}
+
+
+def test_response_api_handler_merges_extra_body_through_the_real_config_hook():
+    assert _responses_wire_body(OpenAIResponsesAPIConfig()) == _SHALLOW_MERGED_RESPONSES_BODY
+    assert _responses_wire_body(_NestingResponsesConfig()) == _HOOK_NESTED_RESPONSES_BODY
+
+
+async def test_async_response_api_handler_merges_extra_body_through_the_real_config_hook():
+    assert await _async_responses_wire_body(OpenAIResponsesAPIConfig()) == _SHALLOW_MERGED_RESPONSES_BODY
+    assert await _async_responses_wire_body(_NestingResponsesConfig()) == _HOOK_NESTED_RESPONSES_BODY

@@ -251,10 +251,13 @@ class TestSailRequestShape:
             wav_file.writeframes(b"\x00" * 1600)
         wav.seek(0)
 
-        with pytest.raises(ValueError, match="Unmapped provider"):
+        with pytest.raises(ValueError, match="Unmapped provider") as excinfo:
             litellm.transcription(model=MODEL, file=wav)
 
-        assert not route.called
+        assert type(excinfo.value) is ValueError
+        assert str(excinfo.value) == "Unmapped provider passed in. Unable to get the response."
+        assert route.call_count == 0
+        assert respx_mock.calls.call_count == 0
 
     @pytest.mark.respx()
     def test_sail_unsupported_params_dropped_with_drop_params(self, respx_mock: respx.Router):

@@ -232,6 +232,27 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
     )
 
 
+def test_balanced_tier_keys_live_only_on_sail_rows_next_to_their_base_key(prices: dict):
+    balanced_keys = tuple(
+        (name, tier_key)
+        for name, entry in prices.items()
+        if isinstance(entry, dict)
+        for tier_key in entry
+        if tier_key.endswith("_balanced")
+    )
+    misplaced = tuple(
+        (name, tier_key, entry.get("litellm_provider"), tier_anchor(tier_key) in entry)
+        for name, tier_key in balanced_keys
+        for entry in [prices[name]]
+        if not name.startswith("sail/") or entry.get("litellm_provider") != "sail" or tier_anchor(tier_key) not in entry
+    )
+    assert misplaced == (), (
+        "(model, balanced key, litellm_provider, has base key) for balanced tier pricing that is "
+        f"off a sail/ row or missing its base key: {misplaced}"
+    )
+    assert balanced_keys != ()
+
+
 OPENAI_REASONING_FAMILY_MARKERS = ("codex", "deep-research", "chat-latest")
 
 

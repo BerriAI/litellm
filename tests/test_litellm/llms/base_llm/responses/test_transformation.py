@@ -33,3 +33,19 @@ async def test_default_async_transform_delegates_to_the_sync_transform():
     )
     assert async_body == sync_body
     assert "cache_control" not in async_body["input"][0]["content"][0]
+
+
+def test_default_merge_extra_body_shallow_merges_and_lets_extra_body_replace_nested_metadata():
+    cfg = OpenAIResponsesAPIConfig()
+    request = {"model": "m", "input": "hi", "metadata": {"from_request": "1"}, "max_output_tokens": 5}
+    extra_body = {"metadata": {"from_extra_body": "2"}, "vendor_only_field": "x"}
+
+    assert cfg.merge_extra_body(dict(request), extra_body) == {
+        "model": "m",
+        "input": "hi",
+        "metadata": {"from_extra_body": "2"},
+        "max_output_tokens": 5,
+        "vendor_only_field": "x",
+    }
+    assert cfg.merge_extra_body(dict(request), None) == request
+    assert cfg.merge_extra_body(dict(request), {}) == request
