@@ -648,7 +648,7 @@ describe("processActivityData", () => {
     expect(result).toEqual({});
   });
 
-  it.each(["models", "api_keys", "mcp_servers"] as const)("should skip %s entries without metrics", (breakdownKey) => {
+  it.each(["models", "api_keys", "mcp_servers", "entities"] as const)("should skip %s entries without metrics", (breakdownKey) => {
     const sparseEntry =
       breakdownKey === "api_keys"
         ? { metadata: { key_alias: "Sparse Key", team_id: null } }
