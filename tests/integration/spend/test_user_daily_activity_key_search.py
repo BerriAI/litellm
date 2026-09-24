@@ -1,0 +1,127 @@
+import uuid
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+from typing import Final
+
+import pytest
+from integration._support.client import Gateway, eventually, object_value
+from integration._support.database import read_rows
+from pydantic import JsonValue
+
+from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+
+
+def _key_breakdown(body: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    results: Final = body["results"]
+    assert isinstance(results, list), body
+    return {
+        digest: metrics
+        for day in results
+        for digest, metrics in object_value(object_value(object_value(day)["breakdown"])["api_keys"]).items()
+    }
+
+
+def _range_params() -> dict[str, str]:
+    today: Final = datetime.now(timezone.utc)
+    return {
+        "start_date": (today - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "end_date": (today + timedelta(days=1)).strftime("%Y-%m-%d"),
+        "timezone": "0",
+    }
+
+
+def test_key_search_finds_an_alias_outside_the_top_spend_keys_the_usage_page_loads(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        expensive: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        cheap: Final = scenario.model(input_cost_per_token=0.00001, output_cost_per_token=0.00002)
+        user: Final = scenario.user()
+        alias: Final = f"needle-{uuid.uuid4().hex}"
+        needle: Final = scenario.key(user_id=user, key_alias=alias, models=[cheap])
+        needle_digest: Final = sha256(needle.encode()).hexdigest()
+        hay: Final = tuple(scenario.key(user_id=user, models=[expensive]) for _ in range(USAGE_TOP_API_KEYS_LIMIT))
+        for key in (needle, *hay):
+            reply: Final = gateway.chat(
+                expensive if key in hay else cheap, key=key, text=f"key search {uuid.uuid4().hex}"
+            )
+            assert reply["usage"]["total_tokens"] == 40, reply
+        daily: Final = eventually(
+            lambda: read_rows('SELECT api_key, spend FROM "LiteLLM_DailyUserSpend" WHERE user_id=%s', (user,)),
+            lambda values: len(values) == USAGE_TOP_API_KEYS_LIMIT + 1,
+            seconds=70,
+        )
+        by_digest: Final = {str(row["api_key"]): float(str(row["spend"])) for row in daily}
+        assert by_digest[needle_digest] == pytest.approx(20 * 0.00001 + 20 * 0.00002), daily
+        assert min(by_digest[sha256(key.encode()).hexdigest()] for key in hay) == pytest.approx(
+            20 * 0.001 + 20 * 0.002
+        ), daily
+
+        loaded: Final = gateway.request("GET", "/user/daily/activity/aggregated", params=_range_params())
+        assert loaded.status_code == 200, loaded.text
+        loaded_body: Final = object_value(loaded.json())
+        loaded_metadata: Final = object_value(loaded_body["metadata"])
+        assert loaded_metadata["api_key_limit"] == USAGE_TOP_API_KEYS_LIMIT, loaded.text
+        assert int(str(loaded_metadata["total_api_keys"])) > USAGE_TOP_API_KEYS_LIMIT, loaded.text
+        loaded_keys: Final = _key_breakdown(loaded_body)
+        assert len(loaded_keys) == USAGE_TOP_API_KEYS_LIMIT, sorted(loaded_keys)
+        assert needle_digest not in loaded_keys, "Precondition: the cheap key must fall outside the loaded top keys"
+
+        searched: Final = gateway.request(
+            "GET",
+            "/user/daily/activity/aggregated/search",
+            params={**_range_params(), "search": alias[len("needle-") :].upper()},
+        )
+        assert searched.status_code == 200, searched.text
+        found: Final = _key_breakdown(object_value(searched.json()))
+        assert set(found) == {needle_digest}, searched.text
+        found_metrics: Final = object_value(object_value(found[needle_digest])["metrics"])
+        assert found_metrics["spend"] == pytest.approx(20 * 0.00001 + 20 * 0.00002), searched.text
+        assert found_metrics["api_requests"] == 1, searched.text
+        found_metadata: Final = object_value(object_value(found[needle_digest])["metadata"])
+        assert (found_metadata["key_alias"], found_metadata["user_id"]) == (alias, user), searched.text
+
+
+def test_key_search_by_exact_hash_only_returns_keys_the_caller_may_see(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        owner: Final = scenario.user(user_role="internal_user")
+        stranger: Final = scenario.user(user_role="internal_user")
+        owner_key: Final = scenario.key(user_id=owner, models=[model])
+        stranger_key: Final = scenario.key(user_id=stranger, models=[model])
+        for key in (owner_key, stranger_key):
+            assert gateway.chat(model, key=key, text=f"scoped search {uuid.uuid4().hex}")["usage"]["total_tokens"] == 40
+        eventually(
+            lambda: read_rows(
+                'SELECT api_key FROM "LiteLLM_DailyUserSpend" WHERE user_id = ANY(%s::text[])',
+                (f"{{{owner},{stranger}}}",),
+            ),
+            lambda values: len(values) == 2,
+            seconds=70,
+        )
+        owner_digest: Final = sha256(owner_key.encode()).hexdigest()
+        stranger_digest: Final = sha256(stranger_key.encode()).hexdigest()
+
+        as_owner: Final = gateway.request(
+            "GET",
+            "/user/daily/activity/aggregated/search",
+            params={**_range_params(), "search": stranger_digest},
+            key=owner_key,
+        )
+        assert as_owner.status_code == 200, as_owner.text
+        assert _key_breakdown(object_value(as_owner.json())) == {}, as_owner.text
+
+        own: Final = gateway.request(
+            "GET",
+            "/user/daily/activity/aggregated/search",
+            params={**_range_params(), "search": owner_digest},
+            key=owner_key,
+        )
+        assert own.status_code == 200, own.text
+        assert set(_key_breakdown(object_value(own.json()))) == {owner_digest}, own.text
+
+        as_admin: Final = gateway.request(
+            "GET",
+            "/user/daily/activity/aggregated/search",
+            params={**_range_params(), "search": stranger_digest},
+        )
+        assert as_admin.status_code == 200, as_admin.text
+        assert set(_key_breakdown(object_value(as_admin.json()))) == {stranger_digest}, as_admin.text
