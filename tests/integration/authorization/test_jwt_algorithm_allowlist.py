@@ -516,6 +516,23 @@ def test_master_key_request_still_works_on_jwt_enabled_proxy(gateway: Gateway, t
             assert response.status_code == 200, response.text
 
 
+def _response_ids(status: int, text: str) -> tuple[str, ...]:
+    if status != 200:
+        return ()
+    stripped: Final = text.strip()
+    if stripped.startswith("{"):
+        body: Final = json.loads(stripped)
+        return (str(body["id"]),) if "id" in body else ()
+    ids: Final = {
+        str(chunk["id"])
+        for line in stripped.splitlines()
+        if line.startswith("data: ") and line[len("data: ") :].strip() != "[DONE]"
+        for chunk in (json.loads(line[len("data: ") :]),)
+        if "id" in chunk
+    }
+    return tuple(ids)
+
+
 def _spend_row_counts(identifiers: set[str]) -> dict[str, int]:
     if not identifiers:
         return {}
@@ -591,8 +608,8 @@ def test_mixed_jwt_burst_survives_jwks_restart_and_writes_spend_rows(gateway: Ga
                 assert warmup_rs.status_code == 200, warmup_rs.text
                 assert warmup_ed.status_code == 200, warmup_ed.text
 
-            statuses: Final = []
-            bodies: Final = []
+            statuses: Final[list[int]] = []
+            bodies: Final[list[str]] = []
             with ThreadPoolExecutor(max_workers=15) as pool:
                 futures = [
                     pool.submit(chat, rs_token if index % 2 == 0 else ed_token, index, index % 5 == 0)
@@ -612,11 +629,13 @@ def test_mixed_jwt_burst_survives_jwks_restart_and_writes_spend_rows(gateway: Ga
                 assert fresh_ed.status_code == 200, fresh_ed.text
 
             succeeded: Final = {
-                json.loads(text)["id"]
-                for status, text in zip(statuses, bodies)
-                if status == 200 and "id" in text and text.strip().startswith("{")
+                identifier for status, text in zip(statuses, bodies) for identifier in _response_ids(status, text)
             }
-            succeeded.update(json.loads(text)["id"] for text in (fresh_rs.text, fresh_ed.text) if "id" in text)
+            succeeded.update(_response_ids(200, fresh_rs.text) + _response_ids(200, fresh_ed.text))
+            assert len(succeeded) == sum(1 for status in statuses if status == 200) + 2, (
+                statuses,
+                bodies[:3],
+            )
             counts: Final = eventually(
                 lambda: _spend_row_counts(succeeded),
                 lambda value: value == {identifier: 1 for identifier in succeeded},
@@ -667,10 +686,19 @@ def test_burst_survives_killed_worker_and_stays_alive(gateway: Gateway, tmp_path
 
             with ThreadPoolExecutor(max_workers=12) as pool:
                 futures = [pool.submit(chat, rs_token if index % 2 == 0 else ed_token, index) for index in range(24)]
-                children: Final = psutil.Process(owned.process.pid).children(recursive=True)
-                assert children, "owned proxy reported no worker children"
-                children[0].kill()
-                results: Final = []
+                owned_port: Final = owned.gateway.client.base_url.port
+                listeners: Final = [
+                    child
+                    for child in psutil.Process(owned.process.pid).children(recursive=True)
+                    if any(
+                        connection.status == psutil.CONN_LISTEN and connection.laddr.port == owned_port
+                        for connection in child.net_connections(kind="inet")
+                    )
+                ]
+                assert len(listeners) >= 2, listeners
+                killed_pid: Final = listeners[0].pid
+                listeners[0].kill()
+                results: Final[list[int]] = []
                 for future in futures:
                     try:
                         result = future.result(timeout=60)
@@ -679,6 +707,12 @@ def test_burst_survives_killed_worker_and_stays_alive(gateway: Gateway, tmp_path
                         results.append(0)
             assert all(status in (200, 401, 0) for status in results), results
             assert any(status == 200 for status in results), results
+            dead: Final = eventually(
+                lambda: psutil.pid_exists(killed_pid),
+                lambda exists: not exists,
+                seconds=30,
+            )
+            assert not dead, f"killed worker pid {killed_pid} still exists"
             liveliness: Final = eventually(
                 lambda: owned.gateway.client.get("/health/liveliness"),
                 lambda response: response.status_code == 200,
