@@ -207,7 +207,8 @@ jobs:
             mkdir -p test-results/<< parameters.flag >>
             selection="$(bash .circleci/scripts/unit_selection.sh << parameters.flag >>)" || { echo "unit_selection.sh failed for << parameters.flag >>"; exit 1; }
             [ -n "${selection}" ] || { echo "unit_selection.sh produced no files for << parameters.flag >>"; exit 1; }
-            mapfile -t files < <(printf '%s\n' "${selection}" | circleci tests split --split-by=timings --timings-type=filename)
+            shard="$(printf '%s\n' "${selection}" | circleci tests split --split-by=timings --timings-type=filename)" || { echo "circleci tests split failed for << parameters.flag >>"; exit 1; }
+            mapfile -t files < <(printf '%s\n' "${shard}")
             if [ "${#files[@]}" -eq 0 ]; then echo "shard ${CIRCLE_NODE_INDEX} received no << parameters.flag >> files; nothing to run"; exit 0; fi
             xdist_args=()
             if [ "<< parameters.workers >>" -gt 0 ]; then xdist_args=(-n << parameters.workers >> --dist=<< parameters.dist >>); fi
