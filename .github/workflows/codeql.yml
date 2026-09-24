@@ -72,13 +72,19 @@ jobs:
       # a lookup key into the haveibeenpwned range API (the protocol mandates
       # SHA-1) and the digest itself never leaves the proxy beyond its first 5
       # characters.
-      - name: Filter SARIF (OCI sha256, HIBP sha1)
+      # The same query fires on the legacy-row verifier in
+      # litellm/proxy/utils.py, where a stored 64-hex SHA256 row is matched by
+      # hashing the submitted password to compare. No new SHA256 rows are
+      # written (new passwords are PBKDF2-HMAC-SHA256); the call exists only so
+      # pre-migration rows can still sign in and be rehashed.
+      - name: Filter SARIF (OCI sha256, HIBP sha1, legacy password row verify)
         if: matrix.language == 'python'
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
           patterns: |
             -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
             -litellm/proxy/auth/password_policy.py:py/weak-sensitive-data-hashing
+            -litellm/proxy/utils.py:py/weak-sensitive-data-hashing
           input: sarif-results/python.sarif
           output: sarif-results/python.sarif
 
