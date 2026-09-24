@@ -22237,7 +22237,7 @@
         "supports_embedding_image_input": true
     },
     "embed-multilingual-light-v3.0": {
-        "input_cost_per_token": 0.0001,
+        "input_cost_per_token": 1e-07,
         "litellm_provider": "cohere",
         "max_input_tokens": 512,
         "max_tokens": 512,
