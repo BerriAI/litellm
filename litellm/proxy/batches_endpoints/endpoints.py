@@ -237,7 +237,9 @@ async def _create_provider_batch_for_managed_file(
     }
     response: Final = await llm_router.acreate_batch(
         **request,
-        **({} if input_content is None else {ANTHROPIC_BATCH_INPUT_CONTENT_KWARG: input_content}),  # mutable-ok: kwargs require a concrete mapping
+        **(
+            {} if input_content is None else {ANTHROPIC_BATCH_INPUT_CONTENT_KWARG: input_content}
+        ),  # mutable-ok: kwargs require a concrete mapping
     )
     response.input_file_id = input_file_id
     response._hidden_params["unified_file_id"] = unified_file_id
