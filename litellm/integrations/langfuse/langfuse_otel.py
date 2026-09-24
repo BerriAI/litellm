@@ -24,8 +24,8 @@ else:
     Span = Any
 
 
-LANGFUSE_CLOUD_EU_ENDPOINT: Final = "https://cloud.langfuse.com/api/public/otel"
-LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/otel"
+LANGFUSE_CLOUD_EU_ENDPOINT: Final = "https://cloud.langfuse.com/api/public/otel/v1/traces"
+LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/otel/v1/traces"
 LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
 LANGFUSE_INGESTION_VERSION: Final = "4"
 
@@ -326,7 +326,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         if langfuse_host:
             normalized_host: Final = langfuse_host if langfuse_host.startswith("http") else f"https://{langfuse_host}"
-            endpoint = f"{normalized_host.rstrip('/')}/api/public/otel"
+            endpoint = f"{normalized_host.rstrip('/')}/api/public/otel/v1/traces"
             verbose_logger.debug("Using Langfuse OTEL endpoint from host: %s", endpoint)
         else:
             endpoint = LANGFUSE_CLOUD_US_ENDPOINT
