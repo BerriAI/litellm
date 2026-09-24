@@ -304,6 +304,7 @@ describe("KeyInfoView", () => {
     );
 
     expect(await screen.findByTestId("key-lifetime-spend-backfill-hint")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /lifetime spend is below/i })).toBeInTheDocument();
     expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $4.0000");
   });
 

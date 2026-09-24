@@ -690,9 +690,17 @@ export default function KeyInfoView({
                     {needsLifetimeSpendBackfill(currentKeyData.spend, currentKeyData.total_spend) && (
                       <HoverCard>
                         <HoverCardTrigger
-                          render={<Info className="size-3 text-muted-foreground cursor-help inline-block ml-1" />}
-                          data-testid="key-lifetime-spend-backfill-hint"
-                        />
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Why lifetime spend is below current spend"
+                              className="inline-flex align-middle ml-1 cursor-help"
+                              data-testid="key-lifetime-spend-backfill-hint"
+                            />
+                          }
+                        >
+                          <Info className="size-3 text-muted-foreground" />
+                        </HoverCardTrigger>
                         <HoverCardContent className="w-80">
                           Lifetime tracking started with LiteLLM v1.103.0 and was not backfilled, so this key&apos;s
                           lifetime spend only counts usage since the upgrade. To include earlier spend, run
