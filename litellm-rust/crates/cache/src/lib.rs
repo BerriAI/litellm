@@ -16,8 +16,9 @@ pub use caching::{Cache, CacheBackend, get_cache, set_cache};
 pub use capabilities::{
     BatchCache, BoundedCounterCache, BulkDeleteCache, CacheScript, ClaimCache, ClientInfoCache,
     ConnectionCache, CountReadCache, CounterCache, DeleteCache, DisconnectCache, FlushAllCache,
-    FlushCache, IncrementOperation, PingCache, PopOperation, PushOperation, QueueCache,
-    RefreshTtlCache, ScanCache, ScriptCache, SetCache, TtlCache, TtlPipelineCache,
+    FlushCache, IncrementOperation, Message, MessageStream, PingCache, PopOperation, PubSubCache,
+    PushOperation, QueueCache, RefreshTtlCache, ScanCache, ScriptCache, SetCache, TtlCache,
+    TtlPipelineCache,
 };
 pub use codec::{CacheCodec, JsonCodec};
 pub use dual::{

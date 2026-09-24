@@ -4,12 +4,14 @@ pub mod connection;
 mod counter;
 mod keys;
 mod lifecycle;
+mod pubsub;
 mod queue;
 mod script;
 mod store;
 mod topology;
 
 pub use cache::RedisCache;
+pub use pubsub::RedisSubscription;
 pub use queue::{RedisLpopOperation, RedisLpopResult, RedisRpushOperation};
 pub use script::{RedisArg, RedisScript};
 pub use topology::{RedisNode, RedisTopology};

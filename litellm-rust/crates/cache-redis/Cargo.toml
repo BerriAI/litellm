@@ -9,7 +9,7 @@ repository.workspace = true
 litellm-cache.workspace = true
 redis = { version = "1.7.0", features = ["cluster", "tls-rustls"] }
 r2d2 = "0.8.10"
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 litellm-cache-testing.workspace = true

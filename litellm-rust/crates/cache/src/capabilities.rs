@@ -303,3 +303,38 @@ pub trait ScriptCache: BaseCache {
 
     fn async_register_script(&self, source: String) -> Self::Script;
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Message {
+    pub channel: String,
+    pub payload: Vec<u8>,
+}
+
+/// One open subscription. `next_message` returns `None` when `timeout` elapses first, and
+/// `Err` once the connection behind it is gone, so the owner reconnects with a fresh
+/// `async_subscribe`.
+pub trait MessageStream: Send {
+    fn next_message(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> impl Future<Output = Result<Option<Message>, Error>> + Send;
+
+    fn close(self) -> impl Future<Output = Result<(), Error>> + Send;
+}
+
+/// `async_publish` and `async_subscribe`. Channels are passed through as given; a namespace
+/// prefix is the caller's, as with Python's `f"{namespace}:{channel}"`.
+pub trait PubSubCache: BaseCache {
+    type Subscription: MessageStream;
+
+    fn async_publish(
+        &self,
+        channel: &str,
+        payload: &[u8],
+    ) -> impl Future<Output = Result<usize, Error>> + Send;
+
+    fn async_subscribe(
+        &self,
+        channels: &[String],
+    ) -> impl Future<Output = Result<Self::Subscription, Error>> + Send;
+}
