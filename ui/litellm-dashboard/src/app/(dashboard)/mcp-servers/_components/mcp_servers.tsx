@@ -241,6 +241,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     return map;
   }, [envVarStatuses]);
 
+  const serversWithUserFields = useMemo(
+    () =>
+      new Set((envVarStatuses ?? []).filter((status) => (status.required ?? []).length > 0).map((s) => s.server_id)),
+    [envVarStatuses],
+  );
+
   // Deep-link via ?fill_env_vars=<server_id> — the link users follow from the
   // friendly error the proxy returns when a per-user var is missing. The id is
   // captured into state above and resolved to a server below; here we only strip
@@ -491,6 +497,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           isModalVisible={isModalVisible}
           setModalVisible={setModalVisible}
           availableAccessGroups={uniqueMcpAccessGroups}
+          existingServers={mcpServers}
           prefillData={prefillData}
           onBackToDiscovery={() => {
             setModalVisible(false);
@@ -604,6 +611,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 userRole={userRole}
                 isViewOnly={isViewOnly}
                 availableAccessGroups={uniqueMcpAccessGroups}
+                existingServers={mcpServers}
                 initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
               />
             ) : (
@@ -730,6 +738,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                           key={server.server_id}
                           server={server}
                           missingUserFields={missingFieldsByServer[server.server_id]}
+                          hasUserFields={serversWithUserFields.has(server.server_id)}
                           isLoadingHealth={isLoadingHealth}
                           isRechecking={recheckingServerIds?.has(server.server_id)}
                           onClick={() => {

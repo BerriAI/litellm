@@ -9,11 +9,11 @@ the question neither covers: whether the job that globs a file then deselects it
 """
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 from typing import Final
 
+import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -24,13 +24,14 @@ sys.modules[_spec.name] = coverage  # @dataclass(slots=True) rebuilds via sys.mo
 _spec.loader.exec_module(coverage)
 
 
-def test_integration_manifest_requires_exclusive_scheduled_circleci_owner(tmp_path: Path) -> None:
+def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path: Path) -> None:
     test_path: Final = "tests/integration/management/test_contract.py"
     test_file: Final = tmp_path / test_path
     test_file.parent.mkdir(parents=True)
     test_file.write_text("def test_contract(): pass\n")
-    (tmp_path / "tests/integration/contracts.json").write_text(
-        json.dumps({"groups": {"management": ["management"]}, "tests": {f"{test_path}::test_contract": ["mgmt.test"]}})
+    (tmp_path / "tests/integration/run.py").write_text(
+        "from types import MappingProxyType\nfrom typing import Final\n"
+        'GROUPS: Final = MappingProxyType({"management": ("management",)})\n'
     )
     paths, findings = coverage._integration_ownership(tmp_path)
     assert not paths
@@ -144,9 +145,7 @@ def test_the_parent_token_alone_does_not_satisfy_any_child(tmp_path):
     (root / "billing").mkdir(parents=True)
     (root / "billing" / "test_a.py").write_text("def test_a(): assert True\n")
 
-    findings = coverage._unassigned_shard_children(
-        frozenset({"tests/tree"}), roots=("tests/tree",), repo_root=tmp_path
-    )
+    findings = coverage._unassigned_shard_children(frozenset({"tests/tree"}), roots=("tests/tree",), repo_root=tmp_path)
 
     assert tuple(f.subject for f in findings) == ("tests/tree/billing",)
 
@@ -181,8 +180,12 @@ def test_the_repo_as_it_stands_has_every_shard_child_assigned():
 
 def _slice(**overrides):
     defaults = dict(
-        job="a_job", globs=("tests/x/**/test_*.py",), named=frozenset(),
-        required=(), excluded=(), understood=True,
+        job="a_job",
+        globs=("tests/x/**/test_*.py",),
+        named=frozenset(),
+        required=(),
+        excluded=(),
+        understood=True,
     )
     return coverage.Slice(**{**defaults, **overrides})
 
@@ -224,9 +227,7 @@ def test_an_explicitly_named_file_is_claimed_whatever_the_keywords_say():
 def test_an_unparsed_keyword_expression_claims_everything_it_globs():
     # Staying silent beats guessing: an expression this parser cannot model must never
     # be the reason a file is reported as unrun.
-    assert _slice(understood=False, excluded=("cache",)).claims(
-        "tests/x/test_caching.py", frozenset()
-    ) is True
+    assert _slice(understood=False, excluded=("cache",)).claims("tests/x/test_caching.py", frozenset()) is True
 
 
 def test_keyword_terms_splits_an_and_chain_into_required_and_excluded():
@@ -339,10 +340,7 @@ def test_a_dockerfile_directory_entry_is_stale_because_only_an_exact_path_exempt
 def test_a_workflow_that_names_a_file_clears_it_from_the_slice_check():
     named = coverage._workflow_named_tokens()
     assert named, "the workflows must name some test paths or the check proves nothing"
-    assert any(
-        coverage._token_covers(token, "tests/local_testing/test_caching_handler.py")
-        for token in named
-    )
+    assert any(coverage._token_covers(token, "tests/local_testing/test_caching_handler.py") for token in named)
 
 
 def test_the_slice_check_credits_only_workflows_never_the_circleci_config():
@@ -353,8 +351,20 @@ def test_the_slice_check_credits_only_workflows_never_the_circleci_config():
     )
 
 
-def test_a_file_no_workflow_names_is_still_reported_when_every_slice_drops_it():
-    named = coverage._workflow_named_tokens()
+@pytest.mark.parametrize("selector", ("test_selected.py", "test_selected.py::test_redis_auth"))
+def test_a_workflow_does_not_credit_a_file_it_never_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selector: str
+) -> None:
+    workflows: Final = tmp_path / "workflows"
+    workflows.mkdir()
+    (workflows / "test.yml").write_text(
+        f"jobs:\n  test:\n    steps:\n      - run: uv run pytest tests/local_testing/{selector}\n"
+    )
+    monkeypatch.setattr(coverage, "WORKFLOW_DIR", workflows)
+    monkeypatch.setattr(coverage, "CIRCLECI_CONFIG", tmp_path / "circleci.yml")
+
+    named: Final = coverage._workflow_named_tokens()
+    assert named == frozenset({"tests/local_testing/test_selected.py"})
     assert not any(
-        coverage._token_covers(token, "tests/local_testing/test_caching.py") for token in named
-    ), "test_caching.py is allowlisted, not run; crediting it would hide a real gap"
+        coverage._token_covers(token, "tests/local_testing/test_unrun.py") for token in named
+    )

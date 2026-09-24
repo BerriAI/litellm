@@ -23,6 +23,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 from opentelemetry.trace import SpanKind  # noqa: E402
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY  # noqa: E402
 from litellm.integrations.otel import (  # noqa: E402
     GenAI,
     LiteLLM,
@@ -173,6 +174,64 @@ def test_async_log_success_event_emits_llm_call_span():
     assert span.attributes[LiteLLM.CALL_ID] == "call_1"
     # Success leaves status UNSET (semconv default), not forced OK.
     assert span.status.status_code is StatusCode.UNSET
+
+
+def test_llm_call_span_carries_the_callers_conversation_id():
+    logger, exporter = _logger()
+    kwargs = {**_kwargs(), "litellm_params": {"litellm_session_id": "conv-42", "metadata": {}}}
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.CONVERSATION_ID] == "conv-42"
+
+
+def test_llm_call_span_without_a_caller_session_has_no_conversation_id():
+    """The proxy stamps ``metadata.trace_id`` with the OTel trace id and
+    ``get_litellm_params`` back-fills ``litellm_session_id`` from it."""
+    logger, exporter = _logger()
+    otel_trace_id = "6ca5745ef6780d958f62925747f7a5ee"
+    kwargs = {
+        **_kwargs(payload=_payload(trace_id=otel_trace_id)),
+        "litellm_trace_id": otel_trace_id,
+        "litellm_params": {
+            "litellm_session_id": otel_trace_id,
+            "litellm_trace_id": otel_trace_id,
+            "metadata": {"trace_id": otel_trace_id},
+        },
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.CONVERSATION_ID not in span.attributes
+
+
+def test_llm_call_span_keeps_the_header_session_when_the_proxy_generated_a_body_one():
+    """``missing_session_id: generate`` mints a body session and marks it, but the
+    caller's ``langfuse_session_id`` header is still their conversation."""
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(),
+        "litellm_params": {
+            "litellm_session_id": "minted-by-proxy",
+            "metadata": {"session_id": "minted-by-proxy", SESSION_ID_GENERATED_METADATA_KEY: True},
+            "proxy_server_request": {"headers": {"langfuse_session_id": "conv-header"}},
+        },
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.CONVERSATION_ID] == "conv-header"
+
+
+def test_replayed_llm_call_span_does_not_take_the_payloads_session_id():
+    """``/callback_logs`` replays a finished payload whose ``litellm_params`` hold
+    only key metadata; a session minted under ``missing_session_id: generate``
+    lands there without its marker, so ``payload.session_id`` is never trusted."""
+    logger, exporter = _logger()
+    kwargs = {
+        **_kwargs(payload=_payload(session_id="minted-then-replayed", trace_id="minted-then-replayed")),
+        "litellm_params": {"metadata": {"user_api_key_hash": "hsh"}},
+    }
+    _emit_llm(logger, kwargs)
+    (span,) = exporter.get_finished_spans()
+    assert GenAI.CONVERSATION_ID not in span.attributes
 
 
 def test_streaming_span_carries_time_to_first_chunk():
@@ -1940,6 +1999,91 @@ def test_service_span_prefers_ambient_context_over_threaded_parent():
         threaded.end()
     by_name = {s.name: s for s in exporter.get_finished_spans()}
     assert by_name["redis get"].parent.span_id == ambient.get_span_context().span_id
+
+
+_REQUEST_END = 1_000.0
+
+
+def _ended_request_span(logger):
+    """A PROXY_REQUEST span whose response already went out at ``_REQUEST_END``."""
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    server.end(end_time=to_ns(_REQUEST_END))
+    return server
+
+
+@pytest.mark.parametrize("parent_source", ["ambient", "threaded"])
+def test_service_call_that_outlives_the_request_roots_its_own_trace_linked_to_the_request(parent_source):
+    """Post-response work (spend tracking, the cache write, the spend-counter
+    increment) finishes after the server span ended, so it did not add to the
+    request's latency. Nesting it under the request would stretch the request
+    trace past the response, so it starts its own trace and keeps the request
+    reachable through a span link, whether the request span is the ambient
+    context or the threaded ``parent_otel_span``."""
+    logger, exporter = _logger()
+    server = _ended_request_span(logger)
+    hook = logger.async_service_success_hook(
+        payload=_ServicePayload("batch_write_to_db", "_PROXY_track_cost_callback"),
+        parent_otel_span=server if parent_source == "threaded" else None,
+        start_time=_REQUEST_END + 0.1,
+        end_time=_REQUEST_END + 0.5,
+    )
+    if parent_source == "ambient":
+        with trace.use_span(server, end_on_exit=False):
+            asyncio.run(hook)
+    else:
+        asyncio.run(hook)
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    span = by_name["batch_write_to_db _PROXY_track_cost_callback"]
+    request_ctx = server.get_span_context()
+    assert span.parent is None
+    assert span.context.trace_id != request_ctx.trace_id
+    assert [(link.context.trace_id, link.context.span_id) for link in span.links] == [
+        (request_ctx.trace_id, request_ctx.span_id)
+    ]
+
+
+def test_service_call_that_finished_before_the_response_stays_in_the_request_trace():
+    """The hook is dispatched with ``asyncio.create_task`` and can run after the
+    response went out even though the call itself completed during the request.
+    Its own end time decides: a call that ended before the request span did is
+    request latency and stays a child of the request."""
+    logger, exporter = _logger()
+    server = _ended_request_span(logger)
+    asyncio.run(
+        logger.async_service_success_hook(
+            payload=_ServicePayload("postgres", "get_data"),
+            parent_otel_span=server,
+            start_time=_REQUEST_END - 0.5,
+            end_time=_REQUEST_END - 0.1,
+        )
+    )
+    span = {s.name: s for s in exporter.get_finished_spans()}["postgres get_data"]
+    assert span.parent.span_id == server.get_span_context().span_id
+    assert span.context.trace_id == server.get_span_context().trace_id
+    assert list(span.links) == []
+
+
+def test_service_call_under_a_remote_parent_is_never_detached():
+    """A propagated parent is a ``NonRecordingSpan`` with no end time of its own.
+    Not recording is not the same as ended, so the call stays its child."""
+    from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+
+    logger, exporter = _logger()
+    remote = NonRecordingSpan(
+        SpanContext(trace_id=0xABC, span_id=0x123, is_remote=True, trace_flags=TraceFlags(TraceFlags.SAMPLED))
+    )
+    asyncio.run(
+        logger.async_service_success_hook(
+            payload=_ServicePayload("redis", "get"),
+            parent_otel_span=remote,
+            start_time=_REQUEST_END + 0.1,
+            end_time=_REQUEST_END + 0.5,
+        )
+    )
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis get"]
+    assert span.parent.span_id == 0x123
+    assert span.context.trace_id == 0xABC
+    assert list(span.links) == []
 
 
 # --------------------------------------------------------------------------- #

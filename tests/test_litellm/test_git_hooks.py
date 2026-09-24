@@ -246,7 +246,6 @@ def test_pre_push_rejects_non_conventional_branches(branch):
     "branch",
     [
         "main",
-        "litellm_internal_staging",
         "dependabot/github_actions/foo",
         "gh-readonly-queue/main/abc123",
     ],

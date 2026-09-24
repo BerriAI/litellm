@@ -1,19 +1,27 @@
 import json
+import os
 import threading
 import uuid
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from hashlib import sha256
+from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+import psycopg
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, rule, run_state_machine_as_test
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows
+from integration._support.database_relay import database_relay
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
+from psycopg import sql
 
 
 @pytest.mark.covers("quota_management.response_cache.generated_sequences_preserve_content_and_accounting")
@@ -214,6 +222,99 @@ def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gat
         assert upstream.get("/__observations").json()["requests"] == []
 
 
+RESET_SWEEP_QUERY: Final = b'"LiteLLM_VerificationToken"."budget_reset_at" < $'
+
+
+@contextmanager
+def scratch_database() -> Generator[str]:
+    name: Final = f"integration_{uuid.uuid4().hex}"
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+        try:
+            yield urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{name}"))
+        finally:
+            admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+@pytest.mark.covers("quota_management.budget.key.scheduled_reset_survives_transient_db_outage")
+@pytest.mark.timeout(300)
+def test_scheduled_budget_reset_reconnects_after_db_transport_failure_and_unblocks_key(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with (
+        scratch_database() as scratch_url,
+        database_relay(scratch_url, RESET_SWEEP_QUERY) as (relay, relayed_url),
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {
+                "DATABASE_URL": relayed_url,
+                "PROXY_BUDGET_RESCHEDULER_MIN_TIME": "30",
+                "PROXY_BUDGET_RESCHEDULER_MAX_TIME": "30",
+                "PRISMA_HEALTH_WATCHDOG_ENABLED": "false",
+            },
+        ) as candidate,
+    ):
+        model: Final = f"integration-{uuid.uuid4().hex}"
+        candidate.post(
+            "/model/new",
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "integration-provider-key",
+                    "api_base": f"{gateway.upstream_url}/v1",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+                "model_info": {},
+            },
+        )
+        key: Final = string_value(
+            candidate.post("/key/generate", {"models": [model], "max_budget": 0.06, "budget_duration": "5s"})["key"]
+        )
+        digest: Final = sha256(key.encode()).hexdigest()
+        row_query: Final = (
+            'SELECT spend, budget_reset_at::text AS budget_reset_at FROM "LiteLLM_VerificationToken" WHERE token=%s'
+        )
+        assert candidate.chat(model, key=key, text=f"spend it {uuid.uuid4().hex}")["usage"]["total_tokens"] == 40
+        exhausted: Final = eventually(
+            lambda: read_rows(row_query, (digest,), database_url=scratch_url),
+            lambda rows: len(rows) == 1 and float(rows[0]["spend"]) >= 0.06,
+            seconds=70,
+        )
+        assert float(exhausted[0]["spend"]) == pytest.approx(0.06)
+        upstream.get("/__observations").raise_for_status()
+        denied: Final = candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": f"over budget {uuid.uuid4().hex}"}]},
+            key=key,
+        )
+        assert denied.status_code == 422 and denied.json()["error"]["type"] == "budget_exceeded", denied.text
+        assert upstream.get("/__observations").json()["requests"] == []
+        relay.arm()
+        assert relay.tripped.wait(90), "Scheduled reset sweep never reached the database"
+        eventually(lambda: relay.refused, lambda count: count >= 1, seconds=30)
+        reset: Final = eventually(
+            lambda: read_rows(row_query, (digest,), database_url=scratch_url),
+            lambda rows: len(rows) == 1 and float(rows[0]["spend"]) == 0,
+            seconds=80,
+            return_last_on_timeout=True,
+        )
+        assert len(reset) == 1 and reset[0]["spend"] == 0.0, (exhausted, reset)
+        assert str(reset[0]["budget_reset_at"]) > str(exhausted[0]["budget_reset_at"]), (exhausted, reset)
+        prompt: Final = f"after reset {uuid.uuid4().hex}"
+        recovered: Final = candidate.request(
+            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": prompt}]}, key=key
+        )
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["usage"]["total_tokens"] == 40, recovered.text
+        reached: Final = upstream.get("/__observations").json()["requests"]
+        assert len(reached) == 1 and reached[0]["body"]["messages"] == [{"role": "user", "content": prompt}], reached
+
+
 @pytest.mark.covers("quota_management.budget.key.count_tokens_reserves_nothing_so_completion_within_budget_succeeds")
 def test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_later_completion(
     gateway: Gateway,
@@ -333,6 +434,7 @@ def test_different_system_messages_do_not_share_a_cached_response(gateway: Gatew
     ):
         model: Final = scenario.model()
         prompt: Final = uuid.uuid4().hex
+
         def completion_id(system: str, expected_calls: int) -> str:
             upstream.get("/__observations").raise_for_status()
             response: Final = gateway.request(
