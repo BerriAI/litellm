@@ -2095,6 +2095,11 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
+    allow_team_member_budget_overflow: bool | None = Field(
+        default=None,
+        strict=True,
+        description="Allow positive member budgets to use remaining total team budget. Defaults to false; requires a finite positive team max_budget.",
+    )
     router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
     model_max_budget: GenericBudgetConfigType | None = Field(
@@ -2167,6 +2172,11 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     policies: Optional[List[str]] = None
     """
 
+    allow_team_member_budget_overflow: bool | None = Field(
+        default=None,
+        strict=True,
+        description="Allow positive member budgets to use remaining total team budget. Requires a finite positive team max_budget.",
+    )
     team_id: str  # required
     team_alias: str | None = None
     organization_id: str | None = None

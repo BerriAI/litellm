@@ -2162,6 +2162,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
   const wireBody = (payload: Record<string, unknown>) => JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
 
   const alwaysSent = {
+    allow_team_member_budget_overflow: false,
     team_id: "123",
     team_alias: "Test Team",
     models: ["gpt-4"],
@@ -3003,5 +3004,76 @@ describe("TeamInfoView - disable_global_guardrails switch gating", () => {
     await openEditForm();
 
     expect(await screen.findByRole("switch", { name: /Disable all global guardrails/i })).toBeInTheDocument();
+  });
+});
+
+describe("TeamInfoView member budget overflow", () => {
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-6-astra"],
+    editTeam: false,
+  };
+  beforeEach(seedDefaultMocks);
+  afterEach(() => vi.clearAllMocks());
+
+  const openOverflowEditor = async (enabled: boolean) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        max_budget: 100,
+        metadata: { allow_team_member_budget_overflow: enabled, cost_center: "keep-me" },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({
+      data: { ...createMockTeamData().team_info, organization_id: "", keys: [] },
+      team_id: "123",
+    });
+    renderWithProviders(<TeamInfoView {...props} />);
+    await screen.findByRole("tab", { name: "Settings" });
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    await screen.findByText(`Member Budget Overflow: ${enabled ? "Allowed" : "Off"}`);
+    fireEvent.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  it.each([false, true])("saves the overflow switch from %s while retaining unrelated metadata", async (enabled) => {
+    await openOverflowEditor(enabled);
+    fireEvent.click(screen.getByText("Team Member Settings"));
+    const toggle = await screen.findByRole("switch", { name: "Allow member budget overflow" });
+    if (enabled) expect(toggle).toBeChecked();
+    else expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+    expect(payload.allow_team_member_budget_overflow).toBe(!enabled);
+    expect(payload.metadata.cost_center).toBe("keep-me");
+    expect(payload.metadata).not.toHaveProperty("allow_team_member_budget_overflow");
+  });
+
+  it("preserves enabled overflow when saving with member settings closed", async () => {
+    await openOverflowEditor(true);
+    fireEvent.change(screen.getByLabelText("Team Name"), { target: { value: "Renamed team" } });
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toMatchObject({
+      team_alias: "Renamed team",
+      allow_team_member_budget_overflow: true,
+      metadata: { cost_center: "keep-me" },
+    });
+  });
+
+  it("prevents removing the team cap while overflow is enabled", async () => {
+    await openOverflowEditor(true);
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(
+      await screen.findByText("Set a positive team Max Budget to allow member budget overflow"),
+    ).toBeInTheDocument();
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
   });
 });

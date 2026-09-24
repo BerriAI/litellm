@@ -342,3 +342,126 @@ async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_call
 
     assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
     assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_overflow_reserves_crossing_request_only_against_team_cap(
+    spend_counter_cache: DualCache, enabled: bool,
+) -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id="overflow-member", team_id="overflow-team"),
+        value=LiteLLM_TeamMembership(
+            user_id="overflow-member", team_id="overflow-team", spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=1e-9),
+        ),
+    )
+    reserve: Final = reserve_budget_for_request(
+        request_body={"model": "gpt-6-astra", "input": "hello", "max_output_tokens": 10},
+        route="/v1/responses", llm_router=None,
+        valid_token=UserAPIKeyAuth(token="overflow-key", user_id="overflow-member", team_id="overflow-team"),
+        team_object=LiteLLM_TeamTable(
+            team_id="overflow-team", max_budget=10.0,
+            metadata={"allow_team_member_budget_overflow": enabled},
+        ),
+        user_object=LiteLLM_UserTable(user_id="overflow-member"), prisma_client=None,
+        user_api_key_cache=cache, proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+        fail_closed_budget_enforcement=True,
+    )
+    if not enabled:
+        with pytest.raises(litellm.BudgetExceededError, match="TeamMember"):
+            await reserve
+        return
+    reservation: Final = await reserve
+    assert reservation is not None
+    assert reservation["reserved_cost"] > 1e-9
+    assert [entry["counter_key"] for entry in reservation["entries"]] == ["spend:team:overflow-team"]
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:team:overflow-team") == reservation["reserved_cost"]
+    await release_unbound_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_overflow_keeps_every_other_budget_reservation_guard() -> None:
+    from litellm.models.project import LiteLLM_ProjectTable
+    from litellm.proxy._types import LiteLLM_OrganizationTable
+    from litellm.proxy.common_utils.user_api_key_cache import project_cache_key
+    from litellm.proxy.spend_tracking.budget_reservation import _get_budget_counters
+
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id="overflow-member", team_id="overflow-team"),
+        value=LiteLLM_TeamMembership(
+            user_id="overflow-member", team_id="overflow-team", spend=1.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+        ),
+    )
+    await cache.async_set_cache(
+        key="org_id:overflow-org:with_budget",
+        value=LiteLLM_OrganizationTable(
+            organization_id="overflow-org", budget_id="org-budget", created_by="admin", updated_by="admin",
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=20.0),
+        ),
+    )
+    await cache.async_set_cache(
+        key=project_cache_key("overflow-project"),
+        value=LiteLLM_ProjectTable(project_id="overflow-project", team_id="overflow-team", litellm_budget_table=LiteLLM_BudgetTable(max_budget=5.0)),
+    )
+    counters: Final = await _get_budget_counters(
+        request_body={},
+        valid_token=UserAPIKeyAuth(
+            token="overflow-key", user_id="overflow-member", team_id="overflow-team",
+            project_id="overflow-project", max_budget=2.0,
+        ),
+        team_object=LiteLLM_TeamTable(
+            team_id="overflow-team", organization_id="overflow-org", max_budget=10.0,
+            budget_limits=[{"budget_duration": "1d", "max_budget": 3.0}],
+            metadata={"allow_team_member_budget_overflow": True},
+        ),
+        user_object=LiteLLM_UserTable(user_id="overflow-member", max_budget=4.0),
+        prisma_client=None, user_api_key_cache=cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=cache), apply_user_budget_to_team_keys=True,
+    )
+    assert [(counter.entity_type, counter.max_budget) for counter in counters] == [
+        ("Key", 2.0), ("Team", 10.0), ("Team", 3.0), ("User", 4.0), ("Organization", 20.0), ("Project", 5.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_overflow_requests_compete_for_remaining_team_reservation_capacity(spend_counter_cache: DualCache) -> None:
+    import asyncio
+
+    body: Final = {"model": "gpt-6-astra", "input": "hello", "max_output_tokens": 10}
+    estimated: Final = estimate_request_max_cost(request_body=body, route="/v1/responses", llm_router=None)
+    assert estimated > 0
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id="concurrent-member", team_id="concurrent-team"),
+        value=LiteLLM_TeamMembership(
+            user_id="concurrent-member", team_id="concurrent-team", spend=1.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+        ),
+    )
+
+    async def reserve() -> object:
+        return await reserve_budget_for_request(
+            request_body=body, route="/v1/responses", llm_router=None,
+            valid_token=UserAPIKeyAuth(token="concurrent-key", user_id="concurrent-member", team_id="concurrent-team"),
+            team_object=LiteLLM_TeamTable(
+                team_id="concurrent-team", max_budget=estimated * 1.5,
+                metadata={"allow_team_member_budget_overflow": True},
+            ),
+            user_object=LiteLLM_UserTable(user_id="concurrent-member"), prisma_client=None,
+            user_api_key_cache=cache, proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+            fail_closed_budget_enforcement=True,
+        )
+
+    results: Final = await asyncio.gather(reserve(), reserve(), return_exceptions=True)
+    admitted: Final = tuple(result for result in results if isinstance(result, dict))
+    rejected: Final = tuple(result for result in results if isinstance(result, litellm.BudgetExceededError))
+    assert len(admitted) == 1
+    assert len(rejected) == 1
+    assert "Team=concurrent-team" in str(rejected[0])
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:team:concurrent-team") == pytest.approx(estimated)
+    await release_unbound_budget_reservation(admitted[0])
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:team:concurrent-team") == pytest.approx(0.0)

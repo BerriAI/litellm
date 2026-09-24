@@ -36406,6 +36406,11 @@ export interface components {
              * @default []
              */
             admins: string[];
+            /**
+             * Allow Team Member Budget Overflow
+             * @description Allow positive member budgets to use remaining total team budget. Defaults to false; requires a finite positive team max_budget.
+             */
+            allow_team_member_budget_overflow?: boolean | null;
             /** Allowed Passthrough Routes */
             allowed_passthrough_routes?: unknown[] | null;
             /** Allowed Vector Store Indexes */
@@ -37450,6 +37455,11 @@ export interface components {
         PatchTeamRequest: {
             /** Access Group Ids */
             access_group_ids?: string[] | null;
+            /**
+             * Allow Team Member Budget Overflow
+             * @description Allow positive member budgets to use remaining total team budget. Requires a finite positive team max_budget.
+             */
+            allow_team_member_budget_overflow?: boolean | null;
             /** Allowed Passthrough Routes */
             allowed_passthrough_routes?: unknown[] | null;
             /** Allowed Vector Store Indexes */
@@ -44830,6 +44840,11 @@ export interface components {
         UpdateTeamRequest: {
             /** Access Group Ids */
             access_group_ids?: string[] | null;
+            /**
+             * Allow Team Member Budget Overflow
+             * @description Allow positive member budgets to use remaining total team budget. Requires a finite positive team max_budget.
+             */
+            allow_team_member_budget_overflow?: boolean | null;
             /** Allowed Passthrough Routes */
             allowed_passthrough_routes?: unknown[] | null;
             /** Allowed Vector Store Indexes */

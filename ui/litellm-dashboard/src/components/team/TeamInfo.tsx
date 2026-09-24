@@ -121,6 +121,7 @@ import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "allow_team_member_budget_overflow",
   "logging",
   "secret_manager_settings",
   "soft_budget_alerting_emails",
@@ -347,6 +348,7 @@ const teamUpdateFieldsSchema = z.object({
   soft_budget_alerting_emails: z.union([z.string(), z.array(z.string())]).optional(),
   default_team_member_models: z.array(z.string()).optional(),
   team_member_budget: numericInputSchema,
+  allow_team_member_budget_overflow: z.boolean().optional(),
   team_member_budget_duration: z.string().nullish(),
   team_member_key_duration: z.string().optional(),
   team_member_tpm_limit: numericInputSchema,
@@ -429,6 +431,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   soft_budget_alerting_emails: "",
   default_team_member_models: [],
   team_member_budget: undefined,
+  allow_team_member_budget_overflow: false,
   team_member_budget_duration: undefined,
   team_member_key_duration: undefined,
   team_member_tpm_limit: undefined,
@@ -479,6 +482,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     : "",
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
+  allow_team_member_budget_overflow: info.metadata?.allow_team_member_budget_overflow === true,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
@@ -553,6 +557,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const teamUpdateSchema = useMemo(
     () =>
       teamUpdateFieldsSchema.superRefine((values, ctx) => {
+        if (
+          values.allow_team_member_budget_overflow &&
+          (!Number.isFinite(Number(values.max_budget)) || Number(values.max_budget) <= 0)
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            message: "Set a positive team Max Budget to allow member budget overflow",
+            path: ["max_budget"],
+          });
+        }
         if (!isParsableJson(values.secret_manager_settings)) {
           ctx.addIssue({ code: "custom", message: SUPPRESSED_BY_DESCRIPTION, path: ["secret_manager_settings"] });
         }
@@ -968,6 +982,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       const updateData: any = {
         team_id: teamId,
+        allow_team_member_budget_overflow: values.allow_team_member_budget_overflow === true,
         team_alias: values.team_alias,
         models: normalizeTeamModelSelection(values.models),
         tpm_limit: sanitizeNumeric(values.tpm_limit),
@@ -1537,6 +1552,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                 onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)
                               }
                             />
+                          )}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="allow_team_member_budget_overflow"
+                          label="Allow member budget overflow"
+                          description="Members with a positive budget can keep spending from the remaining total team budget. Requires a positive team Max Budget. Other limits still apply; unused member allowances are not reserved."
+                        >
+                          {({ id, value, onChange }) => (
+                            <Switch id={id} checked={value === true} onCheckedChange={onChange} />
                           )}
                         </FormField>
                         <FormField
@@ -2147,6 +2172,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </SimpleTooltip>
                 </p>
                 <div>Max Budget: {info.team_member_budget_table?.max_budget ?? "No Limit"}</div>
+                <div>
+                  Member Budget Overflow:{" "}
+                  {info.metadata?.allow_team_member_budget_overflow === true ? "Allowed" : "Off"}
+                </div>
                 <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
                 <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
                 <div>TPM Limit: {info.team_member_budget_table?.tpm_limit ?? "No Limit"}</div>

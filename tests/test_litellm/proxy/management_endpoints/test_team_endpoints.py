@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -17228,3 +17228,103 @@ def test_team_export_csv_escapes_formula_aliases_and_keeps_dash_placeholder():
     assert record["Key Alias"] == "'@cmd"
     assert record["User ID"] == "-"
     assert record["User Email"] == "-"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+@pytest.mark.parametrize("cap", [None, 0.0, -1.0, float("inf"), float("nan")])
+async def test_team_overflow_rejects_removing_or_invalidating_enabled_hard_cap(kind: str, cap: float | None) -> None:
+    with pytest.raises(ProxyException) as error:
+        await _drive_team_write(
+            kind, existing_metadata={"allow_team_member_budget_overflow": True},
+            existing_kwargs={"max_budget": 10.0}, payload={"max_budget": cap},
+        )
+    assert str(error.value.code) == "400"
+    assert "max_budget" in str(error.value.message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_team_overflow_update_preserves_metadata_and_toggles_policy(kind: str, enabled: bool) -> None:
+    recorded: Final = []
+    stored: Final = {"cost_center": "budget-test", "team_member_budget_id": "member-budget"}
+    with _configured_team_metadata_validator(_recording_validator(recorded)):
+        _, write = await _drive_team_write(
+            kind, existing_metadata=stored, existing_kwargs={"max_budget": 10.0},
+            payload={"allow_team_member_budget_overflow": enabled},
+        )
+    assert write.call_args.kwargs["data"]["metadata"] == {**stored, "allow_team_member_budget_overflow": enabled}
+    assert "allow_team_member_budget_overflow" not in write.call_args.kwargs["data"]
+    assert recorded[0].metadata == {"cost_center": "budget-test", "allow_team_member_budget_overflow": enabled}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+async def test_team_overflow_can_disable_while_removing_hard_cap(kind: str) -> None:
+    _, write = await _drive_team_write(
+        kind, existing_metadata={"allow_team_member_budget_overflow": True},
+        existing_kwargs={"max_budget": 10.0},
+        payload={"max_budget": None, "allow_team_member_budget_overflow": False},
+    )
+    assert write.call_args.kwargs["data"]["max_budget"] is None
+    assert write.call_args.kwargs["data"]["metadata"] == {"allow_team_member_budget_overflow": False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+@pytest.mark.parametrize("payload", [
+    {"allow_team_member_budget_overflow": True},
+    {"metadata": {"allow_team_member_budget_overflow": True}},
+])
+async def test_team_overflow_cannot_be_enabled_without_hard_cap(kind: str, payload: dict[str, object]) -> None:
+    with pytest.raises(ProxyException) as error:
+        await _drive_team_write(kind, payload=payload)
+    assert str(error.value.code) == "400"
+    assert "finite positive team max_budget" in str(error.value.message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [
+    {"allow_team_member_budget_overflow": True},
+    {"metadata": {"allow_team_member_budget_overflow": True}},
+])
+async def test_team_admin_cannot_enable_overflow_through_either_input(payload: dict[str, object]) -> None:
+    with _team_admin_may_edit("max_budget"):
+        with pytest.raises(ProxyException) as error:
+            await _drive_team_write(
+                "post", existing_kwargs={"max_budget": 10.0, "members_with_roles": [{"user_id": "member", "role": "admin"}]},
+                payload=payload,
+                user=UserAPIKeyAuth(user_id="member", user_role=LitellmUserRoles.INTERNAL_USER),
+            )
+    assert str(error.value.code) == "403"
+    assert "permission" in str(error.value.message)
+
+
+@pytest.mark.asyncio
+async def test_team_overflow_still_runs_custom_metadata_validator() -> None:
+    recorded: Final = []
+    with _configured_team_metadata_validator(_recording_validator(recorded, valid=False, error_message="cost center required")):
+        with pytest.raises(ProxyException) as error:
+            await _drive_team_write(
+                "post", existing_kwargs={"max_budget": 10.0}, payload={"allow_team_member_budget_overflow": True},
+            )
+    assert str(error.value.code) == "400"
+    assert "cost center required" in str(error.value.message)
+    assert recorded[0].metadata == {"allow_team_member_budget_overflow": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cap", [None, 0.0, -1.0, float("inf"), float("nan")])
+async def test_new_team_overflow_requires_finite_positive_hard_cap(mock_db_client, mock_admin_auth, cap: float | None) -> None:
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    with pytest.raises(ProxyException) as error:
+        await new_team(
+            data=NewTeamRequest(max_budget=cap, allow_team_member_budget_overflow=True),
+            http_request=MagicMock(spec=Request), user_api_key_dict=mock_admin_auth,
+        )
+    assert str(error.value.code) == "400"
+    assert "max_budget" in str(error.value.message)

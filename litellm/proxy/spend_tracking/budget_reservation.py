@@ -778,7 +778,13 @@ async def _get_team_member_budget_counter(
                     member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
                 )
 
-    if team_member_budget is None or team_member_budget <= 0:
+    from litellm.models.team import team_member_budget_allows_overflow
+
+    if (
+        team_member_budget is None
+        or team_member_budget <= 0
+        or team_member_budget_allows_overflow(team_object, team_member_budget)
+    ):
         return None
 
     team_member_spend = cast(LiteLLM_TeamMembership, team_membership).spend if team_membership is not None else 0.0

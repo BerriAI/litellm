@@ -557,6 +557,44 @@ def _caller_edit_access(role: TeamAccessRole | None, general_settings: Mapping[s
             assert_never(role)
 
 
+def _team_member_budget_overflow_metadata(
+    data: NewTeamRequest | UpdateTeamRequest,
+    existing_team: LiteLLM_TeamTable | None = None,
+) -> Mapping[str, JsonValue] | None:
+    supplied_metadata: Final = (
+        data.metadata if "metadata" in data.model_fields_set or existing_team is None else existing_team.metadata
+    )
+    metadata: Final = (
+        TypeAdapter(dict[str, JsonValue]).validate_python(supplied_metadata) if supplied_metadata is not None else None
+    )
+    resulting_metadata: Final = (
+        TypeAdapter(dict[str, JsonValue]).validate_python(
+            MappingProxyType(
+                {
+                    **(metadata if metadata is not None else MappingProxyType({})),
+                    "allow_team_member_budget_overflow": data.allow_team_member_budget_overflow,
+                }
+            )
+        )
+        if data.allow_team_member_budget_overflow is not None
+        else metadata
+    )
+    enabled: Final = (
+        resulting_metadata.get("allow_team_member_budget_overflow", False) if resulting_metadata is not None else False
+    )
+    if enabled is not None and not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="allow_team_member_budget_overflow must be a boolean")
+    max_budget: Final = (
+        data.max_budget if "max_budget" in data.model_fields_set or existing_team is None else existing_team.max_budget
+    )
+    if enabled is True and (max_budget is None or not math.isfinite(max_budget) or max_budget <= 0):
+        raise HTTPException(
+            status_code=400,
+            detail="allow_team_member_budget_overflow requires a finite positive team max_budget",
+        )
+    return resulting_metadata
+
+
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
 
@@ -1662,9 +1700,10 @@ async def new_team(
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
 
+        overflow_metadata: Final = _team_member_budget_overflow_metadata(data)
         await validate_team_metadata_if_configured(
             operation="create",
-            metadata=data.metadata,
+            metadata=overflow_metadata,
             existing_metadata=None,
             team_id=data.team_id,
             team_alias=data.team_alias,
@@ -1690,7 +1729,9 @@ async def new_team(
 
             _model_id = model_dict.id
 
-        data_json = data.json()
+        data_json = data.model_copy(update=MappingProxyType({"metadata": overflow_metadata})).json(
+            exclude=frozenset(("allow_team_member_budget_overflow",))
+        )
 
         ## Handle Object Permission - MCP, Vector Stores etc.
         await enforce_all_proxy_mcp_servers_grant_is_admin_only(
@@ -2446,7 +2487,10 @@ async def update_team(
             existing_model_max_budget=existing_team_row.model_max_budget,
         )
 
-        updated_kv = data.json(exclude_unset=True)
+        overflow_metadata: Final = _team_member_budget_overflow_metadata(data, existing_team)
+        updated_kv = data.json(exclude_unset=True, exclude=frozenset(("allow_team_member_budget_overflow",)))
+        if data.allow_team_member_budget_overflow is not None:
+            updated_kv["metadata"] = overflow_metadata
         if "model_max_budget" in updated_kv and updated_kv["model_max_budget"] is None:
             updated_kv["model_max_budget"] = {}
 
@@ -2498,9 +2542,9 @@ async def update_team(
         if isinstance(existing_team_row.metadata, dict):
             if "metadata" not in updated_kv and (_team_member_fields_in_request or _writes_metadata_backed_field):
                 updated_kv["metadata"] = copy.deepcopy(existing_team_row.metadata)
-            elif isinstance(updated_kv.get("metadata"), dict):
+            elif isinstance(update_metadata := updated_kv.get("metadata"), dict):
                 updated_kv["metadata"] = {
-                    **updated_kv["metadata"],
+                    **update_metadata,
                     **{
                         key: existing_team_row.metadata[key]
                         for key in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS

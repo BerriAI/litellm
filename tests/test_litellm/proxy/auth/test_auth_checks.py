@@ -9456,3 +9456,95 @@ def test_can_object_call_model_allows_listed_model_for_key():
     )
 
     assert result is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "enabled,team_cap,member_cap,spend,denied",
+    [
+        (None, 10.0, 1.0, 1.0, True),
+        (False, 10.0, 1.0, 2.0, True),
+        (True, 10.0, 1.0, 1.0, False),
+        (True, 10.0, 1.0, 2.0, False),
+        (True, 10.0, 0.0, 0.0, True),
+        (True, 10.0, None, 2.0, False),
+        (True, None, 1.0, 2.0, True),
+        (True, 0.0, 1.0, 2.0, True),
+        (True, float("inf"), 1.0, 2.0, True),
+        (True, float("nan"), 1.0, 2.0, True),
+        ("true", 10.0, 1.0, 2.0, True),
+    ],
+)
+async def test_team_member_overflow_preserves_explicit_zero_and_requires_bounded_team(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool | str | None,
+    team_cap: float | None,
+    member_cap: float | None,
+    spend: float,
+    denied: bool,
+) -> None:
+    from litellm.caching import DualCache
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import ProxyLogging
+
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
+    membership: Final = LiteLLM_TeamMembership(
+        user_id="overflow-member", team_id="overflow-team", spend=spend,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=member_cap),
+    )
+    check: Final = _check_team_member_budget(
+        team_object=LiteLLM_TeamTable(
+            team_id="overflow-team", max_budget=team_cap,
+            metadata={"allow_team_member_budget_overflow": enabled},
+        ),
+        user_object=LiteLLM_UserTable(user_id="overflow-member"),
+        valid_token=UserAPIKeyAuth(user_id="overflow-member", team_id="overflow-team"),
+        prisma_client=None, user_api_key_cache=cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+        team_membership=membership, team_membership_loaded=True,
+    )
+    if denied:
+        with pytest.raises(litellm.BudgetExceededError) as error:
+            await check
+        assert error.value.max_budget == member_cap
+        assert error.value.current_cost == spend
+    else:
+        assert await check is None
+    assert membership.spend == spend
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_team_member_overflow_uses_live_default_after_temporary_grant_expiry(enabled: bool) -> None:
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="team_member_default_budget:overflow-default",
+        value=LiteLLM_BudgetTable(budget_id="overflow-default", max_budget=1.0),
+    )
+    check: Final = _check_team_member_budget(
+        team_object=LiteLLM_TeamTable(
+            team_id="overflow-default-team", max_budget=10.0,
+            metadata={"team_member_budget_id": "overflow-default", "allow_team_member_budget_overflow": enabled},
+        ),
+        user_object=None, valid_token=UserAPIKeyAuth(user_id="overflow-default-member"),
+        prisma_client=MagicMock(), user_api_key_cache=cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+        team_membership=LiteLLM_TeamMembership(
+            user_id="overflow-default-member", team_id="overflow-default-team", spend=2.0,
+            litellm_budget_table=LiteLLM_BudgetTable(
+                temp_budget_increase=5.0, temp_budget_expiry=datetime.now(timezone.utc) - timedelta(days=1),
+            ),
+        ),
+        team_membership_loaded=True,
+    )
+    if enabled:
+        assert await check is None
+    else:
+        with pytest.raises(litellm.BudgetExceededError) as error:
+            await check
+        assert error.value.max_budget == 1.0

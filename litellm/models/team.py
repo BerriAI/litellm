@@ -7,6 +7,7 @@ budget-window value types and the team-model alias table). Re-exported from
 """
 
 import json
+import math
 from datetime import datetime
 from typing import Final, Literal, Optional
 
@@ -135,6 +136,18 @@ class LiteLLM_TeamTable(TeamBase):
 
 class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
     last_refreshed_at: float | None = None
+
+
+def team_member_budget_allows_overflow(team: LiteLLM_TeamTable, member_max_budget: float | None) -> bool:
+    return (
+        team.metadata is not None
+        and team.metadata.get("allow_team_member_budget_overflow") is True
+        and team.max_budget is not None
+        and math.isfinite(team.max_budget)
+        and team.max_budget > 0
+        and member_max_budget is not None
+        and member_max_budget > 0
+    )
 
 
 class LiteLLM_DeletedTeamTable(LiteLLM_TeamTable):

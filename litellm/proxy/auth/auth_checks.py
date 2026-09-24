@@ -5650,7 +5650,9 @@ async def _check_team_member_budget(
                         member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
                     )
 
-        if team_member_budget is not None:
+        from litellm.models.team import team_member_budget_allows_overflow
+
+        if team_member_budget is not None and not team_member_budget_allows_overflow(team_object, team_member_budget):
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0
 
             # Read from cross-pod counter (Redis-first) if available
