@@ -192,9 +192,7 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
             )
             ocr_response: Final = OCRResponse.model_validate(result) if result is not None else None
         except (*native_errors, ValidationError) as error:
-            verbose_logger.warning(
-                "azure_ai passthrough: OCR body from %s is not costable: %s", relayed_url, error
-            )
+            verbose_logger.warning("azure_ai passthrough: OCR body from %s is not costable: %s", relayed_url, error)
             return None
         if ocr_response is None:
             return None
