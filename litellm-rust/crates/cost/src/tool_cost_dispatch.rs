@@ -14,6 +14,7 @@ use crate::tool_call_cost_tracking::{
     response_object_includes_file_search_call, response_object_includes_web_search_call,
     safe_convert_to_int,
 };
+use crate::wire::is_truthy;
 
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltInToolCostRequest<'a> {
@@ -129,22 +130,11 @@ fn maps_cost(request: BuiltInToolCostRequest<'_>, model_info: Option<&Value>) ->
     }
 }
 
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null | Value::Bool(false) => false,
-        Value::Bool(true) => true,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
-}
-
 fn file_search_cost(request: BuiltInToolCostRequest<'_>, model_info: Option<&Value>) -> f64 {
     let file_search = request
         .params
         .get("file_search")
-        .filter(|value| truthy(value));
+        .filter(|value| is_truthy(value));
     let (storage_gb, days) = file_search
         .map(extract_file_search_params)
         .unwrap_or((None, None));
@@ -165,15 +155,15 @@ fn azure_assistant_cost(request: BuiltInToolCostRequest<'_>, model_info: Option<
     let vector = request
         .params
         .get("vector_store_usage")
-        .filter(|value| truthy(value));
+        .filter(|value| is_truthy(value));
     let computer = request
         .params
         .get("computer_use_usage")
-        .filter(|value| truthy(value));
+        .filter(|value| is_truthy(value));
     let sessions = request
         .params
         .get("code_interpreter_sessions")
-        .filter(|value| truthy(value))
+        .filter(|value| is_truthy(value))
         .and_then(|value| safe_convert_to_int(Some(value)));
     let (input_tokens, output_tokens) = computer.map(extract_token_counts).unwrap_or((None, None));
     get_cost_for_vector_store(vector, request.provider, model_info, request.defaults)

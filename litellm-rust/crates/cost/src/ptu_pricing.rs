@@ -2,6 +2,8 @@ use jiff::Timestamp;
 use jiff::civil::{Date, DateTime};
 use serde_json::{Map, Value, json};
 
+use crate::wire::is_truthy;
+
 pub const PTU_COST_ATTRIBUTION_ENV_VAR: &str = "LITELLM_ENABLE_PTU_COST_ATTRIBUTION";
 pub const AZURE_SPILLOVER_HEADER: &str = "x-ms-is-spilled-over";
 pub const AZURE_SPILLOVER_FROM_HEADER: &str = "x-ms-spillover-from-deployment";
@@ -156,17 +158,6 @@ pub struct AzureSpillover {
     pub from_deployment: Option<String>,
 }
 
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(fields) => !fields.is_empty(),
-    }
-}
-
 fn py_str(value: &Value) -> String {
     match value {
         Value::Null => "None".to_string(),
@@ -277,7 +268,7 @@ pub fn ptu_config_error(model_info: &Value, model_name: Option<&str>) -> Option<
             model_name,
         ));
     }
-    if !truthy(model_info.get("team_id").unwrap_or(&Value::Null)) {
+    if !is_truthy(model_info.get("team_id").unwrap_or(&Value::Null)) {
         return Some(named(
             "team_id is required when PTU fields are set (one model maps to one team)",
             model_name,
@@ -320,7 +311,7 @@ pub fn ptu_identity_error(
 }
 
 pub fn ptu_terms(model_info: &Value) -> Option<PtuTerms> {
-    let team_id = model_info.get("team_id").filter(|value| truthy(value))?;
+    let team_id = model_info.get("team_id").filter(|value| is_truthy(value))?;
     let ptu_count = py_int(model_info.get("ptu_count").unwrap_or(&Value::Null))?;
     let cost_per_hour = py_float(
         model_info

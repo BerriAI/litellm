@@ -72,6 +72,17 @@ pub fn catalog_with_overlays(
     overlay_catalog(&EMBEDDED_CATALOG, overlays)
 }
 
+pub fn is_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => !fields.is_empty(),
+    }
+}
+
 pub fn rate(value: Option<&Value>) -> Rate {
     match value {
         None => Rate::Missing,
@@ -825,6 +836,23 @@ mod tests {
                 .iter()
                 .map(|(key, value)| (key.to_string(), value.clone())),
         ))
+    }
+
+    #[rstest]
+    #[case(serde_json::json!(null), false)]
+    #[case(serde_json::json!(false), false)]
+    #[case(serde_json::json!(true), true)]
+    #[case(serde_json::json!(0), false)]
+    #[case(serde_json::json!(0.0), false)]
+    #[case(serde_json::json!(-0.5), true)]
+    #[case(serde_json::json!(""), false)]
+    #[case(serde_json::json!("0"), true)]
+    #[case(serde_json::json!([]), false)]
+    #[case(serde_json::json!([0]), true)]
+    #[case(serde_json::json!({}), false)]
+    #[case(serde_json::json!({"k": null}), true)]
+    fn is_truthy_follows_python_bool(#[case] value: Value, #[case] expected: bool) {
+        assert_eq!(is_truthy(&value), expected);
     }
 
     #[rstest]

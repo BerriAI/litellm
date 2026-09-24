@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::off_peak::{open_off_peak_block, parse_off_peak_rate};
 use crate::responses_usage::ChatUsage;
+use crate::wire::is_truthy;
 
 fn rate(value: Option<&Value>) -> f64 {
     match value {
@@ -16,14 +17,7 @@ fn rate(value: Option<&Value>) -> f64 {
 fn cost_per_query(model_info: &Value) -> f64 {
     let value = model_info
         .get("search_queries_cost_per_query")
-        .filter(|value| match value {
-            Value::Null => false,
-            Value::Bool(value) => *value,
-            Value::Number(_) => rate(Some(value)) != 0.0,
-            Value::String(value) => !value.is_empty(),
-            Value::Array(values) => !values.is_empty(),
-            Value::Object(values) => !values.is_empty(),
-        })
+        .filter(|value| is_truthy(value))
         .or_else(|| model_info.get("search_context_cost_per_query"));
     match value {
         Some(Value::Object(prices)) => rate(prices.get("search_context_size_low")),

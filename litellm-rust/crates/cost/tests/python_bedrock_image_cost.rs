@@ -8,6 +8,7 @@ use jiff::Timestamp;
 use litellm_cost::bedrock_image_cost::{
     BedrockImageFamily, cost_calculator, get_config_class, stability1_pricing_key,
 };
+use litellm_cost::call_type::CallTypes;
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::image_cost_router::{
     ImageCostRouteRequest, route_image_generation_cost_calculator,
@@ -105,7 +106,7 @@ fn bedrock_direct_families_bill_returned_images(#[case] model: &str, #[case] rat
             model,
             provider: Some("bedrock"),
             image_response: &response,
-            call_type: Some("image_generation"),
+            call_type: Some(CallTypes::image_generation),
             quality: None,
             size: Some("1024-x-1024"),
             n: None,

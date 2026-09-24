@@ -7,6 +7,7 @@ use serde_json::Value;
 use crate::a2a_cost::calculate_a2a_cost;
 use crate::azure_ai_cost::{azure_ai_router_fee, is_azure_model_router};
 use crate::billed_token_rates::{TokenTypeCostBreakdown, get_token_type_cost_breakdown};
+use crate::call_type::CallTypes;
 use crate::catalog::{CostCall, ModelCostRequest, ModelInfoCatalog};
 use crate::completion_cost::{
     CompletionCost, completion_cost, get_response_cost_from_hidden_params,
@@ -320,7 +321,7 @@ fn price_image_response(
                 model,
                 provider,
                 image_response: response,
-                call_type: Some(&prepared.call_type),
+                call_type: prepared.call_type.parse::<CallTypes>().ok(),
                 quality: request.image_quality,
                 size: request.image_size,
                 n: request.image_count,

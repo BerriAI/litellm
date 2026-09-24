@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
+use litellm_cost::call_type::CallTypes;
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::image_cost_router::{
     ImageCostRouteRequest, route_image_generation_cost_calculator,
@@ -88,7 +89,7 @@ fn image_router_uses_gpt_image_path_and_deployment_flat_rate(#[case] provider: &
             model: "gpt-image-model",
             provider: Some(provider),
             image_response: &response,
-            call_type: Some("image_generation"),
+            call_type: Some(CallTypes::image_generation),
             quality: None,
             size: None,
             n: None,

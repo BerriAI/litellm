@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
+use litellm_cost::call_type::CallTypes;
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::fal_ai_image_cost::{
     PIXELS_PER_MEGAPIXEL, cost_calculator, fal_ai_passthrough_cost,
@@ -162,7 +163,7 @@ fn catalog_fal_image_route_uses_keyed_row_for_image_edit() {
             model: "openai/model",
             provider: Some("fal_ai"),
             image_response: &response,
-            call_type: Some("aimage_edit"),
+            call_type: Some(CallTypes::aimage_edit),
             quality: None,
             size: None,
             n: None,

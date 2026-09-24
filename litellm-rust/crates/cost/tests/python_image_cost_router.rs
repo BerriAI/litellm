@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
+use litellm_cost::call_type::CallTypes;
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::image_cost_router::{
     ImageCostRouteRequest, call_type_has_image_response, deployment_pricing,
@@ -26,7 +27,7 @@ fn request<'a>(
         model,
         provider: Some(provider),
         image_response: response,
-        call_type: Some("image_generation"),
+        call_type: Some(CallTypes::image_generation),
         quality: None,
         size: None,
         n: None,
@@ -124,7 +125,7 @@ fn route_google_image_calls_keep_token_and_search_pricing(
     let cost = route_image_generation_cost_calculator(
         &catalog,
         ImageCostRouteRequest {
-            call_type: Some(call_type),
+            call_type: call_type.parse::<CallTypes>().ok(),
             ..request("model", provider, &response)
         },
     )
@@ -241,4 +242,65 @@ fn deployment_pricing_reads_only_the_python_pricing_field_set() {
         Some(&json!(1e-7))
     );
     assert_eq!(pricing.get("future_vendor_cost_per_widget"), None);
+}
+
+fn per_size_catalog() -> ModelInfoCatalog {
+    ModelInfoCatalog::new(HashMap::from([
+        (
+            "standard/1024-x-1024/dall-e".to_owned(),
+            json!({"input_cost_per_image": 0.04}),
+        ),
+        (
+            "standard/512-x-512/dall-e".to_owned(),
+            json!({"input_cost_per_image": 0.02}),
+        ),
+        (
+            "hd/1024-x-1024/dall-e".to_owned(),
+            json!({"input_cost_per_image": 0.08}),
+        ),
+    ]))
+}
+
+#[rstest]
+#[case::count_from_response_data(json!({"data": [{}, {}]}), None, 0.08)]
+#[case::explicit_count_wins(json!({"data": [{}, {}]}), Some(3), 0.12)]
+#[case::no_data_bills_no_images(json!({}), None, 0.0)]
+#[case::empty_data_bills_no_images(json!({"data": []}), None, 0.0)]
+fn route_image_generation_counts_images_like_python(
+    #[case] response: Value,
+    #[case] n: Option<u64>,
+    #[case] expected: f64,
+) {
+    let cost = route_image_generation_cost_calculator(
+        &per_size_catalog(),
+        ImageCostRouteRequest {
+            n,
+            ..request("dall-e", "custom", &response)
+        },
+    )
+    .unwrap();
+    assert!((cost - expected).abs() < 1e-12);
+}
+
+#[rstest]
+#[case::empty_size_falls_through_to_response(Some(""), None, json!({"data": [{}], "size": "512x512"}), json!({}), 0.02)]
+#[case::empty_quality_falls_through_to_params(None, Some(""), json!({"data": [{}]}), json!({"quality": "hd"}), 0.08)]
+fn route_image_generation_skips_empty_strings_like_python_or(
+    #[case] size: Option<&str>,
+    #[case] quality: Option<&str>,
+    #[case] response: Value,
+    #[case] params: Value,
+    #[case] expected: f64,
+) {
+    let cost = route_image_generation_cost_calculator(
+        &per_size_catalog(),
+        ImageCostRouteRequest {
+            size,
+            quality,
+            optional_params: &params,
+            ..request("dall-e", "custom", &response)
+        },
+    )
+    .unwrap();
+    assert!((cost - expected).abs() < 1e-12);
 }
