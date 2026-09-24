@@ -33,7 +33,9 @@ export const renderWithProviders = (ui: React.ReactElement, options?: RenderOpti
   const Providers: React.FC<PropsWithChildren> = ({ children }) => (
     <NuqsTestingAdapter searchParams={searchParams} onUrlUpdate={onUrlUpdate} hasMemory>
       <QueryClientProvider client={testQueryClient}>
-        <AutoRouterAvailabilityDebounceContext.Provider value={0}>{children}</AutoRouterAvailabilityDebounceContext.Provider>
+        <AutoRouterAvailabilityDebounceContext.Provider value={0}>
+          {children}
+        </AutoRouterAvailabilityDebounceContext.Provider>
       </QueryClientProvider>
     </NuqsTestingAdapter>
   );
