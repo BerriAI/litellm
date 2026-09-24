@@ -1,6 +1,6 @@
 """Shared handling of Claude Code's ~/.claude/settings.json.
 
-`lite up` and `lite autoroute up` patch this file temporarily and restore it on
+`lite up` and `lite autoroute start` patch this file temporarily and restore it on
 exit; `lite configure claude` patches it persistently and records how to undo it.
 All of them need the same merge, and `up` already imports from `auth`, so the
 shared parts live here rather than in any one command module. The credential is
@@ -22,8 +22,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
+import click
+from filelock import FileLock
+from packaging.version import InvalidVersion, Version
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
+from litellm._version import version as litellm_version
 from litellm.litellm_core_utils.private_json import (
     commit_staged_json,
     discard_staged_json,
@@ -75,6 +79,7 @@ BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
 AUTOROUTE_BACKUP_PATH: Final = Path.home() / ".litellm" / "autorouter" / "claude_settings_backup.json"
 CONFIGURE_STATE_PATH: Final = Path.home() / ".litellm" / "claude_configure_state.json"
 STATUSLINE_SCRIPT_PATH: Final = Path.home() / ".litellm" / "statusline.py"
+STATUSLINE_VERSION_PREFIX: Final = b"# litellm-statusline-version: "
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +93,7 @@ class SettingsFileOwner:
 
 SETTINGS_FILE_OWNERS: Final = (
     SettingsFileOwner(BACKUP_PATH, "lite up", "lite down"),
-    SettingsFileOwner(AUTOROUTE_BACKUP_PATH, "lite autoroute up", "lite autoroute down"),
+    SettingsFileOwner(AUTOROUTE_BACKUP_PATH, "lite autoroute start", "lite autoroute stop"),
 )
 
 _SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
@@ -111,7 +116,7 @@ def _is_default_settings_file(settings_path: Path) -> bool:
 
 
 def settings_file_owners(settings_path: Path) -> tuple[SettingsFileOwner, ...]:
-    """The commands whose backups guard settings_path: `lite up` and `lite autoroute up` only ever manage the default file."""
+    """The commands whose backups guard settings_path: `lite up` and `lite autoroute start` only ever manage the default file."""
     return SETTINGS_FILE_OWNERS if _is_default_settings_file(settings_path) else ()
 
 
@@ -240,7 +245,7 @@ def _env_object(settings: Mapping[str, JsonValue], path: Path) -> Mapping[str, J
 
 
 def refuse_while_owned(settings_path: Path, owners: Sequence[SettingsFileOwner]) -> None:
-    """Refuse while `lite up` or `lite autoroute up` holds a backup it will restore over any write; a
+    """Refuse while `lite up` or `lite autoroute start` holds a backup it will restore over any write; a
     purely local check, so commands run it before any login prompt or request."""
     for owner in owners:
         if owner.backup_path.exists():
@@ -262,7 +267,7 @@ def _write_target(settings_path: Path) -> Path:
 
 def write_claude_settings(settings_path: Path, settings: Mapping[str, JsonValue]) -> None:
     """The one way a settings document lands on disk: staged owner-only beside the target and renamed into
-    place, through a symlink rather than over it. Every writer (`configure`, `up`, `autoroute up` and the
+    place, through a symlink rather than over it. Every writer (`configure`, `up`, `autoroute start` and the
     restores) may be carrying the credential, so none creates the file under the umask or truncates it."""
     target: Final = _write_target(settings_path)
     try:
@@ -305,11 +310,54 @@ def statusline_command(script_path: Path, platform: str = sys.platform) -> str:
     return " ".join(quote(token) for token in (sys.executable, str(script_path)))
 
 
-def install_statusline_script(script_path: Path | None = None) -> str:
+def _statusline_version(value: str) -> Version | None:
+    try:
+        return Version(value)
+    except InvalidVersion:
+        return None
+
+
+def _installed_statusline_version(target: Path) -> Version | None:
+    try:
+        with target.open("rb") as script:
+            header: Final = script.readline(256)
+    except FileNotFoundError:
+        return None
+    if not header.startswith(STATUSLINE_VERSION_PREFIX):
+        return None
+    try:
+        return _statusline_version(header.removeprefix(STATUSLINE_VERSION_PREFIX).decode("ascii").strip())
+    except UnicodeDecodeError:
+        return None
+
+
+def install_statusline_script(
+    script_path: Path | None = None,
+    *,
+    package_version: str = litellm_version,
+    write: Callable[[str, bytes], None] = write_private_bytes,
+) -> str:
     target: Final = script_path or STATUSLINE_SCRIPT_PATH
     try:
         ensure_private_dir(target.parent)
-        write_private_bytes(str(target), Path(statusline_script.__file__).read_bytes())
+        bundled_version: Final = _statusline_version(package_version)
+        with FileLock(str(target) + ".lock", timeout=10, mode=0o600):
+            installed_version: Final = _installed_statusline_version(target)
+            if installed_version is not None and (bundled_version is None or installed_version > bundled_version):
+                cli_version: Final = str(bundled_version) if bundled_version is not None else "unknown"
+                click.echo(
+                    f"Keeping the status line from LiteLLM {installed_version}; this CLI is {cli_version}. "
+                    "Upgrade the CLI to refresh it.",
+                    err=True,
+                )
+                return statusline_command(target)
+            source: Final = Path(statusline_script.__file__).read_bytes()
+            header: Final = (
+                STATUSLINE_VERSION_PREFIX + str(bundled_version).encode("ascii") + b"\n"
+                if bundled_version is not None
+                else b""
+            )
+            write(str(target), header + source)
     except OSError as e:
         raise ClaudeSettingsError(f"Could not install the status line script at {target}: {e}") from e
     return statusline_command(target)
@@ -341,7 +389,7 @@ def merge_claude_settings(
     an apiKeyHelper) are removed, since Claude Code given two credentials may send the wrong one.
     ENABLE_TOOL_SEARCH and CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY get their defaults only when
     missing. `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
-    `tier_model` is `lite autoroute up`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
+    `tier_model` is `lite autoroute start`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
     group. Apart from those tier keys, exactly OWNED_PATHS are touched.
     """
     raw_env: Final = settings.get(ENV_KEY, {})
@@ -573,7 +621,7 @@ def unconfigure_claude_settings(
     )
     target: Final = _write_target(settings_path)
     file_removed: Final = not settings and not (receipt.file_existed and target.exists())
-    kept_receipt: Final = (  # mutable-ok: pydantic serializes the update as given and rejects a mappingproxy
+    kept_receipt: Final = (
         receipt.model_copy(update={"written": {item.key: _fingerprint(absent) for item in withheld}})
         if withheld
         else None

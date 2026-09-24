@@ -99,11 +99,20 @@ def mcp_tool_search_settings() -> MCPToolSearchSettings | ValidationError:
 
 
 def _tool_result(tool: Tool) -> ToolSearchResult:
-    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema}
+    return {
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+    }
 
 
 def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
-    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema, "score": score}
+    return {
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+        "score": score,
+    }
 
 
 _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
@@ -111,7 +120,7 @@ _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
 
 def with_mcp_proxy_identity(tool: Tool, server_id: str) -> Tool:
     identity: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool.name}
-    return tool.model_copy(  # mutable-ok: Pydantic requires mutable update and metadata mappings
+    return tool.model_copy(
         update={  # mutable-ok: Pydantic update payload
             "meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}  # mutable-ok: metadata mapping
         }
@@ -148,11 +157,11 @@ def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
         "tool_id": mcp_proxy_tool_id(tool),
         "name": tool.name,
         "description": tool.description or "",
-        "inputSchema": tool.inputSchema,
+        "inputSchema": tool.input_schema,
     }
-    if tool.outputSchema is None:
+    if tool.output_schema is None:
         return base
-    return {**base, "outputSchema": tool.outputSchema}  # mutable-ok: wire schema payload
+    return {**base, "outputSchema": tool.output_schema}  # mutable-ok: wire schema payload
 
 
 def _tool_text(tool: Tool) -> str:
@@ -372,7 +381,7 @@ def _text_tool_result(text: str, is_error: bool) -> CallToolResult:
 
     return CallToolResult(
         content=[TextContent(type="text", text=text)],  # mutable-ok: CallToolResult accepts only list content
-        isError=is_error,
+        is_error=is_error,
     )
 
 
@@ -454,8 +463,8 @@ async def handle_mcp_tool_search(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
 ) -> CallToolResult:
-    from litellm.proxy._experimental.mcp_server.server import (
-        _list_mcp_tools,  # pyright: ignore[reportPrivateUsage]  # shared catalog owner
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _list_mcp_tools,
     )
     from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
@@ -510,8 +519,8 @@ async def handle_mcp_proxy_tool(
     from jsonschema import validate
 
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server.server import (  # pyright: ignore[reportPrivateUsage]  # shared catalog owner
-        _list_mcp_tools,  # pyright: ignore[reportPrivateUsage]  # shared catalog owner
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _list_mcp_tools,
     )
 
     listing: Final = await _list_mcp_tools(
@@ -565,7 +574,7 @@ async def handle_mcp_proxy_tool(
     if not isinstance(tool_arguments, dict):
         return _text_tool_result("arguments must be an object", is_error=True)
     try:
-        validate(instance=tool_arguments, schema=tool.inputSchema)
+        validate(instance=tool_arguments, schema=tool.input_schema)
     except JsonSchemaValidationError as exc:
         return _text_tool_result(f"Invalid arguments: {exc.message}", is_error=True)
 
@@ -596,8 +605,9 @@ async def handle_mcp_tool_call(
     raw_headers: dict[str, str] | None = None,
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
     requested_server_id: str | None = None,
+    guardrail_context: Mapping[str, object] | None = None,
 ) -> CallToolResult:
-    from litellm.proxy._experimental.mcp_server.server import (
+    from litellm.proxy._experimental.mcp_server.operations import (
         _get_allowed_mcp_servers,
         execute_mcp_tool,
         raise_denied_scoped_mcp_access,
@@ -633,6 +643,8 @@ async def handle_mcp_tool_call(
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
+        client_ip=client_ip,
         litellm_logging_obj=litellm_logging_obj,
         requested_server_id=requested_server_id,
+        guardrail_context=guardrail_context,
     )

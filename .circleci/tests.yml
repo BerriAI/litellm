@@ -1,0 +1,292 @@
+version: 2.1
+
+commands:
+  wait_for_service:
+    parameters:
+      url:
+        type: string
+      timeout:
+        type: string
+        default: "60"
+    steps:
+      - run:
+          name: "Wait for << parameters.url >>"
+          command: |
+            TIMEOUT=<< parameters.timeout >>
+            URL="<< parameters.url >>"
+            ELAPSED=0
+            echo "Waiting up to ${TIMEOUT}s for ${URL} ..."
+            if echo "$URL" | grep -q '^tcp://'; then
+              HOST=$(echo "$URL" | sed 's|tcp://||' | cut -d: -f1)
+              PORT=$(echo "$URL" | sed 's|tcp://||' | cut -d: -f2)
+              while ! bash -c "echo > /dev/tcp/$HOST/$PORT" 2>/dev/null; do
+                sleep 2; ELAPSED=$((ELAPSED+2))
+                if [ "$ELAPSED" -ge "$TIMEOUT" ]; then echo "Timed out"; exit 1; fi
+              done
+            else
+              while ! curl -sf --max-time 5 "$URL" > /dev/null 2>&1; do
+                sleep 2; ELAPSED=$((ELAPSED+2))
+                if [ "$ELAPSED" -ge "$TIMEOUT" ]; then echo "Timed out"; exit 1; fi
+              done
+            fi
+            echo "Service ready after ${ELAPSED}s"
+  install_uv:
+    steps:
+      - run:
+          name: Install uv (pinned 0.10.9)
+          command: |
+            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
+            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
+            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
+            rm -f /tmp/uv-install.sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+            export PATH="$HOME/.local/bin:$PATH"
+  install_rust:
+    steps:
+      - run:
+          name: Install Rust (rustup 1.28.2, toolchain 1.98.0)
+          command: |
+            case "$(uname -m)" in
+              x86_64)
+                RUSTUP_TRIPLE=x86_64-unknown-linux-gnu
+                RUSTUP_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
+                ;;
+              aarch64)
+                RUSTUP_TRIPLE=aarch64-unknown-linux-gnu
+                RUSTUP_SHA256=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c
+                ;;
+              *)
+                echo "install_rust: unsupported architecture $(uname -m)" >&2
+                exit 1
+                ;;
+            esac
+            curl -sSLf -o /tmp/rustup-init \
+              "https://static.rust-lang.org/rustup/archive/1.28.2/${RUSTUP_TRIPLE}/rustup-init"
+            echo "${RUSTUP_SHA256}  /tmp/rustup-init" | sha256sum -c -
+            chmod +x /tmp/rustup-init
+            /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.98.0
+            rm -f /tmp/rustup-init
+            echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
+            export PATH="$HOME/.cargo/bin:$PATH"
+            rustc --version
+            cargo --version
+  install_codecov_cli:
+    steps:
+      - run:
+          name: Install Codecov CLI (pinned v11.3.1)
+          command: |
+            curl -sSLf -o /tmp/codecov https://cli.codecov.io/v11.3.1/linux/codecov
+            curl -sSLf -o /tmp/codecov.SHA256SUM https://cli.codecov.io/v11.3.1/linux/codecov.SHA256SUM
+            [ "$(cat /tmp/codecov.SHA256SUM)" = "ca1d64196d2d34771084afe76ea657d581bf628e31d993ff8e52ea09cc88a56d  codecov" ]
+            (cd /tmp && sha256sum -c codecov.SHA256SUM)
+            chmod +x /tmp/codecov
+            mkdir -p "$HOME/.local/bin"
+            mv /tmp/codecov "$HOME/.local/bin/codecov"
+  setup_litellm_enterprise_pip:
+    steps:
+      - run:
+          name: "Install local version of litellm-enterprise"
+          command: |
+            uv run --no-sync python -c "import litellm_enterprise; print('litellm-enterprise OK:', litellm_enterprise.__file__)"
+  setup_test_deps:
+    steps:
+      - checkout
+      - install_uv
+      - install_rust
+      - restore_cache:
+          keys:
+            - v3-integration-uv-cache-{{ checksum "uv.lock" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_enterprise_pip
+      - save_cache:
+          paths:
+            - ~/.cache/uv
+          key: v3-integration-uv-cache-{{ checksum "uv.lock" }}
+      - run:
+          name: Generate Prisma client
+          command: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+  skip_unless_relevant:
+    parameters:
+      category:
+        type: string
+        default: backend
+      base_ref:
+        type: string
+        default: ""
+      pull_request_url:
+        type: string
+        default: ""
+    steps:
+      - run:
+          name: "Skip job when no << parameters.category >>-relevant files changed"
+          command: |
+            export CIRCLE_PULL_REQUEST="${CIRCLE_PULL_REQUEST:-<< parameters.pull_request_url >>}"
+            export PATH_FILTER_BASE_BRANCH="<< parameters.base_ref >>"
+            [ -n "$PATH_FILTER_BASE_BRANCH" ] || unset PATH_FILTER_BASE_BRANCH
+            bash .circleci/scripts/path_filter.sh << parameters.category >>
+  start_postgres:
+    parameters:
+      db_name:
+        type: string
+        default: circle_test
+      image:
+        type: string
+        default: postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
+    steps:
+      - run:
+          name: Start PostgreSQL
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=<< parameters.db_name >> \
+              -p 5432:5432 \
+              << parameters.image >>
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+  start_redis:
+    steps:
+      - run:
+          name: Start Redis
+          command: |
+            docker run -d \
+              --name redis-cache \
+              -p 6379:6379 \
+              redis:7-alpine@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
+      - wait_for_service:
+          url: tcp://localhost:6379
+          timeout: "60"
+
+jobs:
+  unit:
+    parameters:
+      tests_path:
+        type: string
+        default: tests/unit
+      flag:
+        type: string
+        default: unit
+      shards:
+        type: integer
+        default: 6
+      base_ref:
+        type: string
+        default: ""
+      pull_request_url:
+        type: string
+        default: ""
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    parallelism: << parameters.shards >>
+    environment:
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    steps:
+      - setup_test_deps
+      - skip_unless_relevant:
+          base_ref: << parameters.base_ref >>
+          pull_request_url: << parameters.pull_request_url >>
+      - run:
+          name: "Run << parameters.tests_path >> shard"
+          no_output_timeout: 20m
+          command: |
+            mkdir -p test-results/<< parameters.flag >>
+            mapfile -t files < <(find << parameters.tests_path >> -name 'test_*.py' | sort | circleci tests split --split-by=timings --timings-type=filename)
+            if [ "${#files[@]}" -eq 0 ]; then echo "shard ${CIRCLE_NODE_INDEX} received no << parameters.tests_path >> files; nothing to run"; exit 0; fi
+            set +e
+            uv run --no-sync pytest "${files[@]}" -p no:rerunfailures -p no:pytest-retry --timeout=90 -n 4 --dist=loadscope --tb=short --durations=20 -o junit_family=xunit1 --junitxml=test-results/<< parameters.flag >>/junit.xml --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml:coverage.xml --cov-config=pyproject.toml
+            status=$?
+            set -e
+            if [ "$status" -eq 5 ]; then echo "pytest collected no tests from the shard; passing"; exit 0; fi
+            exit "$status"
+      - install_codecov_cli
+      - run:
+          name: Upload coverage
+          when: always
+          command: |
+            [ -f coverage.xml ] || { echo "no coverage.xml produced; skipping upload"; exit 0; }
+            codecov upload-process --disable-search -f coverage.xml -F << parameters.flag >> -C "$CIRCLE_SHA1" -n "<< parameters.flag >>-${CIRCLE_NODE_INDEX}-${CIRCLE_BUILD_NUM}" --git-service github
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+      - store_artifacts:
+          path: coverage.xml
+  documentation:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - setup_test_deps
+      - run:
+          name: Checkout litellm-docs
+          command: rm -rf docs/my-website && git clone --depth 1 https://github.com/BerriAI/litellm-docs.git docs/my-website
+      - run:
+          name: Run documentation validation
+          command: |
+            uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
+            uv run --no-sync python ./tests/documentation_tests/test_router_settings.py
+            uv run --no-sync python ./tests/documentation_tests/test_api_docs.py
+            uv run --no-sync python ./tests/documentation_tests/test_circular_imports.py
+  integration:
+    parameters:
+      suite:
+        type: string
+      base_ref:
+        type: string
+        default: ""
+      pull_request_url:
+        type: string
+        default: ""
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - setup_test_deps
+      - skip_unless_relevant:
+          base_ref: << parameters.base_ref >>
+          pull_request_url: << parameters.pull_request_url >>
+      - start_postgres:
+          image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+      - start_redis
+      - run:
+          name: Run owned integration contracts
+          command: bash .circleci/scripts/run_integration.sh << parameters.suite >>
+          no_output_timeout: 15m
+      - run:
+          name: Stop owned database and Redis
+          when: always
+          command: |
+            mkdir -p test-results/integration-<< parameters.suite >>
+            docker logs postgres-db > test-results/integration-<< parameters.suite >>/postgres.log 2>&1 || true
+            docker logs redis-cache > test-results/integration-<< parameters.suite >>/redis.log 2>&1 || true
+            docker rm -f postgres-db redis-cache
+            test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+
+workflows:
+  tests:
+    when: (pipeline.event.name == "push" and pipeline.git.branch == "main") or pipeline.event.name == "api" or (pipeline.event.name == "pull_request" and (pipeline.event.github.pull_request.base.ref == "main" or pipeline.event.github.pull_request.base.ref starts-with "litellm_"))
+    jobs:
+      - unit:
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - documentation
+      - integration:
+          name: integration-<< matrix.suite >>
+          matrix:
+            parameters:
+              suite: [sdk]
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>

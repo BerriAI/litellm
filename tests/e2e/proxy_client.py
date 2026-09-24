@@ -8,6 +8,7 @@ ProxyClient's key/customer methods for cleanup. Read-backs are eventually consis
 
 from __future__ import annotations
 
+import os
 import time
 import warnings
 from collections.abc import Callable, Mapping
@@ -26,6 +27,7 @@ from e2e_config import (
     PROXY_REPLICA_URLS,
     REQUEST_TIMEOUT,
     SLOW_PROVIDER_TIMEOUT_SECONDS,
+    provider_edge_base,
     settle_propagation,
 )
 from e2e_http import (
@@ -45,6 +47,8 @@ from models import (
     AnthropicMessagesResponse,
     ChatBody,
     ChatResponse,
+    ConfigFieldList,
+    ConfigListParams,
     CostMap,
     CostMapEntry,
     CountTokensBody,
@@ -77,6 +81,13 @@ from models import (
     ModelUpdateBody,
     OcrBody,
     OcrResponse,
+    RerankBody,
+    RerankResponse,
+    RouterCurrentValues,
+    RouterSettingsResponse,
+    SearchToolCreateBody,
+    SearchToolCreateResponse,
+    SessionSpendLogsParams,
     SpendLogRow,
     SpendLogs,
     SpendLogsPage,
@@ -85,12 +96,14 @@ from models import (
     TeamDeleteBody,
     TeamNewBody,
     TeamNewResponse,
+    TeamUpdateBody,
     ToolsetCreateBody,
     ToolsetRow,
     ToolsetUpdateBody,
     UserDeleteBody,
     UserDeleteResponse,
 )
+from provider_cache_routing import route_cache_model
 from pydantic import BaseModel
 from transport import HttpTransport, SplitTransport, Transport, is_control_plane_path
 
@@ -495,13 +508,16 @@ class ProxyClient:
             )
         ).info
 
-    def memory_summary_everywhere(self) -> Mapping[str, Result[MemorySummaryResponse]]:
+    def memory_summary_everywhere(
+        self, *, timeout: float | None = None
+    ) -> Mapping[str, Result[MemorySummaryResponse]]:
         return {
             url: transport.get(
                 "/debug/memory/summary",
                 headers=self.management_headers(transport=transport),
                 params=NoBody(),
                 response_type=MemorySummaryResponse,
+                timeout=timeout,
             )
             for url, transport in self.replicas.items()
         }
@@ -565,6 +581,18 @@ class ProxyClient:
             )
         ).data
 
+    def router_settings(self) -> RouterCurrentValues:
+        """The router knobs the proxy is running with, for a test whose behavior
+        needs one of them switched on in the proxy config."""
+        return unwrap(
+            self.transport.get(
+                "/router/settings",
+                headers=self.transport.master,
+                params=NoBody(),
+                response_type=RouterSettingsResponse,
+            )
+        ).current_values
+
     def model_cost_map(self) -> dict[str, CostMapEntry]:
         return unwrap(
             self.transport.get(
@@ -596,6 +624,8 @@ class ProxyClient:
         model_name: str,
         litellm_params: LiteLLMParamsBody,
         mode: ModelMode | None = None,
+        *,
+        provider_live: bool = False,
     ) -> str:
         """Register a deployment under `model_name` and return its proxy-assigned
         model_id, once the model is actually servable on the data plane."""
@@ -604,15 +634,33 @@ class ProxyClient:
                 model_name=model_name,
                 litellm_params=litellm_params,
                 model_info=ModelInfoBody(mode=mode),
-            )
+            ),
+            provider_live=provider_live,
         )
 
-    def register_model(self, body: ModelNewBody, listed_for: str | None = None) -> str:
+    def general_setting_enabled(self, field_name: str) -> bool:
+        """Whether the proxy is running with the named general_settings flag on, for
+        a test whose behavior only exists under a config flag the stack has to carry."""
+        fields = unwrap(
+            self.transport.get(
+                "/config/list",
+                headers=self.transport.master,
+                params=ConfigListParams(config_type="general_settings"),
+                response_type=ConfigFieldList,
+            )
+        ).root
+        return any(entry.field_name == field_name and entry.field_value is True for entry in fields)
+
+    def register_model(
+        self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False
+    ) -> str:
         """`create_model` for deployments that carry more than a mode: access groups,
         team scoping, a pinned id. `listed_for` is the virtual key whose /v1/models
         view must list the deployment before it counts as servable, because a
         team-scoped deployment is listed to its own team and to nobody else, master
-        key included; leave it unset for a proxy-wide model.
+        key included; leave it unset for a proxy-wide model. `provider_live` keeps
+        the deployment on its real provider path whatever the cache setting, for a
+        deployment shared across tests or workers, which no one test could own.
 
         /model/new is a control-plane route; the data plane (which serves /chat,
         /ocr, ...) only picks the new model up on its next DB reload, so a call
@@ -631,7 +679,11 @@ class ProxyClient:
             self.transport.post(
                 "/model/new",
                 headers=self.management_headers(),
-                json=body,
+                json=body.model_copy(update={"litellm_params": route_cache_model(
+                    body.litellm_params, provider_edge_base,
+                    enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
+                    mode=body.model_info.mode,
+                )}),
                 response_type=ModelNewResponse,
             )
         ).model_id
@@ -813,6 +865,30 @@ class ProxyClient:
             response_type=NoBody,
         )
 
+    def create_search_tool(self, body: SearchToolCreateBody) -> str:
+        """POST /search_tools: register a search tool on the running proxy and return its id
+        once every worker has had a config-reload window to pick it up from the DB."""
+        search_tool_id: Final = unwrap(
+            self.transport.post(
+                "/search_tools",
+                headers=self.management_headers(),
+                json=body,
+                response_type=SearchToolCreateResponse,
+            )
+        ).search_tool_id
+        settle_propagation(time.monotonic())
+        return search_tool_id
+
+    def delete_search_tool(self, search_tool_id: str) -> None:
+        result = self.transport.delete(
+            f"/search_tools/{search_tool_id}",
+            headers=self.management_headers(),
+            json=NoBody(),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_search_tool({search_tool_id!r}) failed: {result}", stacklevel=2)
+
     def create_credential(self, body: CredentialCreateBody) -> None:
         unwrap(
             self.transport.post(
@@ -842,6 +918,16 @@ class ProxyClient:
                 response_type=TeamNewResponse,
             )
         ).team_id
+
+    def update_team(self, body: TeamUpdateBody) -> None:
+        unwrap(
+            self.transport.post(
+                "/team/update",
+                headers=self.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
 
     def delete_team(self, team_id: str) -> None:
         result = self.transport.post(
@@ -901,6 +987,16 @@ class ProxyClient:
             timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
+    def rerank(self, key: str, body: RerankBody) -> Result[RerankResponse]:
+        """POST /v1/rerank (Cohere-format). No official OpenAI/Anthropic SDK
+        covers this route, so it stays on the shared typed transport."""
+        return self.transport.post(
+            "/v1/rerank",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=RerankResponse,
+        )
+
     def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:
         """POST /v1/messages/count_tokens (Anthropic-native). Sends the
         anthropic-version header so the native path accepts it; harmless on the
@@ -912,19 +1008,26 @@ class ProxyClient:
             response_type=CountTokensResponse,
         )
 
-    def messages(self, key: str, body: AnthropicMessagesBody) -> Result[AnthropicMessagesResponse]:
+    def messages(
+        self, key: str, body: AnthropicMessagesBody, *, session_id: str | None = None
+    ) -> Result[AnthropicMessagesResponse]:
         """POST /v1/messages (Anthropic-native). The response is either the
         Anthropic-shape passthrough (`content`) or the OpenAI-normalized shape
-        (`choices`); AnthropicMessagesResponse models both."""
+        (`choices`); AnthropicMessagesResponse models both. `session_id` goes out
+        as the `x-litellm-session-id` header, the way Claude Code sends it through
+        ANTHROPIC_CUSTOM_HEADERS, so every spend row the call produces shares it."""
         return self.transport.post(
             "/v1/messages",
-            headers=self._anthropic_headers(key),
+            headers=self._anthropic_headers(key, session_id=session_id),
             json=body,
             response_type=AnthropicMessagesResponse,
         )
 
-    def _anthropic_headers(self, key: str) -> AnthropicHeaders:
-        return AnthropicHeaders(authorization=self.transport.bearer(key).authorization)
+    def _anthropic_headers(self, key: str, *, session_id: str | None = None) -> AnthropicHeaders:
+        return AnthropicHeaders(
+            authorization=self.transport.bearer(key).authorization,
+            x_litellm_session_id=session_id,
+        )
 
     # ---- spend read-back ------------------------------------------------
 
@@ -967,6 +1070,27 @@ class ProxyClient:
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None
     ) -> list[SpendLogRow]:
         return self._poll(lambda: self.spend_logs(SpendLogsParams(api_key=key)), min_rows, predicate)
+
+    def session_spend_logs(self, session_id: str) -> list[SpendLogRow]:
+        """GET /spend/logs/session/ui, the per-session view the Admin UI logs page
+        opens when a session id is clicked."""
+        return unwrap(
+            self.transport.get(
+                "/spend/logs/session/ui",
+                headers=self.management_headers(),
+                params=SessionSpendLogsParams(session_id=session_id),
+                response_type=SpendLogsPage,
+            )
+        ).data
+
+    def poll_logs_for_session(
+        self,
+        session_id: str,
+        *,
+        min_rows: int = 1,
+        predicate: RowsPredicate | None = None,
+    ) -> list[SpendLogRow]:
+        return self._poll(lambda: self.session_spend_logs(session_id), min_rows, predicate)
 
     def poll_logs_for_request_id(
         self,

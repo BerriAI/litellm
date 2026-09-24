@@ -45,6 +45,10 @@ class CleanupClient:
         self.calls(f"delete {provider} {file_id}")
         return self.file_response()
 
+    def delete_file_as_admin(self, file_id: str, *, provider: str | None = None) -> Result[FileDeleteResponse]:
+        self.calls(f"admin delete {provider} {file_id}")
+        return self.file_response()
+
     def retrieve_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]:
         self.calls(f"retrieve {provider} {batch_id}")
         return self.batch_response()

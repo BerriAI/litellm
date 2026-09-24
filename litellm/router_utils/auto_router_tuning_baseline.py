@@ -10,12 +10,10 @@ from pydantic import ValidationError
 
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 
-TUNING_BASELINE_PARAM_NAME: Final = "auto_router_tuning_baseline_v2"
+# v2 hashes combine models and scoring rules; a new snapshot is required to separate them.
+TUNING_BASELINE_PARAM_NAME: Final = "auto_router_tuning_baseline_v3"
 
 HEURISTIC_V1_TUNING_FIELDS: Final = (
-    "tiers",
-    "tier_model_configs",
-    "classifier_type",
     "tier_boundaries",
     "reasoning_override_min_score",
     "token_thresholds",
@@ -49,8 +47,10 @@ def tuning_fingerprint(complexity_router_config: object) -> str | None:
         validated: Final = ComplexityRouterConfig.model_validate(raw)
     except ValidationError:
         return None
-    supplied: Final = ((_TUNING_FIELD_SET - frozenset(("tier_model_configs",))) & frozenset(raw)) | (
-        frozenset(("tier_model_configs",)) if validated.tier_model_configs else frozenset()
+    # The UI always writes this built-in marker. Freeze its spelling so future defaults cannot change recorded hashes.
+    default_escalation: Final = validated.escalation_keywords in (None, ["LITELLM ESCALATE"])
+    supplied: Final = (_TUNING_FIELD_SET & frozenset(raw)) - (
+        frozenset(("escalation_keywords",)) if default_escalation else frozenset()
     )
     payload: Final = validated.model_dump(
         mode="json",
@@ -120,7 +120,7 @@ def snapshot_tuning_baselines(deployments: Iterable[Mapping[str, object]]) -> Ma
             if (pair := heuristic_v1_router_fingerprint(deployment)) is not None
             for identity, fingerprint in (pair,)
         }
-    )  # mutable-ok: MappingProxyType owns the completed immutable snapshot
+    )
 
 
 def is_mutable_tuned_candidate(candidate: Mapping[str, object], baselines: Mapping[str, str]) -> bool:
@@ -148,9 +148,9 @@ def tuning_limit_violation(*, held: int, limit: int | None) -> str | None:
     if limit is None or held <= limit:
         return None
     return (
-        f"At most {limit} auto-router(s) with changed heuristic scorer settings or tier models can be modified "
+        f"At most {limit} auto-router(s) with changed heuristic scoring rules can be modified "
         "without an auto-router license. Keep this router on its recorded settings, or revert the other changed "
-        "router to its baseline, or remove one of them."
+        "router to its baseline, or remove one of them. Selecting models does not use this allowance."
     )
 
 

@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.types.utils import CallTypes
 
@@ -27,6 +27,19 @@ if TYPE_CHECKING:
 
 
 RELAYED_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+
+class PassthroughMetadata(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    model_group: str = ""
+
+
+def model_group_from(litellm_params: Mapping[str, object]) -> str:
+    try:
+        return PassthroughMetadata.model_validate(litellm_params.get("litellm_metadata")).model_group
+    except ValidationError:
+        return ""
 
 
 def strip_leading_model_segment(endpoint: str, model_names: tuple[str, ...]) -> str:
@@ -55,6 +68,14 @@ def relayed_json_object(httpx_response: Response) -> Mapping[str, object] | None
         return None
 
 
+def relayed_body(httpx_response: Response) -> str | dict:
+    try:
+        body: Final[object] = httpx_response.json()
+    except ValueError:
+        return httpx_response.text
+    return body if isinstance(body, dict) else httpx_response.text
+
+
 @dataclass(frozen=True, slots=True)
 class RelayShape:
     path_suffix: str
@@ -74,9 +95,7 @@ def logged_relay_shape(
         parsed: Final = shape.parse(body)
     except ValidationError:
         return None
-    logging_obj.call_type = (
-        shape.call_type.value
-    )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
+    logging_obj.call_type = shape.call_type.value
     return parsed
 
 

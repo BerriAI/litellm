@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Annotated, Final, Literal
 
-import httpx
+import httpx2
 from expression import case, tag, tagged_union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from typing_extensions import assert_never
@@ -66,7 +66,7 @@ class AuthResolution(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class ResolvedCredential:
-    auth: httpx.Auth = field(repr=False)
+    auth: httpx2.Auth = field(repr=False)
     source: AuthResolution
 
 
@@ -110,7 +110,7 @@ class Unauthorized:
 
 @tagged_union(frozen=True)
 class CredError:
-    """Why a credential could not be produced. Fail-closed: an arm yields this or an `httpx.Auth`.
+    """Why a credential could not be produced. Fail-closed: an arm yields this or an `httpx2.Auth`.
 
     Discriminated on the `Literal` `tag`; consumers `match self.tag` (see `summary`) so the
     type checker can prove exhaustiveness. Construct via the `of_*` factories.

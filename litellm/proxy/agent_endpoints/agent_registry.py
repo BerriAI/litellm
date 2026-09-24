@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypedDict
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELM_STRING
@@ -37,6 +38,7 @@ class AgentRecordDump(TypedDict):
     agent_card_params: dict[str, object]
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
+    access_group_ids: ReadOnly[Sequence[str] | None]
     object_permission: dict[str, object] | None
     spend: float
     tpm_limit: int | None
@@ -64,6 +66,9 @@ class AgentRecord(Protocol):
 
     @property
     def object_permission(self) -> AgentObjectPermissionRecord | None: ...
+
+    @property
+    def access_group_ids(self) -> Sequence[str] | None: ...
 
     @property
     def spend(self) -> float: ...
@@ -130,9 +135,7 @@ def _dump_agent_params(raw: Mapping[str, object]) -> dict[str, object]:
 
 _AGENT_PARAMS_MASKER: Final = SensitiveDataMasker()
 _REDACT_AGENT_PARAMS_MAX_DEPTH: Final = 10
-_AGENT_PARAMS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(
-    dict[str, object]
-)  # mutable-ok: safe_dumps() and AgentResponse.litellm_params both require a real dict, not a Mapping
+_AGENT_PARAMS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _AGENT_PARAMS_SEQUENCE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _EMPTY_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -184,7 +187,7 @@ def _redact_agent_params_tree(value: object, _depth: int) -> object:
             else _redact_agent_params_tree(nested_value, _depth + 1)
         )
         for key, nested_value in typed_params.items()
-    }  # mutable-ok: consumed by json.dumps()/AgentResponse.litellm_params, both of which require a real dict
+    }
 
 
 def parse_agent_litellm_params(value: object) -> Mapping[str, object]:
@@ -284,6 +287,12 @@ def _resolved_agent_param_value(
     return _MISSING_AGENT_PARAM
 
 
+def _patched_access_group_ids(agent: PatchAgentRequest) -> Mapping[str, object]:
+    if "access_group_ids" not in agent:
+        return MappingProxyType({})
+    return MappingProxyType({"access_group_ids": tuple(dict.fromkeys(agent.get("access_group_ids") or ()))})
+
+
 def _restore_redacted_litellm_params(
     incoming: Mapping[str, object],
     existing: Mapping[str, object],
@@ -307,7 +316,7 @@ def _restore_redacted_litellm_params(
         key: value
         for key in all_keys
         if (value := _resolved_agent_param_value(key, incoming, existing, _depth)) is not _MISSING_AGENT_PARAM
-    }  # mutable-ok: fed to safe_dumps() for JSON-column storage, which requires a real dict
+    }
 
 
 class GrantMigrationResult(NamedTuple):
@@ -516,6 +525,7 @@ class AgentRegistry:
             static_headers_val: Final[str | None] = safe_dumps(dict(static_headers_obj)) if static_headers_obj else None
 
             extra_headers_val: Final = agent.get("extra_headers")
+            access_group_ids_val: Final = agent.get("access_group_ids")
 
             create_data: Final[dict[str, object]] = {
                 "agent_name": agent_name,
@@ -532,6 +542,8 @@ class AgentRegistry:
                 create_data["static_headers"] = static_headers_val
             if extra_headers_val is not None:
                 create_data["extra_headers"] = extra_headers_val
+            if access_group_ids_val is not None:
+                create_data["access_group_ids"] = tuple(dict.fromkeys(access_group_ids_val))
             if object_permission_id is not None:
                 create_data["object_permission_id"] = object_permission_id
 
@@ -601,7 +613,7 @@ class AgentRegistry:
             existing_agent: Final[Mapping[str, object]] = dict(existing_record)
 
             augment_agent: Final = {**existing_agent, **agent}
-            update_data: Final[dict[str, object]] = {}
+            update_data: Final[dict[str, object]] = {**_patched_access_group_ids(agent)}
             if augment_agent.get("agent_name"):
                 update_data["agent_name"] = augment_agent.get("agent_name")
             if "litellm_params" in agent:
@@ -703,6 +715,7 @@ class AgentRegistry:
                 safe_dumps(dict(static_headers_obj_u)) if static_headers_obj_u is not None else safe_dumps({})
             )
             extra_headers_val_u: Final = agent.get("extra_headers") or []
+            access_group_ids_val_u: Final = tuple(dict.fromkeys(agent.get("access_group_ids") or ()))
 
             update_data: Final[dict[str, object]] = {
                 "agent_name": agent_name,
@@ -710,6 +723,7 @@ class AgentRegistry:
                 "agent_card_params": agent_card_params,
                 "static_headers": static_headers_val_u,
                 "extra_headers": extra_headers_val_u,
+                "access_group_ids": access_group_ids_val_u,
                 "updated_by": updated_by,
                 "updated_at": datetime.now(timezone.utc),
             }

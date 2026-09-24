@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
@@ -84,6 +85,10 @@ class UserApiKeyCache(DualCache):
         self.key_object_cache.update_cache_ttl(
             default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl
         )
+
+    def update_in_memory_max_size(self, max_size: int | None) -> None:
+        super().update_in_memory_max_size(max_size)
+        self.key_object_cache.update_in_memory_max_size(max_size)
 
     def attach_redis_cache(
         self, redis_cache: RedisCache | None = None, *, default_redis_ttl: float | None = None
@@ -221,6 +226,24 @@ class UserApiKeyCache(DualCache):
             return
         await super().async_delete_cache(key)
 
+    async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
+        """Batch twin of ``async_delete_cache``, partitioned like
+        ``async_set_cache_pipeline``.
+
+        Both partitions are cleared even when one raises, because a caller
+        batching these has already committed the rows they cache.
+        """
+        key_object_keys: Final = tuple(key for key in keys if is_user_key_cache_key(key))
+        other_keys: Final = tuple(key for key in keys if not is_user_key_cache_key(key))
+        outcomes: Final = await asyncio.gather(
+            self.key_object_cache.async_delete_cache_keys(key_object_keys),
+            super().async_delete_cache_keys(other_keys),
+            return_exceptions=True,
+        )
+        failed: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, BaseException))
+        if failed:
+            raise failed[0]
+
     def flush_cache(self) -> None:
         super().flush_cache()
         self.key_object_cache.in_memory_cache.flush_cache()
@@ -304,6 +327,14 @@ def model_access_group_spend_counter_key(access_group_name: str) -> str:
     up as a budget that never trips or never resets.
     """
     return f"spend:model_access_group:{access_group_name}"
+
+
+def project_cache_key(project_id: str) -> str:
+    return f"project_id:{project_id}"
+
+
+def project_spend_counter_key(project_id: str) -> str:
+    return f"spend:project:{project_id}"
 
 
 #: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds

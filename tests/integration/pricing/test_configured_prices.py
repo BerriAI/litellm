@@ -1,13 +1,17 @@
-from collections.abc import Iterator, Mapping
-from typing import Final
-from pathlib import Path
+import json
 import uuid
+from collections.abc import Iterator, Mapping
+from pathlib import Path
+from typing import Final
 
 import pytest
 import yaml
+from pydantic import JsonValue
 
-from integration._support.client import Gateway, eventually, object_value, string_value
-from integration._support.database import read_rows
+from litellm import get_model_info
+from tests.integration._support.client import Gateway, eventually, object_value, string_value
+from tests.integration._support.database import read_rows
+from tests.integration._support.process import owned_proxy
 
 
 @pytest.mark.covers("quota_management.spend_tracking.custom_price.matches_input_rates")
@@ -26,6 +30,31 @@ def test_custom_price_is_reported_and_charged(gateway: Gateway) -> None:
         params: Final = object_value(matching[0]["litellm_params"])
         assert params["input_cost_per_token"] == 0.001
         assert params["output_cost_per_token"] == 0.002
+
+
+@pytest.mark.covers("quota_management.cost_estimate.configured_price.reported_for_model_absent_from_cost_map")
+def test_cost_estimate_reports_configured_prices_for_model_absent_from_cost_map(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"openai/integration-on-prem-{uuid.uuid4().hex}",
+            input_cost_per_token=0.003,
+            output_cost_per_token=0.007,
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/cost/estimate",
+            {"model": model, "input_tokens": 1000, "output_tokens": 500, "num_requests_per_day": 10},
+        )
+        assert response.status_code == 200, response.text
+        body: Final = object_value(response.json())
+        assert body["input_cost_per_token"] == pytest.approx(0.003), response.text
+        assert body["output_cost_per_token"] == pytest.approx(0.007), response.text
+        assert body["input_cost_per_request"] == pytest.approx(1000 * 0.003), response.text
+        assert body["output_cost_per_request"] == pytest.approx(500 * 0.007), response.text
+        margin: Final = body["margin_cost_per_request"]
+        assert isinstance(margin, float), response.text
+        assert body["cost_per_request"] == pytest.approx(1000 * 0.003 + 500 * 0.007 + margin), response.text
+        assert body["daily_cost"] == pytest.approx(10 * (1000 * 0.003 + 500 * 0.007 + margin)), response.text
 
 
 @pytest.mark.covers("quota_management.spend_tracking.default_prices.survive_nullable_sibling_reload")
@@ -103,11 +132,93 @@ def test_default_prices_survive_nullable_sibling_and_reload(gateway: Gateway) ->
                 assert float(rows[0]["spend"]) == pytest.approx(expected, rel=1e-6)
 
 
+COST_MAP_DISPLAY_PRICING_KEYS: Final = frozenset(
+    {
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+    }
+)
+
+
+def persisted_model_info(identity: str) -> dict[str, JsonValue]:
+    rows: Final = read_rows('SELECT model_info FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,))
+    assert len(rows) == 1, f"Deployment {identity} has {len(rows)} rows"
+    stored: Final = rows[0]["model_info"]
+    return object_value(json.loads(stored) if isinstance(stored, str) else stored)
+
+
+@pytest.mark.covers("pricing.model_update.echoed_cost_map_price_is_not_persisted_as_override")
+def test_saving_echoed_model_info_does_not_freeze_cost_map_price_into_deployment(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        entries: Final = gateway.get("/model/info")["data"]
+        assert isinstance(entries, list)
+        target: Final = next(object_value(entry) for entry in entries if object_value(entry)["model_name"] == model)
+        displayed: Final = object_value(target["model_info"])
+        identity: Final = string_value(displayed["id"])
+        assert isinstance(displayed["input_cost_per_token"], float), displayed
+        assert isinstance(displayed["output_cost_per_token"], float), displayed
+        fresh: Final = persisted_model_info(identity)
+        assert {key: value for key, value in fresh.items() if key in COST_MAP_DISPLAY_PRICING_KEYS} == {}, fresh
+        saved: Final = gateway.request(
+            "PATCH", f"/model/{identity}/update", {"model_info": {**displayed, "description": "echoed ui save"}}
+        )
+        assert saved.status_code == 200, saved.text
+        stored: Final = persisted_model_info(identity)
+        assert stored["description"] == "echoed ui save", stored
+        assert {key: value for key, value in stored.items() if key in COST_MAP_DISPLAY_PRICING_KEYS} == {}, stored
+
+
+def displayed_model_info(gateway: Gateway, model: str) -> dict[str, JsonValue]:
+    entries: Final = gateway.get("/model/info")["data"]
+    assert isinstance(entries, list)
+    target: Final = next(object_value(entry) for entry in entries if object_value(entry)["model_name"] == model)
+    return object_value(target["model_info"])
+
+
+@pytest.mark.covers("pricing.model_update.echoed_cost_map_metadata_is_not_persisted_as_override")
+def test_saving_echoed_model_info_does_not_persist_cost_map_metadata_as_overrides(gateway: Gateway) -> None:
+    catalog_entry: Final = get_model_info("openai/gpt-4o-mini")
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        displayed: Final = displayed_model_info(gateway, model)
+        identity: Final = string_value(displayed["id"])
+        assert displayed["key"] == catalog_entry["key"], displayed
+        assert displayed["max_input_tokens"] == catalog_entry["max_input_tokens"], displayed
+        saved: Final = gateway.request(
+            "PATCH", f"/model/{identity}/update", {"model_info": {**displayed, "description": "echoed ui save"}}
+        )
+        assert saved.status_code == 200, saved.text
+        stored: Final = persisted_model_info(identity)
+        assert stored["description"] == "echoed ui save", stored
+        assert {key: value for key, value in stored.items() if key in catalog_entry} == {}, stored
+
+
+@pytest.mark.covers("pricing.model_update.echoing_cost_map_value_back_clears_stored_override")
+def test_saving_the_cost_map_value_back_over_a_stored_override_clears_it(gateway: Gateway, tmp_path: Path) -> None:
+    catalog_limit: Final = get_model_info("openai/gpt-4o-mini")["max_input_tokens"]
+    assert isinstance(catalog_limit, int) and catalog_limit != 4321, catalog_limit
+    with owned_proxy(gateway, tmp_path, {}) as candidate, candidate.scenario() as scenario:
+        overridden: Final = scenario.model(model_info={"max_input_tokens": 4321})
+        displayed: Final = displayed_model_info(candidate, overridden)
+        identity: Final = string_value(displayed["id"])
+        assert displayed["max_input_tokens"] == 4321, displayed
+        assert persisted_model_info(identity)["max_input_tokens"] == 4321
+        saved: Final = candidate.request(
+            "PATCH", f"/model/{identity}/update", {"model_info": {**displayed, "max_input_tokens": catalog_limit}}
+        )
+        assert saved.status_code == 200, saved.text
+        stored: Final = persisted_model_info(identity)
+        assert "max_input_tokens" not in stored, stored
+
+
 @pytest.mark.covers("quota_management.spend_tracking.default_prices.loaded_router_preserves_cached_defaults")
 def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: Gateway, tmp_path: Path) -> None:
     from litellm import Router
 
-    aliases: Final = (f"pricing-{uuid.uuid4().hex}", f"pricing-{uuid.uuid4().hex}")
+    aliases: Final = tuple(f"pricing-{uuid.uuid4().hex}" for _ in range(3))
     path: Final = tmp_path / "models.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -123,7 +234,13 @@ def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: G
                         "model_info": {"id": alias, **pricing},
                     }
                     for alias, pricing in zip(
-                        aliases, ({}, {"input_cost_per_token": None, "output_cost_per_token": None}), strict=True
+                        aliases,
+                        (
+                            {},
+                            {"input_cost_per_token": None, "output_cost_per_token": None},
+                            {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+                        ),
+                        strict=True,
                     )
                 ]
             }
@@ -139,10 +256,12 @@ def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: G
                 )
                 assert result.usage.prompt_tokens == 20
                 assert result.usage.completion_tokens == 20
+                expected_cost: Final = 0.0 if alias == aliases[2] else 20 * 0.00000015 + 20 * 0.0000006
+                assert result._hidden_params["response_cost"] == pytest.approx(expected_cost, rel=1e-6)
                 deployment: Final = router.get_deployment(model_id=alias)
                 assert deployment is not None
                 info: Final = router.get_router_model_info(deployment=deployment, received_model_name=alias)
-                assert info["input_cost_per_token"] == 0.00000015
-                assert info["output_cost_per_token"] == 0.0000006
+                assert info["input_cost_per_token"] == (0.0 if alias == aliases[2] else 0.00000015)
+                assert info["output_cost_per_token"] == (0.0 if alias == aliases[2] else 0.0000006)
         finally:
             router.reset()

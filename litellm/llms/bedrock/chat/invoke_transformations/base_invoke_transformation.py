@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BedrockError, stream_chunk_size_from
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
@@ -34,9 +34,8 @@ from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -288,7 +287,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -454,6 +453,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
     ) -> CustomStreamWrapper:
+        chunk_size: Final = stream_chunk_size_from(logging_obj.litellm_params)
         completion_stream, response_headers = await make_call(
             client=client,
             api_base=api_base,
@@ -465,6 +465,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=True if "ai21" in api_base else False,
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
+            stream_chunk_size=chunk_size,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -492,6 +493,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         sync_client: Final = (
             _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
         )
+        chunk_size: Final = stream_chunk_size_from(logging_obj.litellm_params)
         completion_stream, response_headers = make_sync_call(
             client=sync_client,
             api_base=api_base,
@@ -504,6 +506,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=True if "ai21" in api_base else False,
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
+            stream_chunk_size=chunk_size,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,

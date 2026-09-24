@@ -3,7 +3,8 @@ from collections.abc import Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from typing_extensions import ReadOnly, Required, TypedDict, override
+from pydantic import BaseModel, ConfigDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -231,7 +232,7 @@ class CacheDetailBlock(TypedDict):
 class ConverseTokenUsageBlock(TypedDict, total=False):
     inputTokens: Required[ReadOnly[int]]
     outputTokens: Required[ReadOnly[int]]
-    totalTokens: Required[ReadOnly[int]]
+    totalTokens: ReadOnly[int]
     cacheReadInputTokenCount: ReadOnly[int]
     cacheReadInputTokens: ReadOnly[int]
     cacheWriteInputTokenCount: ReadOnly[int]
@@ -1081,6 +1082,7 @@ class BedrockS3InputDataConfig(TypedDict):
     """S3 input data configuration for Bedrock batch jobs."""
 
     s3Uri: str
+    s3BucketOwner: NotRequired[ReadOnly[str]]
 
 
 class BedrockInputDataConfig(TypedDict):
@@ -1094,6 +1096,7 @@ class BedrockS3OutputDataConfig(TypedDict, total=False):
 
     s3Uri: str
     s3EncryptionKeyId: str | None
+    s3BucketOwner: ReadOnly[str]
 
 
 class BedrockOutputDataConfig(TypedDict):
@@ -1110,6 +1113,26 @@ class BedrockTag(TypedDict):
 class AwsSessionTag(TypedDict):
     Key: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
     Value: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+
+
+class AwsAuthParams(BaseModel):
+    """Every credential-shaped aws_* param BaseAWSLLM.get_credentials accepts; region is resolved separately."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+    aws_session_name: str | None = None
+    aws_profile_name: str | None = None
+    aws_role_name: str | None = None
+    aws_web_identity_token: str | None = None
+    aws_sts_endpoint: str | None = None
+    aws_external_id: str | None = None
+    aws_session_tags: object = None
+
+
+AWS_AUTH_PARAM_KEYS: Final[tuple[str, ...]] = tuple(AwsAuthParams.model_fields)
 
 
 class BedrockCreateBatchRequest(TypedDict, total=False):
@@ -1215,6 +1238,7 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     thinking: dict
     metadata: dict
     output_config: dict
+    safeguards: list
 
     # `context_management` is allowed for Bedrock InvokeModel only when it
     # carries `compact_20260112` edits paired with the `compact-2026-01-12`
