@@ -7649,10 +7649,14 @@ class ProxyConfig:
             self.settings.get("maximum_spend_logs_cleanup_cron"),
             self.settings.get("maximum_spend_logs_retention_interval"),
         )
-        job_missing: Final = wants_job and not has_job and attempt != self._last_cleanup_schedule_attempt
-        if previous_retention_values != resolved or job_missing or (has_job and not wants_job):
+        last_attempt: Final = self._last_cleanup_schedule_attempt
+        schedule_changed: Final = last_attempt is not None and attempt != last_attempt
+        job_missing: Final = wants_job and not has_job and attempt != last_attempt
+        if previous_retention_values != resolved or schedule_changed or job_missing or (has_job and not wants_job):
             self._last_cleanup_schedule_attempt = attempt
             await self._reschedule_spend_log_cleanup_job()
+        elif last_attempt is None:
+            self._last_cleanup_schedule_attempt = attempt
 
     async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         _apply_ssrf_general_settings(db_values)
