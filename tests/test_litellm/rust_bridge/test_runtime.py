@@ -12,6 +12,7 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.rust_bridge import bindings, configuration, runtime
 from litellm.rust_bridge.catalog import Delivery, Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.lifecycle import Complete, Open, Stream, SyncStream, Yield
 
 
 class RustBridgeDeclined(Exception):
@@ -262,6 +263,61 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(shap
         "response_cost": 0.01,
         "additional_headers": {"x-request-id": "upstream", "x-litellm-rust": "true"},
     }
+
+
+class ScriptedStreamExecution:
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._steps: Final = iter((*(Yield(chunk) for chunk in chunks), Complete(None)))
+        self.closed = False
+
+    def start(self) -> Open:
+        return Open(None)
+
+    def resume_value(self, value: object) -> Yield | Complete:
+        return next(self._steps)
+
+    def resume_error(self, error: BaseException) -> Complete:
+        return Complete(None)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_native_stream_marker_reaches_caller_without_wrapping_or_consuming_the_stream(
+    asynchronous: bool,
+) -> None:
+    chunks: Final = (b"event: message_start\n\n", b"event: message_stop\n\n")
+    execution: Final = ScriptedStreamExecution(chunks)
+    stream: Final[Stream | SyncStream] = Stream(execution) if asynchronous else SyncStream(execution)
+    bound: Final[bindings.NativeBinding[Callable[[], object]]] = bindings.NativeBinding(
+        "messages", validate=lambda _: None
+    )
+    bound.override(lambda: stream)
+
+    def python() -> object:
+        pytest.fail("native success must not fall back")
+
+    async def anative(fn: Callable[[], object]) -> object:
+        return fn()
+
+    async def apython() -> object:
+        return python()
+
+    result: Final = (
+        await runtime.arun(CONTEXT, binding=bound, native=anative, python=apython, rules=rules(Rollout.RUST_REQUIRED))
+        if asynchronous
+        else runtime.run(
+            CONTEXT, binding=bound, native=lambda fn: fn(), python=python, rules=rules(Rollout.RUST_REQUIRED)
+        )
+    )
+    assert result is stream
+    assert get_hidden_params_dict(result) == {"additional_headers": {"x-litellm-rust": "true"}}
+    assert not execution.closed
+    delivered: Final = tuple([chunk async for chunk in result]) if isinstance(result, Stream) else tuple(result)
+    assert delivered == chunks
+    assert execution.closed
 
 
 def test_upstream_error_maps_to_api_error_without_fallback() -> None:

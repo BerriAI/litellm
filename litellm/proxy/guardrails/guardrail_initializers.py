@@ -120,7 +120,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
         _OPTIONAL_PresidioPIIMasking,
     )
 
-    explicit_filter_scope: Final = getattr(litellm_params, "presidio_filter_scope", None)
+    explicit_filter_scope: Final = litellm_params.presidio_filter_scope
     filter_scope: Final = explicit_filter_scope or ("input" if _is_mcp_only_mode(litellm_params.mode) else "both")
     run_input: Final = filter_scope in ("input", "both")
     run_output: Final = filter_scope in ("output", "both")

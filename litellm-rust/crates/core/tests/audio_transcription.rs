@@ -4,10 +4,8 @@ use std::{
     thread,
 };
 
+use litellm_core::audio_transcription::{audio_transcription, types::AudioTranscriptionRequest};
 use serde_json::{Map, json};
-
-use super::audio_transcription;
-use crate::audio_transcription::types::AudioTranscriptionRequest;
 
 #[tokio::test]
 async fn bedrock_request_is_signed_and_contains_audio() {
