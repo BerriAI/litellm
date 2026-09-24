@@ -583,10 +583,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         _parsed_body = _parsed_body or {}
 
-        litellm_params_in_body: Final = {}
-        for k in all_litellm_params:
-            if k in _parsed_body:
-                litellm_params_in_body[k] = _parsed_body.pop(k, None)
+        owned: Final = frozenset(all_litellm_params)
+        body_keys: Final = tuple(k for k in _parsed_body if isinstance(k, str))
+        litellm_params_in_body: Final = {k: _parsed_body.pop(k) for k in body_keys if k in owned}
 
         _metadata = dict(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)

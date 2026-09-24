@@ -8,7 +8,7 @@ import zlib
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7302,6 +7302,37 @@ def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_bo
     )
 
     assert kwargs["litellm_params"]["metadata"]["model_info"] == {"id": "vertex-gemini-38-flash-dep"}
+
+
+def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_litellm_params() -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    mock_request.headers = Headers()
+    mock_request.scope = MappingProxyType({})
+
+    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body=json.loads(
+            '{"ttl": 30, "contents": [{"parts": [{"text": "hi"}]}], "num_retries": 2,'
+            ' "generationConfig": {"temperature": 0}, "litellm_trace_id": "trace-a"}'
+        ),
+        litellm_call_id="lit-owned-keys-call-id",
+    )
+
+    litellm_params: Final = kwargs["litellm_params"]
+    assert tuple(litellm_params) == ("ttl", "num_retries", "litellm_trace_id", "metadata", "proxy_server_request")
+    assert (litellm_params["ttl"], litellm_params["num_retries"], litellm_params["litellm_trace_id"]) == (
+        30,
+        2,
+        "trace-a",
+    )
+    assert litellm_params["proxy_server_request"]["body"] == json.loads(
+        '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
+    )
 
 
 @pytest.mark.asyncio
