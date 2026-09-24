@@ -28,21 +28,71 @@ _SERVICE_TIER_TO_COMPLETION_WINDOW: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _apply_service_tier_as_completion_window(body: Mapping[str, object]) -> dict[str, object]:
+def _completion_window_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _apply_service_tier_as_completion_window(
+    body: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: transform_request returns a plain dict
     service_tier: Final = body.get("service_tier")
-    window: Final[str | None] = (
+    mapped_window: Final[str | None] = (
         _SERVICE_TIER_TO_COMPLETION_WINDOW.get(service_tier.lower()) if isinstance(service_tier, str) else None
     )
     raw_metadata: Final = body.get("metadata")
     metadata: Final[Mapping[str, object]] = raw_metadata if isinstance(raw_metadata, dict) else MappingProxyType({})
+    raw_extra_body: Final = body.get("extra_body")
+    extra_body: Final[Mapping[str, object]] = (
+        raw_extra_body if isinstance(raw_extra_body, dict) else MappingProxyType({})
+    )
+    raw_extra_metadata: Final = extra_body.get("metadata")
+    extra_metadata: Final[Mapping[str, object]] = (
+        raw_extra_metadata if isinstance(raw_extra_metadata, dict) else MappingProxyType({})
+    )
+    caller_window: Final[str | None] = _completion_window_str(
+        extra_metadata.get("completion_window")
+    ) or _completion_window_str(metadata.get("completion_window"))
+    window: Final[str | None] = caller_window or mapped_window
     new_body: Final[dict[str, object]] = {  # mutable-ok: transform_request returns a plain dict
         key: value for key, value in body.items() if key != "service_tier"
     }
-    if window is None or "completion_window" in metadata:
+    if window is None or (caller_window is None and window == "asap" and body.get("background") is True):
         return new_body
-    return {  # mutable-ok: transform_request returns a plain dict
+    merged: Final[dict[str, object]] = {  # mutable-ok: transform_request returns a plain dict
         **new_body,
         "metadata": {**metadata, "completion_window": window},  # mutable-ok: transform_request returns a plain dict
+    }
+    if isinstance(raw_extra_metadata, dict) and "completion_window" not in extra_metadata:
+        return {  # mutable-ok: transform_request returns a plain dict
+            **merged,
+            "extra_body": {  # mutable-ok: SDK merges extra_body into the wire body
+                **extra_body,
+                "metadata": {  # mutable-ok: SDK merges extra_body into the wire body
+                    **extra_metadata,
+                    "completion_window": window,
+                },
+            },
+        }
+    return merged
+
+
+def _merge_extra_body_keeping_metadata(
+    request: dict[str, object],  # mutable-ok: wire request body is a plain dict
+    extra_body: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
+    """Shallow merge where ``metadata`` merges one level deep so a caller window
+    inside ``extra_body.metadata`` wins over a mapped one but cannot wipe it out
+    by replacing the whole metadata dict."""
+    if not extra_body:
+        return request
+    request_metadata: Final = request.get("metadata")
+    extra_metadata: Final = extra_body.get("metadata")
+    if not isinstance(request_metadata, dict) or not isinstance(extra_metadata, dict):
+        return {**request, **extra_body}  # mutable-ok: request body sent over the wire
+    return {  # mutable-ok: request body sent over the wire
+        **request,
+        **extra_body,
+        "metadata": {**request_metadata, **extra_metadata},  # mutable-ok: request body sent over the wire
     }
 
 
@@ -125,11 +175,11 @@ def create_config_class(provider: SimpleProviderConfig):
         def transform_request(
             self,
             model: str,
-            messages: list[AllMessageValues],
-            optional_params: dict[str, object],
-            litellm_params: dict[str, object],
-            headers: dict[str, object],
-        ) -> dict[str, object]:
+            messages: list[AllMessageValues],  # mutable-ok: matches base signature
+            optional_params: dict[str, object],  # mutable-ok: matches base signature
+            litellm_params: dict[str, object],  # mutable-ok: matches base signature
+            headers: dict[str, object],  # mutable-ok: matches base signature
+        ) -> dict[str, object]:  # mutable-ok: matches base signature
             body: Final = super().transform_request(
                 model=model,
                 messages=messages,
@@ -140,6 +190,15 @@ def create_config_class(provider: SimpleProviderConfig):
             if _service_tier_as_completion_window_enabled(provider):
                 return _apply_service_tier_as_completion_window(body)
             return body
+
+        def merge_extra_body(
+            self,
+            request: dict[str, object],  # mutable-ok: wire request body is a plain dict
+            extra_body: Mapping[str, object] | None,
+        ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
+            if _service_tier_as_completion_window_enabled(provider):
+                return _merge_extra_body_keeping_metadata(request, extra_body)
+            return super().merge_extra_body(request, extra_body)
 
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
@@ -277,10 +336,10 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             self,
             model: str,
             input: str | ResponseInputParam,
-            response_api_optional_request_params: dict[str, object],
+            response_api_optional_request_params: dict[str, object],  # mutable-ok: matches base signature
             litellm_params: GenericLiteLLMParams,
-            headers: dict[str, object],
-        ) -> dict[str, object]:
+            headers: dict[str, object],  # mutable-ok: matches base signature
+        ) -> dict[str, object]:  # mutable-ok: matches base signature
             if provider.special_handling.get("force_store_false"):
                 response_api_optional_request_params["store"] = False
             body: Final = super().transform_responses_api_request(
@@ -293,6 +352,15 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             if _service_tier_as_completion_window_enabled(provider):
                 return _apply_service_tier_as_completion_window(body)
             return body
+
+        def merge_extra_body(
+            self,
+            request: dict[str, object],  # mutable-ok: wire request body is a plain dict
+            extra_body: Mapping[str, object] | None,
+        ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
+            if _service_tier_as_completion_window_enabled(provider):
+                return _merge_extra_body_keeping_metadata(request, extra_body)
+            return super().merge_extra_body(request, extra_body)
 
     _responses_config_cache[provider.slug] = JSONProviderResponsesConfig
     return JSONProviderResponsesConfig

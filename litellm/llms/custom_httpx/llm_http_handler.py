@@ -618,7 +618,7 @@ class BaseLLMHTTPHandler:
         def sign_and_log(
             transformed: dict[str, object],  # mutable-ok: async_completion takes dict
         ) -> tuple[dict[str, object], dict[str, object], bytes | None]:  # mutable-ok: async_completion takes dict
-            data: Final = {**transformed, **extra_body} if extra_body is not None else transformed
+            data: Final = provider_config.merge_extra_body(transformed, extra_body)
             signed: Final = cast(  # cast-ok: sign_request is declared as a bare dict
                 "tuple[dict[str, object], bytes | None]",
                 provider_config.sign_request(
@@ -2702,8 +2702,7 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
-        if extra_body:
-            data.update(extra_body)
+        data = responses_api_provider_config.merge_extra_body(data, extra_body)
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -2890,8 +2889,7 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
-        if extra_body:
-            data.update(extra_body)
+        data = responses_api_provider_config.merge_extra_body(data, extra_body)
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming

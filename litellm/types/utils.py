@@ -267,7 +267,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_input_tokens: Required[int | None]
     max_output_tokens: Required[int | None]
     input_cost_per_token: Required[float | None]
-    input_cost_per_token_balanced: float | None  # balanced service tier pricing
+    input_cost_per_token_balanced: ReadOnly[float | None]  # balanced service tier pricing
     input_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     input_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
     input_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -278,14 +278,14 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
     cache_creation_input_token_cost_above_1hr: float | None
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
-    cache_creation_input_token_cost_balanced: float | None  # balanced service tier pricing
+    cache_creation_input_token_cost_balanced: ReadOnly[float | None]  # balanced service tier pricing
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
     cache_read_input_audio_token_cost: ReadOnly[float | None]
     cache_read_input_image_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
-    cache_read_input_token_cost_balanced: float | None  # balanced service tier pricing
+    cache_read_input_token_cost_balanced: ReadOnly[float | None]  # balanced service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost_above_200k_tokens: float | None
@@ -327,7 +327,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_batches: float | None
     output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
-    output_cost_per_token_balanced: float | None  # balanced service tier pricing
+    output_cost_per_token_balanced: ReadOnly[float | None]  # balanced service tier pricing
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     output_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
     output_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -357,7 +357,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
     output_cost_per_reasoning_token_flex: float | None
-    output_cost_per_reasoning_token_balanced: float | None
+    output_cost_per_reasoning_token_balanced: ReadOnly[float | None]
     output_cost_per_reasoning_token_priority: float | None
     output_cost_per_video_per_second: float | None  # only for vertex ai models
     output_cost_per_audio_per_second: float | None  # only for vertex ai models

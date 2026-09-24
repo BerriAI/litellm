@@ -365,7 +365,7 @@ def _sail_chat_body(optional_params: dict) -> dict:
     return config.transform_request(
         model="zai-org/GLM-5.3",
         messages=_MESSAGES,
-        optional_params=dict(optional_params),
+        optional_params=optional_params,
         litellm_params={},
         headers={},
     )
@@ -599,6 +599,173 @@ class TestSailTierPricing:
 
         expected = prompt_tokens * rates["input_cost_per_token"] + completion_tokens * rates["output_cost_per_token"]
         assert cost == pytest.approx(expected)
+
+
+class TestSailWireAndBillingConsistency:
+    @staticmethod
+    def _expected_cost(suffix: str, prompt_tokens: int = 2, completion_tokens: int = 2) -> float:
+        rates = litellm.model_cost[MODEL]
+        return (
+            prompt_tokens * rates[f"input_cost_per_token{suffix}"]
+            + completion_tokens * rates[f"output_cost_per_token{suffix}"]
+        )
+
+    @pytest.mark.parametrize("service_tier", ["flex", "balanced"])
+    @pytest.mark.respx()
+    def test_asap_window_wins_over_tier_and_bills_base(self, respx_mock: respx.Router, service_tier: str):
+        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
+
+        response = litellm.completion(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            service_tier=service_tier,
+            extra_body={"metadata": {"completion_window": "asap"}},
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"completion_window": "asap"}
+        assert "service_tier" not in body
+        assert response._hidden_params["response_cost"] == pytest.approx(self._expected_cost(""))
+
+    @pytest.mark.respx()
+    def test_tier_window_survives_extra_body_metadata_merge(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
+
+        response = litellm.completion(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            service_tier="flex",
+            extra_body={"metadata": {"trace_id": "x"}},
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"trace_id": "x", "completion_window": "flex"}
+        assert response._hidden_params["response_cost"] == pytest.approx(self._expected_cost("_flex"))
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_aresponses_tier_window_survives_extra_body_metadata_merge(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_RESPONSES).respond(json=_responses_payload())
+
+        response = await litellm.aresponses(
+            model=MODEL,
+            input="hi",
+            service_tier="flex",
+            extra_body={"metadata": {"trace_id": "x"}},
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"trace_id": "x", "completion_window": "flex"}
+        assert response._hidden_params["response_cost"] == pytest.approx(self._expected_cost("_flex"))
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_aresponses_extra_body_window_bills_at_window(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_RESPONSES).respond(json=_responses_payload())
+
+        response = await litellm.aresponses(
+            model=MODEL,
+            input="hi",
+            extra_body={"metadata": {"completion_window": "balanced"}},
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"completion_window": "balanced"}
+        assert response._hidden_params["response_cost"] == pytest.approx(self._expected_cost("_balanced"))
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_aresponses_extra_body_window_overrides_tier(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_RESPONSES).respond(json=_responses_payload())
+
+        response = await litellm.aresponses(
+            model=MODEL,
+            input="hi",
+            service_tier="flex",
+            extra_body={"metadata": {"completion_window": "balanced"}},
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"completion_window": "balanced"}
+        assert response._hidden_params["response_cost"] == pytest.approx(self._expected_cost("_balanced"))
+
+    def test_window_override_applies_when_provider_inferred_from_model(self):
+        rates = litellm.model_cost[MODEL]
+        prompt_tokens, completion_tokens = 1000, 200
+
+        cost = litellm.completion_cost(
+            completion_response=_sail_completion_response(prompt_tokens, completion_tokens),
+            model=MODEL,
+            custom_llm_provider=None,
+            optional_params={
+                "service_tier": "balanced",
+                "extra_body": {"metadata": {"completion_window": "flex"}},
+            },
+        )
+
+        expected = (
+            prompt_tokens * rates["input_cost_per_token_flex"] + completion_tokens * rates["output_cost_per_token_flex"]
+        )
+        assert cost == pytest.approx(expected)
+
+    @pytest.mark.parametrize(
+        "optional_params,expected_window",
+        [
+            ({"service_tier": "default", "background": True}, None),
+            ({"service_tier": "flex", "background": True}, "flex"),
+        ],
+        ids=["background_asap_suppressed", "background_flex_kept"],
+    )
+    def test_background_suppresses_asap_window(self, optional_params: dict, expected_window: str | None):
+        body = _sail_chat_body(optional_params)
+        assert "service_tier" not in body
+        if expected_window is None:
+            assert "completion_window" not in body.get("metadata", {})
+        else:
+            assert body["metadata"]["completion_window"] == expected_window
+
+    @pytest.mark.respx()
+    def test_vendor_kwarg_folds_into_request_body(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
+
+        litellm.completion(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_budget=128,
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["reasoning_budget"] == 128
+
+    @pytest.mark.respx()
+    def test_non_sail_extra_body_metadata_stays_shallow(self, respx_mock: respx.Router):
+        respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+            json={
+                "id": "chatcmpl-openai",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4.1-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+            }
+        )
+
+        litellm.completion(
+            model="openai/gpt-4.1-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            metadata={"b": 2},
+            extra_body={"metadata": {"a": 1}},
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"a": 1}
 
 
 _TIER_COST_BASES = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")

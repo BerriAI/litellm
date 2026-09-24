@@ -966,13 +966,12 @@ def _extract_service_tier(source: object) -> str | None:
 
 
 def _completion_window_value(metadata: object) -> str | None:
-    """Return ``metadata["completion_window"]`` only when it names a billable tier
-    ("flex" or "balanced"). "asap" is the provider default and bills at standard
-    pricing, so it returns None."""
+    """Return ``metadata["completion_window"]`` only when it names a completion
+    window ("asap", "flex" or "balanced")."""
     if not isinstance(metadata, dict):
         return None
     window: Final[object] = metadata.get("completion_window")
-    if isinstance(window, str) and window in (ServiceTier.FLEX.value, ServiceTier.BALANCED.value):
+    if isinstance(window, str) and window in ("asap", ServiceTier.FLEX.value, ServiceTier.BALANCED.value):
         return window
     return None
 
@@ -986,12 +985,25 @@ def _provider_bills_by_completion_window(custom_llm_provider: str | None) -> boo
     return provider is not None and provider.special_handling.get("service_tier_as_completion_window") is True
 
 
-def _service_tier_from_completion_window(optional_params: dict[str, object]) -> str | None:
+def _service_tier_from_completion_window(optional_params: Mapping[str, object]) -> str | None:
     """Read ``metadata.completion_window`` from ``extra_body`` or a top-level ``metadata``
     param (the two shapes callers use to pick a provider completion window directly)."""
     extra_body: Final = optional_params.get("extra_body")
     extra_metadata: Final[object] = extra_body.get("metadata") if isinstance(extra_body, dict) else None
     return _completion_window_value(extra_metadata) or _completion_window_value(optional_params.get("metadata"))
+
+
+def _service_tier_billed_by_completion_window(
+    service_tier: str | None,
+    optional_params: Mapping[str, object] | None,
+    custom_llm_provider: str | None,
+) -> str | None:
+    if optional_params is None or not _provider_bills_by_completion_window(custom_llm_provider):
+        return service_tier
+    window: Final = _service_tier_from_completion_window(optional_params)
+    if window is None:
+        return service_tier
+    return None if window == "asap" else window
 
 
 def get_usage_object(
@@ -1403,13 +1415,6 @@ def completion_cost(
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
-        # Providers that bill by completion window: an explicit window on the request wins
-        # over service_tier, matching what the provider actually sees on the wire
-        if optional_params is not None and _provider_bills_by_completion_window(custom_llm_provider):
-            window_tier: Final = _service_tier_from_completion_window(optional_params)
-            if window_tier is not None:
-                service_tier = window_tier
-
         # Extract service_tier from optional_params if not provided directly
         if service_tier is None and optional_params is not None:
             service_tier = _normalize_service_tier(optional_params.get("service_tier"))
@@ -1556,6 +1561,11 @@ def completion_cost(
                             "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - %s",
                             e,
                         )
+                service_tier = _service_tier_billed_by_completion_window(
+                    service_tier=service_tier,
+                    optional_params=optional_params,
+                    custom_llm_provider=custom_llm_provider,
+                )
                 if CostCalculatorUtils._call_type_has_image_response(call_type) and isinstance(
                     completion_response, ImageResponse
                 ):

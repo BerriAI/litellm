@@ -1011,9 +1011,12 @@ openai_compatible_providers: Final[list] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "scx-ai",
+    "sail",
 ]
 
-OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
+OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset(("openai",)) | (
+    frozenset(openai_compatible_providers) - frozenset(("sail",))
+)
 
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
     "together_ai",

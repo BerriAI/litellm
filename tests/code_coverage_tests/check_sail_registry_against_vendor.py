@@ -9,6 +9,7 @@ Exits 1 with a per-model diff table on any mismatch.
 """
 
 import json
+import math
 import os
 import re
 import sys
@@ -50,7 +51,9 @@ def vendor_model_ids(client: httpx.Client, api_key: str) -> tuple[set[str], list
     return {m["id"] for m in data if isinstance(m, dict) and isinstance(m.get("id"), str)}, []
 
 
-def vendor_context_windows(client: httpx.Client, api_key: str, model_ids: list[str]) -> tuple[dict[str, int], list[str]]:
+def vendor_context_windows(
+    client: httpx.Client, api_key: str, model_ids: list[str]
+) -> tuple[dict[str, int], list[str]]:
     windows: dict[str, int] = {}
     unverified: list[str] = []
     for model_id in model_ids:
@@ -79,16 +82,16 @@ def vendor_prices(client: httpx.Client) -> dict[str, dict[str, dict[str, float]]
     text: Final = client.get(PRICING_URL, timeout=60).text
     labels: Final = ARIA_LABEL_RE.findall(text)
     prices: dict[str, dict[str, dict[str, float]]] = {}
-    last_copy: str | None = None
+    copy_labels: Final = tuple(
+        (index, label[len(COPY_PREFIX) :]) for index, label in enumerate(labels) if label.startswith(COPY_PREFIX)
+    )
     for index, label in enumerate(labels):
         match: Final = PRICING_LABEL_RE.search(f'aria-label="{label}"')
         if match is None:
             continue
-        next_label: Final = labels[index + 1] if index + 1 < len(labels) else ""
-        model_id: Final = next_label[len(COPY_PREFIX):] if next_label.startswith(COPY_PREFIX) else last_copy
-        if model_id is None:
+        if not copy_labels:
             continue
-        last_copy = model_id
+        model_id: Final = min(copy_labels, key=lambda entry: abs(entry[0] - index))[1]
         tiers: Final = prices.setdefault(model_id, {})
         tiers[TIER_TO_SUFFIX[match.group(2)]] = {
             "input_cost_per_token": float(match.group(3)) / 1e6,
@@ -122,6 +125,10 @@ def main() -> int:
                 diffs.append(f"{model_id}: context window cost map={expected} vendor={window}")
 
         prices: Final = vendor_prices(client)
+        if not prices:
+            diffs.append(f"no tier prices parsed from {PRICING_URL}")
+        for model_id in sorted(set(rows) - set(prices)):
+            diffs.append(f"{model_id}: sail/ row in cost map but no tier prices on {PRICING_URL}")
         for model_id, tiers in sorted(prices.items()):
             row: Final = rows.get(model_id)
             if row is None:
@@ -130,10 +137,8 @@ def main() -> int:
                 for field in ("input_cost_per_token", "cache_read_input_token_cost", "output_cost_per_token"):
                     ours: Final = row.get(f"{field}{suffix}")
                     theirs: Final = vendor_fields[field]
-                    if ours != theirs:
-                        diffs.append(
-                            f"{model_id}: {field}{suffix or ' (asap)'} cost map={ours} vendor={theirs}"
-                        )
+                    if ours is None or not math.isclose(ours, theirs, rel_tol=1e-9):
+                        diffs.append(f"{model_id}: {field}{suffix or ' (asap)'} cost map={ours} vendor={theirs}")
 
     if unverified:
         print("unverified models (no context window error or 503):", ", ".join(unverified))

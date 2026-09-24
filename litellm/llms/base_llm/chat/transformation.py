@@ -4,7 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
@@ -310,6 +310,13 @@ class BaseConfig(ABC):
         headers: dict,
     ) -> dict:
         pass
+
+    def merge_extra_body(
+        self,
+        request: dict[str, object],  # mutable-ok: wire request body is a plain dict
+        extra_body: Mapping[str, object] | None,
+    ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
+        return {**request, **extra_body} if extra_body else request  # mutable-ok: wire request body is a plain dict
 
     async def async_transform_request(
         self,
