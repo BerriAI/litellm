@@ -1,10 +1,16 @@
+import inspect
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import pytest
+from pydantic import BaseModel
 
+from litellm.litellm_core_utils.get_litellm_params import (
+    get_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # untyped legacy carrier
+)
 from litellm.types.litellm_params_registry import LITELLM_PARAMS, LiteLLMParam, ParamGroup, names_in
+from litellm.types.router import CredentialLiteLLMParams, RouterConfig, UpdateRouterConfig
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     StandardCallbackDynamicParams,
@@ -92,3 +98,57 @@ def test_every_param_is_found_in_its_own_group_and_no_other(param: LiteLLMParam)
 
     assert containing_groups == frozenset((param.group,))
     assert param.name.strip() == param.name != ""
+
+
+CARRIED_AND_FORWARDED: Final = frozenset(("drop_params", "hugging_face", "no_log", "replicate", "together_ai"))
+
+CARRIED_PARAMS: Final = tuple(
+    name
+    for name in inspect.signature(get_litellm_params).parameters  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy carrier, only its parameter names are read
+    if name != "kwargs" and name not in CARRIED_AND_FORWARDED
+)
+
+
+@pytest.mark.parametrize("name", CARRIED_PARAMS)
+def test_every_param_get_litellm_params_carries_is_kept_out_of_provider_params(name: str) -> None:
+    provider_value: Final = object()
+
+    result: Final = CLASSIFIERS["completion"](
+        {name: object(), PROVIDER_KNOB: provider_value}  # mutable-ok: classifier input type
+    )
+
+    assert result == MappingProxyType({PROVIDER_KNOB: provider_value})
+
+
+TYPED_GROUP_SOURCES: Final[Mapping[str, tuple[tuple[type[BaseModel], ...], frozenset[ParamGroup]]]] = MappingProxyType(
+    {
+        "credentials": (
+            (CredentialLiteLLMParams,),
+            frozenset((ParamGroup.CREDENTIALS_AND_ENDPOINT, ParamGroup.BEDROCK_BATCH_CONFIG)),
+        ),
+        "router": ((RouterConfig, UpdateRouterConfig), frozenset((ParamGroup.ROUTING_AND_RELIABILITY,))),
+        "pricing": ((CustomPricingLiteLLMParams,), frozenset((ParamGroup.COST_AND_BUDGET,))),
+    }
+)
+
+
+def _typed_params(source: str) -> tuple[LiteLLMParam, ...]:
+    models: Final = TYPED_GROUP_SOURCES[source][0]
+    return tuple(param for param in LITELLM_PARAMS if any(param.name in model.model_fields for model in models))
+
+
+TYPED_GROUP_CASES: Final = tuple(
+    pytest.param(source, param, id=f"{source}:{param.name}")
+    for source in TYPED_GROUP_SOURCES
+    for param in _typed_params(source)
+)
+
+
+@pytest.mark.parametrize(("source", "param"), TYPED_GROUP_CASES)
+def test_param_declared_by_a_typed_config_model_is_in_that_models_group(source: str, param: LiteLLMParam) -> None:
+    assert param.group in TYPED_GROUP_SOURCES[source][1]
+
+
+@pytest.mark.parametrize("source", TYPED_GROUP_SOURCES)
+def test_every_typed_config_model_declares_registry_names(source: str) -> None:
+    assert _typed_params(source)
