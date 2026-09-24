@@ -83,6 +83,10 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
         str(CallTypes.aretrieve_batch),
     )
 )
+_FAILURE_ROW_KEYS_LIFTED_FROM_LITELLM_METADATA: Final[tuple[str, ...]] = (
+    "standard_logging_guardrail_information",
+    "used_client_oauth_token",
+)
 
 
 def _proxy_spend_writer() -> DBSpendUpdateWriter:
@@ -195,13 +199,13 @@ class _ProxyDBLogger(CustomLogger):
         existing_metadata.update(_metadata)
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
-        if (
-            isinstance(litellm_metadata_bucket, dict)
-            and "standard_logging_guardrail_information" not in existing_metadata
-        ):
-            guardrail_info: Final = litellm_metadata_bucket.get("standard_logging_guardrail_information")
-            if guardrail_info is not None:
-                existing_metadata["standard_logging_guardrail_information"] = guardrail_info
+        existing_metadata.update(
+            (key, litellm_metadata_bucket[key])
+            for key in _FAILURE_ROW_KEYS_LIFTED_FROM_LITELLM_METADATA
+            if isinstance(litellm_metadata_bucket, dict)
+            and key not in existing_metadata
+            and litellm_metadata_bucket.get(key) is not None
+        )
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
