@@ -2061,7 +2061,8 @@ class MCPRequestHandler:
 
         if not source_grants:
             return McpToolGrant(
-                allowed=[], denied=frozenset()  # mutable-ok: empty allowlist sentinel in a frozen grant; callers require list | None
+                allowed=[],  # mutable-ok: empty allowlist sentinel; the list | None contract is the public return type
+                denied=frozenset(),
             )
 
         # A tool is granted when ANY granting source grants it (its allowlist reaches it and its own
@@ -2375,9 +2376,8 @@ class MCPRequestHandler:
             # keyless_source AND the marker are needed: each source resolves through an UNMARKED auth, so
             # without keyless_source a fault under a source returns None and wins the union as allow-all.
             deny_all = unreadable_entitlement or keyless_source or _is_mcp_admitted_user_subject(user_api_key_auth)
-            return McpToolGrant(
-                allowed=[] if deny_all else None, denied=frozenset()  # mutable-ok: deny-all sentinel shares the list | None contract of the except-free path
-            )
+            allowed_fallback: Final = [] if deny_all else None  # mutable-ok: deny-all sentinel; public list contract
+            return McpToolGrant(allowed=allowed_fallback, denied=frozenset())
 
     @staticmethod
     async def _denied_tools_for_server(
