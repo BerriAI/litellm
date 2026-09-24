@@ -258,7 +258,7 @@ describe("useMemberBudgetReset", () => {
 
     expect(result.current.state.phase).toBe("idle");
     expect(gateway.refreshTeamData).not.toHaveBeenCalled();
-    expect(toast.success).toHaveBeenCalledWith("Reset 1 member budget to the team default");
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("does not return to prompting when the team save fails after a dismiss", async () => {
@@ -312,6 +312,8 @@ describe("useMemberBudgetReset", () => {
 
     expect(result.current.state.phase).toBe("idle");
     expect(gateway.refreshTeamData).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.fromError).not.toHaveBeenCalled();
   });
 
   it("skips the refresh when dismissed while keep-custom is saving", async () => {
@@ -338,5 +340,6 @@ describe("useMemberBudgetReset", () => {
 
     expect(result.current.state.phase).toBe("idle");
     expect(gateway.refreshTeamData).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,7 @@ import {
   MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES,
   pluralize,
   type MemberBudgetResetPending,
+  type TeamUpdatePayload,
 } from "./memberBudgetReset";
 
 export type MemberBudgetBulkResult = components["schemas"]["TeamMemberBudgetUpdateResult"];
@@ -17,7 +18,7 @@ export type MemberBudgetResetState =
   | { phase: "resetFailed"; pending: MemberBudgetResetPending; attempted: number };
 
 export interface MemberBudgetResetGateway {
-  saveTeam: (updateData: Record<string, unknown>) => Promise<void>;
+  saveTeam: (updateData: TeamUpdatePayload) => Promise<void>;
   resetMemberBudgets: (teamId: string, userIds: readonly string[]) => Promise<MemberBudgetBulkResult[]>;
   refreshTeamData: () => Promise<void>;
 }
@@ -53,6 +54,7 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
       [],
     );
 
+    if (!isCurrent(run)) return;
     if (!outcome.ok) {
       console.error("Error resetting member budgets:", outcome.error);
       const total = pending.userIds.length;
@@ -63,10 +65,8 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
       } else {
         toast.fromError("Team updated, but member budgets could not be reset");
       }
-      if (isCurrent(run)) {
-        setState({ phase: "resetFailed", pending, attempted: outcome.attempted });
-        await refreshTeamData();
-      }
+      setState({ phase: "resetFailed", pending, attempted: outcome.attempted });
+      await refreshTeamData();
       return;
     }
     const failed = outcome.results.filter((r) => !r.success);
@@ -79,10 +79,8 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
         `Reset ${outcome.attempted} member ${pluralize(outcome.attempted, "budget", "budgets")} to the team default`,
       );
     }
-    if (isCurrent(run)) {
-      setState({ phase: "idle" });
-      await refreshTeamData();
-    }
+    setState({ phase: "idle" });
+    await refreshTeamData();
   };
 
   const prompt = (pending: MemberBudgetResetPending) => setState({ phase: "prompting", pending });
@@ -120,7 +118,7 @@ export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
     setState({ phase: "idle" });
     try {
       await gateway.saveTeam(pending.updateData);
-      toast.success("Team settings updated successfully");
+      if (isCurrent(run)) toast.success("Team settings updated successfully");
     } catch (error) {
       console.error("Error updating team:", error);
     }

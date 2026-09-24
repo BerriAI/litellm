@@ -1,10 +1,13 @@
+import type { components } from "@/lib/http/schema";
 import type { TeamMembership } from "./TeamInfo";
 
 export const MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES = 500;
 
+export type TeamUpdatePayload = components["schemas"]["UpdateTeamRequest"];
+
 export interface MemberBudgetResetPending {
   readonly teamId: string;
-  readonly updateData: Record<string, unknown>;
+  readonly updateData: TeamUpdatePayload;
   readonly userIds: readonly string[];
   readonly newBudget: number;
 }
