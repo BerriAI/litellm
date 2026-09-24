@@ -183,7 +183,7 @@ jobs:
       - name: Run the claude_code harness unit tests
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          if ! git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/claude_code/**' ':(glob)tests/e2e/*.py' .github/workflows/test-linting.yml | grep -q .; then
+          if ! git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/claude_code/**/*.py' ':(glob)tests/e2e/*.py' tests/e2e/claude_code/cron_vm/install_claude_code.sh .github/workflows/test-linting.yml | grep -q .; then
             echo "No changed claude_code harness files; skipping."
             exit 0
           fi
