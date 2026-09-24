@@ -1132,15 +1132,20 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         call_type: str | None = None,
         transformed_response: ResponsesAPIResponse | None = None,
     ):
-        if transformed_response is not None:
-            transformed: Final = transformed_response
-        elif responses_api_provider_config is not None and response is not None:
-            transformed: Final = responses_api_provider_config.transform_response_api_response(
-                model=model,
-                raw_response=response,
-                logging_obj=logging_obj,
+        transformed: Final[ResponsesAPIResponse | None] = (
+            transformed_response
+            if transformed_response is not None
+            else (
+                responses_api_provider_config.transform_response_api_response(
+                    model=model,
+                    raw_response=response,
+                    logging_obj=logging_obj,
+                )
+                if responses_api_provider_config is not None and response is not None
+                else None
             )
-        else:
+        )
+        if transformed is None:
             raise ValueError(
                 "Either transformed_response or both responses_api_provider_config and response must be provided to MockResponsesAPIStreamingIterator"
             )

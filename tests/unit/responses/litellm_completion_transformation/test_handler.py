@@ -340,6 +340,12 @@ def test_mock_responses_streaming_iterator_validation_and_config_branches():
         def __init__(self):
             self.model_call_details = {"litellm_params": {"api_key": "fake"}}
 
+        async def async_success_handler(self, *args, **kwargs):
+            pass
+
+        def success_handler(self, *args, **kwargs):
+            pass
+
     logging_obj = _MockLoggingObj()
     iterator = MockResponsesAPIStreamingIterator(
         response=httpx.Response(200),
