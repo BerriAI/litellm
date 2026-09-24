@@ -617,17 +617,19 @@ async def test_async_upload_signs_with_one_frozen_credential_snapshot(rotating_p
 
 
 @pytest.mark.asyncio
-async def test_async_upload_retries_403_with_fresh_credentials_and_signature(rotating_profile: str, caplog):
+async def test_async_upload_retries_transient_status_with_fresh_credentials_and_signature(
+    rotating_profile: str, caplog
+):
     """
-    A 403 (SignatureDoesNotMatch after an IMDS rotation) must be retried, and the retry must fetch
-    credentials again and carry a signature computed from that newer generation.
+    A transient status must be retried, and the retry must fetch credentials again and carry
+    a signature computed from that newer generation.
     """
     test_element = s3BatchLoggingElement(
-        s3_object_key="2025-09-14/test-403.json",
-        payload={"test": "403"},
-        s3_object_download_filename="test-403.json",
+        s3_object_key="2025-09-14/test-503.json",
+        payload={"test": "503"},
+        s3_object_download_filename="test-503.json",
     )
-    async with _s3_logger_on_production_handler(rotating_profile, [403, 200]) as (logger, requests, mock_sleep):
+    async with _s3_logger_on_production_handler(rotating_profile, [503, 200]) as (logger, requests, mock_sleep):
         await logger.async_upload_data_to_s3(test_element)
 
     assert len(requests) == 2
@@ -642,13 +644,13 @@ async def test_async_upload_retries_403_with_fresh_credentials_and_signature(rot
 
 
 @pytest.mark.asyncio
-async def test_async_upload_exhausts_403_retries_through_production_http_handler(rotating_profile: str, caplog):
+async def test_async_upload_exhausts_transient_retries_through_production_http_handler(rotating_profile: str, caplog):
     test_element = s3BatchLoggingElement(
-        s3_object_key="2025-09-14/test-403-exhausted.json",
-        payload={"test": "403-exhausted"},
-        s3_object_download_filename="test-403-exhausted.json",
+        s3_object_key="2025-09-14/test-503-exhausted.json",
+        payload={"test": "503-exhausted"},
+        s3_object_download_filename="test-503-exhausted.json",
     )
-    async with _s3_logger_on_production_handler(rotating_profile, [403, 403, 403]) as (logger, requests, mock_sleep):
+    async with _s3_logger_on_production_handler(rotating_profile, [503, 503, 503]) as (logger, requests, mock_sleep):
         await logger.async_upload_data_to_s3(test_element)
 
     assert len(requests) == 3
@@ -671,16 +673,18 @@ async def test_async_upload_does_not_retry_404_through_production_http_handler(r
     assert "Error uploading to s3" in caplog.text
 
 
-def test_sync_upload_retries_403_with_fresh_signature(rotating_profile: str, monkeypatch: pytest.MonkeyPatch):
+def test_sync_upload_retries_transient_status_with_fresh_signature(
+    rotating_profile: str, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setenv("AWS_PROFILE", rotating_profile)
     logger = S3Logger(s3_bucket_name="test-bucket", s3_region_name="us-east-1", s3_flush_interval=3600)
     test_element = s3BatchLoggingElement(
-        s3_object_key="2025-09-14/test-sync-403.json",
-        payload={"test": "sync-403"},
-        s3_object_download_filename="test-sync-403.json",
+        s3_object_key="2025-09-14/test-sync-503.json",
+        payload={"test": "sync-503"},
+        s3_object_download_filename="test-sync-503.json",
     )
     requests: list[httpx.Request] = []
-    replies = iter([403, 200])
+    replies = iter([503, 200])
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -2521,7 +2525,7 @@ class _LateAppendingPut:
             self.appended = True
             self.logger.log_queue.append(self.element)
             if self.fail_first:
-                return _failure_response()
+                return _transient_failure_response()
         return _ok_response()
 
 
@@ -2532,7 +2536,7 @@ class _FailOnSuffixPut:
 
     async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         if self.failing and url.endswith(self.suffixes):
-            return _failure_response()
+            return _transient_failure_response()
         return _ok_response()
 
 
@@ -2544,7 +2548,7 @@ class _FailUntilClearedPut:
     async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         self.calls = (*self.calls, (url, data))
         if self.failing:
-            return _failure_response()
+            return _transient_failure_response()
         return _ok_response()
 
 
@@ -2677,10 +2681,21 @@ def test_empty_config_concurrency_falls_back_to_constructor_value(empty: object)
     assert logger._upload_semaphore._value == 4
 
 
-def _failure_response() -> MagicMock:
+def _transient_failure_response() -> MagicMock:
     response = MagicMock()
-    response.status_code = 400
-    response.raise_for_status = MagicMock(side_effect=Exception("s3 rejected the object"))
+    response.status_code = 503
+    response.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("503", request=MagicMock(), response=response)
+    )
+    return response
+
+
+def _terminal_failure_response() -> MagicMock:
+    response = MagicMock()
+    response.status_code = 403
+    response.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("403", request=MagicMock(), response=response)
+    )
     return response
 
 
@@ -2700,12 +2715,16 @@ async def test_failed_uploads_stay_queued_for_next_flush() -> None:
     logger.async_httpx_client.put = put
     logger.log_queue = list(elements)
 
-    await logger.flush_queue()
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
 
-    assert logger.log_queue == [elements[2], elements[4]]
+        assert [element.s3_object_key for element in logger.log_queue] == [
+            elements[2].s3_object_key,
+            elements[4].s3_object_key,
+        ]
 
-    put.failing = False
-    await logger.flush_queue()
+        put.failing = False
+        await logger.flush_queue()
 
     assert logger.log_queue == []
 
@@ -2728,9 +2747,10 @@ async def test_batch_file_upload_failure_keeps_whole_batch() -> None:
     elements = [_element({"i": i}, f"{i}") for i in range(3)]
     logger.log_queue = list(elements)
 
-    await logger.flush_queue()
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
 
-    assert len(put.calls) == 1
+    assert len(put.calls) == 3
     assert len(logger.log_queue) == 1
     assert logger.log_queue[0].body == "\n".join(json.dumps(element.payload) for element in elements)
 
@@ -2752,9 +2772,10 @@ async def test_events_appended_during_failed_flush_survive() -> None:
     first = _element({"id": "first"}, "first")
     logger.log_queue = [first]
 
-    await logger.flush_queue()
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
 
-    assert logger.log_queue == [first, late]
+    assert [element.s3_object_key for element in logger.log_queue] == [late.s3_object_key]
 
 
 @pytest.mark.asyncio
@@ -2841,17 +2862,19 @@ async def test_failed_batch_file_is_requeued_and_resent_unchanged() -> None:
     logger.async_httpx_client.put = put
     logger.log_queue = [_element({"i": i}, f"{i}") for i in range(3)]
 
-    await logger.flush_queue()
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
 
     assert len(logger.log_queue) == 1
     assert logger.log_queue[0].body is not None
     assert logger.log_queue[0].s3_object_key.endswith(".jsonl")
+    assert logger.log_queue[0].flush_attempts == 1
 
     put.failing = False
     await logger.flush_queue()
 
     assert logger.log_queue == []
-    assert len(put.calls) == 2
+    assert len(put.calls) == 4
     assert put.calls[0] == put.calls[1]
 
 
@@ -2871,7 +2894,8 @@ async def test_elements_appended_after_failed_batch_file_get_their_own_file() ->
     logger.async_httpx_client.put = put
     logger.log_queue = [_element({"id": "first"}, "first")]
 
-    await logger.flush_queue()
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
 
     late = _element({"id": "late"}, "late")
     logger.log_queue.append(late)
@@ -2880,10 +2904,11 @@ async def test_elements_appended_after_failed_batch_file_get_their_own_file() ->
     await logger.flush_queue()
 
     assert logger.log_queue == []
-    assert len(put.calls) == 3
+    assert len(put.calls) == 5
     assert put.calls[0] == put.calls[1]
-    assert put.calls[2][0] != put.calls[0][0]
-    assert put.calls[2][1] == json.dumps({"id": "late"})
+    assert put.calls[3] == put.calls[0]
+    assert put.calls[4][0] != put.calls[0][0]
+    assert put.calls[4][1] == json.dumps({"id": "late"})
 
 
 @pytest.mark.asyncio
@@ -2918,3 +2943,169 @@ async def test_batch_file_mode_disabled_when_s3_v2_is_cold_storage_logger(monkey
 
     assert len(put.calls) == 2
     assert put.calls[1][0].endswith(".jsonl")
+
+
+class _FailOnSuffixTerminalPut:
+    def __init__(self, suffixes: tuple[str, ...]) -> None:
+        self.suffixes = suffixes
+        self.calls: tuple[str, ...] = ()
+
+    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        self.calls = (*self.calls, url)
+        if url.endswith(self.suffixes):
+            return _terminal_failure_response()
+        return _ok_response()
+
+
+@pytest.mark.asyncio
+async def test_terminal_403_upload_is_dropped_and_the_rest_of_the_batch_lands() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    elements = [_element({"i": i}, f"{i}") for i in range(5)]
+    put = _FailOnSuffixTerminalPut(("test-1.json", "test-3.json"))
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    logger.log_queue = list(elements)
+
+    await logger.flush_queue()
+
+    assert len(put.calls) == 5
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_transient_failure_is_dropped_after_the_flush_budget() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_flush_attempts=2,
+    )
+
+    put = _FailUntilClearedPut()
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+
+    element = _element({"id": "doomed"}, "doomed")
+    logger.log_queue = [element]
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert len(logger.log_queue) == 1
+    assert logger.log_queue[0].flush_attempts == 1
+    assert logger.log_queue[0].s3_object_key == element.s3_object_key
+    assert logger.log_queue[0].payload == element.payload
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert logger.log_queue == []
+    calls_after_budget = len(put.calls)
+
+    await logger.flush_queue()
+
+    assert len(put.calls) == calls_after_budget
+
+
+@pytest.mark.asyncio
+async def test_enqueue_drops_new_events_when_queue_is_full() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_flush_interval=3600,
+    )
+    logger.max_queue_size = 3
+
+    with patch.object(logger, "handle_callback_failure") as mock_failure:
+        for index in range(4):
+            await logger._async_log_event_base(
+                kwargs={
+                    "call_type": "acompletion",
+                    "standard_logging_object": {"id": f"event-{index}", "metadata": {}},
+                },
+                response_obj=None,
+                start_time=datetime.utcnow(),
+                end_time=datetime.utcnow(),
+            )
+
+    assert len(logger.log_queue) == 3
+    assert all(element.payload["id"] != "event-3" for element in logger.log_queue)
+    mock_failure.assert_called_once_with(callback_name="S3Logger")
+
+
+def test_sync_upload_does_not_retry_403():
+    from unittest.mock import MagicMock
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-sync-403.json",
+        payload={"test": "sync-403"},
+        s3_object_download_filename="test-sync-403.json",
+    )
+
+    response_403 = MagicMock()
+    response_403.status_code = 403
+    response_403.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError("403", request=MagicMock(), response=response_403)
+    )
+
+    mock_sync_client = MagicMock()
+    mock_sync_client.put = MagicMock(return_value=response_403)
+
+    with (
+        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("time.sleep") as mock_sleep,
+    ):
+        logger.upload_data_to_s3(test_element)
+
+    assert mock_sync_client.put.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_requeued_batch_file_carries_max_flush_attempts_forward() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_batch_file_upload=True,
+    )
+
+    put = _FailUntilClearedPut()
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+
+    retried = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-retried.json",
+        payload={"id": "retried"},
+        s3_object_download_filename="test-retried.json",
+        flush_attempts=1,
+    )
+    fresh = _element({"id": "fresh"}, "fresh")
+    logger.log_queue = [retried, fresh]
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert len(logger.log_queue) == 1
+    assert logger.log_queue[0].s3_object_key.endswith(".jsonl")
+    assert logger.log_queue[0].flush_attempts == 2

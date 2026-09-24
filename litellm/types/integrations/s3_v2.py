@@ -11,3 +11,4 @@ class s3BatchLoggingElement(BaseModel):
     s3_object_download_filename: str
     body: str | None = None
     content_type: str = "application/json"
+    flush_attempts: int = 0

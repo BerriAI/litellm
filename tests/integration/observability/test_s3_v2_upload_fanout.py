@@ -312,7 +312,7 @@ def test_s3_v2_invalid_or_empty_bound_falls_back_to_sixteen(
 @pytest.mark.covers("other.observability.s3_v2.sink_rejection_requeues_and_delivers_every_id_once")
 def test_s3_v2_sink_rejection_requeues_and_delivers_every_id_once(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3deny" + uuid.uuid4().hex[:8]
-    sink: Final = RecordingS3Sink(fail_status=403, delay_seconds=0.2)
+    sink: Final = RecordingS3Sink(fail_status=503, delay_seconds=0.2)
     with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
         config: Final = _s3_config(tmp_path, bucket.url, {})
         with (
@@ -334,6 +334,104 @@ def test_s3_v2_sink_rejection_requeues_and_delivers_every_id_once(gateway: Gatew
     assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     assert len(sink.objects()) == REQUESTS
     assert frozenset(payload["id"] for payload in payloads) == ids
+
+
+@dataclass(slots=True)
+class RejectingS3Sink:
+    """Answers every PUT whose body carries `reject_marker` with `reject_status`, accepts the rest,
+    and counts the rejected attempts so a test can see whether the proxy keeps re-sending them."""
+
+    reject_marker: str
+    reject_status: int
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    rejected_attempts: int = 0
+    store: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: later PUTs must be visible to earlier polls
+
+    def respond(self, request: Request) -> Reply:
+        assert request.method == "PUT", request.method
+        with self.lock:
+            if self.reject_marker.encode() in request.body:
+                self.rejected_attempts += 1
+                return Reply(status=self.reject_status, body=b"<Error><Code>AccessDenied</Code></Error>")
+            self.store[request.target] = request.body
+        return Reply()
+
+    def landed_ids(self) -> frozenset[str]:
+        with self.lock:
+            bodies: Final = tuple(self.store.values())
+        return frozenset(json.loads(line)["id"] for body in bodies for line in body.splitlines())
+
+
+def _send(candidate: Gateway, model: str, key: str, identity: str) -> None:
+    response: Final = candidate.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": identity}], "cache": {"no-cache": True}},
+        key=key,
+    )
+    assert response.status_code == 200, response.text
+
+
+def _send_and_wait_until_landed(candidate: Gateway, model: str, key: str, sink: RejectingS3Sink, identity: str) -> None:
+    _send(candidate, model, key, identity)
+    eventually(sink.landed_ids, lambda landed: identity in landed, seconds=60)
+
+
+def test_s3_v2_access_denied_object_is_put_once_and_never_requeued(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "s3denied" + uuid.uuid4().hex[:8]
+    sink: Final = RejectingS3Sink(reject_marker=f"{marker}-denied", reject_status=403)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        with (
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            _send(candidate, model, key, f"{marker}-denied")
+            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-first-flush")
+            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-second-flush")
+            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-third-flush")
+            readiness: Final = candidate.client.get("/health/readiness")
+            assert readiness.status_code == 200, readiness.text
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 4
+    assert sink.rejected_attempts == 1, (
+        f"a 403 object was PUT {sink.rejected_attempts} times across three flushes; it must be attempted once and dropped"
+    )
+
+
+def test_s3_v2_persistently_unavailable_object_stops_being_retried_after_the_flush_budget(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "s3doomed" + uuid.uuid4().hex[:8]
+    sink: Final = RejectingS3Sink(reject_marker=f"{marker}-doomed", reject_status=503)
+    with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
+        config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
+        with (
+            owned_proxy_process(
+                gateway,
+                tmp_path,
+                {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2", "DEFAULT_S3_MAX_FLUSH_ATTEMPTS": "2"},
+                config=config,
+            ) as owned,
+            owned.gateway.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            _send(owned.gateway, model, key, f"{marker}-doomed")
+            eventually(
+                lambda: owned.log.read_text(),
+                lambda text: "dropped after 2 flush attempts" in text,
+                seconds=60,
+            )
+            exhausted: Final = sink.rejected_attempts
+            _send_and_wait_until_landed(owned.gateway, model, key, sink, f"{marker}-one-flush-later")
+            _send_and_wait_until_landed(owned.gateway, model, key, sink, f"{marker}-two-flushes-later")
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 3
+    assert 2 <= exhausted <= 2 * 3, f"{exhausted} PUTs for a budget of two flushes with at most three attempts each"
+    assert sink.rejected_attempts == exhausted, (
+        f"a 503 object kept being PUT after its flush budget: {exhausted} -> {sink.rejected_attempts}"
+    )
 
 
 @pytest.mark.covers("other.observability.s3_v2.batch_retry_resends_identical_key_and_body")

@@ -54,6 +54,22 @@ def resolve_s3_max_concurrent_uploads(configured: object, fallback: int) -> int:
     return bound
 
 
+def resolve_s3_max_flush_attempts(configured: object, fallback: int) -> int:
+    if configured is None or configured == "":
+        return fallback
+    try:
+        bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning("s3 logging: s3_max_flush_attempts=%r is not an integer, using %s", configured, fallback)
+        return fallback
+    if bound < 1:
+        verbose_logger.warning(
+            "s3 logging: s3_max_flush_attempts=%r must be at least 1, using %s", configured, fallback
+        )
+        return fallback
+    return bound
+
+
 def resolve_s3_batch_file_upload(configured: object) -> bool:
     if configured is None or configured == "":
         return False
