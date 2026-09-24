@@ -2861,6 +2861,7 @@ class PrometheusLogger(CustomLogger):
                 exception_status=exception_status,
                 exception_class=(self._get_exception_class_name(exception) if exception else None),
                 requested_model=label_requested_model,
+                model_group=model_group,
                 hashed_api_key=hashed_api_key,
                 api_key_alias=api_key_alias,
                 user_email=user_email,
@@ -2912,6 +2913,7 @@ class PrometheusLogger(CustomLogger):
         model_id: str | None,
         api_base: str | None,
         llm_provider: str | None,
+        model_group: str | None,
     ):
         """
         Set the deployment TPM and RPM limits metrics
@@ -2927,6 +2929,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider,
+                    model_group=model_group,
                 ),
             )
             self.litellm_deployment_tpm_limit.labels(**_labels).set(tpm)
@@ -2939,6 +2942,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider,
+                    model_group=model_group,
                 ),
             )
             self.litellm_deployment_rpm_limit.labels(**_labels).set(rpm)
@@ -3058,6 +3062,7 @@ class PrometheusLogger(CustomLogger):
                     model_id=model_id,
                     api_base=api_base,
                     llm_provider=llm_provider,
+                    model_group=enum_values.model_group,
                 )
 
             remaining_requests: int | None = None
