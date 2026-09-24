@@ -8647,6 +8647,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-6-astra": {
+        "deprecation_date": "2028-01-11",
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_272k_tokens": 2.75e-05,
         "cache_read_input_token_cost": 1.1e-06,
@@ -8695,6 +8696,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure/us/gpt-6-luna": {
+        "deprecation_date": "2028-03-11",
         "cache_creation_input_token_cost": 1.375e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 2.75e-07,
         "cache_read_input_token_cost": 1.1e-08,
@@ -8743,6 +8745,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure/us/gpt-6-sol": {
+        "deprecation_date": "2028-03-11",
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
         "cache_read_input_token_cost": 2.2e-07,
@@ -68811,6 +68814,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-6-astra": {
+        "deprecation_date": "2028-01-11",
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_272k_tokens": 2.75e-05,
         "cache_read_input_token_cost": 1.1e-06,
@@ -68824,6 +68828,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-6-luna": {
+        "deprecation_date": "2028-03-11",
         "cache_creation_input_token_cost": 1.5e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 3e-07,
         "cache_read_input_token_cost": 1.2e-08,
@@ -68872,6 +68877,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure/eu/gpt-6-sol": {
+        "deprecation_date": "2028-03-11",
         "cache_creation_input_token_cost": 3e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 6e-06,
         "cache_read_input_token_cost": 2.4e-07,
