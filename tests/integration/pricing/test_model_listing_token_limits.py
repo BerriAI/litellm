@@ -15,6 +15,7 @@ def test_v1_models_carries_cost_map_context_window_for_a_known_model(gateway: Ga
     with gateway.scenario() as scenario:
         model: Final = scenario.model(model="openai/gpt-4o-mini")
         listed: Final = _listed_model(gateway, model)
+        # OpenAI publishes these for gpt-4o-mini: https://platform.openai.com/docs/models/gpt-4o-mini (checked 2026-09-24)
         assert listed["max_input_tokens"] == 128000, listed
         assert listed["max_output_tokens"] == 16384, listed
 
