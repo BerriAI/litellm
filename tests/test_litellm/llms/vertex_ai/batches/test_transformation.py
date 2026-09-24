@@ -303,8 +303,20 @@ def test_transform_vertex_response_output_file_id_is_none_until_output_info(
 
 @pytest.mark.parametrize(
     "response",
-    [{}, {"outputConfig": {}}, {"outputInfo": None}, {"outputInfo": {"gcsOutputDirectory": ""}}],
-    ids=["no_fields", "output_config_without_destination", "null_output_info", "empty_output_directory"],
+    [
+        {},
+        {"outputConfig": {}},
+        {"outputInfo": None},
+        {"outputInfo": {"gcsOutputDirectory": ""}},
+        {"outputInfo": {"gcsOutputDirectory": None}},
+    ],
+    ids=[
+        "no_fields",
+        "output_config_without_destination",
+        "null_output_info",
+        "empty_output_directory",
+        "null_output_directory",
+    ],
 )
 def test_get_output_file_id_is_none_without_output_directory(response: Mapping[str, object]) -> None:
     assert T._get_output_file_id_from_vertex_ai_batch_response(response) is None
