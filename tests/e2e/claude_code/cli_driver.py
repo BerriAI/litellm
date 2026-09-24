@@ -94,7 +94,6 @@ retries=0 disables the behavior entirely."""
 # the same isolation prevents accidentally exposing checkout-adjacent
 # files even though the runner home is ephemeral there).
 _CLI_ENV_ALLOWLIST: tuple = (
-    "PATH",
     "USER",
     "LOGNAME",
     "SHELL",
