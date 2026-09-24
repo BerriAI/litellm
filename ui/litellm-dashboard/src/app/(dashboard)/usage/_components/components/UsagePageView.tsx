@@ -428,15 +428,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     [userSpendData.results, topKeysLimit],
   );
 
-  const sortedDailyResults = useMemo(
-    () =>
-      fillMissingDates(
-        [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
-        dateValue.from,
-        dateValue.to,
-      ),
-    [userSpendData.results, dateValue.from, dateValue.to],
-  );
+  const sortedDailyResults = useMemo(() => {
+    const sorted = [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    return spendFetchState.coversRange ? fillMissingDates(sorted, dateValue.from, dateValue.to) : sorted;
+  }, [userSpendData.results, spendFetchState.coversRange, dateValue.from, dateValue.to]);
   const gatewayRequestsByRoute = useMemo(() => topGatewayRoutes(gatewayActivity), [gatewayActivity]);
   const modelMetrics = useMemo(
     () => processActivityData(userSpendData, modelViewType === "groups" ? "model_groups" : "models", teams),

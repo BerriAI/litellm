@@ -379,7 +379,7 @@ describe("UsagePage", () => {
       error: null,
     } as any);
     mockUserDailyActivityAggregatedCall.mockClear();
-    mockUserDailyActivityCall.mockClear();
+    mockUserDailyActivityCall.mockReset();
     mockTagListCall.mockClear();
     mockGatewayDailyActivityCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
@@ -1052,6 +1052,31 @@ describe("UsagePage", () => {
 
       // Should still render the data from the paginated fallback, which lands a render after the call
       expect(await screen.findByText("75,000")).toBeInTheDocument();
+    });
+
+    it("should not draw zero-spend days when both the aggregated and paginated reads fail", async () => {
+      mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Aggregated endpoint not available"));
+      mockUserDailyActivityCall.mockRejectedValue(new Error("Paginated endpoint not available"));
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      expect(await screen.findByText(/failed before any of it arrived/)).toBeInTheDocument();
+      expect(screen.queryByText(yesterday)).not.toBeInTheDocument();
+    });
+
+    it("should not draw zero-spend days for pages that have not arrived yet", async () => {
+      mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Aggregated endpoint not available"));
+      mockUserDailyActivityCall
+        .mockResolvedValueOnce({
+          ...mockSpendData,
+          metadata: { ...mockSpendData.metadata, total_pages: 2, page: 1 },
+        })
+        .mockReturnValueOnce(new Promise(() => {}));
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      expect((await screen.findAllByText(today)).length).toBeGreaterThan(0);
+      expect(screen.queryByText(yesterday)).not.toBeInTheDocument();
     });
 
     it("should stop showing the previous range's paginated pages while a new range is in flight", async () => {
