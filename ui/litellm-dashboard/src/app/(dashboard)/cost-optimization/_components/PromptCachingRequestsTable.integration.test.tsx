@@ -1,5 +1,15 @@
 import { Profiler } from "react";
-import { act, fireEvent, renderWithProviders, screen, testQueryClient, waitFor, within } from "@/../tests/test-utils";
+import userEvent from "@testing-library/user-event";
+import {
+  act,
+  chooseSelectOption,
+  fireEvent,
+  renderWithProviders,
+  screen,
+  testQueryClient,
+  waitFor,
+  within,
+} from "@/../tests/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { components } from "@/lib/http/schema";
@@ -23,8 +33,13 @@ const request = (overrides: Partial<CacheRequest> = {}): CacheRequest => ({
   net_savings: -0.0075,
   ...overrides,
 });
-const response = (requests: CacheRequest[], nextCursor: RequestsResponse["next_cursor"] = null) => {
-  const body: RequestsResponse = { requests, has_more: nextCursor !== null, next_cursor: nextCursor, page_size: 10 };
+const response = (requests: CacheRequest[], nextCursor: RequestsResponse["next_cursor"] = null, pageSize = 10) => {
+  const body: RequestsResponse = {
+    requests,
+    has_more: nextCursor !== null,
+    next_cursor: nextCursor,
+    page_size: pageSize,
+  };
   return Response.json(body);
 };
 const lastQuery = () => new URL(String(fetchMock.mock.calls.at(-1)?.[0]), "http://localhost").searchParams;
@@ -100,17 +115,75 @@ describe("PromptCachingRequestsTable", () => {
     const table = await screen.findByRole("table", { name: "Prompt caching requests" });
     expect(within(table).getAllByRole("link")).toHaveLength(10);
     expect(within(table).queryByRole("link", { name: "request-11" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
     await screen.findByRole("link", { name: "request-11" });
     expect(within(screen.getByRole("table", { name: "Prompt caching requests" })).getAllByRole("link")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Go to previous page" }));
     await screen.findByRole("link", { name: "request-1" });
     expect(within(screen.getByRole("table", { name: "Prompt caching requests" })).getAllByRole("link")).toHaveLength(
       10,
     );
-    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Go to previous page" })).toBeDisabled();
   });
+
+  it.each([25, 50, 100])(
+    "restarts at page one with %i rows and retains the size across navigation and filters",
+    async (pageSize) => {
+      const user = userEvent.setup();
+      const rows = Array.from({ length: 101 }, (_, index) => request({ request_id: `request-${index + 1}` }));
+      fetchMock.mockImplementation(async (input) => {
+        const query = new URL(String(input), "http://localhost").searchParams;
+        const start = rows.findIndex((row) => row.request_id === query.get("cursor_request_id")) + 1;
+        const size = Number(query.get("page_size"));
+        const end = start + size;
+        const page = rows.slice(start, end);
+        const last = page.at(-1);
+        return response(
+          page,
+          end < rows.length && last ? { start_time: last.start_time, request_id: last.request_id } : null,
+          size,
+        );
+      });
+      renderWithProviders(<PromptCachingRequestsTable accessToken="token-a" dateValue={dates} />);
+      await screen.findByRole("link", { name: "request-1" });
+      expect(screen.getByRole("combobox", { name: "Rows per page" })).toHaveTextContent("10");
+      fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
+      await screen.findByRole("link", { name: "request-11" });
+
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: "Rows per page" }), String(pageSize));
+      await screen.findByRole("link", { name: "request-1" });
+      expect(within(screen.getByRole("table", { name: "Prompt caching requests" })).getAllByRole("link")).toHaveLength(
+        pageSize,
+      );
+      expect(lastQuery().get("page_size")).toBe(String(pageSize));
+      expect(lastQuery().has("cursor_request_id")).toBe(false);
+      expect(lastQuery().has("cursor_start_time")).toBe(false);
+      expect(screen.getByText("Page 1")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Go to previous page" })).toBeDisabled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
+      await screen.findByRole("link", { name: `request-${pageSize + 1}` });
+      expect(lastQuery().get("page_size")).toBe(String(pageSize));
+      expect(lastQuery().get("cursor_request_id")).toBe(`request-${pageSize}`);
+      expect(screen.getByText("Page 2")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Go to previous page" }));
+      await screen.findByRole("link", { name: "request-1" });
+      expect(within(screen.getByRole("table", { name: "Prompt caching requests" })).getAllByRole("link")).toHaveLength(
+        pageSize,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
+      await screen.findByRole("link", { name: `request-${pageSize + 1}` });
+      fireEvent.click(screen.getByRole("tab", { name: "Cache hits" }));
+      await screen.findByRole("link", { name: "request-1" });
+      expect(lastQuery().get("filter")).toBe("hits");
+      expect(lastQuery().get("page_size")).toBe(String(pageSize));
+      expect(lastQuery().has("cursor_request_id")).toBe(false);
+      expect(screen.getByText("Page 1")).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: "Rows per page" })).toHaveTextContent(String(pageSize));
+    },
+  );
 
   it("forwards complete server cursors, goes back to prior cursors, and clears them for each caching filter", async () => {
     fetchMock.mockImplementation(async (input) => {
@@ -130,33 +203,33 @@ describe("PromptCachingRequestsTable", () => {
     });
     renderWithProviders(<PromptCachingRequestsTable accessToken="token-a" dateValue={dates} />);
     await screen.findByRole("link", { name: "all-1" });
-    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Go to previous page" })).toBeDisabled();
     expect(lastQuery().has("page")).toBe(false);
     expect(lastQuery().has("cursor_request_id")).toBe(false);
 
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
     await screen.findByRole("link", { name: "all-2" });
     expect(screen.getByText("Page 2")).toBeInTheDocument();
     expect(lastQuery().get("cursor_start_time")).toBe(firstCursor.start_time);
     expect(lastQuery().get("cursor_request_id")).toBe(firstCursor.request_id);
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
     await screen.findByRole("link", { name: "all-3" });
     expect(screen.getByText("Page 3")).toBeInTheDocument();
     expect(lastQuery().get("cursor_start_time")).toBe(secondCursor.start_time);
     expect(lastQuery().get("cursor_request_id")).toBe(secondCursor.request_id);
-    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
 
     await testQueryClient.invalidateQueries({ refetchType: "none" });
-    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go to previous page" }));
     await screen.findByRole("link", { name: "all-2" });
     await waitFor(() => expect(lastQuery().get("cursor_request_id")).toBe(firstCursor.request_id));
     expect(lastQuery().get("cursor_start_time")).toBe(firstCursor.start_time);
     expect(screen.getByText("Page 2")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go to previous page" }));
     await screen.findByRole("link", { name: "all-1" });
     await waitFor(() => expect(lastQuery().has("cursor_request_id")).toBe(false));
     expect(lastQuery().has("cursor_start_time")).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
     await screen.findByRole("link", { name: "all-2" });
 
     fireEvent.click(screen.getByRole("tab", { name: "LiteLLM injected" }));
@@ -166,7 +239,7 @@ describe("PromptCachingRequestsTable", () => {
     expect(lastQuery().has("cursor_request_id")).toBe(false);
     expect(lastQuery().has("cursor_start_time")).toBe(false);
 
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
     await screen.findByRole("link", { name: "injected-2" });
     fireEvent.click(screen.getByRole("tab", { name: "Cache hits" }));
     await screen.findByRole("link", { name: "hits-1" });
@@ -203,7 +276,7 @@ describe("PromptCachingRequestsTable", () => {
       );
       const { rerender } = renderWithProviders(tree("token-a", dates));
       await screen.findByRole("link", { name: "old-first" });
-      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
       await screen.findByRole("link", { name: "old-second" });
 
       const pending = Promise.withResolvers<Response>();
@@ -253,7 +326,7 @@ describe("PromptCachingRequestsTable", () => {
 
     expect(screen.getByRole("link", { name: "current-hit" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "stale-all" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
   });
 
   it("offers retry after a failed read and shows the empty state after it succeeds", async () => {
@@ -265,7 +338,7 @@ describe("PromptCachingRequestsTable", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("No matching prompt caching requests in this range")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

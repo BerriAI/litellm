@@ -1,12 +1,14 @@
 "use client";
 
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
 import { apiClient } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LOG_ID_QUERY_PARAM } from "@/components/view_logs/logDetailRouting";
@@ -18,6 +20,7 @@ import { benchmarksWindow as activityWindow } from "./useAutoRouterBenchmarks";
 import type { DateRange } from "./useDailyActivityRange";
 
 const REQUESTS_PATH = "/cost_optimization/prompt_caching/requests";
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 type RequestsEndpoint = paths[typeof REQUESTS_PATH]["get"];
 type RequestsResponse = RequestsEndpoint["responses"][200]["content"]["application/json"];
 type RequestsQuery = NonNullable<RequestsEndpoint["parameters"]["query"]>;
@@ -31,10 +34,11 @@ interface PromptCachingRequestsTableProps {
 
 export default function PromptCachingRequestsTable({ accessToken, dateValue }: PromptCachingRequestsTableProps) {
   const [filter, setFilter] = useState<RequestFilter>("all");
+  const [pageSize, setPageSize] = useState(10);
   const window = activityWindow(dateValue, new Date());
   const startDate = window.start_date ? `${window.start_date}T00:00:00.000Z` : "";
   const endDate = window.end_date ? `${window.end_date}T23:59:59.999Z` : "";
-  const scope = JSON.stringify([accessToken, startDate, endDate, filter]);
+  const scope = JSON.stringify([accessToken, startDate, endDate, filter, pageSize]);
   const [pagination, setPagination] = useState<{ scope: string; cursors: readonly RequestCursor[] }>({
     scope,
     cursors: [null],
@@ -52,7 +56,7 @@ export default function PromptCachingRequestsTable({ accessToken, dateValue }: P
     start_date: startDate,
     end_date: endDate,
     filter,
-    page_size: 10,
+    page_size: pageSize,
     cursor_start_time: cursor?.start_time,
     cursor_request_id: cursor?.request_id,
   };
@@ -161,22 +165,52 @@ export default function PromptCachingRequestsTable({ accessToken, dateValue }: P
                 </TableBody>
               </Table>
             )}
-            <div className="mt-4 flex items-center justify-end gap-3">
-              <Button
-                variant="outline"
-                disabled={page === 1}
-                onClick={() => setPagination({ scope, cursors: cursors.slice(0, -1) })}
-              >
-                Previous
-              </Button>
-              <span className="text-sm text-muted-foreground">Page {page}</span>
-              <Button
-                variant="outline"
-                disabled={!requests.data.has_more || !nextCursor}
-                onClick={() => nextCursor && setPagination({ scope, cursors: [...cursors, nextCursor] })}
-              >
-                Next
-              </Button>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <span>Rows per page</span>
+                <Select
+                  value={String(pageSize)}
+                  onValueChange={(value) => {
+                    if (typeof value === "string") {
+                      setPageSize(Number(value));
+                    }
+                  }}
+                >
+                  <SelectTrigger size="sm" aria-label="Rows per page" className="w-[4.5rem]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAGE_SIZE_OPTIONS.map((option) => (
+                      <SelectItem key={option} value={String(option)}>
+                        {option}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-4">
+                <span className="text-sm text-muted-foreground tabular-nums">Page {page}</span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label="Go to previous page"
+                    disabled={page === 1}
+                    onClick={() => setPagination({ scope, cursors: cursors.slice(0, -1) })}
+                  >
+                    <ChevronLeft />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    aria-label="Go to next page"
+                    disabled={!requests.data.has_more || !nextCursor}
+                    onClick={() => nextCursor && setPagination({ scope, cursors: [...cursors, nextCursor] })}
+                  >
+                    <ChevronRight />
+                  </Button>
+                </div>
+              </div>
             </div>
           </>
         )}
