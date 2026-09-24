@@ -307,6 +307,7 @@ class KeyManagementRoutes(str, enum.Enum):
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
     TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
+    TEAM_DAILY_ACTIVITY_EXPORT = "/team/daily/activity/export"
     TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH = "/team/daily/activity/aggregated/search"
 
     # team spend-log viewing
@@ -719,6 +720,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_bulk_update",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/daily/activity/export",
             "/team/daily/activity/aggregated/search",
             "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
@@ -890,6 +892,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_update",
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
+        "/team/daily/activity/export",
         "/team/daily/activity/aggregated/search",
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
@@ -990,6 +993,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/daily/activity/export",
             "/team/daily/activity/aggregated/search",
             "/tag/daily/activity",
             "/tag/list",

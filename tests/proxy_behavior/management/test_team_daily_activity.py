@@ -48,8 +48,9 @@ _DATES = "start_date=2024-01-01&end_date=2024-12-31"
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
         "/team/daily/activity/aggregated/search",
+        "/team/daily/activity/export",
     ),
-    ids=("paginated", "aggregated", "search"),
+    ids=("paginated", "aggregated", "search", "export"),
 )
 @pytest.mark.parametrize(
     "actor,team,expected_status",
@@ -59,16 +60,15 @@ _DATES = "start_date=2024-01-01&end_date=2024-12-31"
 async def test_team_daily_activity_matrix(
     actor: Actor, team: str, expected_status: int, endpoint: str, proxy_client, world
 ):
+    filter_param = "team_id" if endpoint.endswith("/export") else "team_ids"
     query = _DATES + ("&search=x" if endpoint.endswith("/search") else "")
     if team == "alpha":
-        query += f"&team_ids={world.team_alpha_id}"
+        query += f"&{filter_param}={world.team_alpha_id}"
     elif team == "beta":
-        query += f"&team_ids={world.team_beta_id}"
+        query += f"&{filter_param}={world.team_beta_id}"
 
     resp = await proxy_client.get(
         f"{endpoint}?{query}",
         headers={"Authorization": f"Bearer {world.keys[actor].cleartext}"},
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{actor.value} -> {team}: {resp.status_code} {resp.text}"
+    assert resp.status_code == expected_status, f"{actor.value} -> {team}: {resp.status_code} {resp.text}"
