@@ -86,8 +86,8 @@ async def oauth_authorization_uses_gateway_credential(request: Request) -> bool:
 
 
 async def _opaque_bearer_is_gateway_credential(token: str) -> bool:
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
-        is_envelope,  # noqa: PLC0415  # envelope imports bridge types
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # envelope imports bridge types
+        is_envelope,
         is_refresh_envelope,
     )
     from litellm.proxy._types import hash_token  # noqa: PLC0415  # proxy import cycle

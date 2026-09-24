@@ -4073,7 +4073,7 @@ async def get_org_object_for_request(
         )
     except OrganizationNotFoundError:
         return None
-    except Exception as e:  # noqa: BLE001  # only a DB outage may fail auth here, anything else degrades to no org limits
+    except Exception as e:
         if not PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
             verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
             return None

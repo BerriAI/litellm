@@ -348,7 +348,7 @@ async def _prepare_user(user: _PendingUser, prisma_client: PrismaClient) -> _Pre
         data: Final = {**dumped, "user_id": user.user_id}  # mutable-ok: /user/new defaults helper mutates in place
         data_json: Final = _JSON_OBJECT.validate_python(_update_internal_new_user_params(data, user.request))
         with_permission: Final = _JSON_OBJECT.validate_python(
-            await _set_object_permission(data_json=data_json, prisma_client=prisma_client)  # pyright: ignore[reportUnknownArgumentType]  # validated by the adapter
+            await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
         )
         return _PreparedUser(user, _USER_ROW.validate_python(with_permission))
     except Exception as exc:  # noqa: BLE001  # any preparation failure is reported on this row only
@@ -509,7 +509,7 @@ class _TeamsData(TypedDict):
 def _default_member_budget_id(team: LiteLLM_TeamTable) -> str | None:
     metadata: Final = (
         _JSON_OBJECT.validate_python(
-            team.metadata  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_TeamTable.metadata is a bare dict; validated by the adapter
+            team.metadata  # pyright: ignore[reportUnknownMemberType]  # LiteLLM_TeamTable.metadata is a bare dict; validated by the adapter
         )
         if team.metadata  # pyright: ignore[reportUnknownMemberType]  # same bare dict
         else None

@@ -1182,7 +1182,7 @@ def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     return False
 
 
-def _without_anthropic_only_tool_keys(tool: dict) -> dict:
+def _without_anthropic_only_tool_keys(tool: dict[str, object]) -> dict[str, object]:
     kept: Final = {key: value for key, value in tool.items() if key not in _ANTHROPIC_ONLY_TOOL_KEYS}
     function: Final = tool.get("function")
     if not isinstance(function, dict):
@@ -1193,7 +1193,7 @@ def _without_anthropic_only_tool_keys(tool: dict) -> dict:
     }
 
 
-def _drop_anthropic_only_tool_keys(tools: list[dict] | None) -> list[dict] | None:
+def _drop_anthropic_only_tool_keys(tools: list[dict[str, object]] | None) -> list[dict[str, object]] | None:
     if tools is None:
         return None
     return [_without_anthropic_only_tool_keys(tool) if isinstance(tool, dict) else tool for tool in tools]
