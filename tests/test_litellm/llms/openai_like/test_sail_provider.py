@@ -13,7 +13,7 @@ from litellm.llms.openai_like.dynamic_config import (
     create_config_class,
     create_responses_config_class,
 )
-from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry, SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
@@ -330,6 +330,128 @@ class TestSailRequestShape:
         )
 
         assert route.called
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_sail_messages_maps_service_tier_to_completion_window(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=50,
+            service_tier="flex",
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body == {
+            "model": MODEL.split("/", 1)[1],
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 50,
+            "metadata": {"completion_window": "flex"},
+            "stream": False,
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_sail_messages_caller_window_wins_over_tier(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=50,
+            service_tier="balanced",
+            metadata={"user_id": "u"},
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"user_id": "u", "completion_window": "balanced"}
+        assert "service_tier" not in body
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_sail_messages_extra_body_window_wins_and_is_stripped(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=50,
+            service_tier="flex",
+            extra_body={"metadata": {"completion_window": "asap"}},
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"completion_window": "asap"}
+        assert "extra_body" not in body
+        assert "service_tier" not in body
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_sail_messages_default_tier_maps_to_asap(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=50,
+            service_tier="default",
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"completion_window": "asap"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_sail_messages_no_tier_sends_no_metadata_key(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=50,
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert "metadata" not in body
+        assert "service_tier" not in body
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_sail_messages_streaming_carries_completion_window(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(
+            content="event: message_start\ndata: {}\n\ndata: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+        await litellm.anthropic_messages(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=50,
+            stream=True,
+            service_tier="flex",
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"completion_window": "flex"}
+        assert body["stream"] is True
+
+    def test_messages_translate_passthrough_params_identity_by_default(self):
+        from litellm.llms.openai_like.messages.transformation import (
+            JSONProviderAnthropicMessagesConfig,
+        )
+
+        config = JSONProviderAnthropicMessagesConfig(
+            SimpleProviderConfig(
+                "fake",
+                {"base_url": "https://x.example/v1", "api_key_env": "FAKE_KEY"},
+            )
+        )
+        optional_params = {"metadata": {"user_id": "u"}, "max_tokens": 5}
+        assert config.translate_passthrough_params(
+            optional_params, {"service_tier": "flex", "extra_body": {"metadata": {"a": 1}}}
+        ) == dict(optional_params)
 
 
 class TestSailCostTracking:

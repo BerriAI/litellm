@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -83,6 +83,13 @@ class BaseAnthropicMessagesConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
         pass
+
+    def translate_passthrough_params(
+        self,
+        optional_params: Mapping[str, object],
+        request_kwargs: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: handler passes optional params as a plain dict
+        return dict(optional_params)
 
     def sign_request(
         self,

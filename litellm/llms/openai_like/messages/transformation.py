@@ -1,9 +1,14 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 import litellm
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
+)
+from litellm.llms.openai_like.dynamic_config import (
+    _apply_service_tier_as_completion_window,
+    _service_tier_as_completion_window_enabled,
 )
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.secret_managers.main import get_secret_str
@@ -174,3 +179,21 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
             litellm_params=litellm_params,
             stream=stream,
         )
+
+    def translate_passthrough_params(
+        self,
+        optional_params: Mapping[str, object],
+        request_kwargs: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: matches dict-typed base signature
+        if not _service_tier_as_completion_window_enabled(self._provider):
+            return super().translate_passthrough_params(optional_params, request_kwargs)
+        merged: Final = {
+            **optional_params,
+            **{
+                key: request_kwargs[key]
+                for key in ("service_tier", "extra_body")
+                if key in request_kwargs
+            },
+        }
+        translated: Final = _apply_service_tier_as_completion_window(merged)
+        return {key: value for key, value in translated.items() if key not in ("service_tier", "extra_body")}
