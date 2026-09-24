@@ -13459,6 +13459,26 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     return message
 
 
+def _contents_as_messages(contents: object) -> tuple[Mapping[str, object], ...] | None:
+    """Approximate gemini contents as chat messages for the local fallback
+    tokenizer; only text parts are countable locally."""
+    if not isinstance(contents, list):
+        return None
+    messages: Final = tuple(
+        {  # mutable-ok: transient chat-shaped message for the local tokenizer
+            "role": "assistant" if content.get("role") == "model" else "user",
+            "content": "\n".join(
+                part["text"]
+                for part in content.get("parts", ())
+                if isinstance(part, Mapping) and isinstance(part.get("text"), str)
+            ),
+        }
+        for content in contents
+        if isinstance(content, Mapping)
+    )
+    return tuple(message for message in messages if message["content"]) or None
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
@@ -13561,7 +13581,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     tokenizer_used: Final = str(_tokenizer_used["type"])
     system_message: Final = _system_message(system)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
-        Sequence[AllMessageValues] | None, messages
+        Sequence[AllMessageValues] | None,
+        messages if messages is not None else _contents_as_messages(contents),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)

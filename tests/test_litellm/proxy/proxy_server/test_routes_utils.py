@@ -84,9 +84,7 @@ def test_token_counter_counts_off_the_event_loop(client, auth_as, patched_token_
     assert counted_off_loop == [True]
 
 
-def test_token_counter_missing_input_returns_400(
-    client, auth_as, patched_token_counter
-):
+def test_token_counter_missing_input_returns_400(client, auth_as, patched_token_counter):
     """Pins ``POST /utils/token_counter`` (error: missing input)."""
     with auth_as():
         response = client.post("/utils/token_counter", json={"model": "gpt-4"})
@@ -118,9 +116,7 @@ def patched_supported_params(monkeypatch):
 def test_supported_openai_params_happy_path(client, auth_as, patched_supported_params):
     """Pins ``GET /utils/supported_openai_params``."""
     with auth_as():
-        response = client.get(
-            "/utils/supported_openai_params", params={"model": "gpt-4"}
-        )
+        response = client.get("/utils/supported_openai_params", params={"model": "gpt-4"})
     assert response.status_code == 200
     assert normalize(response.json()) == {
         "supported_openai_params": ["max_tokens", "temperature", "top_p"],
@@ -359,7 +355,10 @@ def test_token_counter_fallback_counts_tools_system_and_anthropic_blocks(client,
             "content": [
                 {"type": "text", "text": "What is in this file?"},
                 {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}},
-                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}},
+                {
+                    "type": "document",
+                    "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+                },
             ],
         }
     ]
@@ -405,3 +404,24 @@ def test_token_counter_fallback_prompt_with_tools_does_not_500(client, auth_as, 
 
     assert response.status_code == 200, response.text
     assert response.json()["total_tokens"] == litellm.token_counter(model="claude-fable-5", text=prompt)
+
+
+def test_token_counter_contents_only_request_counts_text_parts(client, auth_as, monkeypatch):
+    """Regression: a contents-only request (google countTokens shape) reaches the
+    local fallback as translated messages instead of raising ValueError -> 500."""
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
+    contents = [
+        {"role": "user", "parts": [{"text": "hello world"}, {"inline_data": {"data": "abc"}}]},
+        {"role": "model", "parts": [{"text": "hi there"}]},
+        {"role": "user", "parts": [{"inline_data": {"data": "abc"}}]},
+    ]
+
+    with auth_as():
+        response = client.post("/utils/token_counter", json={"model": "claude-fable-5", "contents": contents})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["total_tokens"] == litellm.token_counter(
+        model="claude-fable-5",
+        messages=[{"role": "user", "content": "hello world"}, {"role": "assistant", "content": "hi there"}],
+    )
