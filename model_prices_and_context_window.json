@@ -30339,7 +30339,11 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_none_reasoning_effort": true,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false
     },
     "chatgpt/gpt-5.6-luna": {
         "litellm_provider": "chatgpt",
@@ -30355,7 +30359,11 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "chatgpt/gpt-5.6-sol": {
         "litellm_provider": "chatgpt",
@@ -30371,7 +30379,11 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "chatgpt/gpt-5.6-terra": {
         "litellm_provider": "chatgpt",
@@ -30387,7 +30399,11 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": true,
+        "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "chatgpt/gpt-5.4": {
         "litellm_provider": "chatgpt",
@@ -30402,7 +30418,12 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false
     },
     "chatgpt/gpt-5.4-pro": {
         "litellm_provider": "chatgpt",
@@ -30416,7 +30437,11 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_none_reasoning_effort": false,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false
     },
     "chatgpt/gpt-5.3-codex": {
         "litellm_provider": "chatgpt",
@@ -30430,7 +30455,11 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_none_reasoning_effort": false,
+        "supports_xhigh_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": true
     },
     "chatgpt/gpt-5.3-codex-spark": {
         "litellm_provider": "chatgpt",
@@ -30474,7 +30503,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_reasoning": true
     },
     "chatgpt/gpt-5.2-codex": {
         "litellm_provider": "chatgpt",
@@ -30488,7 +30518,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_reasoning": true
     },
     "chatgpt/gpt-5.2": {
         "litellm_provider": "chatgpt",
@@ -30503,7 +30534,12 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_none_reasoning_effort": true,
+        "default_reasoning_effort": "none",
+        "supports_xhigh_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false
     },
     "chatgpt/gpt-5.1-codex-max": {
         "litellm_provider": "chatgpt",
@@ -30517,7 +30553,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_reasoning": true
     },
     "chatgpt/gpt-5.1-codex-mini": {
         "litellm_provider": "chatgpt",
@@ -30531,7 +30568,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_reasoning": true
     },
     "gigachat/GigaChat-2": {
         "input_cost_per_token": 0.0,
