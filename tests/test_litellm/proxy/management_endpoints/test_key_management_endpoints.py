@@ -17187,6 +17187,12 @@ def _prisma_where_matches(row, where):
         elif field == "OR":
             if not any(_prisma_where_matches(row, child) for child in expected):
                 return False
+        elif isinstance(expected, dict) and "array_contains" in expected:
+            value = getattr(row, field)
+            for key in expected["path"]:
+                value = value.get(key) if isinstance(value, dict) else None
+            if not isinstance(value, list) or not all(item in value for item in json.loads(expected["array_contains"])):
+                return False
         elif isinstance(expected, dict):
             value = getattr(row, field)
             if "in" in expected and value not in expected["in"]:
@@ -17227,14 +17233,14 @@ _TEAM_A_KEYS = (
 )
 
 
-def _list_team_a_keys_as(user_role, members_with_roles, query):
+def _list_team_a_keys_as(user_role, members_with_roles, query, rows=_TEAM_A_KEYS):
     from fastapi import FastAPI
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.management_endpoints.key_management_endpoints import router
 
     mock_prisma_client = AsyncMock()
-    mock_prisma_client.db.litellm_verificationtoken = _InMemoryVerificationTokenTable(_TEAM_A_KEYS)
+    mock_prisma_client.db.litellm_verificationtoken = _InMemoryVerificationTokenTable(rows)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(user_id="alice", teams=["team-a"], organization_memberships=[])
     )
@@ -17279,6 +17285,53 @@ def test_list_keys_key_alias_stays_exact_without_substring_matching():
     assert _list_team_a_keys_as(
         LitellmUserRoles.INTERNAL_USER, _ALICE_TEAM_ADMIN, "key_alias=app_llmhub_first.last"
     ) == ["tok-alice-first"]
+
+
+def _tagged_team_key(token, key_alias, user_id, metadata):
+    return LiteLLM_VerificationToken(
+        token=token, key_alias=key_alias, user_id=user_id, team_id="team-a", metadata=metadata
+    )
+
+
+_TAGGED_TEAM_A_KEYS = (
+    _tagged_team_key("tok-alice-batch", "alice-batch", "alice", {"tags": ["prod-batch", "nightly"]}),
+    _tagged_team_key("tok-bob-batch", "bob-batch", "bob", {"tags": ["prod-batch"]}),
+    _tagged_team_key("tok-svc-batch", "svc-batch", None, {"tags": ["prod-batch"]}),
+    _tagged_team_key("tok-alice-similar", "alice-similar", "alice", {"tags": ["prod-batch-2"]}),
+    _tagged_team_key("tok-alice-scalar", "alice-scalar", "alice", {"tags": "prod-batch"}),
+    _tagged_team_key("tok-alice-untagged", "alice-untagged", "alice", {}),
+)
+
+
+def test_list_keys_tag_returns_only_keys_carrying_that_exact_tag():
+    keys = _list_team_a_keys_as(
+        LitellmUserRoles.INTERNAL_USER, _ALICE_TEAM_ADMIN, "tag=prod-batch", rows=_TAGGED_TEAM_A_KEYS
+    )
+    assert keys == ["tok-alice-batch", "tok-bob-batch", "tok-svc-batch"]
+
+
+def test_list_keys_tag_composes_with_other_filters():
+    keys = _list_team_a_keys_as(
+        LitellmUserRoles.INTERNAL_USER,
+        _ALICE_TEAM_ADMIN,
+        "tag=prod-batch&key_alias=alice&substring_matching=true",
+        rows=_TAGGED_TEAM_A_KEYS,
+    )
+    assert keys == ["tok-alice-batch"]
+
+
+def test_list_keys_tag_stays_within_caller_visibility():
+    keys = _list_team_a_keys_as(
+        LitellmUserRoles.INTERNAL_USER, _ALICE_TEAM_MEMBER, "tag=prod-batch", rows=_TAGGED_TEAM_A_KEYS
+    )
+    assert keys == ["tok-alice-batch", "tok-svc-batch"]
+
+
+def test_list_keys_tag_without_keys_returns_none():
+    keys = _list_team_a_keys_as(
+        LitellmUserRoles.INTERNAL_USER, _ALICE_TEAM_ADMIN, "tag=unused-tag", rows=_TAGGED_TEAM_A_KEYS
+    )
+    assert keys == []
 
 
 @pytest.mark.asyncio
