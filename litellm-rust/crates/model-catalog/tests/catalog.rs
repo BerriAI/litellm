@@ -272,11 +272,8 @@ fn parses_current_and_packaged_catalogs_without_pinning_counts(
             ))
             .is_ok()
     );
-    for name in current_catalog.model_names() {
+    assert!(current_catalog.model_names().all(|name| {
         let entry = current_catalog.lookup(name).unwrap().entry;
-        assert_eq!(
-            entry.info().litellm_provider.is_some(),
-            entry.field("litellm_provider").is_some()
-        );
-    }
+        entry.info().litellm_provider.is_some() == entry.field("litellm_provider").is_some()
+    }));
 }

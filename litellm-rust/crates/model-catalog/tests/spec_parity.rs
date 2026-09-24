@@ -83,14 +83,15 @@ fn validate_dates_and_windows(model_name: &str, info: &ModelInfo) -> Result<(), 
         if windows.is_empty() {
             return Err(format!("{model_name}.off_peak_pricing.windows is empty"));
         }
-        for window in windows {
+        windows.iter().try_for_each(|window| {
             validate_hours(&window.hours_utc)?;
             if let Some(days) = &window.weekdays
                 && (days.is_empty() || days.iter().any(|day| !valid_weekday(day)))
             {
                 return Err(format!("{model_name}.off_peak_pricing.weekdays is invalid"));
             }
-        }
+            Ok(())
+        })?;
     }
     Ok(())
 }
@@ -151,7 +152,7 @@ fn check_prices(path: &str, value: &Value) -> Result<(), String> {
     let Some(object) = value.as_object() else {
         return Ok(());
     };
-    for (key, field) in object {
+    object.iter().try_for_each(|(key, field)| {
         let field_path = format!("{path}.{key}");
         if (key.contains("cost")
             || path.ends_with(".guardrail_cost_per_unit")
@@ -176,17 +177,16 @@ fn check_prices(path: &str, value: &Value) -> Result<(), String> {
         {
             return Err(format!("{field_path} must be nonnegative"));
         }
-        if !matches!(key.as_str(), "metadata" | "provider_specific_entry") {
-            if let Some(items) = field.as_array() {
-                for (index, item) in items.iter().enumerate() {
-                    check_prices(&format!("{field_path}[{index}]"), item)?;
-                }
-            } else {
-                check_prices(&field_path, field)?;
-            }
+        if matches!(key.as_str(), "metadata" | "provider_specific_entry") {
+            return Ok(());
         }
-    }
-    Ok(())
+        match field.as_array() {
+            Some(items) => items.iter().enumerate().try_for_each(|(index, item)| {
+                check_prices(&format!("{field_path}[{index}]"), item)
+            }),
+            None => check_prices(&field_path, field),
+        }
+    })
 }
 
 #[rstest]
@@ -195,15 +195,11 @@ fn check_prices(path: &str, value: &Value) -> Result<(), String> {
 fn every_entry_round_trips_through_model_info(repo_root: PathBuf, #[case] filename: &str) {
     let body = std::fs::read(repo_root.join(filename)).unwrap();
     let document: IndexMap<String, Value> = serde_json::from_slice(&body).unwrap();
-    for (model_name, value) in document {
-        if matches!(
-            model_name.as_str(),
-            "sample_spec" | "fallback_generalizations"
-        ) {
-            continue;
-        }
-        validate_entry(&model_name, &value).unwrap();
-    }
+    document
+        .into_iter()
+        .filter(|(name, _)| !matches!(name.as_str(), "sample_spec" | "fallback_generalizations"))
+        .try_for_each(|(name, value)| validate_entry(&name, &value))
+        .unwrap();
 }
 
 #[rstest]
@@ -222,49 +218,22 @@ fn fallback_generalizations_are_typed(repo_root: PathBuf) {
     );
 }
 
-#[test]
-fn registry_validation_rejects_missing_provider_unknown_fields_and_negative_prices() {
-    for (entry, expected) in [
-        (serde_json::json!({"mode": "chat"}), "litellm_provider"),
-        (
-            serde_json::json!({"litellm_provider": "test", "typo": true}),
-            "unknown field",
-        ),
-        (
-            serde_json::json!({"litellm_provider": "test", "input_cost_per_token": -1}),
-            "nonnegative",
-        ),
-        (
-            serde_json::json!({"litellm_provider": "test", "guardrail_cost_per_unit": {"unit": -1}}),
-            "nonnegative",
-        ),
-        (
-            serde_json::json!({"litellm_provider": "test", "mode": "invalid"}),
-            "unknown variant",
-        ),
-        (
-            serde_json::json!({"litellm_provider": "test", "deprecation_date": "2026-02-31"}),
-            "deprecation_date",
-        ),
-        (
-            serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"hours_utc": "25:00-01:00"}}),
-            "hours_utc",
-        ),
-        (
-            serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"windows": []}}),
-            "windows is empty",
-        ),
-        (
-            serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"windows": [{"hours_utc": "00:00-01:00", "weekdays": [0]}]}}),
-            "weekdays is invalid",
-        ),
-    ] {
-        assert!(
-            validate_entry("test", &entry)
-                .unwrap_err()
-                .contains(expected)
-        );
-    }
+#[rstest]
+#[case::missing_provider(serde_json::json!({"mode": "chat"}), "litellm_provider")]
+#[case::unknown_field(serde_json::json!({"litellm_provider": "test", "typo": true}), "unknown field")]
+#[case::negative_price(serde_json::json!({"litellm_provider": "test", "input_cost_per_token": -1}), "nonnegative")]
+#[case::negative_nested_price(serde_json::json!({"litellm_provider": "test", "guardrail_cost_per_unit": {"unit": -1}}), "nonnegative")]
+#[case::invalid_mode(serde_json::json!({"litellm_provider": "test", "mode": "invalid"}), "unknown variant")]
+#[case::invalid_date(serde_json::json!({"litellm_provider": "test", "deprecation_date": "2026-02-31"}), "deprecation_date")]
+#[case::invalid_hours(serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"hours_utc": "25:00-01:00"}}), "hours_utc")]
+#[case::empty_windows(serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"windows": []}}), "windows is empty")]
+#[case::invalid_weekday(serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"windows": [{"hours_utc": "00:00-01:00", "weekdays": [0]}]}}), "weekdays is invalid")]
+fn registry_validation_rejects_malformed_entries(#[case] entry: Value, #[case] expected: &str) {
+    assert!(
+        validate_entry("test", &entry)
+            .unwrap_err()
+            .contains(expected)
+    );
 }
 
 #[test]
