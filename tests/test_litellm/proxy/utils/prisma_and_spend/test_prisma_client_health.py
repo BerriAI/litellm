@@ -10,9 +10,8 @@ Symbols pinned here:
   - ``PrismaClient.get_health_check_history``
   - ``PrismaClient.get_all_latest_health_checks``
   - ``PrismaClient.get_latest_health_checks_for_models``
-  - ``PrismaClient._is_sha256_hex`` (a nested helper inside
-    ``migrate_passwords_to_scrypt_async``; the pin list assigns it to this
-    cluster as a documentation artifact)
+  - ``_is_sha256_hex`` (used by ``migrate_plaintext_passwords_async``; the
+    pin list assigns it to this cluster as a documentation artifact)
 """
 
 from __future__ import annotations

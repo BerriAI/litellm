@@ -42,6 +42,7 @@ from litellm.proxy.utils import (
     PrismaClient,
     get_server_root_path,
     hash_password,
+    needs_password_rehash,
     verify_password,
 )
 from litellm.repositories.user_repository import UserRepository
@@ -106,8 +107,8 @@ async def screen_login_password_for_breach(
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
-    """Rehash legacy password (SHA256) to scrypt on successful login."""
-    if stored.startswith("scrypt:"):
+    """Rehash legacy scrypt or SHA256 password rows to pbkdf2 on successful login."""
+    if not needs_password_rehash(stored):
         return
     from litellm.proxy.proxy_server import prisma_client
 
