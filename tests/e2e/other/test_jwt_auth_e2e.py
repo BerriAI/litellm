@@ -9,7 +9,7 @@ from typing import Final
 
 import pytest
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import RateLimitedError, UnauthorizedError, UnknownApiError, unwrap
+from e2e_http import UnauthorizedError, UnknownApiError, unwrap
 from idp import ADMIN_CLIENT_ID, SHORT_LIVED_CLIENT_ID, WRONG_AUDIENCE_CLIENT_ID, Identity
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, TeamNewBody, UserNewBody
@@ -156,9 +156,8 @@ class TestJwtAuth:
         admin: Final = client.idp.access_token(identity, client_id=ADMIN_CLIENT_ID)
 
         blocked: Final = client.proxy.chat(admin, _ping())
-        assert isinstance(blocked, RateLimitedError) and "ExceededBudget" in blocked.body, (
-            f"proxy_admin JWT must be stopped by the user's own max_budget, got {blocked}"
-        )
+        assert isinstance(blocked, UnknownApiError), f"proxy_admin JWT must be stopped by its max_budget, got {blocked}"
+        assert (blocked.status_code, "ExceededBudget" in blocked.body) == (422, True), blocked
         assert f"User={identity.user_id}" in blocked.body, f"budget denial must name the JWT's user: {blocked.body}"
 
     @pytest.mark.covers("other.auth.jwt.invalid_signature_denied")
