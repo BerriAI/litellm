@@ -469,6 +469,56 @@ def test_bedrock_invoke_keeps_pinned_temperature_on_adaptive_effort():
     assert result["temperature"] == 0.5
 
 
+def test_bedrock_keeps_pinned_temperature_for_claude_code_adaptive_effort_shape():
+    """The shape Claude Code actually sends -- an adaptive ``thinking`` block *and* an
+    ``output_config.effort`` level -- on an adaptive model, where the earlier passes
+    leave both keys in place. The bare ``effort_set`` arm would still classify this as
+    active thinking, so the provider early return is what keeps Bedrock's pinned
+    temperature: only the first-party API rejects it under adaptive thinking."""
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+    from litellm.types.router import GenericLiteLLMParams
+
+    params = _claude_code_payload(effort="high")
+    params["temperature"] = 0.5
+    result = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["temperature"] == 0.5
+
+
+def test_adaptive_block_is_not_active_thinking_on_other_backends():
+    """A bare ``thinking={type: adaptive}`` says nothing about a backend's sampling rules.
+
+    This is asserted at the helper level on a non-adaptive model because the earlier
+    passes hide the case end to end: adaptive models are handled by the provider early
+    return, and for everyone else the block is either translated to a legacy ``enabled``
+    budget or dropped outright. So a direct call is the only place the ``first_party``
+    qualifier on ``adaptive`` is observable, and it has to hold -- treating the block as
+    active thinking for every provider is what silently dropped Bedrock's pinned
+    temperature in the first place.
+    """
+    params = {
+        "max_tokens": 4096,
+        "temperature": 0.5,
+        "top_p": 0.5,
+        "top_k": 5,
+        "thinking": {"type": "adaptive"},
+    }
+
+    for provider in ("bedrock", "vertex_ai", "azure", "deepseek"):
+        candidate = dict(params)
+        AnthropicMessagesConfig._drop_incompatible_sampling_for_thinking("claude-opus-4-5", candidate, provider)
+        assert candidate == params, f"{provider} stripped sampling params for a non-first-party adaptive block"
+
+
 def test_non_numeric_top_p_forwarded_under_thinking():
     """A non-numeric top_p (e.g. a serialized string from an upstream gateway) must not
     raise a TypeError during the comparison; it is left for Anthropic to validate."""
