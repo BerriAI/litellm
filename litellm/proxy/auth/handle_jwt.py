@@ -39,6 +39,7 @@ from litellm.proxy._types import (
     JWTKeyItem,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
+    LiteLLM_ObjectPermissionBase,
     LiteLLM_OrganizationTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -723,17 +724,15 @@ class JWTHandler:
         return org_alias
 
     def get_scopes(self, token: dict) -> list[str]:
-        try:
-            if isinstance(token["scope"], str):
-                # Assuming the scopes are stored in 'scope' claim and are space-separated
-                scopes = token["scope"].split()
-            elif isinstance(token["scope"], list):
-                scopes = token["scope"]
-            else:
-                raise Exception(f"Unmapped scope type - {type(token['scope'])}. Supported types - list, str.")
-        except KeyError:
-            scopes = []
-        return scopes
+        claim_path: Final = self.litellm_jwtauth.scope_jwt_field
+        raw_scopes: Final = get_nested_value(data=token, key_path=claim_path)
+        if raw_scopes is None:
+            return []
+        if isinstance(raw_scopes, str):
+            return raw_scopes.split()
+        if isinstance(raw_scopes, list):
+            return raw_scopes
+        raise Exception(f"Unmapped scope type at '{claim_path}' - {type(raw_scopes)}. Supported types - list, str.")
 
     async def _resolve_jwks_url(self, url: str) -> str:
         """
@@ -1407,6 +1406,36 @@ class JWTAuthManager:
         return
 
     @staticmethod
+    def mcp_permissions_from_scopes(
+        scope_mappings: Sequence[ScopeMapping],
+        scopes: Sequence[str],
+    ) -> tuple[LiteLLM_ObjectPermissionBase, ...]:
+        return tuple(
+            LiteLLM_ObjectPermissionBase(
+                mcp_servers=sm.mcp_servers,
+                mcp_access_groups=sm.mcp_access_groups,
+                mcp_tool_permissions=sm.mcp_tool_permissions,
+            )
+            for sm in scope_mappings
+            if sm.scope in scopes and (sm.mcp_servers or sm.mcp_access_groups or sm.mcp_tool_permissions)
+        )
+
+    @staticmethod
+    def mcp_grants_from_claims(
+        jwt_handler: JWTHandler,
+        claims: dict | None,
+    ) -> tuple[LiteLLM_ObjectPermissionBase, ...]:
+        scope_mappings: Final = jwt_handler.litellm_jwtauth.scope_mappings
+        if not claims or not scope_mappings:
+            return ()
+        try:
+            scopes: Final = jwt_handler.get_scopes(token=claims)
+        except Exception as e:  # noqa: BLE001  # get_scopes raises a bare Exception on a malformed scope claim
+            verbose_proxy_logger.warning("Ignoring malformed JWT scope claim for MCP grants: %s", e)
+            return ()
+        return JWTAuthManager.mcp_permissions_from_scopes(scope_mappings=scope_mappings, scopes=scopes)
+
+    @staticmethod
     async def check_rbac_role(
         jwt_handler: JWTHandler,
         jwt_valid_token: dict,
@@ -1444,6 +1473,7 @@ class JWTAuthManager:
         jwt_valid_token: dict | None = None,
         user_email: str | None = None,
         agent_id: str | None = None,
+        jwt_scope_mcp_grants: tuple[LiteLLM_ObjectPermissionBase, ...] = (),
     ) -> JWTAuthBuilderResult | None:
         """Check admin status and route access permissions"""
         if not jwt_handler.is_admin(scopes=scopes):
@@ -1474,6 +1504,7 @@ class JWTAuthManager:
             team_membership=None,
             jwt_claims=jwt_valid_token or {},
             agent_id=agent_id,
+            jwt_scope_mcp_grants=jwt_scope_mcp_grants,
         )
 
     @staticmethod
@@ -2488,6 +2519,9 @@ class JWTAuthManager:
 
         # Check Scope Based Access
         scopes: Final = handler.get_scopes(token=jwt_valid_token)
+        jwt_scope_mcp_grants: Final = JWTAuthManager.mcp_permissions_from_scopes(
+            scope_mappings=handler.litellm_jwtauth.scope_mappings or (), scopes=scopes
+        )
         if handler.litellm_jwtauth.enforce_scope_based_access and handler.litellm_jwtauth.scope_mappings:
             JWTAuthManager.check_scope_based_access(
                 scope_mappings=handler.litellm_jwtauth.scope_mappings,
@@ -2531,6 +2565,7 @@ class JWTAuthManager:
             jwt_valid_token,
             user_email=user_email,
             agent_id=agent_id,
+            jwt_scope_mcp_grants=jwt_scope_mcp_grants,
         )
         if admin_result:
             await JWTAuthManager._attach_team_from_header_for_admin(
@@ -2808,6 +2843,7 @@ class JWTAuthManager:
             team_membership=team_membership_object,
             jwt_claims=jwt_valid_token,
             agent_id=agent_id,
+            jwt_scope_mcp_grants=jwt_scope_mcp_grants,
         )
 
     @staticmethod
@@ -2834,6 +2870,7 @@ class JWTAuthManager:
             end_user_id=result["end_user_id"],
             parent_otel_span=parent_otel_span,
             jwt_claims=result["jwt_claims"],
+            jwt_scope_mcp_grants=result.get("jwt_scope_mcp_grants", ()),
             agent_id=result.get("agent_id"),
             user_tpm_limit=user.tpm_limit if user is not None and not admin else None,
             user_rpm_limit=user.rpm_limit if user is not None and not admin else None,

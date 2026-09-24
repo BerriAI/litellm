@@ -1660,6 +1660,9 @@ async def _user_api_key_auth_builder(
                         valid_token = resolve_result
                         api_key = valid_token.token or ""
                         valid_token.jwt_claims = jwt_claims
+                        valid_token.jwt_scope_mcp_grants = JWTAuthManager.mcp_grants_from_claims(
+                            jwt_handler, jwt_claims
+                        )
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
                         if valid_token.user_id is not None and valid_token.user_email is None:
@@ -1769,6 +1772,7 @@ async def _user_api_key_auth_builder(
                         )
                         if auto_registered is not None:
                             auto_registered.jwt_claims = jwt_claims
+                            auto_registered.jwt_scope_mcp_grants = result.get("jwt_scope_mcp_grants", ())
                             auto_registered.user_email = user_email
                             # The auto-registered token is built from the new key's
                             # columns, which carry no user budget. Carry over the

@@ -3316,6 +3316,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
     # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
     jwt_claims: dict | None = None
+    jwt_scope_mcp_grants: tuple[LiteLLM_ObjectPermissionBase, ...] = ()
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -4997,6 +4998,7 @@ class JWTAuthBuilderResult(TypedDict):
     team_membership: LiteLLM_TeamMembership | None
     jwt_claims: dict  # Decoded JWT token claims (avoids re-decoding)
     agent_id: ReadOnly[str | None]
+    jwt_scope_mcp_grants: NotRequired[ReadOnly[tuple[LiteLLM_ObjectPermissionBase, ...]]]
 
 
 class ClientSideFallbackModel(TypedDict, total=False):
@@ -5043,6 +5045,9 @@ class JWTLiteLLMRoleMap(BaseModel):
 
 class ScopeMapping(OIDCPermissions):
     scope: str
+    mcp_servers: list[str] | None = None
+    mcp_access_groups: list[str] | None = None
+    mcp_tool_permissions: dict[str, list[str]] | None = None
 
     model_config = {
         "extra": "forbid",
@@ -5268,6 +5273,14 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     role_mappings: list[RoleMapping] | None = None
     object_id_jwt_field: str | None = None  # can be either user / team, inferred from the role mapping
     scope_mappings: list[ScopeMapping] | None = None
+    scope_jwt_field: str = Field(
+        default="scope",
+        description=(
+            "The claim that holds the token's scopes, as a space-separated string or a list of strings. Supports "
+            "dot notation (e.g. 'realm_access.roles'). Feeds scope_mappings (models and MCP grants) and the "
+            "admin_jwt_scope check."
+        ),
+    )
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False
     custom_validate: Callable[..., Literal[True]] | None = None

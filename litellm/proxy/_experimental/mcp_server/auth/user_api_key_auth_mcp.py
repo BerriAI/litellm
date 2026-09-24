@@ -35,6 +35,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
 )
 from litellm.proxy._types import (
     UI_TEAM_ID,
+    LiteLLM_ObjectPermissionBase,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     ProxyException,
@@ -1620,10 +1621,14 @@ class MCPRequestHandler:
 
             key_access_group_grants = await MCPRequestHandler._get_key_access_group_mcp_server_extras(user_api_key_auth)
 
+            allowed_mcp_servers_for_scopes: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_jwt_scopes(
+                user_api_key_auth
+            )
+
             #########################################################
             # Calculate key/team allowed servers using inheritance and intersection logic
             #########################################################
-            key_set: Final = set(allowed_mcp_servers_for_key)
+            key_set: Final = set(allowed_mcp_servers_for_key) | set(allowed_mcp_servers_for_scopes)
             team_set: Final = set(allowed_mcp_servers_for_team)
             grants_set: Final = set(key_access_group_grants)
 
@@ -2251,11 +2256,16 @@ class MCPRequestHandler:
                 else None
             )
 
-            key_tools: Final = (
-                list(set(key_direct_tools or []) | set(key_toolset_tools or []))
-                if key_direct_tools is not None or key_toolset_tools is not None
-                else None
+            key_own_grant: Final = await MCPRequestHandler._key_tool_grant_for_server(
+                key_obj_perm,
+                server_id,
+                MCPRequestHandler._union_tool_grants(key_direct_tools, key_toolset_tools),
+                user_api_key_auth,
             )
+            scope_grants: Final = await MCPRequestHandler._jwt_scope_tool_grants_for_server(
+                server_id, user_api_key_auth
+            )
+            key_tools: Final = MCPRequestHandler._merge_additive_tool_grants((*key_own_grant, *scope_grants))
             team_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
                 if team_obj_perm
@@ -2459,6 +2469,100 @@ class MCPRequestHandler:
         except Exception as e:
             verbose_logger.warning("Failed to get key access group MCP server grants: %s", e)
             return []
+
+    @staticmethod
+    def _get_jwt_scope_object_permissions(
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> tuple[LiteLLM_ObjectPermissionBase, ...]:
+        return user_api_key_auth.jwt_scope_mcp_grants if user_api_key_auth is not None else ()
+
+    @staticmethod
+    async def _expand_scope_grant_servers(scope_obj_perm: LiteLLM_ObjectPermissionBase) -> frozenset[str]:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        direct_servers: Final = global_mcp_server_manager.expand_permission_list(scope_obj_perm.mcp_servers or [])
+        access_group_servers: Final = (
+            await MCPRequestHandler._get_mcp_servers_from_access_groups(scope_obj_perm.mcp_access_groups)
+            if scope_obj_perm.mcp_access_groups
+            else ()
+        )
+        return frozenset((*direct_servers, *access_group_servers))
+
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_jwt_scopes(
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> list[str]:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        scope_obj_perms: Final = MCPRequestHandler._get_jwt_scope_object_permissions(user_api_key_auth)
+        granted_servers: Final = [await MCPRequestHandler._expand_scope_grant_servers(p) for p in scope_obj_perms]
+        tool_perm_servers: Final = [
+            global_mcp_server_manager.expand_tool_permissions(p.mcp_tool_permissions).keys() for p in scope_obj_perms
+        ]
+        return list({server for group in (*granted_servers, *tool_perm_servers) for server in group})
+
+    @staticmethod
+    async def _jwt_scope_tool_grants_for_server(
+        server_id: str,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> tuple[Sequence[str] | None, ...]:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        scope_obj_perms: Final = MCPRequestHandler._get_jwt_scope_object_permissions(user_api_key_auth)
+        tool_grants: Final = tuple(
+            global_mcp_server_manager.expand_tool_permissions(p.mcp_tool_permissions).get(server_id)
+            for p in scope_obj_perms
+        )
+        granted_servers: Final = [await MCPRequestHandler._expand_scope_grant_servers(p) for p in scope_obj_perms]
+        return tuple(
+            tools
+            for tools, servers in zip(tool_grants, granted_servers, strict=True)
+            if tools is not None or server_id in servers
+        )
+
+    @staticmethod
+    async def _key_tool_grant_for_server(
+        key_obj_perm: LiteLLM_ObjectPermissionBase | None,
+        server_id: str,
+        key_own_tools: Sequence[str] | None,
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> tuple[Sequence[str] | None, ...]:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        if key_own_tools is not None:
+            return (key_own_tools,)
+        direct_servers: Final = (
+            global_mcp_server_manager.expand_permission_list(key_obj_perm.mcp_servers or []) if key_obj_perm else ()
+        )
+        tag_group_servers: Final = (
+            await MCPRequestHandler._get_mcp_servers_from_access_groups(key_obj_perm.mcp_access_groups)
+            if key_obj_perm and key_obj_perm.mcp_access_groups
+            else ()
+        )
+        if server_id in (*direct_servers, *tag_group_servers):
+            return (None,)
+        unified_group_servers: Final = (
+            await MCPRequestHandler._get_key_access_group_mcp_server_extras(user_api_key_auth)
+            if user_api_key_auth.access_group_ids
+            else ()
+        )
+        return (None,) if server_id in unified_group_servers else ()
+
+    @staticmethod
+    def _merge_additive_tool_grants(
+        grants: Sequence[Sequence[str] | None],
+    ) -> list[str] | None:
+        if not grants or any(tools is None for tools in grants):
+            return None
+        return sorted({tool for tools in grants if tools is not None for tool in tools})
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_key(

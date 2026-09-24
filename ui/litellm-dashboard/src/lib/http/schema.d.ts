@@ -45285,6 +45285,11 @@ export interface components {
             jwt_claims?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Jwt Scope Mcp Grants
+             * @default []
+             */
+            jwt_scope_mcp_grants: components["schemas"]["LiteLLM_ObjectPermissionBase"][];
             /** Key Alias */
             key_alias?: string | null;
             /** Key Name */
