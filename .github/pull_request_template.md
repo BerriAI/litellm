@@ -29,7 +29,7 @@ How it solves it:
      No LiteLLM internals: never name functions, files, DB tables, config classes, hooks, callbacks, or code paths. "The upload hands back an ID that looks like OpenAI's own `file-abc123` instead of the scrambled one the gateway returned" is right, "no managed-file row was registered" is wrong
      Keep the two lists step-for-step identical until they diverge, so the changed step is obvious
      If the bug had a security or authorization consequence, end each list with what another user could or could no longer do
-     Regenerate this section whenever new commits change the PR's behavior, so it never describes an older revision
+     Regenerate this section, screenshots included, whenever new commits change the PR's behavior, so it never describes an older revision
      If the PR changes what an Admin UI page shows, embed a before and an after screenshot of that page right after its list, taken at the same URL on the same data, with the rows, fields, or controls that changed boxed in red so a reader spots the difference without reading the steps. These are the UI screenshots for Screenshots / Proof of Fix too: embed them once here and have that section's Before and After steps point back to them instead of repeating the images
 
 Example:
