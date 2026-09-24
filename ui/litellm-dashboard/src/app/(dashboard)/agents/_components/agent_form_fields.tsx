@@ -10,6 +10,7 @@ import { Field, FieldGroup, FieldTitle } from "@/components/ui/field";
 import { AGENT_FORM_CONFIG, SKILL_FIELD_CONFIG } from "./agent_config";
 import CostConfigFields, { COST_FIELD_NAMES } from "./cost_config_fields";
 import KillSwitchFormFields from "./KillSwitchFormFields";
+import { KILL_SWITCH_PANEL_KEY } from "./kill_switch_config";
 import {
   AgentFormField,
   AgentFormPanel,
@@ -20,7 +21,6 @@ import {
 } from "./AgentFormKit";
 
 const AUTH_HEADERS_PANEL_KEY = "auth_headers";
-export const KILL_SWITCH_PANEL_KEY = "kill_switch";
 
 const namesOf = (fields: readonly { name: string }[]): readonly string[] => fields.map((field) => field.name);
 

@@ -167,13 +167,14 @@ describe("AgentInfoView settings", () => {
       ...agent,
       kill_switch: { url: "https://ops.example.com/kill", method: "DELETE" },
     });
-    vi.mocked(networking.triggerAgentKillSwitchCall).mockResolvedValue({
+    const firedResult = {
       agent_id: "agent-1",
       url: "https://ops.example.com/kill",
-      method: "DELETE",
+      method: "DELETE" as const,
       status_code: 202,
       response_body: "stopping",
-    });
+    };
+    vi.mocked(networking.triggerAgentKillSwitchCall).mockResolvedValue(firedResult);
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
 

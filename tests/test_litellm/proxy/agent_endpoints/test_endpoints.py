@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1179,6 +1180,7 @@ def test_kill_switch_trigger_fires_the_configured_webhook_and_returns_the_result
     registry: Final = MagicMock()
     registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
     monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     fake: Final = _FakeKillSwitchClient(httpx.Response(200, text="ok"))
 
     resp: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake).post(
@@ -1203,6 +1205,7 @@ def test_kill_switch_trigger_returns_502_when_the_webhook_rejects(monkeypatch) -
     registry: Final = MagicMock()
     registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
     monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     fake: Final = _FakeKillSwitchClient(httpx.Response(401, text="bad token"))
 
     resp: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake).post(
@@ -1219,6 +1222,7 @@ def test_kill_switch_trigger_is_refused_before_any_webhook_call_for_non_admins(m
     registry: Final = MagicMock()
     registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
     monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     fake: Final = _FakeKillSwitchClient(httpx.Response(200))
 
     resp: Final = _kill_switch_app(role, fake).post(
@@ -1233,6 +1237,7 @@ def test_kill_switch_trigger_404s_unknown_agent_and_400s_an_agent_without_one(mo
     registry: Final = MagicMock()
     registry.get_agent_by_id = MagicMock(side_effect=[None, _sample_agent_response()])
     monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     fake: Final = _FakeKillSwitchClient(httpx.Response(200))
     test_client: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake)
 
@@ -1243,6 +1248,31 @@ def test_kill_switch_trigger_404s_unknown_agent_and_400s_an_agent_without_one(mo
     assert unconfigured.status_code == 400
     assert "no kill_switch configured" in unconfigured.json()["detail"]
     assert fake.calls == []
+
+
+def test_kill_switch_trigger_fires_the_db_row_config_over_a_stale_in_memory_copy(monkeypatch) -> None:
+    """Another replica may have updated the agent; the row is the source of truth for what gets fired."""
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    db_row: Final = SimpleNamespace(
+        agent_id="agent-123",
+        kill_switch={"url": "https://ops.example.com/kill-v2", "method": "DELETE", "auth": None},
+    )
+    prisma: Final = MagicMock()
+    prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=db_row)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(204))
+
+    resp: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake).post(
+        "/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    (method, url, headers, body, _timeout) = fake.calls[0]
+    assert (method, url, headers, body) == ("DELETE", "https://ops.example.com/kill-v2", {}, None)
+    assert prisma.db.litellm_agentstable.find_unique.await_args.kwargs == {"where": {"agent_id": "agent-123"}}
+    registry.get_agent_by_id.assert_not_called()
 
 
 def test_get_agent_redacts_kill_switch_secret_for_admins_and_hides_it_from_others(monkeypatch) -> None:

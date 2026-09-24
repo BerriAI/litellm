@@ -237,7 +237,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       );
 
       const built: AgentRequestPayload = usesDynamicFields
-        ? { ...buildDynamicAgentData(values, selectedAgentTypeInfo), agent_name: values.agent_name }
+        ? { ...buildDynamicAgentData(values, selectedAgentTypeInfo, agent), agent_name: values.agent_name }
         : buildAgentDataFromForm(values, agent);
 
       const updateData = appliedDiscoveredSelection

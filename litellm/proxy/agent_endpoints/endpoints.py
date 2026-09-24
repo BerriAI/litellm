@@ -33,6 +33,7 @@ from litellm.proxy.a2a.agent_card import (
     normalize_protocol_version,
 )
 from litellm.proxy.agent_endpoints.agent_registry import (
+    parse_agent_kill_switch,
     parse_agent_litellm_params,
     redact_sensitive_agent_litellm_params,
 )
@@ -59,6 +60,7 @@ from litellm.types.agents import (
     AgentCard,
     AgentConfig,
     AgentKeySummary,
+    AgentKillSwitchConfig,
     AgentKillSwitchResult,
     AgentMakePublicResponse,
     AgentResponse,
@@ -909,16 +911,33 @@ async def trigger_agent_kill_switch(
     await check_feature_access_for_user(user_api_key_dict, "agents")
     _check_agent_management_permission(user_api_key_dict)
 
-    agent: Final = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
-    if agent is None:
+    resolved: Final = await _resolve_agent_kill_switch(agent_id)
+    if resolved is None:
         raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
-    if agent.kill_switch is None:
+    resolved_agent_id, config = resolved
+    if config is None:
         raise HTTPException(status_code=400, detail=f"Agent with ID {agent_id} has no kill_switch configured")
 
-    result: Final = await fire_kill_switch(agent_id=agent.agent_id, config=agent.kill_switch, http_client=http_client)
+    result: Final = await fire_kill_switch(agent_id=resolved_agent_id, config=config, http_client=http_client)
     if not result.succeeded:
         raise HTTPException(status_code=502, detail=result.model_dump())
     return result
+
+
+async def _resolve_agent_kill_switch(agent_id: str) -> tuple[str, AgentKillSwitchConfig | None] | None:
+    """The DB row wins over this replica's in-memory registry so a trigger never fires a webhook another
+    replica has since changed; config.yaml agents have no row and fall back to the registry."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is not None:
+        row: Final = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        if row is not None:
+            return row.agent_id, parse_agent_kill_switch(row.kill_switch)
+
+    agent: Final = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
+    if agent is None:
+        return None
+    return agent.agent_id, agent.kill_switch
 
 
 @router.post(

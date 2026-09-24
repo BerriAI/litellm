@@ -5,6 +5,7 @@ import {
   parseKillSwitchForForm,
   validateKillSwitchBody,
   type KillSwitchConfig,
+  type KillSwitchFormValue,
 } from "./kill_switch_config";
 
 const fullConfig: KillSwitchConfig = {
@@ -22,27 +23,30 @@ describe("buildKillSwitchFromForm", () => {
   });
 
   it("returns null when the URL is blank so the backend clears the config", () => {
-    expect(
-      buildKillSwitchFromForm({ ...EMPTY_KILL_SWITCH_FORM, url: "   ", auth_type: "bearer", auth_token: "t" }),
-    ).toBeNull();
+    const blankUrlForm: KillSwitchFormValue = {
+      ...EMPTY_KILL_SWITCH_FORM,
+      url: "   ",
+      auth_type: "bearer",
+      auth_token: "t",
+    };
+    expect(buildKillSwitchFromForm(blankUrlForm)).toBeNull();
   });
 
   it("builds the full config, dropping rows without a key and parsing the JSON body", () => {
-    expect(
-      buildKillSwitchFromForm({
-        url: " https://ops.example.com/kill?env=prod ",
-        method: "DELETE",
-        headers: [
-          { key: "X-Env", value: "prod" },
-          { key: "  ", value: "ignored" },
-        ],
-        query_params: [{ key: "agent", value: "billing-bot" }],
-        body: '{"reason": "manual stop", "force": true}',
-        auth_type: "api_key",
-        auth_header_name: "X-Ops-Key",
-        auth_api_key: "k-456",
-      }),
-    ).toEqual(fullConfig);
+    const fullForm: KillSwitchFormValue = {
+      url: " https://ops.example.com/kill?env=prod ",
+      method: "DELETE",
+      headers: [
+        { key: "X-Env", value: "prod" },
+        { key: "  ", value: "ignored" },
+      ],
+      query_params: [{ key: "agent", value: "billing-bot" }],
+      body: '{"reason": "manual stop", "force": true}',
+      auth_type: "api_key",
+      auth_header_name: "X-Ops-Key",
+      auth_api_key: "k-456",
+    };
+    expect(buildKillSwitchFromForm(fullForm)).toEqual(fullConfig);
   });
 
   it.each([
@@ -60,20 +64,20 @@ describe("buildKillSwitchFromForm", () => {
       { type: "basic", username: "ops", password: "pw" },
     ],
   ])("maps auth form fields %j to %j", (authFields, expectedAuth) => {
-    const built = buildKillSwitchFromForm({ ...EMPTY_KILL_SWITCH_FORM, url: "https://x.example", ...authFields });
-    expect(built?.auth).toEqual(expectedAuth);
+    const authForm: KillSwitchFormValue = { ...EMPTY_KILL_SWITCH_FORM, url: "https://x.example", ...authFields };
+    expect(buildKillSwitchFromForm(authForm)?.auth).toEqual(expectedAuth);
   });
 
   it("sends an empty body as null and defaults the method to POST", () => {
-    const built = buildKillSwitchFromForm({ url: "https://x.example", body: "  " });
-    expect(built).toEqual({
+    const expected: KillSwitchConfig = {
       url: "https://x.example",
       method: "POST",
       headers: {},
       query_params: {},
       body: null,
       auth: null,
-    });
+    };
+    expect(buildKillSwitchFromForm({ url: "https://x.example", body: "  " })).toEqual(expected);
   });
 });
 

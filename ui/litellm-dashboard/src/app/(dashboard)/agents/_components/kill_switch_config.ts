@@ -32,6 +32,8 @@ export interface KillSwitchFormValue {
   auth_password?: string;
 }
 
+export const KILL_SWITCH_PANEL_KEY = "kill_switch";
+
 export const EMPTY_KILL_SWITCH_FORM: Readonly<KillSwitchFormValue> = {
   url: "",
   method: "POST",

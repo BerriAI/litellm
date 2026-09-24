@@ -3,7 +3,13 @@
  * Used across create, view, and update operations
  */
 
-import { EMPTY_KILL_SWITCH_FORM, buildKillSwitchFromForm, parseKillSwitchForForm } from "./kill_switch_config";
+import {
+  EMPTY_KILL_SWITCH_FORM,
+  buildKillSwitchFromForm,
+  parseKillSwitchForForm,
+  type KillSwitchConfig,
+  type KillSwitchFormValue,
+} from "./kill_switch_config";
 
 export interface FieldConfig {
   name: string;
@@ -313,12 +319,20 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
     agentData.extra_headers = values.extra_headers;
   }
 
-  const killSwitch = buildKillSwitchFromForm(values.kill_switch);
+  applyKillSwitchToPayload(agentData, values.kill_switch, existingAgent);
+
+  return agentData;
+};
+
+export const applyKillSwitchToPayload = (
+  agentData: { kill_switch?: KillSwitchConfig | null },
+  form: KillSwitchFormValue | undefined,
+  existingAgent?: { kill_switch?: KillSwitchConfig | null },
+) => {
+  const killSwitch = buildKillSwitchFromForm(form);
   if (killSwitch !== undefined && (killSwitch !== null || existingAgent?.kill_switch)) {
     agentData.kill_switch = killSwitch;
   }
-
-  return agentData;
 };
 
 export const parseAccessGroupIdsForForm = (agent: { access_group_ids?: string[] | null }) => ({
