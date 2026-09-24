@@ -16,7 +16,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import BEDROCK_MAX_TOOL_NAME_LENGTH, REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
@@ -4968,7 +4968,11 @@ def _bedrock_converse_messages_pt(
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
-    """Normalize tool names to Bedrock pattern [a-zA-Z][a-zA-Z0-9_-]*."""
+    """Normalize tool names to Bedrock pattern [a-zA-Z][a-zA-Z0-9_-]* within the 64-char limit.
+
+    Note: scoped to Amazon Bedrock Runtime (the Converse / InvokeModel tool path).
+    Only Bedrock tool names are normalized here; other providers are unaffected.
+    """
 
     def replace_invalid(char):
         if char.isalnum() or char in ("_", "-"):
@@ -4986,12 +4990,22 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     # Replace any invalid characters with underscores
     valid_string: Final = "".join(replace_invalid(char) for char in bedrock_tool_name)
 
-    if input_tool_name != valid_string:
+    # Enforce Bedrock's max tool-name length. Truncate and append a short
+    # deterministic hash so distinct long names don't collide and the same
+    # input always maps to the same output (so toolSpec and toolUse match).
+    if len(valid_string) > BEDROCK_MAX_TOOL_NAME_LENGTH:
+        name_hash = hashlib.sha256(valid_string.encode()).hexdigest()[:8]
+        prefix_length = BEDROCK_MAX_TOOL_NAME_LENGTH - len(name_hash) - 1
+        final_name: Final = f"{valid_string[:prefix_length]}_{name_hash}"
+    else:
+        final_name = valid_string
+
+    if input_tool_name != final_name:
         # passed tool name was formatted to become valid
         # store it internally so we can use for the response
-        litellm.bedrock_tool_name_mappings.set_cache(key=valid_string, value=input_tool_name)
+        litellm.bedrock_tool_name_mappings.set_cache(key=final_name, value=input_tool_name)
 
-    return valid_string
+    return final_name
 
 
 def add_cache_point_tool_block(tool: dict, model: str | None = None) -> BedrockToolBlock | None:

@@ -2542,6 +2542,43 @@ def test_make_valid_bedrock_tool_name_preserves_hyphens():
     )
 
 
+def test_make_valid_bedrock_tool_name_truncates_and_restores_long_name():
+    """Names over Bedrock's 64-char limit are truncated and mapped back on response."""
+    import litellm
+
+    raw_name = "mcp__codex_apps__atlassian_rovo___getAccessibleAtlassianResources"
+    assert len(raw_name) > 64
+
+    valid = make_valid_bedrock_tool_name(raw_name)
+    assert len(valid) == 64
+    assert re.match(r"^[a-zA-Z][a-zA-Z0-9_-]*$", valid)
+    # the original name is recoverable on the response path
+    assert litellm.bedrock_tool_name_mappings.get_cache(key=valid) == raw_name
+
+
+def test_make_valid_bedrock_tool_name_is_deterministic():
+    """Same input always yields the same sanitized name (toolSpec == toolUse)."""
+    raw_name = "a" * 80
+    assert make_valid_bedrock_tool_name(raw_name) == make_valid_bedrock_tool_name(
+        raw_name
+    )
+
+
+def test_make_valid_bedrock_tool_name_avoids_collision_on_shared_prefix():
+    """Two long names sharing a >64-char prefix must not collapse to the same value."""
+    name_a = "shared_prefix_" + "a" * 60 + "_alpha"
+    name_b = "shared_prefix_" + "a" * 60 + "_beta"
+    assert len(name_a) > 64 and len(name_b) > 64
+    assert make_valid_bedrock_tool_name(name_a) != make_valid_bedrock_tool_name(name_b)
+
+
+def test_make_valid_bedrock_tool_name_boundary_64_unchanged():
+    """A valid name of exactly 64 chars is passed through untouched."""
+    name = "a" + "b" * 63
+    assert len(name) == 64
+    assert make_valid_bedrock_tool_name(name) == name
+
+
 def test_bedrock_tool_name_sanitized_consistently_in_tools_and_tool_use():
     """toolSpec and toolUse names must match after sanitization (issue #5007)."""
     raw_name = "foo@bar"
