@@ -62,10 +62,9 @@ jobs:
       # a content-integrity hash, not a password or secret hash. SHA-256 is mandated
       # by Oracle for this header; see
       # https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
-      # The `usedforsecurity=False` flag on the hashlib.sha256 call already declares
-      # non-security intent, but CodeQL's taint flow still re-fires when callers
-      # further up the stack are modified. The suppression is scoped to this one
-      # file/rule pair via SARIF post-filtering so every other callsite of
+      # The sha256 call carries no usedforsecurity=False flag (FIPS builds reject the hint), so
+      # CodeQL's taint flow fires whenever callers further up the stack are modified. The
+      # suppression is scoped to this one file/rule pair via SARIF post-filtering so every other callsite of
       # py/weak-sensitive-data-hashing in the repository continues to be analyzed.
       # The same query fires on the HIBP k-anonymity lookup in
       # litellm/proxy/auth/password_policy.py, where the password's SHA-1 is only
