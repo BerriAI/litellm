@@ -30,6 +30,15 @@
 --    retention window is already gone and cannot be recovered. On a large
 --    SpendLogs table the join scan is slow, so run it off peak.
 --
+--    Run Statement B while the proxy is idle (or with traffic paused). The
+--    proxy flushes spend logs in batches, so a request that already raised
+--    total_spend but whose log is still queued is missing from the sum, and
+--    the rebuilt value would be short by that in-flight amount.
+--
+--    A custom token can be deleted and recreated, so the archived table can
+--    hold several lifetimes of one token. Statement B only rewrites archived
+--    rows that reset, and the log sum covers every lifetime of that token.
+--
 -- 4. No proxy restart is needed. The proxy picks up the corrected values on
 --    its next read of each key.
 --
@@ -74,7 +83,7 @@ WHERE k.token = s.token
   AND k.total_spend < s.sum_spend;
 
 -- Archived tokens are not unique, so collapse them to one row per token
--- before joining spend logs; the update then hits every archived row.
+-- before joining spend logs; the update then hits every resetting archived row.
 UPDATE "LiteLLM_DeletedVerificationToken" k
 SET total_spend = s.sum_spend
 FROM (
@@ -92,7 +101,11 @@ FROM (
     GROUP BY k2.token
 ) s
 WHERE k.token = s.token
-  AND k.total_spend < s.sum_spend;
+  AND k.total_spend < s.sum_spend
+  AND (k.budget_duration IS NOT NULL
+       OR k.budget_id IN (
+           SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_duration IS NOT NULL
+       ));
 
 -- Verify: this should return 0.
 --   SELECT count(*) FROM "LiteLLM_VerificationToken" WHERE total_spend < spend;
