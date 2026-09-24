@@ -3006,10 +3006,12 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
     userIds: string[] = ["user-custom@x.com"],
     maxBudget: number | null = 50,
   ) => {
-    const data = createMockTeamData({
-      team_member_budget_table: { max_budget: 10, budget_duration: null, tpm_limit: null, rpm_limit: null },
-    }) as TeamData;
-    data.team_memberships = userIds.map((id) => customBudgetMembership(id, maxBudget));
+    const data = {
+      ...createMockTeamData({
+        team_member_budget_table: { max_budget: 10, budget_duration: null, tpm_limit: null, rpm_limit: null },
+      }),
+      team_memberships: userIds.map((id) => customBudgetMembership(id, maxBudget)),
+    } as TeamData;
     vi.mocked(networking.teamInfoCall).mockResolvedValue(data);
     vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
@@ -3022,8 +3024,7 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
   };
 
   const submitNewDefault = async (user: ReturnType<typeof userEvent.setup>, input: HTMLElement, value: string) => {
-    await user.clear(input);
-    await user.type(input, value);
+    fireEvent.change(input, { target: { value } });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
   };
 

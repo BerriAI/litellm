@@ -20,10 +20,5 @@ export const shouldPromptMemberBudgetApplyAll = (
   return budgetChanged && customBudgetUserIds.length > 0;
 };
 
-export const chunkMemberIds = (userIds: string[], size = MEMBER_BUDGET_BULK_CHUNK_SIZE): string[][] => {
-  const chunks: string[][] = [];
-  for (let i = 0; i < userIds.length; i += size) {
-    chunks.push(userIds.slice(i, i + size));
-  }
-  return chunks;
-};
+export const chunkMemberIds = (userIds: string[], size = MEMBER_BUDGET_BULK_CHUNK_SIZE): string[][] =>
+  Array.from({ length: Math.ceil(userIds.length / size) }, (_, i) => userIds.slice(i * size, i * size + size));
