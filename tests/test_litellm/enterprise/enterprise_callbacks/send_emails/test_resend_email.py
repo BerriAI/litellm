@@ -127,17 +127,9 @@ async def test_send_email_missing_api_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_email_multiple_recipients(mock_env_vars):
-    # Initialize the logger
+async def test_send_email_multiple_recipients_get_separate_messages(mock_env_vars):
     logger = ResendEmailLogger()
 
-    # Test data with multiple recipients
-    from_email = "test@example.com"
-    to_email = ["recipient1@example.com", "recipient2@example.com"]
-    subject = "Test Subject"
-    html_body = "<p>Test email body</p>"
-
-    # Create mock HTTP client and inject it directly into the logger
     mock_response = mock.Mock(spec=Response)
     mock_response.status_code = 200
     mock_response.json.return_value = {"id": "test_email_id"}
@@ -145,20 +137,22 @@ async def test_send_email_multiple_recipients(mock_env_vars):
 
     mock_async_client = mock.AsyncMock()
     mock_async_client.post.return_value = mock_response
-
-    # Directly inject the mock client to bypass any caching
     logger.async_httpx_client = mock_async_client
 
-    # Send email
     await logger.send_email(
-        from_email=from_email, to_email=to_email, subject=subject, html_body=html_body
+        from_email="test@example.com",
+        to_email=["recipient1@example.com", "recipient2@example.com"],
+        subject="Test Subject",
+        html_body="<p>Test email body</p>",
     )
 
-    # Verify the HTTP client was called with multiple recipients
-    mock_async_client.post.assert_called_once()
-    call_args = mock_async_client.post.call_args
-    request_body = call_args[1]["json"]
-    assert request_body["to"] == to_email
+    recipients_per_message = [
+        call.kwargs["json"]["to"] for call in mock_async_client.post.call_args_list
+    ]
+    assert sorted(recipients_per_message) == [
+        ["recipient1@example.com"],
+        ["recipient2@example.com"],
+    ]
 
 
 @pytest.mark.asyncio

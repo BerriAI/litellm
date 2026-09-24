@@ -5,7 +5,6 @@ https://resend.com/docs/api-reference/emails/send-email
 """
 
 import os
-from typing import List
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -40,13 +39,13 @@ class ResendEmailLogger(BaseEmailLogger):
         self.resend_api_key = os.getenv("RESEND_API_KEY")
         self.resend_from_email = os.getenv("RESEND_FROM_EMAIL")
 
-    async def send_email(
+    async def send_email_to_recipient(
         self,
         from_email: str,
-        to_email: List[str],
+        to_email: str,
         subject: str,
         html_body: str,
-    ):
+    ) -> None:
         sender_email = self.resend_from_email or from_email
         verbose_logger.debug(
             f"Sending email from {sender_email} to {to_email} with subject {subject}"
@@ -55,7 +54,7 @@ class ResendEmailLogger(BaseEmailLogger):
             url=RESEND_API_ENDPOINT,
             json={
                 "from": sender_email,
-                "to": to_email,
+                "to": [to_email],
                 "subject": subject,
                 "html": html_body,
             },
@@ -64,4 +63,3 @@ class ResendEmailLogger(BaseEmailLogger):
         verbose_logger.debug(
             f"Email sent with status code {response.status_code}. Got response: {response.json()}"
         )
-        return

@@ -111,25 +111,26 @@ async def test_send_email_missing_api_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_email_multiple_recipients(mock_env_vars, mock_async_client):
+async def test_send_email_multiple_recipients_get_separate_messages(
+    mock_env_vars, mock_async_client
+):
     logger = SendGridEmailLogger()
-    # Directly replace the httpx client to ensure the mock is used
-    # This bypasses any caching or initialization timing issues
     logger.async_httpx_client = mock_async_client
 
-    from_email = "test@example.com"
     to_email = ["recipient1@example.com", "recipient2@example.com"]
-    subject = "Test Subject"
-    html_body = "<p>Test email body</p>"
 
     await logger.send_email(
-        from_email=from_email, to_email=to_email, subject=subject, html_body=html_body
+        from_email="test@example.com",
+        to_email=to_email,
+        subject="Test Subject",
+        html_body="<p>Test email body</p>",
     )
 
-    mock_async_client.post.assert_called_once()
-    payload = mock_async_client.post.call_args[1]["json"]
-
-    assert payload["personalizations"][0]["to"] == [
-        {"email": "recipient1@example.com"},
-        {"email": "recipient2@example.com"},
+    recipients_per_message = [
+        call.kwargs["json"]["personalizations"][0]["to"]
+        for call in mock_async_client.post.call_args_list
+    ]
+    assert sorted(recipients_per_message, key=lambda to: to[0]["email"]) == [
+        [{"email": "recipient1@example.com"}],
+        [{"email": "recipient2@example.com"}],
     ]

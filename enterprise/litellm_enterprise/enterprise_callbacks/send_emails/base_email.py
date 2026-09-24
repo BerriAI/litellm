@@ -3,6 +3,7 @@ Base class for sending emails to user after creating keys or invite links
 
 """
 
+import asyncio
 import html
 import json
 import os
@@ -938,8 +939,28 @@ class BaseEmailLogger(CustomLogger):
     async def send_email(
         self,
         from_email: str,
-        to_email: List[str],
+        to_email: list[str],
         subject: str,
         html_body: str,
-    ):
-        pass
+    ) -> None:
+        """Deliver one message per recipient so nobody sees the other recipients' addresses."""
+        await asyncio.gather(
+            *(
+                self.send_email_to_recipient(
+                    from_email=from_email,
+                    to_email=recipient,
+                    subject=subject,
+                    html_body=html_body,
+                )
+                for recipient in to_email
+            )
+        )
+
+    async def send_email_to_recipient(
+        self,
+        from_email: str,
+        to_email: str,
+        subject: str,
+        html_body: str,
+    ) -> None:
+        raise NotImplementedError
