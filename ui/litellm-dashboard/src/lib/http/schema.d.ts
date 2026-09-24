@@ -42029,6 +42029,8 @@ export interface components {
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
             base_model: ("gpt-4-1106-preview" | "gpt-4-32k" | "gpt-4" | "gpt-3.5-turbo-16k" | "gpt-3.5-turbo" | "text-embedding-ada-002") | null;
+            /** Discoverable */
+            discoverable?: boolean | null;
             /** Id */
             id: string | null;
             /**
@@ -42076,6 +42078,8 @@ export interface components {
              * @default false
              */
             db_model: boolean;
+            /** Discoverable */
+            discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
             /** Id */

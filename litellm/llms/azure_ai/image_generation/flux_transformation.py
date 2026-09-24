@@ -73,9 +73,7 @@ class AzureFoundryFluxImageGenerationConfig(GPTImageGenerationConfig):
         normalized_model: Final = model.lower().replace(".", "-").replace("_", "-")
         return "flux-2-flex" if "flux-2-flex" in normalized_model else "flux-2-pro"
 
-    def get_supported_openai_params(  # mutable-ok: inherited config contract returns a list
-        self, model: str
-    ) -> list[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         if not self.is_flux2_model(model):
             return super().get_supported_openai_params(model)
         return [  # mutable-ok: BaseImageGenerationConfig requires a list

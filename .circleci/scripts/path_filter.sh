@@ -11,7 +11,7 @@ run_full() {
 
 [ -n "${CIRCLE_PULL_REQUEST:-}" ] || run_full "not a pull request"
 
-candidate_bases="main"
+candidate_bases="${PATH_FILTER_BASE_BRANCH:-main}"
 merge_base=""
 for base in $candidate_bases; do
   git fetch --quiet origin "$base" 2>/dev/null || continue

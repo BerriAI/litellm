@@ -120,7 +120,7 @@ def snapshot_tuning_baselines(deployments: Iterable[Mapping[str, object]]) -> Ma
             if (pair := heuristic_v1_router_fingerprint(deployment)) is not None
             for identity, fingerprint in (pair,)
         }
-    )  # mutable-ok: MappingProxyType owns the completed immutable snapshot
+    )
 
 
 def is_mutable_tuned_candidate(candidate: Mapping[str, object], baselines: Mapping[str, str]) -> bool:

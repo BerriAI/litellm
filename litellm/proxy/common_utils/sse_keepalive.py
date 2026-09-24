@@ -65,9 +65,7 @@ async def _keepalive_ping_stream(
     ping_interval_seconds: float,
     ping_chunk: str,
 ) -> AsyncGenerator[str, None]:
-    pending = asyncio.ensure_future(
-        stream.__anext__()
-    )  # rebind-ok: re-armed with the next __anext__ after each delivered chunk
+    pending = asyncio.ensure_future(stream.__anext__())
     try:
         while True:
             await asyncio.wait({pending}, timeout=ping_interval_seconds)
@@ -125,9 +123,7 @@ async def _keepalive_ping_byte_stream(
     stream: AsyncGenerator[bytes, None],
     ping_interval_seconds: float,
 ) -> AsyncGenerator[bytes, None]:
-    pending = asyncio.ensure_future(
-        stream.__anext__()
-    )  # rebind-ok: re-armed with the next __anext__ after each delivered chunk
+    pending = asyncio.ensure_future(stream.__anext__())
     # The tail of the bytes relayed so far, long enough to hold any delimiter.
     # Seeded as a delimiter because a stream starts at a frame boundary, and kept
     # across chunks because a delimiter can be split between two transport reads,

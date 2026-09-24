@@ -52,7 +52,7 @@ export default function PromptCachingRequestsTable({ accessToken, dateValue }: P
     start_date: startDate,
     end_date: endDate,
     filter,
-    page_size: 50,
+    page_size: 10,
     cursor_start_time: cursor?.start_time,
     cursor_request_id: cursor?.request_id,
   };

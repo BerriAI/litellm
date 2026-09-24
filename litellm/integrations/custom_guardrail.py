@@ -1644,5 +1644,5 @@ def log_guardrail_information(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)
 
-    vars(wrapper)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True  # rebind-ok: stamps the wrapper this call just built
+    vars(wrapper)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True
     return wrapper
