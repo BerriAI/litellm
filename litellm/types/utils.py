@@ -1,4 +1,3 @@
-# isort: off
 import json
 import re
 import time
@@ -57,16 +56,15 @@ from litellm.types.llms.base import (
 from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
+from . import litellm_params as _litellm_params
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
-from .litellm_params import ADDRESSED_RESPONSE_ID_FIELD as ADDRESSED_RESPONSE_ID_FIELD  # noqa: PLC0414  # explicit public re-export
 from .litellm_params import (
     AGENTIC_LOOP_KWARG_NAMES,
     BEDROCK_BATCH_KWARG_NAMES,
     KWARG_ARTIFACTS,
     OWNED_KWARG_NAMES,
 )
-from .litellm_params import TRUSTED_CALLBACK_VARS_FIELD as TRUSTED_CALLBACK_VARS_FIELD  # noqa: PLC0414  # explicit public re-export
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
 from .llms.openai import (
@@ -90,7 +88,6 @@ from .llms.openai import (
     WebSearchOptions,
 )
 from .rerank import RerankResponse as RerankResponse
-# isort: on
 
 
 def _nested_selector(
@@ -3914,6 +3911,9 @@ def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
 agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)  # mutable-ok: public type stays a list
 
 bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
+
+TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
+ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it  # mutable-ok: callers concat
     *OWNED_KWARG_NAMES,
