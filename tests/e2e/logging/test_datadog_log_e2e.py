@@ -408,13 +408,24 @@ class TestDataDogFailureDelivery:
         exactly one error-grade event: the retry loop invokes the failure
         handler once per attempt on the same logging object, so a dedup that
         only works for non-streaming calls multiplies every retried stream
-        failure by its attempt count (issue #42988)."""
+        failure by its attempt count (issue #42988).
+
+        The deployment fails with a connect error, not an auth error: the
+        router does not retry AuthenticationError when the model group has a
+        single deployment, so an invalid key would never reach the retry loop
+        this test exercises. api_base is an unroutable address, so every
+        attempt fails the same retryable way."""
         _assert_datadog_configured(client)
 
         model_name = f"dd-err-stream-{unique_marker()}"
         model_id = client.create_model(
             model_name,
-            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY, num_retries=2),
+            LiteLLMParamsBody(
+                model="anthropic/claude-haiku-4-5",
+                api_key=INVALID_UPSTREAM_API_KEY,
+                api_base="http://localhost:1",
+                num_retries=2,
+            ),
         )
         resources.defer(lambda: client.delete_model(model_id))
         key = client.key_with_alias(f"dd-err-stream-key-{unique_marker()}", models=[model_name])
@@ -422,8 +433,10 @@ class TestDataDogFailureDelivery:
 
         deadline = time.monotonic() + client.proxy.poll_timeout
         while True:
-            outcome = client.chat_raw(key, model_name, "trigger an upstream auth failure", stream=True, max_tokens=16)
-            assert not outcome.ok, "the call must fail; the deployment's upstream key is invalid"
+            outcome = client.chat_raw(
+                key, model_name, "trigger an upstream connect failure", stream=True, max_tokens=16
+            )
+            assert not outcome.ok, "the call must fail; the deployment's upstream is unreachable"
             assert outcome.status_code != -1, (
                 "network failure between the test and the proxy while provoking the provider "
                 "failure; retrying now could double-log the failure payload and falsely trip "
@@ -433,11 +446,8 @@ class TestDataDogFailureDelivery:
                 break
             time.sleep(client.proxy.poll_interval)
         assert "AnthropicException" in outcome.body, (
-            "never saw the upstream provider failure before the deadline; the key may still be "
-            f"propagating - last outcome {outcome.status_code}: {outcome.body[:200]}"
-        )
-        assert outcome.status_code == 401, (
-            f"an upstream auth failure must map to 401, got {outcome.status_code}: {outcome.body[:200]}"
+            "never saw the upstream provider failure before the deadline; the deployment may still "
+            f"be propagating - last outcome {outcome.status_code}: {outcome.body[:200]}"
         )
 
         events = dd_logs.poll_events_for_query(f"@model_group:{model_name}")
