@@ -134,7 +134,6 @@ router: Final = APIRouter()
 
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
-_OWNED_KWARG_NAMES: Final = frozenset(all_litellm_params)
 _METADATA_CARRIERS: Final = frozenset(("litellm_metadata", "metadata"))
 
 # Global registry to track registered pass-through routes and prevent memory leaks
@@ -585,7 +584,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _parsed_body = _parsed_body or {}
 
         owned_in_body: Final = MappingProxyType(
-            {k: _parsed_body.pop(k) for k in tuple(_parsed_body) if k in _OWNED_KWARG_NAMES}
+            {k: _parsed_body.pop(k) for k in tuple(_parsed_body) if k in all_litellm_params}
         )
         litellm_params_in_body: Final = MappingProxyType(
             {k: v for k, v in owned_in_body.items() if k not in _METADATA_CARRIERS}

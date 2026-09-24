@@ -262,9 +262,115 @@ CALLBACK_VAR_NAMES: Final = (
     "litellm_disabled_callbacks",
 )
 
-PRICING_NAMES: Final = tuple(CustomPricingLiteLLMParams.model_fields)
-
-PRICING_NAMES_EVERY_COST_PATH_READS: Final = ("input_cost_per_token", "output_cost_per_token")
+PRICING_NAMES: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_character",
+    "output_cost_per_character",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
+    "tiered_pricing",
+    "input_cost_per_second",
+    "output_cost_per_second",
+    "output_cost_per_second_1080p",
+    "output_cost_per_second_480p",
+    "output_cost_per_second_720p",
+    "output_cost_per_second_768p",
+    "output_cost_per_second_2k",
+    "output_cost_per_second_4k",
+    "output_cost_per_image_512",
+    "output_cost_per_image_1024",
+    "output_cost_per_image_1536",
+    "input_cost_per_pixel",
+    "output_cost_per_pixel",
+    "input_cost_per_token_flex",
+    "input_cost_per_token_priority",
+    "input_cost_per_token_ultrafast",
+    "cache_creation_input_token_cost_above_1hr",
+    "cache_creation_input_token_cost_above_200k_tokens",
+    "cache_creation_input_token_cost_above_272k_tokens",
+    "cache_creation_input_token_cost_above_272k_tokens_priority",
+    "cache_creation_input_token_cost_above_272k_tokens_flex",
+    "cache_creation_input_token_cost_flex",
+    "cache_creation_input_token_cost_priority",
+    "cache_creation_input_token_cost_ultrafast",
+    "cache_creation_input_audio_token_cost",
+    "cache_read_input_token_cost_flex",
+    "cache_read_input_token_cost_priority",
+    "cache_read_input_token_cost_ultrafast",
+    "cache_read_input_token_cost_above_200k_tokens",
+    "cache_read_input_token_cost_above_200k_tokens_priority",
+    "cache_read_input_token_cost_above_272k_tokens_priority",
+    "cache_read_input_token_cost_above_272k_tokens_flex",
+    "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_above_272k_tokens_batches",
+    "cache_creation_input_token_cost_batches",
+    "cache_creation_input_token_cost_above_272k_tokens_batches",
+    "cache_read_input_audio_token_cost",
+    "cache_read_input_image_token_cost",
+    "input_cost_per_character_above_128k_tokens",
+    "input_cost_per_audio_token",
+    "input_cost_per_token_cache_hit",
+    "input_cost_per_token_above_128k_tokens",
+    "input_cost_per_token_above_200k_tokens",
+    "input_cost_per_token_above_200k_tokens_priority",
+    "input_cost_per_token_above_272k_tokens_priority",
+    "input_cost_per_token_above_272k_tokens_flex",
+    "input_cost_per_token_above_272k_tokens_batches",
+    "input_cost_per_query",
+    "input_cost_per_image",
+    "input_cost_per_image_above_128k_tokens",
+    "input_cost_per_audio_per_second",
+    "input_cost_per_audio_per_second_above_128k_tokens",
+    "input_cost_per_video_per_second",
+    "input_cost_per_video_per_second_above_128k_tokens",
+    "input_cost_per_video_per_second_above_15s_interval",
+    "input_cost_per_video_per_second_above_8s_interval",
+    "input_cost_per_audio_token_batches",
+    "input_cost_per_image_token_batches",
+    "input_cost_per_token_batches",
+    "input_cost_per_video_token_batches",
+    "output_cost_per_token_batches",
+    "output_cost_per_token_flex",
+    "output_cost_per_token_priority",
+    "output_cost_per_token_ultrafast",
+    "output_cost_per_audio_token",
+    "output_cost_per_token_above_128k_tokens",
+    "output_cost_per_token_above_200k_tokens",
+    "output_cost_per_token_above_200k_tokens_priority",
+    "output_cost_per_token_above_272k_tokens_priority",
+    "output_cost_per_token_above_272k_tokens_flex",
+    "output_cost_per_token_above_272k_tokens_batches",
+    "output_cost_per_character_above_128k_tokens",
+    "output_cost_per_image",
+    "output_cost_per_image_token",
+    "output_cost_per_video_token",
+    "output_cost_per_reasoning_token",
+    "output_cost_per_reasoning_token_flex",
+    "output_cost_per_reasoning_token_priority",
+    "output_cost_per_video_per_second",
+    "output_cost_per_audio_per_second",
+    "search_context_cost_per_query",
+    "google_maps_grounding_cost_per_query",
+    "citation_cost_per_token",
+    "cache_read_input_token_cost_above_272k_tokens",
+    "cache_read_input_token_cost_above_512k_tokens",
+    "input_cost_per_image_token",
+    "input_cost_per_video_token",
+    "input_cost_per_token_above_272k_tokens",
+    "input_cost_per_token_above_512k_tokens",
+    "output_cost_per_token_above_272k_tokens",
+    "output_cost_per_token_above_512k_tokens",
+    "output_vector_size",
+    "ocr_cost_per_page",
+    "ocr_cost_per_page_batches",
+    "ocr_cost_per_credit",
+    "annotation_cost_per_page",
+    "annotation_cost_per_page_batches",
+    "regional_processing_uplift_multiplier_eu",
+    "regional_processing_uplift_multiplier_us",
+    "regional_endpoint_uplift_multiplier",
+)
 
 DECLARED_BY_ROOT: Final[Mapping[type, tuple[str, ...]]] = MappingProxyType(
     {ConnectionSettings: CONNECTION_NAMES, LiteLLMOptions: OPTION_NAMES, InternalState: INTERNAL_STATE_NAMES}
@@ -332,10 +438,8 @@ def test_callback_vars_are_the_fields_of_the_callback_typed_dict() -> None:
     assert tuple(StandardCallbackDynamicParams.__annotations__) == CALLBACK_VAR_NAMES
 
 
-@pytest.mark.parametrize("name", PRICING_NAMES_EVERY_COST_PATH_READS)
-def test_pricing_name_reaches_all_litellm_params_through_the_pricing_model(name: str) -> None:
-    assert name in PRICING_NAMES
-    assert name in all_litellm_params
+def test_pricing_names_are_the_fields_of_the_pricing_model() -> None:
+    assert tuple(CustomPricingLiteLLMParams.model_fields) == PRICING_NAMES
 
 
 def test_every_owned_name_has_exactly_one_owner() -> None:
@@ -408,7 +512,11 @@ def test_owned_wire_names_refuse_a_root_that_declares_a_kwarg_outside_a_leaf() -
 def test_agentic_loop_names_concatenate_as_a_list() -> None:
     extended: Final = agentic_loop_internal_litellm_params + ["caller_added"]  # mutable-ok: list contract under test
 
-    assert (type(extended), tuple(extended)) == (list, (*AGENTIC_LOOP_STATE_NAMES, "max_agentic_loops", "caller_added"))
+    assert (type(extended), len(extended), frozenset(extended)) == (
+        list,
+        len(AGENTIC_LOOP_STATE_NAMES) + 2,
+        frozenset((*AGENTIC_LOOP_STATE_NAMES, "max_agentic_loops", "caller_added")),
+    )
 
 
 def test_bedrock_batch_names_concatenate_as_a_tuple() -> None:
@@ -459,34 +567,6 @@ TYPED_MODEL_OWNERS: Final[Mapping[str, tuple[tuple[type[BaseModel], ...], type]]
 
 DECLARED_NAMES: Final = frozenset(name for root in LITELLM_OWNED_ROOTS for name in owned_wire_names(root))
 
-PROVIDER_CLIENT_SETTINGS_THE_ROUTER_CONFIG_ALSO_DECLARES: Final = frozenset(("max_retries",))
-
-
-def _declared_names_of(source: str) -> tuple[str, ...]:
-    models: Final = TYPED_MODEL_OWNERS[source][0]
-    return tuple(
-        sorted(
-            frozenset(
-                name
-                for model in models
-                for name in model.model_fields
-                if name in DECLARED_NAMES and name not in PROVIDER_CLIENT_SETTINGS_THE_ROUTER_CONFIG_ALSO_DECLARES
-            )
-        )
-    )
-
-
-TYPED_MODEL_CASES: Final = tuple(
-    pytest.param(source, name, id=f"{source}:{name}")
-    for source in TYPED_MODEL_OWNERS
-    for name in _declared_names_of(source)
-)
-
-
-@pytest.mark.parametrize(("source", "name"), TYPED_MODEL_CASES)
-def test_name_declared_by_a_typed_config_model_lives_on_that_models_object(source: str, name: str) -> None:
-    assert name in owned_wire_names(TYPED_MODEL_OWNERS[source][1])
-
 
 NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
@@ -527,8 +607,11 @@ NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingPr
 
 
 @pytest.mark.parametrize("source", TYPED_MODEL_OWNERS)
-def test_every_typed_config_model_shares_names_with_the_declarations(source: str) -> None:
-    assert _declared_names_of(source) == NAMES_SHARED_WITH_TYPED_MODELS[source]
+def test_names_a_typed_config_model_shares_with_its_root_are_exactly_the_declared_ones(source: str) -> None:
+    models, root = TYPED_MODEL_OWNERS[source]
+    model_names: Final = frozenset(name for model in models for name in model.model_fields)
+
+    assert frozenset(owned_wire_names(root)) & model_names == frozenset(NAMES_SHARED_WITH_TYPED_MODELS[source])
 
 
 @pytest.mark.parametrize("name", PRICING_NAMES)

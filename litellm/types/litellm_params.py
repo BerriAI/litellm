@@ -5,7 +5,8 @@ field on exactly one leaf below. The fields are the registry: `all_litellm_param
 derived from them. Three roots partition the names by where a value lives: `ConnectionSettings`
 (how the SDK reaches the provider), `LiteLLMOptions` (what the caller or deployment asks
 LiteLLM to do) and `InternalState` (what LiteLLM stamps on a call and never accepts from a
-client). A field's kwarg name is its field name unless it carries `wire(...)` metadata.
+client). A field's kwarg name is its field name unless it carries `wire(...)` metadata, and its
+type is what its readers accept, so a reader that takes a model or its mapping form gets both.
 `KWARG_ARTIFACTS` names the four registered kwargs that are not request fields.
 """
 
@@ -124,7 +125,7 @@ class RoutingOptions:
     fallbacks: Sequence[str | Mapping[str, Sequence[str]]] | None = None
     context_window_fallback_dict: Mapping[str, str] | None = None
     num_retries: int | None = None
-    retry_policy: "RetryPolicy | None" = None
+    retry_policy: "RetryPolicy | Mapping[str, object] | None" = None
     retry_strategy: Literal["constant_retry", "exponential_backoff_retry"] | None = None
     routing_strategy: str | None = None
     cooldown_time: float | None = None
@@ -287,7 +288,7 @@ class CallState:
     """Identity and bookkeeping LiteLLM attaches to one call."""
 
     litellm_call_id: str | None = None
-    completion_call_id: str | None = None
+    completion_call_id: str | None = None  # TODO: nothing reads it; registered before this module existed
     data_residency: str | None = None
     litellm_logging_obj: "Logging | None" = None
     preset_cache_key: str | None = None
