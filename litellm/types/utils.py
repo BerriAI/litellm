@@ -3908,7 +3908,7 @@ def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
     )
 
 
-agentic_loop_internal_litellm_params: Final = list(  # mutable-ok: kept a list to match the base type for downstream users
+agentic_loop_internal_litellm_params: Final = list(  # mutable-ok: public type stays a list
     names_in(ParamGroup.AGENTIC_LOOP_STATE)
 )
 
