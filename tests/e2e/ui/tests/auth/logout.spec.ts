@@ -1,10 +1,14 @@
 import { test, expect } from "@playwright/test";
-import { ADMIN_STORAGE_PATH } from "../../constants";
+import { Role, users } from "../../fixtures/users";
+import { logInThroughLoginPage } from "../../helpers/userOnboarding";
 
 test.describe("Logout", () => {
-  test.use({ storageState: ADMIN_STORAGE_PATH });
+  test.use({ storageState: { cookies: [], origins: [] } });
 
   test("Clicking Logout clears the session and forces re-login on a protected page", async ({ page }) => {
+    const admin = users[Role.ProxyAdmin];
+    await logInThroughLoginPage(page, admin.email, admin.password);
+
     await page.goto("/ui");
     // Scope to the sidebar; the top-bar breadcrumb also shows "Virtual Keys".
     await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 10_000 });
