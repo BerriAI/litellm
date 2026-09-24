@@ -26207,7 +26207,6 @@
     },
     "gemini-2.5-flash-image": {
         "deprecation_date": "2027-03-15",
-        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
@@ -49417,7 +49416,6 @@
     },
     "vertex_ai/gemini-2.5-flash-image": {
         "deprecation_date": "2027-03-15",
-        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
