@@ -32,6 +32,7 @@ from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
 from litellm.proxy._types import *
@@ -1209,7 +1210,10 @@ async def get_spend_capture_rate(
     project_ids: Annotated[
         list[str] | None,
         fastapi.Query(
-            description="OpenAI project ids to scope the bill to; omit to compare against the whole organization"
+            description=(
+                "Scope the OpenAI bill to these project ids; omit to compare against the whole organization. Captured "
+                "spend is never scoped, so pass every project LiteLLM's OpenAI keys belong to"
+            )
         ),
     ] = None,
 ) -> CaptureRateReport:
@@ -1235,6 +1239,11 @@ async def get_spend_capture_rate(
         )
     if end_date < start_date:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_date must not be before start_date")
+    if (end_date - start_date).days >= SPEND_CAPTURE_RATE_MAX_RANGE_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Date range too large; maximum is {SPEND_CAPTURE_RATE_MAX_RANGE_DAYS} days",
+        )
     result: Final = await capture_rate_report(
         prisma_client,
         provider=provider,

@@ -42259,6 +42259,7 @@ export interface components {
             lookback_days: number;
             /**
              * Openai Project Ids
+             * @description Scope the OpenAI bill to these project ids; empty compares against the whole organization. Captured spend is never scoped, so list every project LiteLLM's OpenAI keys belong to
              * @default []
              */
             openai_project_ids: string[];
@@ -65459,7 +65460,7 @@ export interface operations {
                 provider?: "openai";
                 /** @description Ratio under which the report flags below_threshold */
                 threshold?: number;
-                /** @description OpenAI project ids to scope the bill to; omit to compare against the whole organization */
+                /** @description Scope the OpenAI bill to these project ids; omit to compare against the whole organization. Captured spend is never scoped, so pass every project LiteLLM's OpenAI keys belong to */
                 project_ids?: string[] | null;
             };
             header?: never;

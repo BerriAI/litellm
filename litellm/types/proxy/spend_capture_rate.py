@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from litellm.constants import SPEND_CAPTURE_RATE_MAX_RANGE_DAYS
+
 SpendCaptureProvider = Literal["openai"]
 
 
@@ -19,8 +21,14 @@ class SpendCaptureRateCheckSettings(BaseModel):
 
     providers: tuple[SpendCaptureProvider, ...] = Field(("openai",), min_length=1)
     threshold: float = Field(0.9, gt=0, le=1)
-    lookback_days: int = Field(7, ge=1, le=180)
-    openai_project_ids: tuple[str, ...] = ()
+    lookback_days: int = Field(7, ge=1, le=SPEND_CAPTURE_RATE_MAX_RANGE_DAYS)
+    openai_project_ids: tuple[str, ...] = Field(
+        (),
+        description=(
+            "Scope the OpenAI bill to these project ids; empty compares against the whole organization. Captured "
+            "spend is never scoped, so list every project LiteLLM's OpenAI keys belong to"
+        ),
+    )
 
 
 class CaptureRateDay(BaseModel):

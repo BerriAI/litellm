@@ -1,3 +1,4 @@
+import math
 from typing import Final
 
 from prometheus_client import REGISTRY
@@ -20,7 +21,7 @@ def _samples(metric_name: str) -> list[Sample]:
     return [sample for metric in REGISTRY.collect() for sample in metric.samples if sample.name == metric_name]
 
 
-def test_capture_rate_gauge_holds_the_latest_rate_per_provider() -> None:
+def test_capture_rate_gauge_holds_the_latest_rate_per_provider_and_nan_when_there_is_none() -> None:
     _clear_prometheus_registry()
     try:
         logger: Final = PrometheusLogger()
@@ -31,5 +32,10 @@ def test_capture_rate_gauge_holds_the_latest_rate_per_provider() -> None:
 
         samples: Final = _samples(METRIC)
         assert [(sample.labels, sample.value) for sample in samples] == [({"api_provider": "openai"}, 0.91)]
+
+        logger.set_spend_capture_rate(api_provider="openai", capture_rate=None)
+
+        (unavailable,) = _samples(METRIC)
+        assert unavailable.labels == {"api_provider": "openai"} and math.isnan(unavailable.value)
     finally:
         _clear_prometheus_registry()

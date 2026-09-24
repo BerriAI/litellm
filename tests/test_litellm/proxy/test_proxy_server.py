@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 from unittest import mock
-from unittest.mock import AsyncMock, MagicMock, create_autospec, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open, patch
 
 import click
 import fastapi.routing
@@ -15207,33 +15207,46 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
     assert proxy_server_module.jwt_handler.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
 
 
-def test_spend_capture_rate_check_job_is_scheduled_only_when_configured():
+def test_spend_capture_rate_check_job_validates_the_boot_settings_and_reads_them_again_on_every_run(monkeypatch):
     from pydantic import ValidationError
 
     from litellm.constants import SPEND_CAPTURE_RATE_CHECK_JOB_ID
     from litellm.proxy.proxy_server import ProxyStartupEvent
 
     scheduler = MagicMock()
-    ProxyStartupEvent._initialize_spend_capture_rate_check_job(
-        scheduler=scheduler, proxy_logging_obj=MagicMock(), prisma_client=MagicMock(), general_settings={}
-    )
-    scheduler.add_job.assert_not_called()
+    general_settings: dict[str, object] = {}
+    seen_settings = []
 
+    async def fake_scheduled_check(prisma_client, settings, *, pod_lock_manager, alert, publish):
+        seen_settings.append(settings)
+        return ()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.run_scheduled_spend_capture_rate_check", fake_scheduled_check)
     ProxyStartupEvent._initialize_spend_capture_rate_check_job(
         scheduler=scheduler,
         proxy_logging_obj=MagicMock(),
         prisma_client=MagicMock(),
-        general_settings={"spend_capture_rate_check": {"providers": ["openai"], "threshold": 0.85}},
+        read_general_settings=lambda: general_settings,
     )
     scheduler.add_job.assert_called_once()
     assert scheduler.add_job.call_args.kwargs["id"] == SPEND_CAPTURE_RATE_CHECK_JOB_ID
+    check = scheduler.add_job.call_args.args[0]
+
+    asyncio.run(check())
+    assert seen_settings == []
+
+    general_settings["spend_capture_rate_check"] = {"providers": ["openai"], "threshold": 0.85}
+    asyncio.run(check())
+    general_settings["spend_capture_rate_check"] = {"threshold": 0.7, "lookback_days": 3}
+    asyncio.run(check())
+    assert [(s.threshold, s.lookback_days) for s in seen_settings] == [(0.85, 7), (0.7, 3)]
 
     with pytest.raises(ValidationError, match="threshhold"):
         ProxyStartupEvent._initialize_spend_capture_rate_check_job(
             scheduler=scheduler,
             proxy_logging_obj=MagicMock(),
             prisma_client=MagicMock(),
-            general_settings={"spend_capture_rate_check": {"threshhold": 0.85}},
+            read_general_settings=lambda: {"spend_capture_rate_check": {"threshhold": 0.85}},
         )
 
 
@@ -15253,6 +15266,7 @@ async def test_spend_capture_rate_check_job_publishes_to_prometheus_and_alerts(m
 
     async def fake_scheduled_check(prisma_client, settings, *, pod_lock_manager, alert, publish):
         publish("openai", 0.42)
+        publish("openai", None)
         await alert("under the threshold")
         return ()
 
@@ -15261,12 +15275,15 @@ async def test_spend_capture_rate_check_job_publishes_to_prometheus_and_alerts(m
         scheduler=scheduler,
         proxy_logging_obj=proxy_logging,
         prisma_client=MagicMock(),
-        general_settings={"spend_capture_rate_check": {}},
+        read_general_settings=lambda: {"spend_capture_rate_check": {}},
     )
 
     await scheduler.add_job.call_args.args[0]()
 
-    prometheus.set_spend_capture_rate.assert_called_once_with(api_provider="openai", capture_rate=0.42)
+    assert prometheus.set_spend_capture_rate.call_args_list == [
+        call(api_provider="openai", capture_rate=0.42),
+        call(api_provider="openai", capture_rate=None),
+    ]
     proxy_logging.alerting_handler.assert_awaited_once()
     assert proxy_logging.alerting_handler.await_args.kwargs["message"] == "under the threshold"
     assert proxy_logging.alerting_handler.await_args.kwargs["level"] == "High"

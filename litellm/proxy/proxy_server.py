@@ -5064,6 +5064,11 @@ def _bind_general_settings_store(settings: SettingsStore) -> None:
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
 
 
+def _current_general_settings() -> Mapping[str, object]:
+    """The live ``general_settings``, whichever object a config reload has bound since the caller was created."""
+    return general_settings
+
+
 @lru_cache(maxsize=4096)
 def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
     verbose_proxy_logger.warning(
@@ -10456,7 +10461,7 @@ class ProxyStartupEvent:
             scheduler=scheduler,
             proxy_logging_obj=proxy_logging_obj,
             prisma_client=prisma_client,
-            general_settings=general_settings,
+            read_general_settings=_current_general_settings,
         )
 
         ### PTU DAILY ROLLUP ###
@@ -10839,12 +10844,10 @@ class ProxyStartupEvent:
         scheduler: AsyncIOScheduler,
         proxy_logging_obj: ProxyLogging,
         prisma_client: PrismaClient,
-        general_settings: Mapping[str, object],
+        read_general_settings: Callable[[], Mapping[str, object]],
     ) -> None:
-        raw_settings: Final = general_settings.get("spend_capture_rate_check")
-        if raw_settings is None:
-            return
-        settings: Final = SpendCaptureRateCheckSettings.model_validate(raw_settings)
+        """The job always runs; each run re-reads ``spend_capture_rate_check`` so a config reload applies to the next one."""
+        cls._spend_capture_rate_check_settings(read_general_settings())
 
         async def alert(message: str) -> None:
             await proxy_logging_obj.alerting_handler(
@@ -10853,7 +10856,7 @@ class ProxyStartupEvent:
                 alert_type=AlertType.failed_tracking_spend,
             )
 
-        def publish(provider: str, capture_rate: float) -> None:
+        def publish(provider: str, capture_rate: float | None) -> None:
             from litellm.integrations.prometheus import PrometheusLogger
 
             for logger in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=PrometheusLogger):
@@ -10861,6 +10864,9 @@ class ProxyStartupEvent:
                     logger.set_spend_capture_rate(api_provider=provider, capture_rate=capture_rate)
 
         async def check() -> None:
+            settings: Final = cls._spend_capture_rate_check_settings(read_general_settings())
+            if settings is None:
+                return
             await run_scheduled_spend_capture_rate_check(
                 prisma_client,
                 settings,
@@ -10880,6 +10886,13 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
         )
+
+    @staticmethod
+    def _spend_capture_rate_check_settings(
+        general_settings: Mapping[str, object],
+    ) -> SpendCaptureRateCheckSettings | None:
+        raw_settings: Final = general_settings.get("spend_capture_rate_check")
+        return None if raw_settings is None else SpendCaptureRateCheckSettings.model_validate(raw_settings)
 
     @classmethod
     async def _initialize_slack_alerting_jobs(

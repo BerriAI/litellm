@@ -7665,6 +7665,46 @@ def test_capture_rate_rejects_a_reversed_range(client, monkeypatch):
     assert response.status_code == 400
 
 
+def test_capture_rate_rejects_a_range_over_the_maximum(client, monkeypatch):
+    from litellm.constants import SPEND_CAPTURE_RATE_MAX_RANGE_DAYS
+    from litellm.proxy.spend_tracking.spend_capture_rate import compute_capture_rate
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    windows = []
+
+    async def fake_report(prisma_client, *, provider, start_date, end_date, threshold, openai_project_ids=()):
+        windows.append((start_date, end_date))
+        return compute_capture_rate(
+            provider=provider,
+            start_date=start_date,
+            end_date=end_date,
+            captured_by_day={},
+            billed_by_day={},
+            threshold=threshold,
+        )
+
+    monkeypatch.setattr(spend_management_endpoints, "capture_rate_report", fake_report)
+    start = datetime.date(2026, 1, 1)
+    widest_end = start + datetime.timedelta(days=SPEND_CAPTURE_RATE_MAX_RANGE_DAYS - 1)
+    app.dependency_overrides[ps.user_api_key_auth] = _admin_auth
+    try:
+        too_wide = client.get(
+            f"/spend/capture_rate?start_date={start}&end_date={widest_end + datetime.timedelta(days=1)}",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        widest = client.get(
+            f"/spend/capture_rate?start_date={start}&end_date={widest_end}",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+    assert too_wide.status_code == 400
+    assert str(SPEND_CAPTURE_RATE_MAX_RANGE_DAYS) in too_wide.json()["detail"]
+    assert widest.status_code == 200
+    assert windows == [(start, widest_end)]
+    assert len(widest.json()["days"]) == SPEND_CAPTURE_RATE_MAX_RANGE_DAYS
+
+
 def test_capture_rate_returns_the_report_for_the_requested_window(client, monkeypatch):
     from litellm.proxy.spend_tracking.spend_capture_rate import compute_capture_rate
 

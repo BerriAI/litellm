@@ -13,18 +13,17 @@ from pydantic import ValidationError
 from pytest_postgresql import factories
 
 from litellm.constants import (
-    OPENAI_ORGANIZATION_COSTS_URL,
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
     SPEND_CAPTURE_RATE_DOCS_URL,
+    SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
+from litellm.llms.openai.organization_costs import OPENAI_ADMIN_KEY_ENV_VAR
 from litellm.proxy.spend_tracking.spend_capture_rate import (
-    OPENAI_ADMIN_KEY_ENV_VAR,
     ProviderBillingCredentialMissing,
     ProviderBillingRequestFailed,
     alert_message,
     captured_spend_by_day,
     compute_capture_rate,
-    fetch_openai_daily_costs,
     run_scheduled_spend_capture_rate_check,
     run_spend_capture_rate_check,
 )
@@ -52,18 +51,15 @@ def _bucket(day: str, *amounts: float) -> dict[str, object]:
 class _FakeCostsApi:
     """Serves ``pages`` in order and records every request it saw."""
 
-    def __init__(self, *pages: dict[str, object] | httpx.Response | Exception) -> None:
-        self._pages = list(pages)
+    def __init__(self, *pages: dict[str, object] | httpx.Response) -> None:
+        self.responses = [
+            page if isinstance(page, httpx.Response) else httpx.Response(200, json=page) for page in pages
+        ]
         self.calls: list[tuple[str, Mapping[str, object], Mapping[str, str]]] = []
 
     async def __call__(self, url: str, params: Mapping[str, object], headers: Mapping[str, str]) -> httpx.Response:
         self.calls.append((url, dict(params), dict(headers)))
-        page = self._pages.pop(0)
-        if isinstance(page, Exception):
-            raise page
-        if isinstance(page, httpx.Response):
-            return page
-        return httpx.Response(200, json=page)
+        return self.responses[len(self.calls) - 1]
 
 
 def _page(*buckets: dict[str, object], next_page: str | None = None) -> dict[str, object]:
@@ -74,58 +70,6 @@ def _fake_prisma(rows: list[dict[str, object]]) -> MagicMock:
     prisma = MagicMock()
     prisma.db.query_raw = AsyncMock(return_value=rows)
     return prisma
-
-
-@pytest.mark.asyncio
-async def test_openai_costs_are_summed_per_utc_day_across_pages_and_line_items():
-    api = _FakeCostsApi(
-        _page(_bucket("2026-09-20", 10.0, 2.5), _bucket("2026-09-21", 4.0), next_page="page_2"),
-        _page(_bucket("2026-09-22", 1.0)),
-    )
-
-    billed = await fetch_openai_daily_costs(date(2026, 9, 20), date(2026, 9, 22), admin_key=_ADMIN_KEY, http_get=api)
-
-    assert dict(billed) == {"2026-09-20": 12.5, "2026-09-21": 4.0, "2026-09-22": 1.0}
-    first, second = api.calls
-    assert first[0] == OPENAI_ORGANIZATION_COSTS_URL
-    assert first[2] == {"Authorization": f"Bearer {_ADMIN_KEY}"}
-    assert first[1]["start_time"] == _utc_midnight("2026-09-20")
-    assert first[1]["end_time"] == _utc_midnight("2026-09-23")
-    assert first[1]["bucket_width"] == "1d"
-    assert "page" not in first[1]
-    assert "project_ids[]" not in first[1]
-    assert second[1] == {**first[1], "page": "page_2"}
-
-
-@pytest.mark.asyncio
-async def test_openai_costs_are_scoped_to_the_configured_projects():
-    api = _FakeCostsApi(_page())
-
-    billed = await fetch_openai_daily_costs(
-        date(2026, 9, 20), date(2026, 9, 20), admin_key=_ADMIN_KEY, project_ids=("proj_a", "proj_b"), http_get=api
-    )
-
-    assert dict(billed) == {}
-    assert api.calls[0][1]["project_ids[]"] == ("proj_a", "proj_b")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "page, detail_fragment",
-    [
-        (httpx.Response(401, json={"error": {"message": "Incorrect API key provided"}}), "HTTP 401"),
-        (httpx.ConnectError("connection refused"), "request failed"),
-        ({"object": "page", "data": [{"start_time": "not-a-timestamp"}]}, "unexpected response shape"),
-    ],
-)
-async def test_an_unreadable_openai_bill_is_a_request_failure_not_an_exception(page, detail_fragment):
-    api = _FakeCostsApi(page)
-
-    billed = await fetch_openai_daily_costs(date(2026, 9, 20), date(2026, 9, 20), admin_key=_ADMIN_KEY, http_get=api)
-
-    assert isinstance(billed, ProviderBillingRequestFailed)
-    assert billed.provider == "openai"
-    assert detail_fragment in billed.detail
 
 
 def test_capture_rate_covers_every_day_in_the_range_and_flags_the_threshold():
@@ -268,14 +212,33 @@ async def test_check_alerts_on_a_missing_admin_key_and_publishes_nothing(monkeyp
     )
 
     assert result == ProviderBillingCredentialMissing("openai", OPENAI_ADMIN_KEY_ENV_VAR)
-    publish.assert_not_called()
+    publish.assert_called_once_with("openai", None)
     alert.assert_awaited_once()
     assert api.calls == []
     prisma.db.query_raw.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_check_publishes_nothing_when_the_provider_billed_nothing(monkeypatch):
+async def test_check_alerts_on_an_unreadable_bill_and_publishes_no_rate(monkeypatch):
+    monkeypatch.setenv(OPENAI_ADMIN_KEY_ENV_VAR, _ADMIN_KEY)
+    api = _FakeCostsApi(httpx.Response(401, json={"error": {"message": "Incorrect API key provided"}}))
+    prisma = _fake_prisma([{"date": "2026-09-22", "spend": 5.0}])
+    alert = AsyncMock()
+    publish = MagicMock()
+
+    (result,) = await run_spend_capture_rate_check(
+        prisma, SpendCaptureRateCheckSettings(), alert=alert, publish=publish, today=date(2026, 9, 23), http_get=api
+    )
+
+    assert result == ProviderBillingRequestFailed("openai", "HTTP 401: " + api.responses[0].text[:300])
+    publish.assert_called_once_with("openai", None)
+    alert.assert_awaited_once()
+    assert "HTTP 401" in alert.await_args.args[0]
+    prisma.db.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_check_publishes_no_rate_when_the_provider_billed_nothing(monkeypatch):
     monkeypatch.setenv(OPENAI_ADMIN_KEY_ENV_VAR, _ADMIN_KEY)
     api = _FakeCostsApi(_page())
     prisma = _fake_prisma([{"date": "2026-09-22", "spend": 5.0}])
@@ -292,7 +255,7 @@ async def test_check_publishes_nothing_when_the_provider_billed_nothing(monkeypa
     )
 
     assert isinstance(report, CaptureRateReport) and report.capture_rate is None
-    publish.assert_not_called()
+    publish.assert_called_once_with("openai", None)
     alert.assert_not_awaited()
 
 
@@ -306,12 +269,14 @@ def _pod_lock(acquired: bool) -> MagicMock:
     return lock
 
 
-async def _scheduled_run_under_threshold(lock: MagicMock, monkeypatch) -> tuple[AsyncMock, MagicMock]:
+async def _scheduled_run(
+    lock: MagicMock, monkeypatch, *, captured: float, prisma: MagicMock | None = None
+) -> tuple[AsyncMock, MagicMock]:
     monkeypatch.setenv(OPENAI_ADMIN_KEY_ENV_VAR, _ADMIN_KEY)
     alert = AsyncMock()
     publish = MagicMock()
-    results = await run_scheduled_spend_capture_rate_check(
-        _fake_prisma([{"date": "2026-09-22", "spend": 50.0}]),
+    await run_scheduled_spend_capture_rate_check(
+        prisma or _fake_prisma([{"date": "2026-09-22", "spend": captured}]),
         SpendCaptureRateCheckSettings(lookback_days=1),
         pod_lock_manager=lock,
         alert=alert,
@@ -319,9 +284,34 @@ async def _scheduled_run_under_threshold(lock: MagicMock, monkeypatch) -> tuple[
         today=date(2026, 9, 23),
         http_get=_FakeCostsApi(_page(_bucket("2026-09-22", 200.0))),
     )
-    (report,) = results
-    assert isinstance(report, CaptureRateReport) and report.below_threshold
     return alert, publish
+
+
+async def _scheduled_run_under_threshold(lock: MagicMock, monkeypatch) -> tuple[AsyncMock, MagicMock]:
+    return await _scheduled_run(lock, monkeypatch, captured=50.0)
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_scheduled_check_publishes_and_never_touches_the_alert_lock(monkeypatch):
+    lock = _pod_lock(acquired=False)
+
+    alert, publish = await _scheduled_run(lock, monkeypatch, captured=190.0)
+
+    publish.assert_called_once_with("openai", 0.95)
+    alert.assert_not_awaited()
+    lock.acquire_lock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_scheduled_check_that_fails_never_claims_the_alert_window(monkeypatch):
+    lock = _pod_lock(acquired=True)
+    prisma = MagicMock()
+    prisma.db.query_raw = AsyncMock(side_effect=RuntimeError("database gone"))
+
+    with pytest.raises(RuntimeError, match="database gone"):
+        await _scheduled_run(lock, monkeypatch, captured=0.0, prisma=prisma)
+
+    lock.acquire_lock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -379,6 +369,8 @@ def test_settings_reject_typos_and_out_of_range_values():
         SpendCaptureRateCheckSettings.model_validate({"providers": []})
     with pytest.raises(ValidationError, match="providers"):
         SpendCaptureRateCheckSettings.model_validate({"providers": ["anthropic"]})
+    with pytest.raises(ValidationError, match="lookback_days"):
+        SpendCaptureRateCheckSettings.model_validate({"lookback_days": SPEND_CAPTURE_RATE_MAX_RANGE_DAYS + 1})
     parsed = SpendCaptureRateCheckSettings.model_validate(
         json.loads('{"providers": ["openai"], "threshold": 0.8, "lookback_days": 3, "openai_project_ids": ["p"]}')
     )
