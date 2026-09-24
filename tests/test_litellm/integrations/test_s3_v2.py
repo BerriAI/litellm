@@ -657,6 +657,36 @@ async def test_async_upload_exhausts_403_retries_through_production_http_handler
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transient_status", [500, 503])
+async def test_async_upload_recovers_from_transient_5xx_through_production_http_handler(
+    transient_status: int, rotating_profile: str, caplog
+):
+    """
+    AsyncHTTPHandler.put raises MaskedHTTPStatusError on 5xx instead of returning the response, so a retry
+    loop that only inspects returned status codes never runs (#42868).
+    """
+    test_element = s3BatchLoggingElement(
+        s3_object_key=f"2025-09-14/test-{transient_status}.json",
+        payload={"test": str(transient_status)},
+        s3_object_download_filename=f"test-{transient_status}.json",
+    )
+    async with _s3_logger_on_production_handler(rotating_profile, [transient_status, 200]) as (
+        logger,
+        requests,
+        mock_sleep,
+    ):
+        uploaded = await logger.async_upload_data_to_s3(test_element)
+
+    assert uploaded is True
+    assert len(requests) == 2
+    assert all(request.method == "PUT" for request in requests)
+    assert requests[0].url == requests[1].url
+    assert requests[0].content == requests[1].content
+    mock_sleep.assert_awaited_once_with(1)
+    assert "Error uploading to s3" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_async_upload_does_not_retry_404_through_production_http_handler(rotating_profile: str, caplog):
     test_element = s3BatchLoggingElement(
         s3_object_key="2025-09-14/test-404.json",
