@@ -8194,6 +8194,76 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
     assert "Max budget: 2.0" in exc_info.value.message
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_member_spend, expect_blocked", [(2.4, True), (2.39, False)])
+async def test_team_member_budget_enforced_for_builder_only_callers(team_member_spend, expect_blocked):
+    """Callers that stop at the builder and skip common_checks (the MCP OAuth dependency) still reject a member
+    at their team member budget with the same 422 the full auth flow returns."""
+    from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.user_api_key_auth import enforce_team_member_budget_without_common_checks
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+
+    team_id = "team-builder-only"
+    user_id = "user-builder-only"
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(key=f"team_id:{team_id}", value=LiteLLM_TeamTableCachedObj(team_id=team_id))
+    await user_api_key_cache.async_set_cache(
+        key=user_id, value=LiteLLM_UserTable(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER)
+    )
+    await user_api_key_cache.async_set_cache(
+        key=team_membership_reservation_cache_key(team_id=team_id, user_id=user_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=team_member_spend,
+            budget_id="budget-builder-only",
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=2.4),
+        ),
+    )
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/mcp/server/oauth/srv/authorize"
+    mock_request.method = "GET"
+    mock_request.headers = {}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    async def _enforce():
+        await enforce_team_member_budget_without_common_checks(
+            user_api_key_auth_obj=UserAPIKeyAuth(api_key="hashed", team_id=team_id, user_id=user_id),
+            request=mock_request,
+            request_data={},
+            route="/v1/mcp/server/oauth/srv/authorize",
+            api_key="Bearer sk-builder-only",
+        )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: module-global proxy state
+        patch(  # test-quality-ok: seed the team, user and membership without a DB
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
+        ),
+        patch(  # test-quality-ok: module-global proxy state
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+        ),
+        patch(  # test-quality-ok: the live counter needs Redis or a DB; pin the spend the check compares
+            "litellm.proxy.proxy_server.get_current_spend",
+            new=AsyncMock(return_value=team_member_spend),
+        ),
+    ):
+        if not expect_blocked:
+            await _enforce()
+            return
+        with pytest.raises(ProxyException) as exc_info:
+            await _enforce()
+
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert f"TeamMember={user_id}:{team_id}" in exc_info.value.message
+
+
 async def _proxy_exception_for_key(
     api_key: str,
     general_settings: dict[str, bool],

@@ -205,8 +205,10 @@ if MCP_AVAILABLE:
         UserMCPManagementMode,
         is_per_server_oauth_discovery_eligible,
     )
+    from litellm.proxy.auth.auth_utils import get_request_route
     from litellm.proxy.auth.user_api_key_auth import (
         _user_api_key_auth_builder,
+        enforce_team_member_budget_without_common_checks,
         user_api_key_auth,
     )
     from litellm.proxy.common_utils.http_parsing_utils import (
@@ -2010,9 +2012,6 @@ if MCP_AVAILABLE:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
                 global_mcp_server_manager,
             )
-            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
-                get_request_route,
-            )
 
             server_id: Final[str] = request.path_params.get("server_id", "")
             if server_id:
@@ -2049,7 +2048,7 @@ if MCP_AVAILABLE:
         request_data = await _read_request_body(request=request)
         request_data = populate_request_with_path_params(request_data=request_data, request=request)
 
-        return await _user_api_key_auth_builder(
+        user_api_key_dict: Final = await _user_api_key_auth_builder(
             request=request,
             api_key=api_key,
             azure_api_key_header="",
@@ -2058,6 +2057,15 @@ if MCP_AVAILABLE:
             azure_apim_header=None,
             request_data=request_data,
         )
+        # This dependency never reaches common_checks, which is the only other place the member budget is enforced.
+        await enforce_team_member_budget_without_common_checks(
+            user_api_key_auth_obj=user_api_key_dict,
+            request=request,
+            request_data=request_data,
+            route=get_request_route(request),
+            api_key=api_key,
+        )
+        return user_api_key_dict
 
     async def _get_cached_temporary_mcp_server_or_404(
         server_id: str,
