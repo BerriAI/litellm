@@ -62,7 +62,7 @@ jobs:
       # a content-integrity hash, not a password or secret hash. SHA-256 is mandated
       # by Oracle for this header; see
       # https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
-      # The sha256 call carries no usedforsecurity=False flag (FIPS builds reject the hint), so
+      # The sha256 call carries no usedforsecurity=False hint (kept out for FIPS review), so
       # CodeQL's taint flow fires whenever callers further up the stack are modified. The
       # suppression is scoped to this one file/rule pair via SARIF post-filtering so every other callsite of
       # py/weak-sensitive-data-hashing in the repository continues to be analyzed.
