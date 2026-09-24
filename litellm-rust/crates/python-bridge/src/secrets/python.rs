@@ -11,6 +11,7 @@ use super::error::external_error;
 /// management settings and the environment fallback behave exactly as they do in Python.
 pub(super) struct PythonSecrets {
     get_secret_str: Arc<Py<PyAny>>,
+    context: Arc<Py<PyAny>>,
 }
 
 impl PythonSecrets {
@@ -19,12 +20,16 @@ impl PythonSecrets {
             py.import("litellm.secret_managers.main")?
                 .getattr("get_secret_str")?
                 .unbind(),
+            py.import("contextvars")?
+                .call_method0("copy_context")?
+                .unbind(),
         ))
     }
 
-    fn reading_with(get_secret_str: Py<PyAny>) -> Self {
+    fn reading_with(get_secret_str: Py<PyAny>, context: Py<PyAny>) -> Self {
         Self {
             get_secret_str: Arc::new(get_secret_str),
+            context: Arc::new(context),
         }
     }
 }
@@ -35,11 +40,13 @@ impl SecretSource for PythonSecrets {
         name: &'a str,
     ) -> BoxFuture<'a, Result<Option<SecretValue>, Error>> {
         let get_secret_str = Arc::clone(&self.get_secret_str);
+        let context = Arc::clone(&self.context);
         let name = name.to_owned();
         Box::pin(attach_blocking(move |py| {
-            get_secret_str
+            context
                 .bind(py)
-                .call1((name,))
+                .call_method0("copy")
+                .and_then(|context| context.call_method1("run", (get_secret_str.bind(py), name)))
                 .and_then(|value| value.extract::<Option<String>>())
                 .map(|value| value.map(SecretValue::new))
                 .map_err(|error| external_error(py, error))
@@ -63,12 +70,16 @@ mod tests {
             let namespace = PyDict::new(py);
             py.run(
                 c"
+import contextvars
 import threading
 read_on = None
+request_var = contextvars.ContextVar('request_var', default=None)
+seen_context_values = []
 raised = KeyboardInterrupt('secret manager stopped')
 def get_secret_str(name):
     global read_on
     read_on = threading.get_ident()
+    seen_context_values.append(request_var.get())
     if name == 'RAISING':
         raise raised
     return {'MISTRAL_API_KEY': 'vault-key'}.get(name)
@@ -83,15 +94,28 @@ def get_secret_str(name):
 
     #[fixture]
     fn secrets(namespace: Py<PyDict>) -> (PythonSecrets, Py<PyDict>) {
-        let reader = Python::attach(|py| {
+        let (reader, context) = Python::attach(|py| {
+            let namespace = namespace.bind(py);
             namespace
-                .bind(py)
-                .get_item("get_secret_str")
+                .get_item("request_var")
                 .unwrap()
                 .unwrap()
-                .unbind()
+                .call_method1("set", ("request-value",))
+                .unwrap();
+            (
+                namespace
+                    .get_item("get_secret_str")
+                    .unwrap()
+                    .unwrap()
+                    .unbind(),
+                py.import("contextvars")
+                    .unwrap()
+                    .call_method0("copy_context")
+                    .unwrap()
+                    .unbind(),
+            )
         });
-        (PythonSecrets::reading_with(reader), namespace)
+        (PythonSecrets::reading_with(reader, context), namespace)
     }
 
     fn global<T: for<'a, 'py> FromPyObject<'a, 'py, Error: std::fmt::Debug>>(
@@ -152,5 +176,35 @@ def get_secret_str(name):
 
         let read_on: u64 = Python::attach(|py| global(&secrets.1, py, "read_on"));
         assert_ne!(read_on, polling);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reads_see_the_callers_contextvars(secrets: (PythonSecrets, Py<PyDict>)) {
+        secrets.0.get_secret_str("MISTRAL_API_KEY").await.unwrap();
+
+        let seen: Vec<String> = Python::attach(|py| global(&secrets.1, py, "seen_context_values"));
+        assert_eq!(seen, vec!["request-value".to_owned()]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn concurrent_reads_each_copy_the_context(secrets: (PythonSecrets, Py<PyDict>)) {
+        let (first, second) = tokio::join!(
+            secrets.0.get_secret_str("MISTRAL_API_KEY"),
+            secrets.0.get_secret_str("OTHER"),
+        );
+
+        assert_eq!(
+            first
+                .unwrap()
+                .map(|value| value.expose().to_owned())
+                .as_deref(),
+            Some("vault-key")
+        );
+        assert!(second.unwrap().is_none());
+        let seen: Vec<String> = Python::attach(|py| global(&secrets.1, py, "seen_context_values"));
+        assert_eq!(seen.len(), 2);
+        assert!(seen.iter().all(|value| value == "request-value"));
     }
 }
