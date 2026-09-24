@@ -10,12 +10,13 @@ test_paths:
     paths:
       - tests/rust-python-harness
   - reason: >-
-      What is left of the caching suite in tests/local_testing that runs nowhere. Every job that
-      globs that directory either deselects it (local_testing_part1 and part2 carry `-k "... and
-      not caching and not cache"`) or keeps only another keyword (langfuse, router, assistants),
-      and no job names these files the way redis_caching_unit_tests names test_dual_cache.py.
-      The gap was eight files and 118 tests when measured 2026-08-20; the five keyless ones now
-      run in the caching-local shard, leaving these three. Measured 2026-08-21 with no provider
+      Live-provider caching cases in tests/local_testing that remain outside CI. Jobs that
+      glob that directory either deselect them (local_testing_part1 and part2 carry `-k "... and
+      not caching and not cache"`) or keep only another keyword (langfuse, router, assistants).
+      Separately, test-redis-compat.yml selects two IAM cluster authentication tests in
+      test_caching.py by node ID. It does not run that file's other tests.
+      The gap was eight files and 118 tests when measured 2026-08-20; the five keyless files now
+      run in the caching-local shard, leaving live cases in these three. Measured 2026-08-21 with no provider
       credentials and no Redis: test_caching.py needs both (37 of 65 fail without them),
       test_disk_cache_unit_tests.py needs OPENAI_API_KEY for 2 of its 4, and
       test_gcs_cache_unit_tests.py needs GCS credentials for all 4. They want the keyless/live

@@ -168,7 +168,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         # Per-loop semaphores bounding chunked-analyze fan-out across ALL
         # concurrent oversized blocks/requests on this instance, not per call
-        self._loop_chunk_semaphores: _LoopSemaphores = {}  # mutable-ok: per-loop semaphore cache
+        self._loop_chunk_semaphores: _LoopSemaphores = {}
 
         if mock_testing is True:  # for testing purposes only
             return

@@ -216,9 +216,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
     captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
     expected: Final = response()
 
-    def python(
-        *call_args: object, **call_kwargs: object
-    ) -> AnthropicMessagesResponse:  # kwargs-ok: records invalid call
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:
         captured.append((call_args, call_kwargs))
         return expected
 
