@@ -25,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # legacy client factory has an untyped params map
     httpxSpecialProvider,
 )
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
@@ -85,13 +86,13 @@ class TrendAIGuardrail(CustomGuardrail):
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
     ) -> None:
-        resolved_api_key: Final = api_key or os.environ.get("TMV1_API_KEY")
+        resolved_api_key: Final = api_key or get_secret_str("TMV1_API_KEY")
         if not resolved_api_key:
             raise ValueError(
                 "Trend AI Guard requires an API key. Pass api_key or set the TMV1_API_KEY environment variable."
             )
 
-        resolved_api_base: Final = api_base or os.environ.get("TRENDAI_AI_GUARD_BASE_URL")
+        resolved_api_base: Final = api_base or get_secret_str("TRENDAI_AI_GUARD_BASE_URL")
         if not resolved_api_base:
             raise ValueError(
                 "Trend AI Guard requires an API base URL. Pass api_base or set the "
