@@ -1,3 +1,4 @@
+use crate::error::CostError;
 use serde_json::Value;
 
 use crate::responses_usage::ChatUsage;
@@ -8,13 +9,6 @@ pub enum SpeechCostMetric {
     PerToken,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SpeechCostError {
-    MissingMetric,
-    MissingPromptCharacters,
-    MissingInputCharacterRate,
-}
-
 pub fn count_characters(text: &str) -> usize {
     text.chars()
         .filter(|character| {
@@ -23,9 +17,7 @@ pub fn count_characters(text: &str) -> usize {
         .count()
 }
 
-pub fn select_cost_metric_for_model(
-    model_info: &Value,
-) -> Result<SpeechCostMetric, SpeechCostError> {
+pub fn select_cost_metric_for_model(model_info: &Value) -> Result<SpeechCostMetric, CostError> {
     if model_info
         .get("input_cost_per_character")
         .and_then(Value::as_f64)
@@ -40,7 +32,7 @@ pub fn select_cost_metric_for_model(
     {
         return Ok(SpeechCostMetric::PerToken);
     }
-    Err(SpeechCostError::MissingMetric)
+    Err(CostError::MissingMetric)
 }
 
 pub fn generic_cost_per_character(

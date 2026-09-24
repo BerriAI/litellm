@@ -1,6 +1,6 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/test_cost_calculator.py::test_cost_discount_not_applied_to_other_providers
+use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
 
@@ -10,8 +10,8 @@ use litellm_cost::catalog::{
     ResponseCostRequest,
 };
 use litellm_cost::completion_cost::{
-    ResponseCostError, apply_cost_discount, apply_cost_margin, completion_cost,
-    get_response_cost_from_hidden_params, response_cost_calculator,
+    apply_cost_discount, apply_cost_margin, completion_cost, get_response_cost_from_hidden_params,
+    response_cost_calculator,
 };
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
@@ -71,10 +71,10 @@ fn apply_cost_margin_uses_global_when_provider_has_no_entry() {
 #[case(json!({"additional_headers": {"llm_provider-x-litellm-response-cost": true}}), Ok(Some(1.0)))]
 #[case(json!({"additional_headers": {"llm_provider-x-litellm-response-cost": null}}), Ok(None))]
 #[case(json!({"additional_headers": {"other": "1.25"}}), Ok(None))]
-#[case(json!({"additional_headers": {"llm_provider-x-litellm-response-cost": "invalid"}}), Err(ResponseCostError::InvalidProviderCost))]
+#[case(json!({"additional_headers": {"llm_provider-x-litellm-response-cost": "invalid"}}), Err(CostError::InvalidProviderCost))]
 fn get_response_cost_from_hidden_params_parses_provider_value(
     #[case] hidden_params: serde_json::Value,
-    #[case] expected: Result<Option<f64>, ResponseCostError>,
+    #[case] expected: Result<Option<f64>, CostError>,
 ) {
     assert_eq!(
         get_response_cost_from_hidden_params(&hidden_params),

@@ -4,20 +4,18 @@ use jiff::Timestamp;
 use litellm_token_counter::{CountableRequest, TokenCounter};
 use serde_json::Value;
 
-use crate::a2a_cost::{A2ACostError, calculate_a2a_cost};
+use crate::a2a_cost::calculate_a2a_cost;
 use crate::azure_ai_cost::is_azure_model_router;
 use crate::billed_token_rates::TokenTypeCostBreakdown;
-use crate::catalog::{
-    CatalogCallError, CatalogError, CatalogImageError, CostCall, ModelCostRequest, ModelInfoCatalog,
-};
+use crate::catalog::{CostCall, ModelCostRequest, ModelInfoCatalog};
 use crate::completion_cost::{
-    CompletionCost, ResponseCostError, completion_cost, get_response_cost_from_hidden_params,
+    CompletionCost, completion_cost, get_response_cost_from_hidden_params,
 };
 use crate::completion_input::{CompletionInputRequest, PreparedCompletionInput, ResponseKind};
-use crate::custom_pricing::{CustomPricing, CustomPricingError, cost_from_chat_usage};
+use crate::custom_pricing::{CustomPricing, cost_from_chat_usage};
+use crate::error::CostError;
 use crate::image_cost_router::{
-    ImageCostRouteError, ImageCostRouteRequest, call_type_has_image_response,
-    route_image_generation_cost_calculator,
+    ImageCostRouteRequest, call_type_has_image_response, route_image_generation_cost_calculator,
 };
 use crate::mcp_cost::calculate_mcp_tool_call_cost;
 use crate::per_second::{DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND, get_replicate_completion_pricing};
@@ -25,7 +23,7 @@ use crate::realtime_cost::{
     collect_and_combine_usage_from_realtime_stream_results, combine_usage_objects, event_usage,
     partition_results_by_service_tier,
 };
-use crate::responses_usage::{ChatUsage, UsageError};
+use crate::responses_usage::ChatUsage;
 use crate::speech_cost::count_characters;
 use crate::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
 use crate::tool_cost_dispatch::BuiltInToolCostRequest;
@@ -85,29 +83,6 @@ pub struct PricedCompletionResponse {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CompletionResponseCostError {
-    Usage(UsageError),
-    MissingUsage,
-    MissingModel,
-    MissingProvider,
-    UnsupportedCallType,
-    Cost(CatalogCallError),
-    Image(ImageCostRouteError),
-    Video(CatalogImageError),
-    Realtime(CatalogError),
-    A2A(A2ACostError),
-    TokenCount,
-    CustomPricing(CustomPricingError),
-    ProviderCost(ResponseCostError),
-}
-
-impl From<UsageError> for CompletionResponseCostError {
-    fn from(value: UsageError) -> Self {
-        Self::Usage(value)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CandidatePriceError<E> {
     MissingModel,
     Price(E),
@@ -145,20 +120,18 @@ fn price_with_custom(
     usage: &ChatUsage,
     pricing: CustomPricing,
     response_time_ms: Option<f64>,
-    catalog_price: impl Fn(&str) -> Result<(f64, f64), CompletionResponseCostError>,
-) -> Result<(String, (f64, f64)), CompletionResponseCostError> {
-    match cost_from_chat_usage(usage, pricing, response_time_ms)
-        .map_err(CompletionResponseCostError::CustomPricing)?
-    {
+    catalog_price: impl Fn(&str) -> Result<(f64, f64), CostError>,
+) -> Result<(String, (f64, f64)), CostError> {
+    match cost_from_chat_usage(usage, pricing, response_time_ms)? {
         Some(cost) => candidates
             .iter()
             .flatten()
             .next()
             .cloned()
             .map(|model| (model, (cost.input, cost.output)))
-            .ok_or(CompletionResponseCostError::MissingModel),
+            .ok_or(CostError::MissingModel),
         None => price_candidates(candidates, catalog_price).map_err(|error| match error {
-            CandidatePriceError::MissingModel => CompletionResponseCostError::MissingModel,
+            CandidatePriceError::MissingModel => CostError::MissingModel,
             CandidatePriceError::Price(error) => error,
         }),
     }
@@ -186,41 +159,33 @@ fn number(value: Option<&Value>) -> Option<f64> {
     }
 }
 
-fn count_text_usage(
-    input: CompletionTextInput<'_>,
-) -> Result<ChatUsage, CompletionResponseCostError> {
+fn count_text_usage(input: CompletionTextInput<'_>) -> Result<ChatUsage, CostError> {
     let prompt = match input.messages {
         Some(Value::Array(messages)) if !messages.is_empty() => {
             let body = serde_json::to_vec(&serde_json::json!({"messages": messages}))
-                .map_err(|_| CompletionResponseCostError::TokenCount)?;
-            let request = CountableRequest::parse(&body)
-                .map_err(|_| CompletionResponseCostError::TokenCount)?;
+                .map_err(|_| CostError::TokenCount)?;
+            let request = CountableRequest::parse(&body).map_err(|_| CostError::TokenCount)?;
             input
                 .counter
                 .count_request(&request)
-                .map_err(|_| CompletionResponseCostError::TokenCount)?
+                .map_err(|_| CostError::TokenCount)?
                 .input_tokens
         }
         Some(Value::Array(_)) | None => input
             .counter
             .count_text(input.prompt)
-            .map_err(|_| CompletionResponseCostError::TokenCount)?,
-        Some(_) => return Err(CompletionResponseCostError::TokenCount),
+            .map_err(|_| CostError::TokenCount)?,
+        Some(_) => return Err(CostError::TokenCount),
     };
     let completion = input
         .counter
         .count_text(input.completion)
-        .map_err(|_| CompletionResponseCostError::TokenCount)?;
-    let prompt_tokens = u64::try_from(prompt)
-        .map_err(|_| CompletionResponseCostError::Usage(UsageError::TokenCountOverflow))?;
-    let completion_tokens = u64::try_from(completion)
-        .map_err(|_| CompletionResponseCostError::Usage(UsageError::TokenCountOverflow))?;
-    let total_tokens =
-        prompt_tokens
-            .checked_add(completion_tokens)
-            .ok_or(CompletionResponseCostError::Usage(
-                UsageError::TokenCountOverflow,
-            ))?;
+        .map_err(|_| CostError::TokenCount)?;
+    let prompt_tokens = u64::try_from(prompt).map_err(|_| CostError::TokenCountOverflow)?;
+    let completion_tokens = u64::try_from(completion).map_err(|_| CostError::TokenCountOverflow)?;
+    let total_tokens = prompt_tokens
+        .checked_add(completion_tokens)
+        .ok_or(CostError::TokenCountOverflow)?;
     Ok(ChatUsage {
         prompt_tokens,
         completion_tokens,
@@ -268,7 +233,7 @@ fn cost_call<'a>(
     model: &'a str,
     request_model: Option<&'a str>,
     empty_params: &'a Value,
-) -> Result<CostCall<'a>, CompletionResponseCostError> {
+) -> Result<CostCall<'a>, CostError> {
     match call_type {
         "speech" | "aspeech" => Ok(CostCall::Speech {
             prompt_characters: request.prompt_characters.or_else(|| {
@@ -301,7 +266,7 @@ fn cost_call<'a>(
                 .input
                 .model_selection
                 .response
-                .ok_or(CompletionResponseCostError::MissingUsage)?,
+                .ok_or(CostError::MissingUsage)?,
             deployment_info: request
                 .input
                 .model_selection
@@ -327,7 +292,7 @@ fn cost_call<'a>(
                 request_model,
             })
         }
-        _ => Err(CompletionResponseCostError::UnsupportedCallType),
+        _ => Err(CostError::UnsupportedCallType),
     }
 }
 
@@ -337,12 +302,12 @@ fn price_image_response(
     prepared: PreparedCompletionInput,
     provider: Option<&str>,
     deployment_info: Option<&Value>,
-) -> Result<PricedCompletionResponse, CompletionResponseCostError> {
+) -> Result<PricedCompletionResponse, CostError> {
     let response = request
         .input
         .model_selection
         .response
-        .ok_or(CompletionResponseCostError::MissingUsage)?;
+        .ok_or(CostError::MissingUsage)?;
     let empty_params = Value::Null;
     let (model, total) = price_candidates(&prepared.model_candidates, |model| {
         route_image_generation_cost_calculator(
@@ -362,8 +327,8 @@ fn price_image_response(
         )
     })
     .map_err(|error| match error {
-        CandidatePriceError::MissingModel => CompletionResponseCostError::MissingModel,
-        CandidatePriceError::Price(error) => CompletionResponseCostError::Image(error),
+        CandidatePriceError::MissingModel => CostError::MissingModel,
+        CandidatePriceError::Price(error) => error,
     })?;
     Ok(flat_priced(prepared, model, total))
 }
@@ -386,7 +351,7 @@ fn price_video_response(
     prepared: PreparedCompletionInput,
     provider: Option<&str>,
     deployment_info: Option<&Value>,
-) -> Result<PricedCompletionResponse, CompletionResponseCostError> {
+) -> Result<PricedCompletionResponse, CostError> {
     let usage = request
         .input
         .model_selection
@@ -401,7 +366,7 @@ fn price_video_response(
             .iter()
             .flatten()
             .next()
-            .ok_or(CompletionResponseCostError::MissingModel)?
+            .ok_or(CostError::MissingModel)?
             .clone();
         return Ok(flat_priced(prepared, model, total));
     }
@@ -427,8 +392,8 @@ fn price_video_response(
             .map(|cost| cost * count as f64)
     })
     .map_err(|error| match error {
-        CandidatePriceError::MissingModel => CompletionResponseCostError::MissingModel,
-        CandidatePriceError::Price(error) => CompletionResponseCostError::Video(error),
+        CandidatePriceError::MissingModel => CostError::MissingModel,
+        CandidatePriceError::Price(error) => error,
     })?;
     Ok(flat_priced(prepared, model, total))
 }
@@ -464,9 +429,7 @@ fn unregistered_replicate_cost(
     Some((model.clone(), total))
 }
 
-fn realtime_results(
-    request: CompletionResponseCostRequest<'_>,
-) -> Result<&[Value], CompletionResponseCostError> {
+fn realtime_results(request: CompletionResponseCostRequest<'_>) -> Result<&[Value], CostError> {
     request
         .input
         .model_selection
@@ -474,7 +437,7 @@ fn realtime_results(
         .and_then(|response| response.get("results"))
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .ok_or(CompletionResponseCostError::MissingUsage)
+        .ok_or(CostError::MissingUsage)
 }
 
 fn price_realtime_response(
@@ -482,20 +445,19 @@ fn price_realtime_response(
     request: CompletionResponseCostRequest<'_>,
     prepared: PreparedCompletionInput,
     provider: Option<&str>,
-) -> Result<PricedCompletionResponse, CompletionResponseCostError> {
-    let provider = provider.ok_or(CompletionResponseCostError::MissingProvider)?;
+) -> Result<PricedCompletionResponse, CostError> {
+    let provider = provider.ok_or(CostError::MissingProvider)?;
     let results = realtime_results(request)?;
     let combined = match prepared.usage.as_ref().or(request.fallback_usage) {
         Some(usage) => usage.clone(),
-        None => collect_and_combine_usage_from_realtime_stream_results(results)
-            .map_err(CompletionResponseCostError::Usage)?,
+        None => collect_and_combine_usage_from_realtime_stream_results(results)?,
     };
     let model = prepared
         .model_candidates
         .iter()
         .flatten()
         .next()
-        .ok_or(CompletionResponseCostError::MissingModel)?
+        .ok_or(CostError::MissingModel)?
         .clone();
     let total = catalog.handle_realtime_stream_cost_calculation(
         results,
@@ -560,7 +522,7 @@ fn price_responses_websocket(
     prepared: PreparedCompletionInput,
     provider: Option<&str>,
     region: Option<&str>,
-) -> Result<PricedCompletionResponse, CompletionResponseCostError> {
+) -> Result<PricedCompletionResponse, CostError> {
     let results = realtime_results(request)?;
     let partition = partition_results_by_service_tier(results);
     let groups = if partition.is_empty() {
@@ -591,19 +553,17 @@ fn price_responses_websocket(
                     request.response_time_ms,
                 ),
                 |model| {
-                    catalog
-                        .cost_per_token(ModelCostRequest {
-                            model,
-                            provider,
-                            region,
-                            usage,
-                            service_tier: tier,
-                            data_residency: request.data_residency,
-                            vertex_location: request.vertex_location,
-                            at: request.at,
-                            response_time_ms: None,
-                        })
-                        .map_err(CompletionResponseCostError::Realtime)
+                    catalog.cost_per_token(ModelCostRequest {
+                        model,
+                        provider,
+                        region,
+                        usage,
+                        service_tier: tier,
+                        data_residency: request.data_residency,
+                        vertex_location: request.vertex_location,
+                        at: request.at,
+                        response_time_ms: None,
+                    })
                 },
             )?;
             let built_in = if index == 0 {
@@ -623,7 +583,7 @@ fn price_responses_websocket(
             } else {
                 &[]
             };
-            Ok::<_, CompletionResponseCostError>((
+            Ok::<_, CostError>((
                 model,
                 completion_cost(
                     prompt,
@@ -641,7 +601,7 @@ fn price_responses_websocket(
         .first()
         .map(|(model, _)| model.clone())
         .or_else(|| prepared.model_candidates.iter().flatten().next().cloned())
-        .ok_or(CompletionResponseCostError::MissingModel)?;
+        .ok_or(CostError::MissingModel)?;
     let zero = completion_cost(0.0, 0.0, 0.0, &[], None, &Value::Null, &Value::Null);
     let cost = priced_groups
         .into_iter()
@@ -659,10 +619,8 @@ fn price_responses_websocket(
 pub fn completion_cost_from_response(
     catalog: &ModelInfoCatalog,
     request: CompletionResponseCostRequest<'_>,
-) -> Result<PricedCompletionResponse, CompletionResponseCostError> {
-    let prepared = catalog
-        .prepare_completion_input(request.input)
-        .map_err(CompletionResponseCostError::Usage)?;
+) -> Result<PricedCompletionResponse, CostError> {
+    let prepared = catalog.prepare_completion_input(request.input)?;
     let hidden_params = request.input.model_selection.hidden_params;
     let explicit_provider = hidden_params
         .and_then(|hidden| hidden.get("custom_llm_provider"))
@@ -700,8 +658,7 @@ pub fn completion_cost_from_response(
             .next()
             .cloned()
             .unwrap_or_default();
-        let total = calculate_a2a_cost(request.logging_details)
-            .map_err(CompletionResponseCostError::A2A)?;
+        let total = calculate_a2a_cost(request.logging_details)?;
         return Ok(flat_priced(prepared, model, total));
     }
     if prepared.call_type == "call_mcp_tool" {
@@ -711,7 +668,7 @@ pub fn completion_cost_from_response(
             .flatten()
             .next()
             .cloned()
-            .ok_or(CompletionResponseCostError::MissingModel)?;
+            .ok_or(CostError::MissingModel)?;
         let total = calculate_mcp_tool_call_cost(request.logging_details);
         return Ok(flat_priced(prepared, model, total));
     }
@@ -849,9 +806,7 @@ pub fn completion_cost_from_response(
                     request.response_time_ms,
                 ),
             };
-            catalog
-                .cost_per_token_for_call(cost_request, call)
-                .map_err(CompletionResponseCostError::Cost)
+            catalog.cost_per_token_for_call(cost_request, call)
         },
     )?;
     let router_fee = (!is_search && provider == Some("azure_ai") && !is_azure_model_router(&model))
@@ -913,14 +868,13 @@ pub fn response_cost_calculator_from_response(
     catalog: &ModelInfoCatalog,
     request: CompletionResponseCostRequest<'_>,
     cache_hit: bool,
-) -> Result<f64, CompletionResponseCostError> {
+) -> Result<f64, CostError> {
     if cache_hit {
         return Ok(0.0);
     }
     if request.input.model_selection.response.is_some()
         && let Some(hidden) = request.input.model_selection.hidden_params
-        && let Some(cost) = get_response_cost_from_hidden_params(hidden)
-            .map_err(CompletionResponseCostError::ProviderCost)?
+        && let Some(cost) = get_response_cost_from_hidden_params(hidden)?
     {
         return Ok(cost);
     }

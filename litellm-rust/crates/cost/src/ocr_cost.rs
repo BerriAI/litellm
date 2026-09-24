@@ -1,14 +1,8 @@
+use crate::error::CostError;
 use serde_json::Value;
 
-use crate::non_token::{Error as NonTokenError, OcrRates, OcrUsage, calculate_ocr_with_tables};
+use crate::non_token::{OcrRates, OcrUsage, calculate_ocr_with_tables};
 use crate::pricing::Rate;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OcrCostError {
-    MissingUsage,
-    MissingPages,
-    Pricing(NonTokenError),
-}
 
 fn rate(model_info: &Value, key: &str) -> Rate {
     model_info
@@ -36,11 +30,11 @@ pub fn ocr_cost(
     response: &Value,
     deployment_info: Option<&Value>,
     published_info: Option<&Value>,
-) -> Result<(f64, f64), OcrCostError> {
+) -> Result<(f64, f64), CostError> {
     let usage = response
         .get("usage_info")
         .and_then(Value::as_object)
-        .ok_or(OcrCostError::MissingUsage)?;
+        .ok_or(CostError::MissingUsage)?;
     let pages = usage.get("pages_processed").and_then(Value::as_u64);
     let annotation_pages = usage
         .get("pages_processed_annotation")
@@ -62,7 +56,7 @@ pub fn ocr_cost(
         if credit_rate.is_some() || page_rate.is_none() {
             return Ok((0.0, 0.0));
         }
-        return Err(OcrCostError::MissingPages);
+        return Err(CostError::MissingPages);
     }
     let cost = calculate_ocr_with_tables(
         &tables,
@@ -71,7 +65,6 @@ pub fn ocr_cost(
             pages: pages.unwrap_or(0),
             annotation_pages,
         },
-    )
-    .map_err(OcrCostError::Pricing)?;
+    )?;
     Ok((cost.total, 0.0))
 }

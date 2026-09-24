@@ -1,3 +1,4 @@
+use crate::error::CostError;
 use serde_json::Value;
 
 fn number(value: &Value) -> Option<f64> {
@@ -89,14 +90,9 @@ pub fn completion_cost(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ResponseCostError {
-    InvalidProviderCost,
-}
-
 pub fn get_response_cost_from_hidden_params(
     hidden_params: &Value,
-) -> Result<Option<f64>, ResponseCostError> {
+) -> Result<Option<f64>, CostError> {
     let Some(value) = hidden_params
         .get("additional_headers")
         .and_then(|headers| headers.get("llm_provider-x-litellm-response-cost"))
@@ -108,14 +104,14 @@ pub fn get_response_cost_from_hidden_params(
     }
     number(value)
         .map(Some)
-        .ok_or(ResponseCostError::InvalidProviderCost)
+        .ok_or(CostError::InvalidProviderCost)
 }
 
 pub fn response_cost_calculator(
     cache_hit: bool,
     hidden_params: &Value,
     calculated_completion_cost: f64,
-) -> Result<f64, ResponseCostError> {
+) -> Result<f64, CostError> {
     if cache_hit {
         return Ok(0.0);
     }

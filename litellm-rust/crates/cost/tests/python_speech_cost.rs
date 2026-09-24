@@ -1,16 +1,15 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/test_cost_calculator.py
+use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use litellm_cost::catalog::{CatalogSpeechError, ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::responses_usage::ChatUsage;
 use litellm_cost::speech_cost::{
-    SpeechCostError, SpeechCostMetric, cost_per_second, count_characters,
-    generic_cost_per_character, lyria_generation_cost, select_cost_metric_for_model,
-    transcription_usage_has_token_details,
+    SpeechCostMetric, cost_per_second, count_characters, generic_cost_per_character,
+    lyria_generation_cost, select_cost_metric_for_model, transcription_usage_has_token_details,
 };
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
@@ -41,10 +40,10 @@ fn count_characters_excludes_whitespace(#[case] prompt: &str, #[case] expected: 
 #[rstest]
 #[case(json!({"input_cost_per_character": 0.002, "input_cost_per_token": 0.003}), Ok(SpeechCostMetric::PerCharacter))]
 #[case(json!({"input_cost_per_character": 0.0, "input_cost_per_token": 0.003}), Ok(SpeechCostMetric::PerToken))]
-#[case(json!({"input_cost_per_character": 0.0, "input_cost_per_token": 0.0}), Err(SpeechCostError::MissingMetric))]
+#[case(json!({"input_cost_per_character": 0.0, "input_cost_per_token": 0.0}), Err(CostError::MissingMetric))]
 fn select_cost_metric_for_model_uses_character_first(
     #[case] model_info: Value,
-    #[case] expected: Result<SpeechCostMetric, SpeechCostError>,
+    #[case] expected: Result<SpeechCostMetric, CostError>,
 ) {
     assert_eq!(select_cost_metric_for_model(&model_info), expected);
 }
@@ -101,9 +100,7 @@ fn speech_cost_selects_character_or_token_pricing_and_requires_characters() {
     );
     assert_eq!(
         catalog.speech_cost(request("character", "openai", &usage), None),
-        Err(CatalogSpeechError::Speech(
-            SpeechCostError::MissingPromptCharacters
-        ))
+        Err(CostError::MissingPromptCharacters)
     );
 }
 

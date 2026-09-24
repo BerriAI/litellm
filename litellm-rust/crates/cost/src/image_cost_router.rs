@@ -1,10 +1,8 @@
+use crate::error::CostError;
 use jiff::Timestamp;
 use serde_json::Value;
 
-use crate::catalog::{
-    AzureAiImageCatalogRequest, CatalogError, CatalogImageError, DefaultImageCostRequest,
-    ModelInfoCatalog,
-};
+use crate::catalog::{AzureAiImageCatalogRequest, DefaultImageCostRequest, ModelInfoCatalog};
 use crate::generic_input::get_cost_per_unit;
 
 #[derive(Clone, Copy, Debug)]
@@ -19,25 +17,6 @@ pub struct ImageCostRouteRequest<'a> {
     pub optional_params: &'a Value,
     pub supplied_model_info: Option<&'a Value>,
     pub at: Timestamp,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ImageCostRouteError {
-    Catalog(CatalogError),
-    Image(CatalogImageError),
-    UnsupportedProvider,
-}
-
-impl From<CatalogError> for ImageCostRouteError {
-    fn from(value: CatalogError) -> Self {
-        Self::Catalog(value)
-    }
-}
-
-impl From<CatalogImageError> for ImageCostRouteError {
-    fn from(value: CatalogImageError) -> Self {
-        Self::Image(value)
-    }
 }
 
 pub fn call_type_has_image_response(call_type: &str) -> bool {
@@ -188,7 +167,7 @@ fn requested_image_size(optional_params: &Value) -> Option<&str> {
 pub fn route_image_generation_cost_calculator(
     catalog: &ModelInfoCatalog,
     request: ImageCostRouteRequest<'_>,
-) -> Result<f64, ImageCostRouteError> {
+) -> Result<f64, CostError> {
     let pricing = deployment_pricing(request.supplied_model_info);
     let resolved_size = request
         .size

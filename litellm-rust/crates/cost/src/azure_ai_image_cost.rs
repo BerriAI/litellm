@@ -1,9 +1,10 @@
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::error::CostError;
 use crate::generic_input::get_cost_per_unit;
 use crate::image_response_cost::calculate_image_response_cost_from_usage;
-use crate::non_token::{Error, ImageRates, ImageUsage, calculate_image};
+use crate::non_token::{ImageRates, ImageUsage, calculate_image};
 use crate::pricing::Rate;
 
 #[derive(Clone, Copy, Debug)]
@@ -38,20 +39,24 @@ pub fn input_cost_per_pixel(resolved: &Value, shared_entry: Option<&Value>) -> f
         .unwrap_or(0.0)
 }
 
-fn dimensions(size: &str) -> Result<(u32, u32), Error> {
+fn dimensions(size: &str) -> Result<(u32, u32), CostError> {
     let (width, height) = size
         .split_once("-x-")
         .or_else(|| size.split_once('x'))
-        .ok_or(Error::InvalidQuantity)?;
-    let width = width.parse::<u32>().map_err(|_| Error::InvalidQuantity)?;
-    let height = height.parse::<u32>().map_err(|_| Error::InvalidQuantity)?;
+        .ok_or(CostError::InvalidQuantity)?;
+    let width = width
+        .parse::<u32>()
+        .map_err(|_| CostError::InvalidQuantity)?;
+    let height = height
+        .parse::<u32>()
+        .map_err(|_| CostError::InvalidQuantity)?;
     if width == 0 || height == 0 {
-        return Err(Error::InvalidQuantity);
+        return Err(CostError::InvalidQuantity);
     }
     Ok((width, height))
 }
 
-pub fn cost_calculator(request: AzureAiImageRequest<'_>) -> Result<f64, Error> {
+pub fn cost_calculator(request: AzureAiImageRequest<'_>) -> Result<f64, CostError> {
     if let Some(cost) = calculate_image_response_cost_from_usage(
         request.image_response,
         request.model_info,

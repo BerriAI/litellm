@@ -1,9 +1,10 @@
+use crate::error::CostError;
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
 use crate::responses_usage::{
-    CacheCreationTokenDetails, ChatUsage, CompletionTokenDetails, PromptTokenDetails, UsageError,
+    CacheCreationTokenDetails, ChatUsage, CompletionTokenDetails, PromptTokenDetails,
 };
 
 pub fn is_anthropic_usage_object(usage: &Value) -> bool {
@@ -15,7 +16,7 @@ pub fn is_anthropic_usage_object(usage: &Value) -> bool {
     })
 }
 
-fn count(value: Option<&Value>) -> Result<u64, UsageError> {
+fn count(value: Option<&Value>) -> Result<u64, CostError> {
     match value {
         None | Some(Value::Null) => Ok(0),
         Some(Value::Number(number)) => number
@@ -26,16 +27,16 @@ fn count(value: Option<&Value>) -> Result<u64, UsageError> {
                     .filter(|value| value.is_finite() && *value >= 0.0 && *value < u64::MAX as f64)
                     .map(|value| value as u64)
             })
-            .ok_or(UsageError::InvalidUsage),
+            .ok_or(CostError::InvalidUsage),
         Some(Value::Bool(value)) => Ok(u64::from(*value)),
         _ => Ok(0),
     }
 }
 
-fn sum_field(entries: &[&Map<String, Value>], field: &str) -> Result<u64, UsageError> {
+fn sum_field(entries: &[&Map<String, Value>], field: &str) -> Result<u64, CostError> {
     entries.iter().try_fold(0_u64, |sum, entry| {
         sum.checked_add(count(entry.get(field))?)
-            .ok_or(UsageError::TokenCountOverflow)
+            .ok_or(CostError::TokenCountOverflow)
     })
 }
 
@@ -43,7 +44,7 @@ fn cache_creation_details(
     usage: &Map<String, Value>,
     iterations: &[&Map<String, Value>],
     total_creation: u64,
-) -> Result<Option<CacheCreationTokenDetails>, UsageError> {
+) -> Result<Option<CacheCreationTokenDetails>, CostError> {
     let breakdowns: Vec<_> = iterations
         .iter()
         .filter_map(|entry| entry.get("cache_creation").and_then(Value::as_object))
@@ -55,7 +56,7 @@ fn cache_creation_details(
         return Ok(Some(CacheCreationTokenDetails {
             ephemeral_5m_input_tokens: Some(
                 five.checked_add(undetailed)
-                    .ok_or(UsageError::TokenCountOverflow)?,
+                    .ok_or(CostError::TokenCountOverflow)?,
             ),
             ephemeral_1h_input_tokens: Some(one),
         }));
@@ -87,8 +88,8 @@ pub fn transform_anthropic_usage_to_chat_usage(
     usage: &Value,
     estimated_reasoning_tokens: Option<u64>,
     response_has_thinking_block: bool,
-) -> Result<ChatUsage, UsageError> {
-    let object = usage.as_object().ok_or(UsageError::InvalidShape)?;
+) -> Result<ChatUsage, CostError> {
+    let object = usage.as_object().ok_or(CostError::InvalidShape)?;
     let iterations: Vec<_> =
         object
             .get("iterations")
@@ -96,7 +97,7 @@ pub fn transform_anthropic_usage_to_chat_usage(
             .map_or(Ok(Vec::new()), |entries| {
                 entries
                     .iter()
-                    .map(|entry| entry.as_object().ok_or(UsageError::InvalidUsage))
+                    .map(|entry| entry.as_object().ok_or(CostError::InvalidUsage))
                     .collect()
             })?;
     let fresh = if iterations.is_empty() {
@@ -122,10 +123,10 @@ pub fn transform_anthropic_usage_to_chat_usage(
     let prompt = fresh
         .checked_add(cache_read)
         .and_then(|total| total.checked_add(cache_creation))
-        .ok_or(UsageError::TokenCountOverflow)?;
+        .ok_or(CostError::TokenCountOverflow)?;
     let total = prompt
         .checked_add(output)
-        .ok_or(UsageError::TokenCountOverflow)?;
+        .ok_or(CostError::TokenCountOverflow)?;
     let reported = if iterations.is_empty() {
         thinking_tokens(object)
     } else {

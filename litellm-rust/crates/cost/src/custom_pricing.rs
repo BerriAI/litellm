@@ -46,19 +46,11 @@ pub struct CustomCost {
     pub output: f64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CustomPricingError {
-    InvalidUsage,
-    InvalidRate,
-    InvalidDuration,
-    NonFiniteCost,
-}
-
 fn nonzero(value: Option<f64>) -> Option<f64> {
     value.filter(|number| *number != 0.0)
 }
 
-pub fn normalize_cache_usage(raw: RawUsage) -> Result<NormalizedUsage, CustomPricingError> {
+pub fn normalize_cache_usage(raw: RawUsage) -> Result<NormalizedUsage, CostError> {
     let values = [
         Some(raw.prompt_tokens),
         Some(raw.completion_tokens),
@@ -75,7 +67,7 @@ pub fn normalize_cache_usage(raw: RawUsage) -> Result<NormalizedUsage, CustomPri
         .flatten()
         .any(|value| !value.is_finite() || value < 0.0)
     {
-        return Err(CustomPricingError::InvalidUsage);
+        return Err(CostError::InvalidUsage);
     }
     let detail_read = raw.details_cached_tokens.unwrap_or(0.0);
     let detail_creation = nonzero(raw.details_cache_write_tokens)
@@ -107,7 +99,7 @@ pub fn normalize_cache_usage(raw: RawUsage) -> Result<NormalizedUsage, CustomPri
         raw.prompt_tokens
     };
     if !prompt_tokens.is_finite() {
-        return Err(CustomPricingError::InvalidUsage);
+        return Err(CostError::InvalidUsage);
     }
     Ok(NormalizedUsage {
         prompt_tokens,
@@ -121,7 +113,7 @@ pub fn cost_per_token_custom_pricing_helper(
     usage: NormalizedUsage,
     pricing: CustomPricing,
     response_time_ms: Option<f64>,
-) -> Result<Option<CustomCost>, CustomPricingError> {
+) -> Result<Option<CustomCost>, CostError> {
     if pricing.token.is_none() && pricing.per_second.is_none() {
         return Ok(None);
     }
@@ -135,7 +127,7 @@ pub fn cost_per_token_custom_pricing_helper(
         .into_iter()
         .any(|value| !value.is_finite() || value < 0.0)
     {
-        return Err(CustomPricingError::InvalidUsage);
+        return Err(CostError::InvalidUsage);
     }
     let cost = match (pricing.token, pricing.per_second) {
         (Some(rates), _) => {
@@ -149,7 +141,7 @@ pub fn cost_per_token_custom_pricing_helper(
             .flatten()
             .any(|rate| !rate.is_finite() || rate < 0.0)
             {
-                return Err(CustomPricingError::InvalidRate);
+                return Err(CostError::InvalidRate);
             }
             let regular =
                 (usage.prompt_tokens - usage.cached_tokens - usage.cache_creation_tokens).max(0.0);
@@ -162,11 +154,11 @@ pub fn cost_per_token_custom_pricing_helper(
         }
         (None, Some(rate)) => {
             if !rate.is_finite() || rate < 0.0 {
-                return Err(CustomPricingError::InvalidRate);
+                return Err(CostError::InvalidRate);
             }
             let duration = response_time_ms.unwrap_or(0.0);
             if !duration.is_finite() || duration < 0.0 {
-                return Err(CustomPricingError::InvalidDuration);
+                return Err(CostError::InvalidDuration);
             }
             CustomCost {
                 input: 0.0,
@@ -176,7 +168,7 @@ pub fn cost_per_token_custom_pricing_helper(
         (None, None) => return Ok(None),
     };
     if !cost.input.is_finite() || !cost.output.is_finite() {
-        return Err(CustomPricingError::NonFiniteCost);
+        return Err(CostError::NonFiniteCost);
     }
     Ok(Some(cost))
 }
@@ -185,7 +177,7 @@ pub fn cost_from_chat_usage(
     usage: &ChatUsage,
     pricing: CustomPricing,
     response_time_ms: Option<f64>,
-) -> Result<Option<CustomCost>, CustomPricingError> {
+) -> Result<Option<CustomCost>, CostError> {
     if pricing == CustomPricing::NONE {
         return Ok(None);
     }
@@ -208,6 +200,7 @@ pub fn cost_from_chat_usage(
     })?;
     cost_per_token_custom_pricing_helper(normalized, pricing, response_time_ms)
 }
+use crate::error::CostError;
 use serde_json::Value;
 
 use crate::responses_usage::ChatUsage;

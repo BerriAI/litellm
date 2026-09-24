@@ -1,3 +1,4 @@
+use crate::error::CostError;
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
@@ -58,13 +59,6 @@ pub struct ChatUsage {
     pub extra: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum UsageError {
-    InvalidShape,
-    InvalidUsage,
-    TokenCountOverflow,
-}
-
 #[derive(Deserialize)]
 struct RawResponseUsage {
     input_tokens: u64,
@@ -103,16 +97,16 @@ pub fn text_tokens_without_nested_reasoning(
     text_tokens - nested as u64
 }
 
-pub fn transform_response_api_usage_to_chat_usage(usage: &Value) -> Result<ChatUsage, UsageError> {
+pub fn transform_response_api_usage_to_chat_usage(usage: &Value) -> Result<ChatUsage, CostError> {
     if !is_response_api_usage(usage) {
-        return Err(UsageError::InvalidShape);
+        return Err(CostError::InvalidShape);
     }
     let raw: RawResponseUsage =
-        serde_json::from_value(usage.clone()).map_err(|_| UsageError::InvalidUsage)?;
+        serde_json::from_value(usage.clone()).map_err(|_| CostError::InvalidUsage)?;
     let total_tokens = raw
         .input_tokens
         .checked_add(raw.output_tokens)
-        .ok_or(UsageError::TokenCountOverflow)?;
+        .ok_or(CostError::TokenCountOverflow)?;
     let prompt_tokens_details =
         raw.input_tokens_details
             .or(raw.input_token_details)

@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use crate::error::CostError;
 use crate::model_selection::{
     ModelSelectionRequest, get_response_model, select_model_name_for_cost_calc,
 };
-use crate::responses_usage::{ChatUsage, UsageError};
+use crate::responses_usage::ChatUsage;
 use crate::usage_dispatch::get_usage_object;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,7 +105,7 @@ pub fn select_service_tier(
 pub fn prepare_completion_input(
     request: CompletionInputRequest<'_>,
     cost_map: &HashMap<String, Value>,
-) -> Result<PreparedCompletionInput, UsageError> {
+) -> Result<PreparedCompletionInput, CostError> {
     let response = request.model_selection.response;
     let call_type =
         infer_call_type(request.call_type, request.response_kind).unwrap_or("completion");

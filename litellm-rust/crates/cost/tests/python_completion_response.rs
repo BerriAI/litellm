@@ -1,16 +1,15 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/test_cost_calculator.py::test_cost_calculator_with_response_cost_in_additional_headers
 // mirrors: local_testing/test_completion_cost.py
+use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
 
 use litellm_cost::catalog::ModelInfoCatalog;
-use litellm_cost::completion_cost::ResponseCostError;
 use litellm_cost::completion_input::{CompletionInputRequest, ResponseKind};
 use litellm_cost::completion_response::{
-    BuiltInToolCostConfig, CompletionResponseCostError, CompletionResponseCostRequest,
-    CompletionTextInput, completion_cost_from_response, response_cost_calculator_from_response,
+    BuiltInToolCostConfig, CompletionResponseCostRequest, CompletionTextInput,
+    completion_cost_from_response, response_cost_calculator_from_response,
     response_time_ms_for_cost,
 };
 use litellm_cost::custom_pricing::{CustomPricing, CustomTokenRates};
@@ -96,11 +95,11 @@ fn request<'a>(
 #[case(true, json!({"additional_headers": {"llm_provider-x-litellm-response-cost": "invalid"}}), Ok(0.0))]
 #[case(false, json!({"additional_headers": {"llm_provider-x-litellm-response-cost": "0.5"}}), Ok(0.5))]
 #[case(false, json!({"additional_headers": {"llm_provider-x-litellm-response-cost": 0.0}}), Ok(0.0))]
-#[case(false, json!({"additional_headers": {"llm_provider-x-litellm-response-cost": "invalid"}}), Err(CompletionResponseCostError::ProviderCost(ResponseCostError::InvalidProviderCost)))]
+#[case(false, json!({"additional_headers": {"llm_provider-x-litellm-response-cost": "invalid"}}), Err(CostError::InvalidProviderCost))]
 fn response_cost_calculator_short_circuits_cache_and_provider_cost(
     #[case] cache_hit: bool,
     #[case] hidden: Value,
-    #[case] expected: Result<f64, CompletionResponseCostError>,
+    #[case] expected: Result<f64, CostError>,
 ) {
     let catalog = ModelInfoCatalog::new(HashMap::new());
     let response = json!({});
@@ -456,7 +455,7 @@ fn invalid_messages_do_not_fall_back_to_prompt_pricing() {
             ..base
         },
     );
-    assert_eq!(result, Err(CompletionResponseCostError::TokenCount));
+    assert_eq!(result, Err(CostError::TokenCount));
 }
 
 #[rstest]
@@ -1514,7 +1513,7 @@ fn unsupported_call_does_not_silently_bill_as_tokens() {
                 )
             }
         ),
-        Err(CompletionResponseCostError::UnsupportedCallType)
+        Err(CostError::UnsupportedCallType)
     );
 }
 

@@ -1,12 +1,13 @@
+use crate::error::CostError;
 use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::image_response_cost::{calculate_image_response_cost_from_usage, flat_image_cost};
-use crate::responses_usage::UsageError;
+
 use crate::usage_dispatch::chat_usage;
 
-fn chat_token_cost(usage: &Value, model_info: &Value, at: Timestamp) -> Result<f64, UsageError> {
+fn chat_token_cost(usage: &Value, model_info: &Value, at: Timestamp) -> Result<f64, CostError> {
     let usage = chat_usage(usage)?;
     let (input, output) = calculate_generic_cost_from_model_info_with_region(
         &usage, model_info, None, false, None, None, at,
@@ -19,7 +20,7 @@ pub fn cost_calculator(
     model_info: &Value,
     provider: &str,
     at: Timestamp,
-) -> Result<f64, UsageError> {
+) -> Result<f64, CostError> {
     let Some(usage) = image_response.get("usage").filter(|usage| !usage.is_null()) else {
         return Ok(flat_image_cost(image_response, model_info));
     };

@@ -1,7 +1,8 @@
+use crate::error::CostError;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::responses_usage::{ChatUsage, PromptTokenDetails, UsageError};
+use crate::responses_usage::{ChatUsage, PromptTokenDetails};
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -28,11 +29,9 @@ pub fn is_transcription_usage_object(usage: &Value) -> bool {
     serde_json::from_value::<TranscriptionUsage>(usage.clone()).is_ok()
 }
 
-pub fn transform_transcription_usage_object(
-    usage: &Value,
-) -> Result<Option<ChatUsage>, UsageError> {
+pub fn transform_transcription_usage_object(usage: &Value) -> Result<Option<ChatUsage>, CostError> {
     let parsed: TranscriptionUsage =
-        serde_json::from_value(usage.clone()).map_err(|_| UsageError::InvalidShape)?;
+        serde_json::from_value(usage.clone()).map_err(|_| CostError::InvalidShape)?;
     match parsed {
         TranscriptionUsage::Duration { .. } => Ok(None),
         TranscriptionUsage::Tokens {

@@ -1,19 +1,20 @@
+use crate::error::CostError;
 use serde_json::{Value, json};
 
 use crate::responses_usage::{
     CacheCreationTokenDetails, CachedTokenDetails, ChatUsage, CompletionTokenDetails,
-    PromptTokenDetails, UsageError,
+    PromptTokenDetails,
 };
 use crate::usage_dispatch::get_usage_object;
 
-fn add_optional(first: Option<u64>, second: Option<u64>) -> Result<Option<u64>, UsageError> {
+fn add_optional(first: Option<u64>, second: Option<u64>) -> Result<Option<u64>, CostError> {
     match (first, second) {
         (None, None) => Ok(None),
         (first, second) => first
             .unwrap_or(0)
             .checked_add(second.unwrap_or(0))
             .map(Some)
-            .ok_or(UsageError::TokenCountOverflow),
+            .ok_or(CostError::TokenCountOverflow),
     }
 }
 
@@ -24,7 +25,7 @@ fn add_optional_f64(first: Option<f64>, second: Option<f64>) -> Option<f64> {
 fn combine_cached_details(
     first: Option<CachedTokenDetails>,
     second: Option<CachedTokenDetails>,
-) -> Result<Option<CachedTokenDetails>, UsageError> {
+) -> Result<Option<CachedTokenDetails>, CostError> {
     match (first, second) {
         (None, None) => Ok(None),
         (first, second) => {
@@ -42,7 +43,7 @@ fn combine_cached_details(
 fn combine_cache_creation_details(
     first: Option<CacheCreationTokenDetails>,
     second: Option<CacheCreationTokenDetails>,
-) -> Result<Option<CacheCreationTokenDetails>, UsageError> {
+) -> Result<Option<CacheCreationTokenDetails>, CostError> {
     match (first, second) {
         (None, None) => Ok(None),
         (first, second) => {
@@ -65,7 +66,7 @@ fn combine_cache_creation_details(
 fn combine_prompt_details(
     first: Option<PromptTokenDetails>,
     second: Option<PromptTokenDetails>,
-) -> Result<Option<PromptTokenDetails>, UsageError> {
+) -> Result<Option<PromptTokenDetails>, CostError> {
     match (first, second) {
         (None, None) => Ok(None),
         (first, second) => {
@@ -75,7 +76,7 @@ fn combine_prompt_details(
                 cached_tokens: first
                     .cached_tokens
                     .checked_add(second.cached_tokens)
-                    .ok_or(UsageError::TokenCountOverflow)?,
+                    .ok_or(CostError::TokenCountOverflow)?,
                 audio_tokens: add_optional(first.audio_tokens, second.audio_tokens)?,
                 text_tokens: add_optional(first.text_tokens, second.text_tokens)?,
                 image_tokens: add_optional(first.image_tokens, second.image_tokens)?,
@@ -127,7 +128,7 @@ fn combine_prompt_details(
 fn combine_completion_details(
     first: Option<CompletionTokenDetails>,
     second: Option<CompletionTokenDetails>,
-) -> Result<Option<CompletionTokenDetails>, UsageError> {
+) -> Result<Option<CompletionTokenDetails>, CostError> {
     match (first, second) {
         (None, None) => Ok(None),
         (first, second) => {
@@ -146,7 +147,7 @@ fn combine_completion_details(
 
 pub fn combine_usage_objects(
     usages: impl IntoIterator<Item = ChatUsage>,
-) -> Result<ChatUsage, UsageError> {
+) -> Result<ChatUsage, CostError> {
     usages
         .into_iter()
         .try_fold(ChatUsage::default(), |combined, usage| {
@@ -154,15 +155,15 @@ pub fn combine_usage_objects(
                 prompt_tokens: combined
                     .prompt_tokens
                     .checked_add(usage.prompt_tokens)
-                    .ok_or(UsageError::TokenCountOverflow)?,
+                    .ok_or(CostError::TokenCountOverflow)?,
                 completion_tokens: combined
                     .completion_tokens
                     .checked_add(usage.completion_tokens)
-                    .ok_or(UsageError::TokenCountOverflow)?,
+                    .ok_or(CostError::TokenCountOverflow)?,
                 total_tokens: combined
                     .total_tokens
                     .checked_add(usage.total_tokens)
-                    .ok_or(UsageError::TokenCountOverflow)?,
+                    .ok_or(CostError::TokenCountOverflow)?,
                 prompt_tokens_details: combine_prompt_details(
                     combined.prompt_tokens_details,
                     usage.prompt_tokens_details,
@@ -177,14 +178,14 @@ pub fn combine_usage_objects(
         })
 }
 
-pub(crate) fn event_usage(event: &Value) -> Result<ChatUsage, UsageError> {
+pub(crate) fn event_usage(event: &Value) -> Result<ChatUsage, CostError> {
     let usage = event.pointer("/response/usage").unwrap_or(&Value::Null);
     Ok(get_usage_object(&json!({"usage": usage}))?.unwrap_or_default())
 }
 
 pub fn collect_usage_from_realtime_stream_results(
     results: &[Value],
-) -> Result<Vec<ChatUsage>, UsageError> {
+) -> Result<Vec<ChatUsage>, CostError> {
     results
         .iter()
         .filter(|event| event.get("type").and_then(Value::as_str) == Some("response.done"))
@@ -194,7 +195,7 @@ pub fn collect_usage_from_realtime_stream_results(
 
 pub fn collect_and_combine_usage_from_realtime_stream_results(
     results: &[Value],
-) -> Result<ChatUsage, UsageError> {
+) -> Result<ChatUsage, CostError> {
     combine_usage_objects(collect_usage_from_realtime_stream_results(results)?)
 }
 
@@ -214,7 +215,7 @@ pub fn billable_responses_ws_events(results: &[Value]) -> Vec<&Value> {
 
 pub fn collect_usage_from_responses_ws_results(
     results: &[Value],
-) -> Result<Vec<ChatUsage>, UsageError> {
+) -> Result<Vec<ChatUsage>, CostError> {
     billable_responses_ws_events(results)
         .into_iter()
         .map(event_usage)
@@ -223,7 +224,7 @@ pub fn collect_usage_from_responses_ws_results(
 
 pub fn collect_and_combine_usage_from_responses_ws_results(
     results: &[Value],
-) -> Result<ChatUsage, UsageError> {
+) -> Result<ChatUsage, CostError> {
     combine_usage_objects(collect_usage_from_responses_ws_results(results)?)
 }
 

@@ -1,11 +1,10 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/test_cost_calculator.py::test_per_query_priced_rerank_deployment_completion_cost_is_nonzero
+use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
 
-use litellm_cost::catalog::{CatalogCallError, CostCall, ModelCostRequest, ModelInfoCatalog};
-use litellm_cost::ocr_cost::OcrCostError;
+use litellm_cost::catalog::{CostCall, ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::responses_usage::ChatUsage;
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
@@ -234,7 +233,7 @@ fn retrieval_and_search_calls_use_their_reported_units() {
             request("rerank", None, &usage),
             CostCall::Rerank { billed_units: None },
         ),
-        Err(CatalogCallError::MissingProvider)
+        Err(CostError::MissingProvider)
     );
 }
 
@@ -300,7 +299,7 @@ fn ocr_call_distinguishes_missing_pages_from_unpriced_usage() {
                 deployment_info: None,
             },
         ),
-        Err(CatalogCallError::Ocr(OcrCostError::MissingPages))
+        Err(CostError::MissingPages)
     );
     assert_eq!(
         catalog
@@ -322,7 +321,7 @@ fn ocr_call_distinguishes_missing_pages_from_unpriced_usage() {
                 deployment_info: None,
             },
         ),
-        Err(CatalogCallError::Ocr(OcrCostError::MissingUsage))
+        Err(CostError::MissingUsage)
     );
 }
 

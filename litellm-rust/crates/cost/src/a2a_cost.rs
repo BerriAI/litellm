@@ -1,15 +1,11 @@
+use crate::error::CostError;
 use serde_json::Value;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum A2ACostError {
-    InvalidCost,
-}
-
-fn amount(value: &Value) -> Result<f64, A2ACostError> {
+fn amount(value: &Value) -> Result<f64, CostError> {
     match value {
-        Value::Number(number) => number.as_f64().ok_or(A2ACostError::InvalidCost),
-        Value::String(number) => number.parse().map_err(|_| A2ACostError::InvalidCost),
-        _ => Err(A2ACostError::InvalidCost),
+        Value::Number(number) => number.as_f64().ok_or(CostError::InvalidCost),
+        Value::String(number) => number.parse().map_err(|_| CostError::InvalidCost),
+        _ => Err(CostError::InvalidCost),
     }
 }
 
@@ -17,7 +13,7 @@ pub fn calculate_token_based_cost(
     details: &Value,
     input_rate: Option<&Value>,
     output_rate: Option<&Value>,
-) -> Result<f64, A2ACostError> {
+) -> Result<f64, CostError> {
     let Some(usage) = details.get("usage") else {
         return Ok(0.0);
     };
@@ -42,7 +38,7 @@ pub fn calculate_token_based_cost(
     Ok(input_tokens * input + output_tokens * output)
 }
 
-pub fn calculate_a2a_cost(details: Option<&Value>) -> Result<f64, A2ACostError> {
+pub fn calculate_a2a_cost(details: Option<&Value>) -> Result<f64, CostError> {
     let Some(details) = details else {
         return Ok(0.0);
     };

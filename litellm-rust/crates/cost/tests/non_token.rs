@@ -1,6 +1,8 @@
+use litellm_cost::error::CostError;
+
 use litellm_cost::Rate;
 use litellm_cost::non_token::{
-    Charge, Component, Error, ImageRates, ImageUsage, OcrRates, OcrUsage, Unit, calculate,
+    Charge, Component, ImageRates, ImageUsage, OcrRates, OcrUsage, Unit, calculate,
     calculate_image, calculate_ocr,
 };
 use rstest::rstest;
@@ -86,21 +88,21 @@ fn rejects_invalid_inputs_and_overflow() {
             quantity: -1.0,
             ..valid
         }]),
-        Err(Error::InvalidQuantity)
+        Err(CostError::InvalidQuantity)
     );
     assert_eq!(
         calculate(&[Charge {
             rate: f64::NAN,
             ..valid
         }]),
-        Err(Error::InvalidRate)
+        Err(CostError::InvalidRate)
     );
     assert_eq!(
         calculate(&[Charge {
             units_per_rate: 0.0,
             ..valid
         }]),
-        Err(Error::InvalidRateBasis)
+        Err(CostError::InvalidRateBasis)
     );
     assert_eq!(
         calculate(&[Charge {
@@ -108,7 +110,7 @@ fn rejects_invalid_inputs_and_overflow() {
             rate: f64::MAX,
             ..valid
         }]),
-        Err(Error::NonFiniteCost)
+        Err(CostError::NonFiniteCost)
     );
 }
 
@@ -180,7 +182,7 @@ fn image_rejects_missing_prices_and_ocr_returns_zero() {
         width: 10,
         height: 10,
     };
-    assert_eq!(calculate_image(&[], image), Err(Error::MissingRate));
+    assert_eq!(calculate_image(&[], image), Err(CostError::MissingRate));
     assert_eq!(
         calculate_ocr(
             OcrRates {

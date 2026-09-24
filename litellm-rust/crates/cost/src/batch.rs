@@ -1,3 +1,4 @@
+use crate::error::CostError;
 use serde_json::Value;
 
 use crate::base_rate_selection::uses_inclusive_token_thresholds;
@@ -69,13 +70,6 @@ pub struct BatchCost {
     pub completion: f64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BatchError {
-    InvalidRate,
-    InvalidMultiplier,
-    NonFiniteCost,
-}
-
 fn value(rate: Rate) -> Option<f64> {
     rate.value()
 }
@@ -121,7 +115,7 @@ fn valid_rate(rate: Rate) -> bool {
     value(rate).is_none_or(|rate| rate.is_finite() && rate >= 0.0)
 }
 
-fn validate(pricing: &BatchPricing<'_>) -> Result<(), BatchError> {
+fn validate(pricing: &BatchPricing<'_>) -> Result<(), CostError> {
     let rates = [
         pricing.batch.input,
         pricing.batch.output,
@@ -147,10 +141,10 @@ fn validate(pricing: &BatchPricing<'_>) -> Result<(), BatchError> {
             .any(|rate| !valid_rate(rate))
         })
     {
-        return Err(BatchError::InvalidRate);
+        return Err(CostError::InvalidRate);
     }
     if !pricing.regional_uplift.is_finite() || pricing.regional_uplift < 0.0 {
-        return Err(BatchError::InvalidMultiplier);
+        return Err(CostError::InvalidMultiplier);
     }
     Ok(())
 }
@@ -158,7 +152,7 @@ fn validate(pricing: &BatchPricing<'_>) -> Result<(), BatchError> {
 pub fn batch_cost_calculator(
     pricing: &BatchPricing<'_>,
     usage: BatchUsage,
-) -> Result<BatchCost, BatchError> {
+) -> Result<BatchCost, CostError> {
     validate(pricing)?;
     let batch = get_batch_cost_rates(pricing, usage.prompt_tokens);
     let prompt = if let Some(input) = value(batch.input) {
@@ -209,7 +203,7 @@ pub fn batch_cost_calculator(
         completion: completion * pricing.regional_uplift,
     };
     if !result.prompt.is_finite() || !result.completion.is_finite() {
-        return Err(BatchError::NonFiniteCost);
+        return Err(CostError::NonFiniteCost);
     }
     Ok(result)
 }
@@ -298,7 +292,7 @@ pub fn batch_cost_from_model_info(
     usage: &ChatUsage,
     provider: Option<&str>,
     data_residency: Option<&str>,
-) -> Result<BatchCost, BatchError> {
+) -> Result<BatchCost, CostError> {
     let policy = if uses_inclusive_token_thresholds(provider) {
         ThresholdPolicy::Inclusive
     } else {

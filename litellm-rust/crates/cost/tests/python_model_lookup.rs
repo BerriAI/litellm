@@ -1,11 +1,11 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/test_cost_calculator.py::test_cost_per_token_duplicate_openai_prefix_matches_model_cost
+use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use litellm_cost::catalog::{CatalogError, ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
 use serde_json::json;
@@ -114,7 +114,7 @@ fn cost_per_token_uses_the_selected_regional_prices() {
 fn cost_per_token_reports_an_unmapped_model() {
     assert_eq!(
         catalog().cost_per_token(request("missing", Some("openai"), None, &usage())),
-        Err(CatalogError::ModelNotFound)
+        Err(CostError::ModelNotFound)
     );
 }
 

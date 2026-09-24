@@ -1,9 +1,8 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/test_video_generation.py::TestVideoGeneration
 // mirrors: unit/llms/openai/transcriptions/test_transcription_duration_hidden.py::TestCostCalculatorReadsDurationFromHiddenParams
+use litellm_cost::error::CostError;
 
-use litellm_cost::non_token::Error;
 use litellm_cost::openai_cost::{
     cost_router, video_generation_cost, video_output_cost_per_second,
     video_resolution_to_cost_field_suffix,
@@ -75,6 +74,6 @@ fn video_generation_cost_matches_python_rate_precedence(
 fn video_generation_cost_rejects_invalid_duration() {
     assert_eq!(
         video_generation_cost(&json!({"output_cost_per_second": 0.05}), -1.0, None),
-        Err(Error::InvalidQuantity)
+        Err(CostError::InvalidQuantity)
     );
 }

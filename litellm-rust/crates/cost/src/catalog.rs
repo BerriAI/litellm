@@ -13,7 +13,7 @@ use crate::azure_ai_image_cost::{
 };
 use crate::azure_cost::output_per_second_cost;
 use crate::base_rate_selection::uses_inclusive_token_thresholds;
-use crate::batch::{BatchError, batch_cost_from_model_info};
+use crate::batch::batch_cost_from_model_info;
 use crate::bedrock_image_cost::cost_calculator as bedrock_image_cost_calculator;
 use crate::billed_token_rates::{
     BilledRatesRequest, BilledTokenRates, TokenTypeCostBreakdown,
@@ -21,16 +21,15 @@ use crate::billed_token_rates::{
     get_token_type_cost_breakdown as calculate_token_type_cost_breakdown,
 };
 use crate::completion_cost::{
-    CompletionCost, ResponseCostError, completion_cost, get_response_cost_from_hidden_params,
+    CompletionCost, completion_cost, get_response_cost_from_hidden_params,
 };
 use crate::completion_input::{
     CompletionInputRequest, PreparedCompletionInput, prepare_completion_input,
 };
-use crate::custom_pricing::{
-    CustomPricing, CustomPricingError, CustomTokenRates, cost_from_chat_usage,
-};
+use crate::custom_pricing::{CustomPricing, CustomTokenRates, cost_from_chat_usage};
 use crate::dashscope_cost::cost_per_token as dashscope_cost_per_token;
 use crate::databricks_cost::registry_key as databricks_registry_key;
+use crate::error::CostError;
 use crate::fal_ai_image_cost::{
     cost_calculator as fal_ai_image_cost_calculator,
     fal_ai_passthrough_cost as calculate_fal_ai_passthrough_cost,
@@ -47,8 +46,8 @@ use crate::image_response_cost::{
 use crate::model_selection::{
     ModelSelectionRequest, get_provider_for_cost_calc, select_model_name_for_cost_calc,
 };
-use crate::non_token::{Error as NonTokenError, ImageRates, ImageUsage, calculate_image};
-use crate::ocr_cost::{OcrCostError, ocr_cost};
+use crate::non_token::{ImageRates, ImageUsage, calculate_image};
+use crate::ocr_cost::ocr_cost;
 use crate::openai_cost::video_generation_cost as calculate_video_generation_cost;
 use crate::openai_image_cost::cost_calculator as openai_image_cost_calculator;
 use crate::per_second::{has_token_or_tiered_pricing, per_second_pricing_cost};
@@ -63,15 +62,15 @@ use crate::realtime_cost::{
     partition_results_by_service_tier, transcription_usage_cost,
 };
 use crate::regional_uplift::get_provider_specific_geo_multiplier;
-use crate::responses_usage::{ChatUsage, UsageError};
+use crate::responses_usage::ChatUsage;
 use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use crate::search_cost::{
     ParallelAiPricing, effective_mode, parallel_ai_search_cost, provider_usage,
     search_provider_cost_per_query,
 };
 use crate::speech_cost::{
-    SpeechCostError, SpeechCostMetric, cost_per_second, generic_cost_per_character,
-    lyria_generation_cost, select_cost_metric_for_model, transcription_usage_has_token_details,
+    SpeechCostMetric, cost_per_second, generic_cost_per_character, lyria_generation_cost,
+    select_cost_metric_for_model, transcription_usage_has_token_details,
 };
 use crate::together_cost::{
     TogetherThresholds, get_model_params_and_category, has_together_registry_pricing,
@@ -175,130 +174,6 @@ pub struct DefaultImageCostRequest<'a> {
     pub n: Option<u64>,
     pub size: Option<&'a str>,
     pub supplied_model_info: Option<&'a Value>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CatalogError {
-    ModelNotFound,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CatalogResponseError {
-    Catalog(CatalogError),
-    ProviderCost(ResponseCostError),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RealtimeCostError {
-    Catalog(CatalogError),
-    Usage(UsageError),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CatalogSpeechError {
-    Catalog(CatalogError),
-    Speech(SpeechCostError),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CatalogCallError {
-    Catalog(CatalogError),
-    Speech(CatalogSpeechError),
-    Ocr(OcrCostError),
-    Batch(BatchError),
-    MissingProvider,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CatalogCustomError {
-    Pricing(CustomPricingError),
-    Catalog(CatalogError),
-    Call(CatalogCallError),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CatalogImageError {
-    Catalog(CatalogError),
-    Pricing(NonTokenError),
-    Usage(UsageError),
-}
-
-impl From<CatalogError> for CatalogImageError {
-    fn from(value: CatalogError) -> Self {
-        Self::Catalog(value)
-    }
-}
-
-impl From<NonTokenError> for CatalogImageError {
-    fn from(value: NonTokenError) -> Self {
-        Self::Pricing(value)
-    }
-}
-
-impl From<UsageError> for CatalogImageError {
-    fn from(value: UsageError) -> Self {
-        Self::Usage(value)
-    }
-}
-
-impl From<CatalogError> for CatalogSpeechError {
-    fn from(value: CatalogError) -> Self {
-        Self::Catalog(value)
-    }
-}
-
-impl From<CatalogError> for CatalogCallError {
-    fn from(value: CatalogError) -> Self {
-        Self::Catalog(value)
-    }
-}
-
-impl From<CatalogSpeechError> for CatalogCallError {
-    fn from(value: CatalogSpeechError) -> Self {
-        Self::Speech(value)
-    }
-}
-
-impl From<OcrCostError> for CatalogCallError {
-    fn from(value: OcrCostError) -> Self {
-        Self::Ocr(value)
-    }
-}
-
-impl From<BatchError> for CatalogCallError {
-    fn from(value: BatchError) -> Self {
-        Self::Batch(value)
-    }
-}
-
-impl From<SpeechCostError> for CatalogSpeechError {
-    fn from(value: SpeechCostError) -> Self {
-        Self::Speech(value)
-    }
-}
-
-impl From<CatalogError> for RealtimeCostError {
-    fn from(value: CatalogError) -> Self {
-        Self::Catalog(value)
-    }
-}
-
-impl From<UsageError> for RealtimeCostError {
-    fn from(value: UsageError) -> Self {
-        Self::Usage(value)
-    }
-}
-
-impl From<CatalogError> for CatalogResponseError {
-    fn from(value: CatalogError) -> Self {
-        Self::Catalog(value)
-    }
-}
-
-impl From<ResponseCostError> for CatalogResponseError {
-    fn from(value: ResponseCostError) -> Self {
-        Self::ProviderCost(value)
-    }
 }
 
 fn select_model_key<'a, T>(
@@ -434,7 +309,7 @@ impl ModelInfoCatalog {
     pub fn prepare_completion_input(
         &self,
         request: CompletionInputRequest<'_>,
-    ) -> Result<PreparedCompletionInput, UsageError> {
+    ) -> Result<PreparedCompletionInput, CostError> {
         prepare_completion_input(request, &self.entries)
     }
 
@@ -442,14 +317,10 @@ impl ModelInfoCatalog {
         &self,
         request: ModelCostRequest<'_>,
         pricing: CustomPricing,
-    ) -> Result<(f64, f64), CatalogCustomError> {
-        match cost_from_chat_usage(request.usage, pricing, request.response_time_ms)
-            .map_err(CatalogCustomError::Pricing)?
-        {
+    ) -> Result<(f64, f64), CostError> {
+        match cost_from_chat_usage(request.usage, pricing, request.response_time_ms)? {
             Some(cost) => Ok((cost.input, cost.output)),
-            None => self
-                .cost_per_token(request)
-                .map_err(CatalogCustomError::Catalog),
+            None => self.cost_per_token(request),
         }
     }
 
@@ -458,14 +329,10 @@ impl ModelInfoCatalog {
         request: ModelCostRequest<'_>,
         call: CostCall<'_>,
         pricing: CustomPricing,
-    ) -> Result<(f64, f64), CatalogCustomError> {
-        match cost_from_chat_usage(request.usage, pricing, request.response_time_ms)
-            .map_err(CatalogCustomError::Pricing)?
-        {
+    ) -> Result<(f64, f64), CostError> {
+        match cost_from_chat_usage(request.usage, pricing, request.response_time_ms)? {
             Some(cost) => Ok((cost.input, cost.output)),
-            None => self
-                .cost_per_token_for_call(request, call)
-                .map_err(CatalogCustomError::Call),
+            None => self.cost_per_token_for_call(request, call),
         }
     }
 
@@ -473,7 +340,7 @@ impl ModelInfoCatalog {
         &self,
         request: ModelCostRequest<'_>,
         call: CostCall<'_>,
-    ) -> Result<(f64, f64), CatalogCallError> {
+    ) -> Result<(f64, f64), CostError> {
         let provider = request.provider.and_then(LlmProviders::parse);
         match call {
             CostCall::Token {
@@ -483,12 +350,12 @@ impl ModelInfoCatalog {
                 request_model,
             } => {
                 if provider == Some(LlmProviders::VERTEX_AI) {
-                    return Ok(self.vertex_cost(
+                    return self.vertex_cost(
                         request,
                         call_type,
                         prompt_characters,
                         completion_characters,
-                    )?);
+                    );
                 }
                 if provider == Some(LlmProviders::TOGETHER_AI)
                     && matches!(
@@ -497,10 +364,10 @@ impl ModelInfoCatalog {
                             | Some(crate::call_type::CallTypes::aembedding)
                     )
                 {
-                    return Ok(self.together_ai_cost_per_token(request, call_type)?);
+                    return self.together_ai_cost_per_token(request, call_type);
                 }
                 if provider == Some(LlmProviders::AZURE_AI) {
-                    return Ok(self.azure_ai_cost_per_token(request, request_model)?);
+                    return self.azure_ai_cost_per_token(request, request_model);
                 }
                 Ok(self.cost_per_token(request)?)
             }
@@ -511,11 +378,11 @@ impl ModelInfoCatalog {
                 Ok(self.transcription_cost(request, duration_seconds)?)
             }
             CostCall::Rerank { billed_units } => {
-                let provider = request.provider.ok_or(CatalogCallError::MissingProvider)?;
+                let provider = request.provider.ok_or(CostError::MissingProvider)?;
                 Ok(self.rerank_cost(request.model, provider, request.region, billed_units))
             }
             CostCall::VectorStoreSearch { api_type } => {
-                let provider = request.provider.ok_or(CatalogCallError::MissingProvider)?;
+                let provider = request.provider.ok_or(CostError::MissingProvider)?;
                 Ok(self.vector_store_search_cost(provider, api_type))
             }
             CostCall::Search {
@@ -575,7 +442,7 @@ impl ModelInfoCatalog {
         call_type: &str,
         prompt_characters: Option<f64>,
         completion_characters: Option<f64>,
-    ) -> Result<(f64, f64), CatalogError> {
+    ) -> Result<(f64, f64), CostError> {
         if let Some(cost) = self
             .select_model_key(request.model, request.provider, request.region)
             .and_then(|key| self.entries.get(key))
@@ -590,7 +457,7 @@ impl ModelInfoCatalog {
         }
         let key = self
             .select_model_key(request.model, request.provider, request.region)
-            .ok_or(CatalogError::ModelNotFound)?;
+            .ok_or(CostError::ModelNotFound)?;
         Ok(vertex_cost_per_character(
             request.model,
             request.usage,
@@ -605,7 +472,7 @@ impl ModelInfoCatalog {
     pub fn databricks_cost_per_token(
         &self,
         request: ModelCostRequest<'_>,
-    ) -> Result<(f64, f64), CatalogError> {
+    ) -> Result<(f64, f64), CostError> {
         if let Some(cost) = self
             .select_model_key(request.model, Some("databricks"), request.region)
             .and_then(|key| self.entries.get(key))
@@ -619,7 +486,7 @@ impl ModelInfoCatalog {
                 Some("databricks"),
                 request.region,
             )
-            .ok_or(CatalogError::ModelNotFound)?;
+            .ok_or(CostError::ModelNotFound)?;
         Ok(calculate_generic_cost_from_model_info_with_region(
             request.usage,
             &self.entries[key],
@@ -639,7 +506,7 @@ impl ModelInfoCatalog {
         &self,
         request: ModelCostRequest<'_>,
         request_model: Option<&str>,
-    ) -> Result<(f64, f64), CatalogError> {
+    ) -> Result<(f64, f64), CostError> {
         let model_info = self
             .select_model_key(request.model, Some("azure_ai"), request.region)
             .and_then(|key| self.entries.get(key));
@@ -659,7 +526,7 @@ impl ModelInfoCatalog {
                 request.at,
             ),
             None if is_azure_model_router(request.model) => (0.0, 0.0),
-            None => return Err(CatalogError::ModelNotFound),
+            None => return Err(CostError::ModelNotFound),
         };
         let fee = self
             .azure_ai_router_fee(request.model, request_model, request.usage.prompt_tokens)?
@@ -672,14 +539,14 @@ impl ModelInfoCatalog {
         model: &str,
         request_model: Option<&str>,
         prompt_tokens: u64,
-    ) -> Result<Option<f64>, CatalogError> {
+    ) -> Result<Option<f64>, CostError> {
         let Some(fee_name) = router_fee_name(model, request_model) else {
             return Ok(None);
         };
         let fee_entry = router_fee_entry_name(fee_name);
         let fee_key = self
             .select_model_key(fee_entry, Some("azure_ai"), None)
-            .ok_or(CatalogError::ModelNotFound)?;
+            .ok_or(CostError::ModelNotFound)?;
         let fee =
             calculate_azure_model_router_flat_cost(fee_name, prompt_tokens, &self.entries[fee_key]);
         Ok((fee > 0.0).then_some(fee))
@@ -689,10 +556,10 @@ impl ModelInfoCatalog {
         &self,
         request: ModelCostRequest<'_>,
         prompt_characters: Option<f64>,
-    ) -> Result<(f64, f64), CatalogSpeechError> {
+    ) -> Result<(f64, f64), CostError> {
         let key = self
             .select_model_key(request.model, request.provider, request.region)
-            .ok_or(CatalogError::ModelNotFound)?;
+            .ok_or(CostError::ModelNotFound)?;
         let model_info = &self.entries[key];
         if matches!(request.provider, Some("vertex_ai" | "vertex_ai_beta"))
             && let Some(cost) = lyria_generation_cost(model_info)
@@ -701,12 +568,11 @@ impl ModelInfoCatalog {
         }
         match select_cost_metric_for_model(model_info)? {
             SpeechCostMetric::PerCharacter => {
-                let characters =
-                    prompt_characters.ok_or(SpeechCostError::MissingPromptCharacters)?;
+                let characters = prompt_characters.ok_or(CostError::MissingPromptCharacters)?;
                 let (prompt, completion) =
                     generic_cost_per_character(model_info, characters, 0.0, None, Some(0.0));
                 Ok((
-                    prompt.ok_or(SpeechCostError::MissingInputCharacterRate)?,
+                    prompt.ok_or(CostError::MissingInputCharacterRate)?,
                     completion.unwrap_or(0.0),
                 ))
             }
@@ -718,10 +584,10 @@ impl ModelInfoCatalog {
         &self,
         request: ModelCostRequest<'_>,
         duration_seconds: f64,
-    ) -> Result<(f64, f64), CatalogError> {
+    ) -> Result<(f64, f64), CostError> {
         let key = self
             .select_model_key(request.model, request.provider, request.region)
-            .ok_or(CatalogError::ModelNotFound)?;
+            .ok_or(CostError::ModelNotFound)?;
         let model_info = &self.entries[key];
         if transcription_usage_has_token_details(request.usage) {
             return Ok(calculate_generic_cost_from_model_info_with_region(
@@ -817,7 +683,7 @@ impl ModelInfoCatalog {
         region: Option<&str>,
         data_residency: Option<&str>,
         at: Timestamp,
-    ) -> Result<f64, RealtimeCostError> {
+    ) -> Result<f64, CostError> {
         partition_results_by_service_tier(results)
             .into_iter()
             .map(|(service_tier, events)| {
@@ -843,10 +709,7 @@ impl ModelInfoCatalog {
             .sum()
     }
 
-    pub fn cost_per_token(
-        &self,
-        request: ModelCostRequest<'_>,
-    ) -> Result<(f64, f64), CatalogError> {
+    pub fn cost_per_token(&self, request: ModelCostRequest<'_>) -> Result<(f64, f64), CostError> {
         if let Some(cost) = self
             .select_model_key(request.model, request.provider, request.region)
             .and_then(|key| self.entries.get(key))
@@ -896,7 +759,7 @@ impl ModelInfoCatalog {
                     self.select_model_key(category, request.provider, request.region)
                 })
         })
-        .ok_or(CatalogError::ModelNotFound)?;
+        .ok_or(CostError::ModelNotFound)?;
         let model_info = apply_provider_cache_read_default(&self.entries[key], request.provider);
         if let Some(cost) = per_second_pricing_cost(&model_info, request.response_time_ms) {
             return Ok(cost);
@@ -998,7 +861,7 @@ impl ModelInfoCatalog {
         &self,
         request: ModelCostRequest<'_>,
         call_type: &str,
-    ) -> Result<(f64, f64), CatalogError> {
+    ) -> Result<(f64, f64), CostError> {
         if has_together_registry_pricing(request.model, &self.entries) {
             return self.cost_per_token(request);
         }
@@ -1089,12 +952,12 @@ impl ModelInfoCatalog {
         image_response: &Value,
         supplied_model_info: Option<&Value>,
         at: Timestamp,
-    ) -> Result<f64, CatalogError> {
+    ) -> Result<f64, CostError> {
         let shared = self
             .select_model_key(model, Some(provider), None)
             .and_then(|key| self.entries.get(key));
         let model_info = resolve_image_model_info(shared, supplied_model_info)
-            .ok_or(CatalogError::ModelNotFound)?;
+            .ok_or(CostError::ModelNotFound)?;
         match provider {
             "gemini" => Ok(gemini_image_generation_cost(
                 image_response,
@@ -1106,7 +969,7 @@ impl ModelInfoCatalog {
                 &model_info,
                 at,
             )),
-            _ => Err(CatalogError::ModelNotFound),
+            _ => Err(CostError::ModelNotFound),
         }
     }
 
@@ -1117,38 +980,38 @@ impl ModelInfoCatalog {
         image_response: &Value,
         supplied_model_info: Option<&Value>,
         at: Timestamp,
-    ) -> Result<f64, CatalogError> {
+    ) -> Result<f64, CostError> {
         let shared = self
             .select_model_key(model, Some(provider), None)
             .and_then(|key| self.entries.get(key));
         match provider {
             "gemini" => {
                 let info = resolve_image_model_info(shared, supplied_model_info)
-                    .ok_or(CatalogError::ModelNotFound)?;
+                    .ok_or(CostError::ModelNotFound)?;
                 Ok(gemini_image_edit_cost(image_response, &info, at))
             }
             "vertex_ai" => shared
                 .map(|info| vertex_image_edit_cost(image_response, info))
-                .ok_or(CatalogError::ModelNotFound),
-            _ => Err(CatalogError::ModelNotFound),
+                .ok_or(CostError::ModelNotFound),
+            _ => Err(CostError::ModelNotFound),
         }
     }
 
     pub fn azure_ai_image_generation_cost(
         &self,
         request: AzureAiImageCatalogRequest<'_>,
-    ) -> Result<f64, CatalogImageError> {
+    ) -> Result<f64, CostError> {
         let shared = self
             .select_model_key(request.model, Some("azure_ai"), None)
             .and_then(|key| self.entries.get(key));
         let model_info = resolve_image_model_info(shared, request.supplied_model_info)
-            .ok_or(CatalogError::ModelNotFound)?;
+            .ok_or(CostError::ModelNotFound)?;
         let shared_pricing = model_info
             .get("key")
             .and_then(Value::as_str)
             .and_then(|key| self.entries.get(key))
             .or(shared);
-        Ok(azure_ai_image_cost_calculator(AzureAiImageRequest {
+        azure_ai_image_cost_calculator(AzureAiImageRequest {
             image_response: request.image_response,
             model_info: &model_info,
             supplied_model_info: request.supplied_model_info,
@@ -1157,7 +1020,7 @@ impl ModelInfoCatalog {
             n: request.n,
             optional_params: request.optional_params,
             at: request.at,
-        })?)
+        })
     }
 
     pub fn flat_image_generation_cost(
@@ -1166,12 +1029,12 @@ impl ModelInfoCatalog {
         provider: &str,
         image_response: &Value,
         supplied_model_info: Option<&Value>,
-    ) -> Result<f64, CatalogError> {
+    ) -> Result<f64, CostError> {
         let shared = self
             .select_model_key(model, Some(provider), None)
             .and_then(|key| self.entries.get(key));
         let model_info = resolve_image_model_info(shared, supplied_model_info)
-            .ok_or(CatalogError::ModelNotFound)?;
+            .ok_or(CostError::ModelNotFound)?;
         Ok(flat_image_cost(image_response, &model_info))
     }
 
@@ -1182,18 +1045,13 @@ impl ModelInfoCatalog {
         image_response: &Value,
         supplied_model_info: Option<&Value>,
         at: Timestamp,
-    ) -> Result<f64, CatalogImageError> {
+    ) -> Result<f64, CostError> {
         let shared = self
             .select_model_key(model, Some(provider), None)
             .and_then(|key| self.entries.get(key));
         let model_info = resolve_image_model_info(shared, supplied_model_info)
-            .ok_or(CatalogError::ModelNotFound)?;
-        Ok(openai_image_cost_calculator(
-            image_response,
-            &model_info,
-            provider,
-            at,
-        )?)
+            .ok_or(CostError::ModelNotFound)?;
+        openai_image_cost_calculator(image_response, &model_info, provider, at)
     }
 
     pub fn fal_ai_image_generation_cost(
@@ -1202,7 +1060,7 @@ impl ModelInfoCatalog {
         image_response: &Value,
         optional_params: &Value,
         deployment_prices: Option<&Value>,
-    ) -> Result<f64, CatalogError> {
+    ) -> Result<f64, CostError> {
         fal_ai_image_cost_calculator(
             model,
             image_response,
@@ -1210,7 +1068,7 @@ impl ModelInfoCatalog {
             deployment_prices,
             &self.entries,
         )
-        .ok_or(CatalogError::ModelNotFound)
+        .ok_or(CostError::ModelNotFound)
     }
 
     pub fn fal_ai_passthrough_cost(&self, model: &str, request_body: &Value) -> Option<f64> {
@@ -1227,9 +1085,9 @@ impl ModelInfoCatalog {
         image_response: &Value,
         size: Option<&str>,
         optional_params: &Value,
-    ) -> Result<f64, CatalogError> {
+    ) -> Result<f64, CostError> {
         bedrock_image_cost_calculator(model, image_response, size, optional_params, &self.entries)
-            .ok_or(CatalogError::ModelNotFound)
+            .ok_or(CostError::ModelNotFound)
     }
 
     pub fn video_generation_cost(
@@ -1239,39 +1097,33 @@ impl ModelInfoCatalog {
         deployment_info: Option<&Value>,
         duration_seconds: f64,
         video_resolution: Option<&str>,
-    ) -> Result<f64, CatalogImageError> {
+    ) -> Result<f64, CostError> {
         let model_info = deployment_info
             .or_else(|| {
                 self.select_model_key(model, provider, None)
                     .and_then(|key| self.entries.get(key))
             })
-            .ok_or(CatalogError::ModelNotFound)?;
-        Ok(calculate_video_generation_cost(
-            model_info,
-            duration_seconds,
-            video_resolution,
-        )?)
+            .ok_or(CostError::ModelNotFound)?;
+        calculate_video_generation_cost(model_info, duration_seconds, video_resolution)
     }
 
     pub fn default_image_cost_calculator(
         &self,
         request: DefaultImageCostRequest<'_>,
-    ) -> Result<f64, CatalogImageError> {
+    ) -> Result<f64, CostError> {
         let raw_size = request.size.unwrap_or("1024-x-1024");
         let size = if raw_size.contains("-x-") {
             raw_size.to_owned()
         } else {
             raw_size.replace('x', "-x-")
         };
-        let (height, width) = size
-            .split_once("-x-")
-            .ok_or(NonTokenError::InvalidQuantity)?;
+        let (height, width) = size.split_once("-x-").ok_or(CostError::InvalidQuantity)?;
         let height = height
             .parse::<u32>()
-            .map_err(|_| NonTokenError::InvalidQuantity)?;
+            .map_err(|_| CostError::InvalidQuantity)?;
         let width = width
             .parse::<u32>()
-            .map_err(|_| NonTokenError::InvalidQuantity)?;
+            .map_err(|_| CostError::InvalidQuantity)?;
         let provider_prefix = request.provider.map(|provider| format!("{provider}/"));
         let without_provider = provider_prefix
             .as_deref()
@@ -1305,7 +1157,7 @@ impl ModelInfoCatalog {
             .flatten()
             .find_map(|candidate| self.entries.get(candidate));
         if shared.is_none() && request.supplied_model_info.is_none() {
-            return Err(CatalogError::ModelNotFound.into());
+            return Err(CostError::ModelNotFound);
         }
         let rate = |info: &Value, key: &str| {
             crate::generic_input::get_cost_per_unit(info, key, None)
@@ -1354,7 +1206,7 @@ impl ModelInfoCatalog {
         provider: Option<&str>,
         number_of_queries: u64,
         optional_params: &Value,
-    ) -> Result<(f64, f64), CatalogError> {
+    ) -> Result<(f64, f64), CostError> {
         if provider == Some("parallel_ai") {
             let pricing_model = match effective_mode(optional_params) {
                 "fast" => "parallel_ai/search-fast",
@@ -1364,7 +1216,7 @@ impl ModelInfoCatalog {
             let model_info = self
                 .entries
                 .get(pricing_model)
-                .ok_or(CatalogError::ModelNotFound)?;
+                .ok_or(CostError::ModelNotFound)?;
             let request_cost = model_info
                 .get("input_cost_per_query")
                 .and_then(|value| match value {
@@ -1389,7 +1241,7 @@ impl ModelInfoCatalog {
         let model_info = self
             .select_model_key(model, provider, None)
             .and_then(|key| self.entries.get(key))
-            .ok_or(CatalogError::ModelNotFound)?;
+            .ok_or(CostError::ModelNotFound)?;
         Ok(search_provider_cost_per_query(
             model_info,
             number_of_queries,
@@ -1413,7 +1265,7 @@ impl ModelInfoCatalog {
     pub fn completion_cost(
         &self,
         request: CompletionCostRequest<'_>,
-    ) -> Result<CompletionCost, CatalogError> {
+    ) -> Result<CompletionCost, CostError> {
         let (prompt, output) = self.cost_per_token(request.token)?;
         let built_in_tools = match request.built_in_tools {
             BuiltInToolCharge::Provided(cost) => cost,
@@ -1438,7 +1290,7 @@ impl ModelInfoCatalog {
     pub fn response_cost_calculator(
         &self,
         request: ResponseCostRequest<'_>,
-    ) -> Result<f64, CatalogResponseError> {
+    ) -> Result<f64, CostError> {
         if request.cache_hit {
             return Ok(0.0);
         }

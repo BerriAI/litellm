@@ -29,15 +29,6 @@ pub struct Cost {
     pub total: f64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Error {
-    MissingRate,
-    InvalidQuantity,
-    InvalidRate,
-    InvalidRateBasis,
-    NonFiniteCost,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImageRates {
     pub input_per_image: Rate,
@@ -88,22 +79,22 @@ fn priced(rate: Rate) -> Option<f64> {
     }
 }
 
-pub fn calculate(charges: &[Charge]) -> Result<Cost, Error> {
+pub fn calculate(charges: &[Charge]) -> Result<Cost, CostError> {
     let components: Vec<Component> = charges
         .iter()
         .map(|charge| {
             if !charge.quantity.is_finite() || charge.quantity < 0.0 {
-                return Err(Error::InvalidQuantity);
+                return Err(CostError::InvalidQuantity);
             }
             if !charge.rate.is_finite() || charge.rate < 0.0 {
-                return Err(Error::InvalidRate);
+                return Err(CostError::InvalidRate);
             }
             if !charge.units_per_rate.is_finite() || charge.units_per_rate <= 0.0 {
-                return Err(Error::InvalidRateBasis);
+                return Err(CostError::InvalidRateBasis);
             }
             let amount = charge.quantity * charge.rate / charge.units_per_rate;
             if !amount.is_finite() {
-                return Err(Error::NonFiniteCost);
+                return Err(CostError::NonFiniteCost);
             }
             Ok(Component {
                 unit: charge.unit,
@@ -113,14 +104,14 @@ pub fn calculate(charges: &[Charge]) -> Result<Cost, Error> {
         .collect::<Result<_, _>>()?;
     let total: f64 = components.iter().map(|component| component.amount).sum();
     if !total.is_finite() {
-        return Err(Error::NonFiniteCost);
+        return Err(CostError::NonFiniteCost);
     }
     Ok(Cost { components, total })
 }
 
-pub fn calculate_image(tables: &[ImageRates], usage: ImageUsage) -> Result<Cost, Error> {
+pub fn calculate_image(tables: &[ImageRates], usage: ImageUsage) -> Result<Cost, CostError> {
     if usage.width == 0 || usage.height == 0 {
-        return Err(Error::InvalidQuantity);
+        return Err(CostError::InvalidQuantity);
     }
     let selected = tables
         .iter()
@@ -141,7 +132,7 @@ pub fn calculate_image(tables: &[ImageRates], usage: ImageUsage) -> Result<Cost,
                     })
                 })
         })
-        .ok_or(Error::MissingRate)?;
+        .ok_or(CostError::MissingRate)?;
     calculate(&[Charge {
         unit: selected.0,
         quantity: selected.1,
@@ -150,7 +141,7 @@ pub fn calculate_image(tables: &[ImageRates], usage: ImageUsage) -> Result<Cost,
     }])
 }
 
-pub fn calculate_ocr(rates: OcrRates, usage: OcrUsage) -> Result<Cost, Error> {
+pub fn calculate_ocr(rates: OcrRates, usage: OcrUsage) -> Result<Cost, CostError> {
     if let (Some(credits), Some(rate)) = (usage.credits, priced(rates.per_credit)) {
         return calculate(&[Charge {
             unit: Unit::Credit,
@@ -184,7 +175,7 @@ pub fn calculate_ocr(rates: OcrRates, usage: OcrUsage) -> Result<Cost, Error> {
     calculate(&charges)
 }
 
-pub fn calculate_ocr_with_tables(tables: &[OcrRates], usage: OcrUsage) -> Result<Cost, Error> {
+pub fn calculate_ocr_with_tables(tables: &[OcrRates], usage: OcrUsage) -> Result<Cost, CostError> {
     let rates = OcrRates {
         per_credit: tables
             .iter()
@@ -207,7 +198,7 @@ pub fn calculate_ocr_batch(
     published: Option<OcrBatchRates>,
     pages: u64,
     annotation_pages: u64,
-) -> Result<Cost, Error> {
+) -> Result<Cost, CostError> {
     let family_rate = |select: fn(OcrBatchRates) -> (Rate, Rate)| {
         [deployment, published]
             .into_iter()
@@ -245,7 +236,7 @@ pub fn calculate_video(
     rates: &VideoRates<'_>,
     duration_seconds: f64,
     resolution: Option<&str>,
-) -> Result<Cost, Error> {
+) -> Result<Cost, CostError> {
     let resolution_rate = resolution
         .and_then(video_resolution_to_cost_field_suffix)
         .and_then(|suffix| {
@@ -267,7 +258,7 @@ pub fn calculate_video(
         }]),
         None => {
             if !duration_seconds.is_finite() || duration_seconds < 0.0 {
-                return Err(Error::InvalidQuantity);
+                return Err(CostError::InvalidQuantity);
             }
             calculate(&[])
         }
@@ -283,4 +274,5 @@ pub fn video_resolution_to_cost_field_suffix(resolution: &str) -> Option<String>
         .collect();
     (!suffix.is_empty() && suffix.chars().count() <= 24).then_some(suffix)
 }
+use crate::error::CostError;
 use crate::pricing::Rate;

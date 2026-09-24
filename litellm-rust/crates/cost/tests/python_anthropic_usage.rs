@@ -1,12 +1,11 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_calculate_usage_aggregates_cache_creation_split_across_iterations
+use litellm_cost::error::CostError;
 
 use litellm_cost::anthropic_usage::{
     is_anthropic_usage_object, transform_anthropic_usage_to_chat_usage,
 };
 use litellm_cost::generic_cost::calculate_generic_cost_from_model_info_with_region;
-use litellm_cost::responses_usage::UsageError;
 use rstest::rstest;
 use serde_json::{Value, json};
 
@@ -152,7 +151,7 @@ fn iteration_sums_overflow_errors_where_python_yields_a_big_int() {
     );
     assert_eq!(
         usage.unwrap_err(),
-        UsageError::TokenCountOverflow,
+        CostError::TokenCountOverflow,
         "divergence: Python sums arbitrary-precision ints and returns a huge cost"
     );
 }

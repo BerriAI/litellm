@@ -1,6 +1,6 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/llms/azure_ai/test_azure_ai_cost_calculator.py::TestAzureModelRouterFlatCost
+use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
 
@@ -9,7 +9,7 @@ use litellm_cost::azure_ai_cost::{
     calculate_azure_model_router_flat_cost, is_azure_model_router, is_router_fee_entry,
     router_fee_entry_name, router_fee_name,
 };
-use litellm_cost::catalog::{CatalogError, ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::responses_usage::ChatUsage;
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
@@ -170,7 +170,7 @@ fn azure_ai_cost_per_token_rejects_unknown_non_router_model() {
     let catalog = catalog();
     assert_eq!(
         catalog.azure_ai_cost_per_token(request("unknown", &ChatUsage::default(), None), None),
-        Err(CatalogError::ModelNotFound)
+        Err(CostError::ModelNotFound)
     );
 }
 

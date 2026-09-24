@@ -1,3 +1,4 @@
+use crate::error::CostError;
 use std::collections::BTreeMap;
 
 use serde_json::Value;
@@ -7,7 +8,7 @@ use crate::interactions_usage::{
     is_interactions_usage_object, transform_interactions_usage_object,
 };
 use crate::responses_usage::{
-    ChatUsage, CompletionTokenDetails, PromptTokenDetails, UsageError, is_response_api_usage,
+    ChatUsage, CompletionTokenDetails, PromptTokenDetails, is_response_api_usage,
     transform_response_api_usage_to_chat_usage,
 };
 use crate::transcription_usage::{
@@ -25,14 +26,14 @@ fn int_count(value: &Value) -> Option<u64> {
     value.as_u64().or_else(|| value.as_bool().map(u64::from))
 }
 
-pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
-    let object = raw.as_object().ok_or(UsageError::InvalidShape)?;
+pub fn chat_usage(raw: &Value) -> Result<ChatUsage, CostError> {
+    let object = raw.as_object().ok_or(CostError::InvalidShape)?;
     let count = |name: &str| {
         object
             .get(name)
             .filter(|value| !value.is_null())
             .map_or(Ok(0), |value| {
-                lenient_count(value).ok_or(UsageError::InvalidUsage)
+                lenient_count(value).ok_or(CostError::InvalidUsage)
             })
     };
     let prompt_tokens = count("prompt_tokens")?;
@@ -51,7 +52,7 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
     let prompt_details: Option<PromptTokenDetails> = object
         .get("prompt_tokens_details")
         .filter(|value| value.as_object().is_some_and(|details| !details.is_empty()))
-        .map(|value| serde_json::from_value(value.clone()).map_err(|_| UsageError::InvalidUsage))
+        .map(|value| serde_json::from_value(value.clone()).map_err(|_| CostError::InvalidUsage))
         .transpose()?;
     let prompt_tokens_details = match (prompt_details, read, creation) {
         (None, None, None) => None,
@@ -73,7 +74,7 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
     let completion_tokens_details: Option<CompletionTokenDetails> = object
         .get("completion_tokens_details")
         .filter(|value| value.as_object().is_some_and(|details| !details.is_empty()))
-        .map(|value| serde_json::from_value(value.clone()).map_err(|_| UsageError::InvalidUsage))
+        .map(|value| serde_json::from_value(value.clone()).map_err(|_| CostError::InvalidUsage))
         .transpose()?;
     let reasoning = object.get("reasoning_tokens").and_then(lenient_count);
     let completion_tokens_details = match (completion_tokens_details, reasoning) {
@@ -129,7 +130,7 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
     })
 }
 
-pub fn get_usage_object(response: &Value) -> Result<Option<ChatUsage>, UsageError> {
+pub fn get_usage_object(response: &Value) -> Result<Option<ChatUsage>, CostError> {
     let Some(usage) = response.as_object().and_then(|object| object.get("usage")) else {
         return Ok(None);
     };
@@ -153,5 +154,5 @@ pub fn get_usage_object(response: &Value) -> Result<Option<ChatUsage>, UsageErro
     if usage.is_object() {
         return Ok(Some(chat_usage(usage)?));
     }
-    Err(UsageError::InvalidShape)
+    Err(CostError::InvalidShape)
 }

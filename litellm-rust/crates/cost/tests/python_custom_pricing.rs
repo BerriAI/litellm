@@ -1,13 +1,13 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/test_cost_calculator.py::test_custom_pricing_anthropic_style_cache_tokens_not_double_counted
+use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
 
-use litellm_cost::catalog::{CatalogCustomError, CostCall, ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::catalog::{CostCall, ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::custom_pricing::{
-    CustomPricing, CustomPricingError, CustomTokenRates, RawUsage,
-    cost_per_token_custom_pricing_helper, normalize_cache_usage,
+    CustomPricing, CustomTokenRates, RawUsage, cost_per_token_custom_pricing_helper,
+    normalize_cache_usage,
 };
 use litellm_cost::usage_dispatch::chat_usage;
 use rstest::rstest;
@@ -262,6 +262,6 @@ fn catalog_custom_pricing_falls_back_and_rejects_invalid_rates() {
                 per_second: None,
             },
         ),
-        Err(CatalogCustomError::Pricing(CustomPricingError::InvalidRate))
+        Err(CostError::InvalidRate)
     );
 }

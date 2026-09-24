@@ -1,10 +1,10 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/responses/test_responses_utils.py::TestResponseAPILoggingUtils
+use litellm_cost::error::CostError;
 
 use litellm_cost::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use litellm_cost::responses_usage::{
-    UsageError, is_response_api_usage, text_tokens_without_nested_reasoning,
+    is_response_api_usage, text_tokens_without_nested_reasoning,
     transform_response_api_usage_to_chat_usage,
 };
 use rstest::rstest;
@@ -169,7 +169,7 @@ fn is_response_api_usage_requires_both_token_fields() {
         transform_response_api_usage_to_chat_usage(
             &json!({"prompt_tokens": 1, "completion_tokens": 2})
         ),
-        Err(UsageError::InvalidShape)
+        Err(CostError::InvalidShape)
     );
 }
 

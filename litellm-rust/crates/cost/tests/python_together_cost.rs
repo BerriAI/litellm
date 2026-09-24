@@ -1,11 +1,11 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: local_testing/test_completion_cost.py::test_together_ai_qwen_completion_cost
+use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use litellm_cost::catalog::{CatalogError, ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::together_cost::{
     TogetherThresholds, get_model_params_and_category, get_model_params_and_category_embeddings,
     has_together_registry_pricing,
@@ -159,6 +159,6 @@ fn catalog_does_not_price_metadata_only_exact_row_when_category_is_missing() {
     let usage = usage();
     assert_eq!(
         catalog.cost_per_token(request("model-7b", &usage)),
-        Err(CatalogError::ModelNotFound)
+        Err(CostError::ModelNotFound)
     );
 }
