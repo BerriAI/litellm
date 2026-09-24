@@ -162,48 +162,28 @@ describe("AgentInfoView settings", () => {
     expect(screen.getByText("None")).toBeInTheDocument();
   });
 
-  it("fires the kill switch webhook after confirmation and shows the returned status", async () => {
+  it("renders the kill switch Danger Zone for admins with the configured webhook", async () => {
     vi.mocked(networking.getAgentInfo).mockResolvedValue({
       ...agent,
       kill_switch: { url: "https://ops.example.com/kill", method: "DELETE" },
     });
-    const firedResult = {
-      agent_id: "agent-1",
-      url: "https://ops.example.com/kill",
-      method: "DELETE" as const,
-      status_code: 202,
-      response_body: "stopping",
-    };
-    vi.mocked(networking.triggerAgentKillSwitchCall).mockResolvedValue(firedResult);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
 
-    expect(await screen.findByText("DELETE https://ops.example.com/kill")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Fire Kill Switch" }));
-
-    expect(await screen.findByRole("status")).toHaveTextContent("Last result: HTTP 202 stopping");
-    expect(networking.triggerAgentKillSwitchCall).toHaveBeenCalledWith("sk-test", "agent-1");
+    const dangerZone = await screen.findByRole("region", { name: "Danger Zone" });
+    expect(dangerZone).toHaveTextContent("DELETE https://ops.example.com/kill");
+    expect(screen.getByRole("button", { name: "Fire Kill Switch" })).toBeInTheDocument();
+    expect(screen.queryByText("Kill Switch")).not.toBeInTheDocument();
   });
 
-  it("does not call the webhook when the confirmation is dismissed", async () => {
+  it("hides the Danger Zone from non-admins", async () => {
     vi.mocked(networking.getAgentInfo).mockResolvedValue({
       ...agent,
       kill_switch: { url: "https://ops.example.com/kill", method: "POST" },
     });
-    vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Fire Kill Switch" }));
-
-    expect(networking.triggerAgentKillSwitchCall).not.toHaveBeenCalled();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
-  });
-
-  it("hides the trigger button from non-admins and shows Not configured without a kill switch", async () => {
     render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={false} />);
 
-    expect(await screen.findByText("Kill Switch")).toBeInTheDocument();
-    expect(screen.getByText("Not configured")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "support-agent" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Danger Zone" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Fire Kill Switch" })).not.toBeInTheDocument();
   });
 });
