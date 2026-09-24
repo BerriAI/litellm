@@ -29,6 +29,8 @@ How it solves it:
      Keep the two lists step-for-step identical until they diverge, so the changed step is obvious
      If the bug had a security or authorization consequence, end each list with what another user could or could no longer do
      Regenerate this section whenever new commits change the PR's behavior, so it never describes an older revision
+     If the PR changes what an Admin UI page shows, embed a before and an after screenshot of that page right after its list, taken at the same URL on the same data, with the rows, fields, or controls that changed boxed in red so a reader spots the difference without reading the steps
+     If the PR intentionally changes what existing users see or how a screen behaves, say so in the TLDR with a line that starts "Intentional product change:" describing what changes, why, and what users lose. Reviewers must never have to infer a deliberate UX change from the diff
 
 Example:
 
