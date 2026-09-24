@@ -4548,10 +4548,12 @@ async def delete_team(
     )
     await _invalidate_deleted_team_member_cache(
         teams=team_rows,
+        prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
     )
 
     for deleted_team in team_rows:
+        _emit_team_members_metric(deleted_team.model_copy(update={"members_with_roles": []}))
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
     return deleted_teams
@@ -4628,16 +4630,23 @@ async def _invalidate_deleted_team_cache(
 
 async def _invalidate_deleted_team_member_cache(
     teams: Sequence[LiteLLM_TeamTable],
+    prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
     for team in teams:
-        await _evict_deleted_team_member_cache(team=team, user_api_key_cache=user_api_key_cache)
+        await _evict_deleted_team_member_cache(
+            team=team,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
 
 
-async def _evict_deleted_team_member_cache(team: LiteLLM_TeamTable, user_api_key_cache: UserApiKeyCache) -> None:
-    member_user_ids: Final = tuple(
-        sorted({member.user_id for member in team.members_with_roles if member.user_id is not None})
-    )
+async def _evict_deleted_team_member_cache(
+    team: LiteLLM_TeamTable,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    member_user_ids: Final = await _deleted_team_member_user_ids(team=team, prisma_client=prisma_client)
     await evict_and_broadcast(cache_keys=member_user_ids, user_api_key_cache=user_api_key_cache)
     await asyncio.gather(
         *(
@@ -4649,6 +4658,25 @@ async def _evict_deleted_team_member_cache(team: LiteLLM_TeamTable, user_api_key
             for user_id in member_user_ids
         )
     )
+
+
+async def _deleted_team_member_user_ids(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> tuple[str, ...]:
+    roster_user_ids: Final = frozenset(
+        member.user_id for member in team.members_with_roles if member.user_id is not None
+    )
+    email_only_member_emails: Final = sorted(
+        {
+            member.user_email
+            for member in team.members_with_roles
+            if member.user_id is None and member.user_email is not None
+        }
+    )
+    if not email_only_member_emails:
+        return tuple(sorted(roster_user_ids))
+    email_only_users: Final = await _user_db(prisma_client).find_many(
+        where={"user_email": {"in": email_only_member_emails, "mode": "insensitive"}}
+    )
+    return tuple(sorted(roster_user_ids.union(user.user_id for user in email_only_users)))
 
 
 def _transform_teams_to_deleted_records(
