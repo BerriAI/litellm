@@ -1,6 +1,6 @@
 -- Optional follow-up to db_scripts/backfill_key_total_spend.sql. Run that
--- script first; this one rebuilds total_spend for the keys it leaves alone:
--- keys whose spend resets each budget period, either because their own
+-- script first; this one rebuilds earlier budget periods for the keys it
+-- can only partially fix: keys whose spend resets each period, because their own
 -- budget_duration IS NOT NULL or because their budget_id links to a
 -- LiteLLM_BudgetTable row whose budget_duration IS NOT NULL.
 --
@@ -85,9 +85,5 @@ WHERE k.token = s.token
            SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_duration IS NOT NULL
        ));
 
--- Verify: non-resetting keys should return 0. Resetting keys are excluded
--- because their current period spend is not comparable to lifetime spend.
---   SELECT count(*) FROM "LiteLLM_VerificationToken"
---   WHERE total_spend < spend AND budget_duration IS NULL
---     AND (budget_id IS NULL OR budget_id NOT IN (
---         SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_duration IS NOT NULL));
+-- Verify: this should return 0.
+--   SELECT count(*) FROM "LiteLLM_VerificationToken" WHERE total_spend < spend;
