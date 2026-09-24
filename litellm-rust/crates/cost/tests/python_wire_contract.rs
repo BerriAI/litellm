@@ -6,8 +6,8 @@
 use serde_json::Value;
 
 use litellm_cost::wire::{
-    ChatUsageInput, DataLen, HiddenParamsInput, ImageResponseInput, OptionalParamsInput,
-    QueryCount, ReportedCostInput, ResponseInput, TranscriptionUsageInput, UsageInput, WireNumber,
+    ChatUsageInput, HiddenParamsInput, ImageResponseInput, OptionalParamsInput, QueryCount,
+    ReportedCostInput, ResponseInput, TranscriptionUsageInput, UsageInput, WireNumber,
 };
 use rstest::rstest;
 
@@ -309,5 +309,4 @@ fn chat_usage_input_leniently_accepts_bool_string_and_integral_float_counts() {
     assert_eq!(usage.completion_tokens, 42);
     assert_eq!(usage.total_tokens, 58);
     assert_eq!(usage.cache_read_input_tokens, None);
-    let _ = DataLen::default();
 }
