@@ -23,7 +23,6 @@ def _declare(group: ParamGroup, names: tuple[str, ...]) -> tuple[LiteLLMParam, .
     return tuple(LiteLLMParam(name, group) for name in names)
 
 
-# Registering a name keeps it out of provider optional params. An unregistered kwarg is sent to the provider
 LITELLM_PARAMS: Final[tuple[LiteLLMParam, ...]] = (
     *_declare(
         ParamGroup.AGENTIC_LOOP_STATE,

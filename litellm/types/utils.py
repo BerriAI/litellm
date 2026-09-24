@@ -58,10 +58,10 @@ from litellm.types.mcp import MCPServerCostInfo
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
-from .litellm_params_registry import (
-    ADDRESSED_RESPONSE_ID_FIELD as ADDRESSED_RESPONSE_ID_FIELD,
+from .litellm_params_registry import (  # noqa: F401  re-exported for backward compat
+    ADDRESSED_RESPONSE_ID_FIELD,
     LITELLM_PARAMS,
-    TRUSTED_CALLBACK_VARS_FIELD as TRUSTED_CALLBACK_VARS_FIELD,
+    TRUSTED_CALLBACK_VARS_FIELD,
     ParamGroup,
     names_in,
 )
@@ -3912,7 +3912,7 @@ agentic_loop_internal_litellm_params: Final = list(names_in(ParamGroup.AGENTIC_L
 
 bedrock_batch_litellm_params: Final = names_in(ParamGroup.BEDROCK_BATCH_CONFIG)
 
-all_litellm_params: Final = (
+all_litellm_params = (
     [param.name for param in LITELLM_PARAMS]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
