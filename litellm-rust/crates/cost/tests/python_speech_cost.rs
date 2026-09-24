@@ -220,3 +220,26 @@ fn transcription_token_pricing_ignores_the_vertex_location() {
     assert!((prompt - 1e-3).abs() < 1e-15);
     assert!((completion - 2e-3).abs() < 1e-15);
 }
+
+#[rstest]
+#[case::vertex_ai("vertex_ai", "lyria")]
+#[case::vertex_ai_beta_reads_the_vertex_ai_key("vertex_ai_beta", "lyria")]
+#[case::prefixed_model("vertex_ai", "vertex_ai/lyria")]
+fn speech_cost_reads_lyria_prices_from_the_vertex_ai_key(
+    #[case] provider: &str,
+    #[case] model: &str,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "vertex_ai/lyria".to_owned(),
+        json!({"vertex_ai_audio_api": "lyria_predict", "supported_audio_formats": ["wav"], "output_cost_per_image": 0.08}),
+    )]));
+    assert_eq!(
+        litellm_cost::cost_calculator::speech_cost(
+            &catalog,
+            request(model, provider, &ChatUsage::default()),
+            None
+        )
+        .unwrap(),
+        (0.0, 0.08)
+    );
+}

@@ -342,19 +342,33 @@ pub fn speech_cost(
     request: ModelCostRequest<'_>,
     prompt_characters: Option<f64>,
 ) -> Result<(f64, f64), CostError> {
-    let model_info = catalog
-        .entry(request.model, request.provider, request.region)
-        .ok_or(CostError::ModelNotFound)?;
     let provider = request
         .provider
         .and_then(|provider| provider.parse::<LlmProviders>().ok());
     if matches!(
         provider,
         Some(LlmProviders::VERTEX_AI | LlmProviders::VERTEX_AI_BETA)
-    ) && let Some(cost) = lyria_generation_cost(model_info)
-    {
-        return Ok((0.0, cost));
+    ) {
+        let model_without_prefix = request
+            .model
+            .split_once('/')
+            .map_or(request.model, |(_, model)| model);
+        let lyria_key = if model_without_prefix.starts_with("vertex_ai/") {
+            model_without_prefix.to_owned()
+        } else {
+            format!("vertex_ai/{model_without_prefix}")
+        };
+        if let Some(cost) = catalog
+            .entries()
+            .get(&lyria_key)
+            .and_then(lyria_generation_cost)
+        {
+            return Ok((0.0, cost));
+        }
     }
+    let model_info = catalog
+        .entry(request.model, request.provider, request.region)
+        .ok_or(CostError::ModelNotFound)?;
     match select_cost_metric_for_model(model_info)? {
         SpeechCostMetric::PerCharacter => {
             let characters = prompt_characters.ok_or(CostError::MissingPromptCharacters)?;
