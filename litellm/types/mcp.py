@@ -11,8 +11,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
-from litellm.proxy.auth.jwt_algorithms import ApprovedJwtAlgorithm
 from litellm.types.llms.base import HiddenParams
+from litellm.types.proxy.auth.jwt_algorithms import ApprovedJwtAlgorithm
 
 if TYPE_CHECKING:
     import httpx2

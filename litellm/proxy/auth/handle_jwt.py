@@ -54,12 +54,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import can_team_access_model
-from litellm.proxy.auth.jwt_algorithms import (
-    APPROVED_JWT_ALGORITHMS,
-    LEGACY_JWT_ALGORITHMS,
-    allowed_jwt_algorithms,
-    jwks_keys_for,
-)
+from litellm.proxy.auth.jwt_algorithms import allowed_jwt_algorithms, jwks_keys_for
 from litellm.proxy.auth.model_access_denied import (
     ModelAccessDeniedHTTPException,
     model_access_denied_client_message,
@@ -76,6 +71,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, LEGACY_JWT_ALGORITHMS
 
 from .auth_checks import (
     TeamNotFoundError,

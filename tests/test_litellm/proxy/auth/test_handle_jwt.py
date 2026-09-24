@@ -7431,7 +7431,7 @@ def _eddsa_jwt(private_key: object, kid: str = "ed") -> str:
 def test_approved_jwt_algorithm_literal_matches_tuple():
     from typing import get_args
 
-    from litellm.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, ApprovedJwtAlgorithm
+    from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, ApprovedJwtAlgorithm
 
     assert set(get_args(ApprovedJwtAlgorithm)) == set(APPROVED_JWT_ALGORITHMS)
 

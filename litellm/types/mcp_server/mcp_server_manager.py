@@ -4,7 +4,6 @@ from typing import Any, Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Self
 
-from litellm.proxy.auth.jwt_algorithms import ApprovedJwtAlgorithm
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
@@ -13,6 +12,7 @@ from litellm.types.mcp import (
     MCPTransportType,
     normalize_upstream_header_name,
 )
+from litellm.types.proxy.auth.jwt_algorithms import ApprovedJwtAlgorithm
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 MCPInfo = dict[str, Any]

@@ -89,9 +89,10 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, jwks_keys_for
+from litellm.proxy.auth.jwt_algorithms import jwks_keys_for
 from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS
 from litellm.types.utils import CallTypesLiteral
 
 if TYPE_CHECKING:

@@ -23,9 +23,10 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, jwks_keys_for
+from litellm.proxy.auth.jwt_algorithms import jwks_keys_for
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS
 
 _ALLOWED_ID_TOKEN_ALGORITHMS: Final = APPROVED_JWT_ALGORITHMS
 _JWKS_CACHE_TTL_SECONDS: Final = 3600

@@ -169,7 +169,6 @@ from litellm.proxy._types import (
     is_per_server_oauth_discovery_eligible,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-from litellm.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, ApprovedJwtAlgorithm
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
@@ -194,6 +193,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPOAuthMetadata,
     MCPServer,
 )
+from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, ApprovedJwtAlgorithm
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:

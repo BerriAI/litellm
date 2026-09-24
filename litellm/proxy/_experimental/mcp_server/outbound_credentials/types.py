@@ -40,12 +40,12 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
-from litellm.proxy.auth.jwt_algorithms import ApprovedJwtAlgorithm
 from litellm.types.mcp import (
     DEFAULT_CREDENTIAL_HEADER,
     DEFAULT_SUBJECT_TOKEN_TYPE,
     normalize_upstream_header_name,
 )
+from litellm.types.proxy.auth.jwt_algorithms import ApprovedJwtAlgorithm
 
 
 class AuthResolution(str, Enum):

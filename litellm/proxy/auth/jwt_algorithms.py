@@ -1,22 +1,8 @@
 from collections.abc import Collection, Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final
 
-ApprovedJwtAlgorithm = Literal["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"]
-
-APPROVED_JWT_ALGORITHMS: Final[tuple[ApprovedJwtAlgorithm, ...]] = (
-    "RS256",
-    "RS384",
-    "RS512",
-    "PS256",
-    "PS384",
-    "PS512",
-    "ES256",
-    "ES384",
-    "ES512",
-)
-
-LEGACY_JWT_ALGORITHMS: Final = ("EdDSA",)
+from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, LEGACY_JWT_ALGORITHMS
 
 _KEY_TYPE_ALGORITHMS: Final = MappingProxyType(
     {
