@@ -434,3 +434,29 @@ async def test_send_alert_raises_when_no_webhook_url_configured(monkeypatch):
             alert_type=AlertType.budget_alerts,
             alerting_metadata={},
         )
+
+
+def _periodic_flush_tasks() -> list[asyncio.Task[object]]:
+    return [
+        t
+        for t in asyncio.all_tasks()
+        if t.get_coro() is not None and t.get_coro().__qualname__ == "SlackAlerting.periodic_flush"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_values_repeated_alerting_reload_keeps_single_periodic_flush_task() -> None:
+    slack_alerting: Final = SlackAlerting(alerting=["slack"])
+    try:
+        for _ in range(5):
+            slack_alerting.update_values(alerting=["slack"])
+        await asyncio.sleep(0)
+        flush_tasks: Final = _periodic_flush_tasks()
+        assert len(flush_tasks) == 1, f"expected 1 periodic_flush task, found {len(flush_tasks)}"
+    finally:
+        for t in _periodic_flush_tasks():
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
