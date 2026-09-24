@@ -738,6 +738,31 @@ def test_is_off_peak_without_override_dates_is_unchanged():
     assert _is_off_peak(deepseek, datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc)) is False
 
 
+def test_override_dates_use_weekday_timezone_calendar_on_shipped_deepseek_rows():
+    """The shipped deepseek/deepseek-flash row reads its override_dates on the
+    Asia/Shanghai calendar: the make-up Sunday bills weekday hours and the holiday is
+    off-peak all day."""
+    from datetime import datetime, timezone
+
+    import litellm
+
+    block: Final = litellm.model_cost["deepseek/deepseek-flash"]["off_peak_pricing"]
+    assert block.get("weekday_timezone") == "Asia/Shanghai"
+
+    shanghai_make_up_sunday = datetime(2026, 1, 3, 17, 0, tzinfo=timezone.utc)
+    make_up_sunday_peak = datetime(2026, 1, 4, 2, 0, tzinfo=timezone.utc)
+    plain_sunday = datetime(2026, 1, 11, 2, 0, tzinfo=timezone.utc)
+    holiday = datetime(2026, 1, 1, 2, 0, tzinfo=timezone.utc)
+    assert _is_off_peak(block, shanghai_make_up_sunday) is True, (
+        f"{shanghai_make_up_sunday.isoformat()} is 2026-01-04 in Shanghai, a make-up workday"
+    )
+    assert _is_off_peak(block, make_up_sunday_peak) is False, (
+        f"{make_up_sunday_peak.isoformat()} is a make-up workday peak hour"
+    )
+    assert _is_off_peak(block, plain_sunday) is True
+    assert _is_off_peak(block, holiday) is True
+
+
 def test_get_token_base_cost_override_dates_bill_holiday_rates():
     """End to end through _get_token_base_cost: a date listed on an override rule bills the
     off-peak input rate during what would be a weekday peak hour."""

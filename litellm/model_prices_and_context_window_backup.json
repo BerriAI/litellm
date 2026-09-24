@@ -58298,7 +58298,8 @@
                         "2026-10-10"
                     ]
                 }
-            ]
+            ],
+            "weekday_timezone": "Asia/Shanghai"
         },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
@@ -58513,7 +58514,8 @@
                         "2026-10-10"
                     ]
                 }
-            ]
+            ],
+            "weekday_timezone": "Asia/Shanghai"
         },
         "output_cost_per_token": 3.96e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
