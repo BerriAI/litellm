@@ -59,12 +59,19 @@ from ..litellm_core_utils.core_helpers import map_finish_reason, process_respons
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
 from .litellm_params import (
+    ADDRESSED_RESPONSE_ID_FIELD as ADDRESSED_RESPONSE_ID_FIELD,
+)
+from .litellm_params import (
     KWARG_ARTIFACTS,
     LITELLM_OWNED_ROOTS,
+    AgenticLoopOptions,
     AgenticLoopState,
     BedrockBatchConnection,
     owned_wire_names,
     wire_names,
+)
+from .litellm_params import (
+    TRUSTED_CALLBACK_VARS_FIELD as TRUSTED_CALLBACK_VARS_FIELD,
 )
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
@@ -3910,12 +3917,12 @@ def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 agentic_loop_internal_litellm_params: Final = list(  # mutable-ok: public type stays a list
-    wire_names(AgenticLoopState)
+    (*wire_names(AgenticLoopState), *wire_names(AgenticLoopOptions))
 )
 
 bedrock_batch_litellm_params: Final = wire_names(BedrockBatchConnection)
 
-all_litellm_params = [  # rebind-ok: litellm/__init__.py star imports rebind it  # mutable-ok: callers concat lists
+all_litellm_params = [  # rebind-ok: a star import re-binds it in litellm/__init__.py  # mutable-ok: callers concat
     *(name for root in LITELLM_OWNED_ROOTS for name in owned_wire_names(root)),
     *KWARG_ARTIFACTS,
     *StandardCallbackDynamicParams.__annotations__,
