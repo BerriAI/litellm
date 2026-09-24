@@ -65,7 +65,6 @@ pub enum ModelList {
     VertexAi21,
     VertexImage,
     VertexVideo,
-    Ai21Chat,
     Ai21,
     NlpCloud,
     AlephAlpha,
@@ -108,7 +107,6 @@ fn model_list_membership(key: &str, info: &Value) -> Option<(ModelList, String)>
         "vertex_ai-ai21_models" => return Some((ModelList::VertexAi21, vertex_member(key))),
         "vertex_ai-image-models" => return Some((ModelList::VertexImage, vertex_member(key))),
         "vertex_ai-video-models" => return Some((ModelList::VertexVideo, vertex_member(key))),
-        "ai21" if mode == Some("chat") => ModelList::Ai21Chat,
         "ai21" => ModelList::Ai21,
         "nlp_cloud" => ModelList::NlpCloud,
         "aleph_alpha" => ModelList::AlephAlpha,
@@ -222,7 +220,7 @@ fn bare_model_provider<'a>(model: &str, sets: &ProviderModelSets) -> Option<&'a 
         model,
     ) {
         Some("vertex_ai")
-    } else if sets.contains_any(&[Ai21Chat, Ai21], model) {
+    } else if sets.contains(Ai21, model) {
         Some("ai21_chat")
     } else if sets.contains(AlephAlpha, model) {
         Some("aleph_alpha")

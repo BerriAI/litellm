@@ -32,6 +32,10 @@ fn catalog() -> ModelInfoCatalog {
             provider("vertex_ai-mistral_models"),
         ),
         (
+            "vertex_ai/jamba-zz@latest".to_owned(),
+            provider("vertex_ai-ai21_models"),
+        ),
+        (
             "anthropic.claude-zz-v1".to_owned(),
             provider("bedrock_converse"),
         ),
@@ -116,6 +120,11 @@ type Resolved = Result<(&'static str, Option<&'static str>, Option<u64>), CostEr
     Some("vertex_ai_beta"),
     Ok(("vertex_ai/mistral-zz@latest", Some("vertex_ai-mistral_models"), None))
 )]
+#[case::vertex_ai21_latest_alias(
+    "jamba-zz",
+    Some("vertex_ai"),
+    Ok(("vertex_ai/jamba-zz@latest", Some("vertex_ai-ai21_models"), None))
+)]
 #[case::bedrock_cross_region_keeps_the_version(
     "us.anthropic.claude-zz-v1:0",
     Some("bedrock"),
@@ -135,6 +144,11 @@ type Resolved = Result<(&'static str, Option<&'static str>, Option<u64>), CostEr
     "bedrock_mantle/us-east-1/model-zz",
     Some("bedrock_mantle"),
     Ok(("bedrock_mantle/model-zz", Some("bedrock_mantle"), None))
+)]
+#[case::mantle_keeps_a_non_region_segment(
+    "bedrock_mantle/team/model-zz",
+    Some("bedrock_mantle"),
+    Err(CostError::ModelNotFound)
 )]
 #[case::fireworks_resource_key(
     "fw-zz",
@@ -345,6 +359,14 @@ fn provider_list_catalog() -> ModelInfoCatalog {
                 "claude-2".to_owned(),
                 json!({"litellm_provider": "anthropic"}),
             ),
+            (
+                "zz-colon:1".to_owned(),
+                json!({"litellm_provider": "bedrock"}),
+            ),
+            (
+                format!("zz:{}", "a".repeat(61)),
+                json!({"litellm_provider": "bedrock"}),
+            ),
         ])
         .collect();
     ModelInfoCatalog::new(entries)
@@ -391,6 +413,13 @@ fn provider_list_catalog() -> ModelInfoCatalog {
 #[case::sora_2("sora-2", Some("openai"))]
 #[case::ft_gpt_4o_o_1("ft:gpt-4o:o::1", Some("openai"))]
 #[case::ft_gpt_3_5_turbo_o_1("ft:gpt-3.5-turbo:o::1", Some("openai"))]
+#[case::short_id_with_a_colon_is_not_a_replicate_candidate("zz-colon:1", Some("bedrock"))]
+#[case::sixty_four_chars_is_not_a_replicate_candidate(&*format!("zz:{}", "a".repeat(61)), Some("bedrock"))]
+#[case::cohere_prefix_without_a_chat_model("cohere/zz-other", Some("cohere"))]
+#[case::cohere_prefix_with_a_chat_model("cohere/zz-cohere_chat", Some("cohere_chat"))]
+#[case::chat_model_under_another_prefix("openai/zz-cohere_chat", Some("openai"))]
+#[case::anthropic_prefix_without_a_text_model("anthropic/zz-other", Some("anthropic"))]
+#[case::text_model_under_another_prefix("openai/claude-2", Some("openai"))]
 #[case::replicate_64_char_version_id(&*format!("owner/m:{}b", "a".repeat(63)), Some("replicate"))]
 #[case::long_id_that_is_not_a_replicate_version(&*format!("owner/m:{}", "a".repeat(70)), None)]
 fn get_llm_provider_routes_every_model_list_like_python(
@@ -404,4 +433,77 @@ fn get_llm_provider_routes_every_model_list_like_python(
             .as_deref(),
         expected
     );
+}
+
+// expected value recorded from _get_model_info_helper: an authenticating provider named in the
+// model is adopted as declared, so the doubled provider prefix becomes a candidate
+#[rstest]
+fn authenticating_provider_prefix_is_adopted_without_inference() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "github_copilot/github_copilot/zz".to_owned(),
+        json!({"litellm_provider": "github_copilot"}),
+    )]));
+    assert_eq!(
+        catalog
+            .get_model_info("github_copilot/zz", None)
+            .map(|info| info.key.into_owned()),
+        Ok("github_copilot/github_copilot/zz".to_owned())
+    );
+}
+
+// expected values recorded from litellm/llms/fireworks_ai/common_utils.py::resolve_fireworks_resource_name
+#[rstest]
+#[case::account_path("accounts/me/models/x", "accounts/me/models/x")]
+#[case::foundry_id("FW-abc", "FW-abc")]
+#[case::deployment_suffix("model#v2", "model#v2")]
+#[case::router_path("routers/r", "accounts/fireworks/routers/r")]
+#[case::model_path("models/m", "accounts/fireworks/models/m")]
+#[case::fast_router("llama-fast", "accounts/fireworks/routers/llama-fast")]
+#[case::provider_prefix("fireworks_ai/llama", "accounts/fireworks/models/llama")]
+#[case::provider_prefixed_account("fireworks_ai/accounts/a/b", "accounts/a/b")]
+#[case::bare_model("plain", "accounts/fireworks/models/plain")]
+fn resolve_fireworks_resource_name_matches_python(#[case] model: &str, #[case] expected: &str) {
+    assert_eq!(
+        litellm_cost::model_info::resolve_fireworks_resource_name(model),
+        expected
+    );
+}
+
+// expected value recorded from _get_model_info_helper: the split name drops only the routing
+// prefix, so a throughput-suffixed key still resolves after the base-model names miss
+#[rstest]
+fn bedrock_split_name_strips_only_the_routing_prefix() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "amazon.zz-model:0:51k".to_owned(),
+        json!({"litellm_provider": "bedrock"}),
+    )]));
+    assert_eq!(
+        catalog
+            .get_model_info("invoke/amazon.zz-model:0:51k", Some("bedrock"))
+            .map(|info| info.key.into_owned()),
+        Ok("amazon.zz-model:0:51k".to_owned())
+    );
+}
+
+// Python keeps the last of several keys that differ only in case, by insertion order. The Rust
+// catalog is a HashMap with no insertion order, so it deterministically keeps the smallest key.
+#[rstest]
+fn case_insensitive_collisions_resolve_to_the_smallest_key() {
+    let casings = [
+        "zz-case", "Zz-case", "zZ-case", "ZZ-case", "zz-Case", "ZZ-CASE",
+    ];
+    for _ in 0..10 {
+        let catalog = ModelInfoCatalog::new(
+            casings
+                .iter()
+                .map(|key| ((*key).to_owned(), json!({})))
+                .collect(),
+        );
+        assert_eq!(
+            catalog
+                .get_model_info("zz-CASE", None)
+                .map(|info| info.key.into_owned()),
+            Ok("ZZ-CASE".to_owned())
+        );
+    }
 }

@@ -73,7 +73,7 @@ fn split_mantle_region_prefix(model: &str) -> &str {
     }
 }
 
-fn resolve_fireworks_resource_name(model: &str) -> String {
+pub fn resolve_fireworks_resource_name(model: &str) -> String {
     let stripped = model.strip_prefix("fireworks_ai/").unwrap_or(model);
     if stripped.starts_with("accounts/") || stripped.starts_with("FW-") || stripped.contains('#') {
         stripped.to_owned()

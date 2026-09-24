@@ -344,3 +344,21 @@ fn custom_pricing_without_a_priced_router_id_falls_back_to_the_response_model(
         expected.map(str::to_owned)
     );
 }
+
+// expected value recorded from cost_calculator.py::_select_model_name_for_cost_calc
+#[rstest]
+fn served_response_model_alone_prices_in_the_request_region() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "bedrock/us-east-1/served".to_owned(),
+        json!({"litellm_provider": "bedrock"}),
+    )]));
+    let response = json!({"model": "served"});
+    assert_eq!(
+        catalog.select_model_name_for_cost_calc(ModelSelectionRequest {
+            response: Some(&response),
+            region_name: Some("us-east-1"),
+            ..request(Some("requested"), Some("bedrock"))
+        }),
+        Some("bedrock/us-east-1/served".to_owned())
+    );
+}
