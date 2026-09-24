@@ -148,3 +148,32 @@ fn cost_breakdown_with_guardrail_merges_existing_total_and_creates_new_breakdown
         ]))
     );
 }
+
+#[rstest]
+#[case::string_in_spend(json!({"guardrail_cost": 0.5, "guardrail_cost_in_spend": "true"}), 0.5)]
+#[case::integer_in_spend(json!({"guardrail_cost": 0.5, "guardrail_cost_in_spend": 1}), 0.5)]
+#[case::string_off(json!({"guardrail_cost": 0.5, "guardrail_cost_in_spend": "off"}), 0.0)]
+#[case::uninterpretable_in_spend(json!({"guardrail_cost": 0.5, "guardrail_cost_in_spend": "maybe"}), 0.0)]
+#[case::padded_string_cost(json!({"guardrail_cost": " 0.5 "}), 0.5)]
+#[case::boolean_cost(json!({"guardrail_cost": true}), 1.0)]
+#[case::unparseable_cost(json!({"guardrail_cost": "free"}), 0.0)]
+fn guardrail_information_cost_validates_entries_like_pydantic(
+    #[case] entry: Value,
+    #[case] expected: f64,
+) {
+    assert_eq!(guardrail_information_cost(&entry), expected);
+}
+
+#[rstest]
+#[case::string_price(json!({"guardrail_cost_by_unit": {"text": "0.25"}}), Some(Some(0.25)))]
+#[case::string_in_spend_false(json!({"guardrail_cost_by_unit": {"text": 0.25}, "guardrail_cost_in_spend": "false"}), None)]
+#[case::negative_price_rejects_entry(json!({"guardrail_cost_by_unit": {"text": -1}}), None)]
+fn billed_guardrail_cost_by_unit_validates_entries_like_pydantic(
+    #[case] entry: Value,
+    #[case] expected: Option<Option<f64>>,
+) {
+    assert_eq!(
+        billed_guardrail_cost_by_unit(&entry).map(|units| units.get("text").copied().flatten()),
+        expected
+    );
+}

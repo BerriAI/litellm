@@ -2,24 +2,14 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-pub type CostByUnit = BTreeMap<String, Option<f64>>;
+use crate::wire::{lax_bool, lax_float};
 
-fn finite_number(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(number) => number.as_f64().filter(|number| number.is_finite()),
-        Value::String(number) => number
-            .parse::<f64>()
-            .ok()
-            .filter(|number| number.is_finite()),
-        _ => None,
-    }
-}
+pub type CostByUnit = BTreeMap<String, Option<f64>>;
 
 fn in_spend(entry: &Map<String, Value>) -> Option<bool> {
     match entry.get("guardrail_cost_in_spend") {
         None | Some(Value::Null) => Some(true),
-        Some(Value::Bool(value)) => Some(*value),
-        _ => None,
+        Some(value) => lax_bool(value),
     }
 }
 
@@ -34,7 +24,9 @@ pub fn billed_guardrail_cost_by_unit(raw: &Value) -> Option<CostByUnit> {
         .map(|(key, value)| {
             let price = match value {
                 Value::Null => Some(None),
-                value => finite_number(value).filter(|price| *price >= 0.0).map(Some),
+                value => lax_float(value)
+                    .filter(|price| price.is_finite() && *price >= 0.0)
+                    .map(Some),
             }?;
             Some((key.clone(), price))
         })
@@ -46,7 +38,7 @@ fn pricing_entry(raw: &Value) -> Option<BTreeMap<String, f64>> {
         .get("guardrail_cost_per_unit")?
         .as_object()?
         .iter()
-        .map(|(key, value)| Some((key.clone(), finite_number(value)?)))
+        .map(|(key, value)| Some((key.clone(), lax_float(value)?)))
         .collect()
 }
 
@@ -107,13 +99,17 @@ fn entry_cost(raw: &Value) -> f64 {
     let Some(entry) = raw.as_object() else {
         return 0.0;
     };
-    if in_spend(entry) != Some(true) {
+    let Some(in_spend) = in_spend(entry) else {
         return 0.0;
-    }
-    entry
-        .get("guardrail_cost")
-        .and_then(finite_number)
-        .filter(|cost| *cost > 0.0)
+    };
+    let cost = match entry.get("guardrail_cost") {
+        None | Some(Value::Null) => None,
+        Some(value) => match lax_float(value) {
+            Some(cost) => Some(cost),
+            None => return 0.0,
+        },
+    };
+    cost.filter(|cost| in_spend && cost.is_finite() && *cost > 0.0)
         .unwrap_or(0.0)
 }
 
