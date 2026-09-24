@@ -36,6 +36,7 @@ from litellm.constants import (
     AIOHTTP_TTL_DNS_CACHE,
     COMPLETION_HTTP_FALLBACK_SECONDS,
     DEFAULT_SSL_CIPHERS,
+    FIPS_SSL_CIPHERS,
     HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -274,15 +275,22 @@ def _prepare_request_data_and_content(
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
-# Key: tuple of (cafile, ssl_security_level, ssl_ecdh_curve)
+# Key: tuple of (cafile, ssl_security_level, ssl_ecdh_curve, ssl_ciphers)
 # Value: ssl.SSLContext
-_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None], ssl.SSLContext]] = {}
+_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, str], ssl.SSLContext]] = {}
+
+
+def _outbound_ssl_ciphers() -> str:
+    from litellm.proxy.common_utils.fips import is_fips_mode
+
+    return FIPS_SSL_CIPHERS if is_fips_mode() else DEFAULT_SSL_CIPHERS
 
 
 def _create_ssl_context(
     cafile: str | None,
     ssl_security_level: str | None,
     ssl_ecdh_curve: str | None,
+    ssl_ciphers: str,
 ) -> ssl.SSLContext:
     """
     Create an SSL context with the given configuration.
@@ -299,9 +307,7 @@ def _create_ssl_context(
         # User provided custom cipher configuration (e.g., via SSL_SECURITY_LEVEL env var)
         custom_ssl_context.set_ciphers(ssl_security_level)
     else:
-        # Use optimized cipher list that strongly prefers fast ciphers
-        # but falls back to widely compatible ones
-        custom_ssl_context.set_ciphers(DEFAULT_SSL_CIPHERS)
+        custom_ssl_context.set_ciphers(ssl_ciphers)
 
     # Configure ECDH curve for key exchange (e.g., to disable PQC and improve performance)
     # Set SSL_ECDH_CURVE env var or litellm.ssl_ecdh_curve to 'X25519' to disable PQC
@@ -416,15 +422,15 @@ def get_ssl_configuration(
             cafile = certifi.where()
 
     if ssl_verify is not False:
-        # Create cache key from configuration parameters
-        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve)
+        ssl_ciphers: Final = _outbound_ssl_ciphers()
+        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve, ssl_ciphers)
 
-        # Check if we have a cached SSL context for this configuration
         if cache_key not in _ssl_context_cache:
             _ssl_context_cache[cache_key] = _create_ssl_context(
                 cafile=cafile,
                 ssl_security_level=ssl_security_level,
                 ssl_ecdh_curve=ssl_ecdh_curve,
+                ssl_ciphers=ssl_ciphers,
             )
 
         # Return the cached SSL context
