@@ -555,7 +555,6 @@ class SlackAlerting(CustomBatchLogger):
         budget_alert_class: Final = get_budget_alert_type(type)
         _id: Final = budget_alert_class.get_id(user_info)
         user_info_str: Final = self._get_user_info_str(user_info)
-        # Team member max-budget alerts ride the key-budget alert type; label them by what they measure.
         event_message = (
             "Team Member Budget: "
             if user_info.event_group == Litellm_EntityType.TEAM_MEMBER

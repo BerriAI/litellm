@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import socketserver
 import threading
-from collections import deque
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -30,14 +29,20 @@ class Delivery:
         return ""
 
 
-@dataclass(frozen=True, slots=True)
 class Mailbox:
-    host: str
-    port: int
-    received: deque[Delivery]
+    def __init__(self, host: str, port: int) -> None:
+        self.host: Final = host
+        self.port: Final = port
+        self._lock: Final = threading.Lock()
+        self._deliveries: tuple[Delivery, ...] = ()
 
-    def with_subject(self, fragment: str) -> tuple[Delivery, ...]:
-        return tuple(delivery for delivery in tuple(self.received) if fragment in delivery.subject)
+    def record(self, delivery: Delivery) -> None:
+        with self._lock:
+            self._deliveries = (*self._deliveries, delivery)
+
+    def deliveries(self) -> tuple[Delivery, ...]:
+        with self._lock:
+            return self._deliveries
 
 
 def _address(argument: str) -> str:
@@ -47,7 +52,6 @@ def _address(argument: str) -> str:
 @contextmanager
 def smtp_sink() -> Generator[Mailbox, None, None]:
     """Owned plaintext SMTP peer; deliveries traverse the proxy's real smtplib client."""
-    received: Final[deque[Delivery]] = deque()  # mutable-ok: sink thread appends each delivery
     errors: Final[SimpleQueue[Exception]] = SimpleQueue()
 
     class Handler(socketserver.StreamRequestHandler):
@@ -90,7 +94,7 @@ def smtp_sink() -> Generator[Mailbox, None, None]:
                         if not chunk or chunk == b".\r\n":
                             break
                         body.extend(chunk[1:] if chunk.startswith(b"..") else chunk)
-                    received.append(Delivery(sender, recipients, message_from_bytes(bytes(body))))
+                    mailbox.record(Delivery(sender, recipients, message_from_bytes(bytes(body))))
                     sender, recipients = "", ()
                     self._reply("250 OK queued")
                 elif verb == "RSET":
@@ -109,10 +113,11 @@ def smtp_sink() -> Generator[Mailbox, None, None]:
         daemon_threads = False
 
     with OwnedServer(("127.0.0.1", 0), Handler) as server:
+        mailbox: Final = Mailbox("127.0.0.1", server.server_address[1])
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
         try:
-            yield Mailbox("127.0.0.1", server.server_address[1], received)
+            yield mailbox
         finally:
             server.shutdown()
             thread.join(timeout=6)

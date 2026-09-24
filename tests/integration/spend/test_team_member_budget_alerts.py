@@ -56,7 +56,7 @@ def test_team_member_budget_thresholds_email_member_and_configured_recipients(ga
             eventually(
                 lambda: _membership_spend(user_id, team_id), lambda spend: spend == pytest.approx(CALL_COST), seconds=70
             )
-            assert tuple(mailbox.received) == (), "no threshold is reached before the first call is recorded"
+            assert mailbox.deliveries() == (), "no threshold is reached before the first call is recorded"
 
             second: Final = candidate.request(
                 "POST",
@@ -65,8 +65,9 @@ def test_team_member_budget_thresholds_email_member_and_configured_recipients(ga
                 key=key,
             )
             assert second.status_code == 200, second.text
-            halfway: Final = eventually(lambda: mailbox.with_subject("50%"), lambda found: len(found) >= 1, seconds=30)
+            halfway: Final = eventually(mailbox.deliveries, lambda found: len(found) >= 1, seconds=30)
             assert [delivery.recipients for delivery in halfway] == [(member_email,)], halfway
+            assert "50%" in halfway[0].subject, halfway[0].subject
             assert f"${MEMBER_BUDGET}" in halfway[0].html, halfway[0].html
             eventually(
                 lambda: _membership_spend(user_id, team_id),
@@ -81,10 +82,12 @@ def test_team_member_budget_thresholds_email_member_and_configured_recipients(ga
                 key=key,
             )
             assert third.status_code == 422 and third.json()["error"]["type"] == "budget_exceeded", third.text
-            hundred: Final = eventually(lambda: mailbox.with_subject("100%"), lambda found: len(found) >= 2, seconds=30)
+            capped: Final = eventually(mailbox.deliveries, lambda found: len(found) >= 3, seconds=30)
+            hundred: Final = capped[1:]
+            assert all("100%" in delivery.subject for delivery in hundred), capped
             assert {recipient for delivery in hundred for recipient in delivery.recipients} == {
                 member_email,
                 finance_email,
-            }, hundred
+            }, capped
             assert all(member_email in delivery.html and f"${MEMBER_BUDGET}" in delivery.html for delivery in hundred)
-            assert len(hundred) == 2, hundred
+            assert len(capped) == 3, capped
