@@ -97,7 +97,14 @@ import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelM
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
 import { jsonFields } from "./common_components/check_openapi_schema";
-import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import type {
+  MCPGatewaySessionSelector,
+  MCPGatewaySessionsResponse,
+  MCPGatewaySessionsTerminateResponse,
+  MCPServerUserCredentialListItem,
+  MCPServerUserCredentialType,
+  MCPUserEnvVarsStatus,
+} from "./mcp_tools/types";
 import type {
   CoordinationRedisSettings,
   CoordinationRedisSettingsResponse,
@@ -126,7 +133,6 @@ import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
 export { serverRootPath };
 
 export { deriveErrorMessage };
-export { ApiError } from "@/lib/http/client";
 
 const isLocal = process.env.NODE_ENV === "development";
 // In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
@@ -383,7 +389,7 @@ export const handleError = async (errorData: string | any) => {
       clearTokenCookies();
       const browserLocation = getWindowLocation();
       if (browserLocation) {
-        window.location.href = browserLocation.pathname;
+        window.location.href = browserLocation.pathname + browserLocation.search + browserLocation.hash;
       }
     }
     lastErrorTime = currentTime;
@@ -1115,78 +1121,9 @@ export const userGetInfoV2 = async (accessToken: string, userId?: string): Promi
   }
 };
 
-export const userInfoCall = async (
-  accessToken: string,
-  userID: string | null,
-  userRole: string,
-  viewAll: boolean = false,
-  page: number | null,
-  page_size: number | null,
-  lookup_user_id: boolean = false,
-) => {
-  try {
-    if (viewAll) {
-      return await apiClient.get(`/user/list`, {
-        accessToken,
-        query: {
-          page: page != null ? page.toString() : undefined,
-          page_size: page_size != null ? page_size.toString() : undefined,
-        },
-      });
-    }
-
-    const includeUserID = !((userRole === "Admin" || userRole === "Admin Viewer") && !lookup_user_id) && userID;
-    return await apiClient.get(`/user/info`, {
-      accessToken,
-      query: { user_id: includeUserID ? userID : undefined },
-    });
-  } catch (error) {
-    console.error("Failed to fetch user data:", error);
-    throw error;
-  }
-};
-
 export const teamInfoCall = async (accessToken: string, teamID: string | null) => {
   try {
     return await apiClient.get(`/team/info`, { accessToken, query: { team_id: teamID || undefined } });
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-type TeamListResponse = {
-  teams: Team[];
-  total: number;
-  page: number;
-  page_size: number;
-  total_pages: number;
-};
-
-export const v2TeamListCall = async (
-  accessToken: string,
-  organizationID: string | null,
-  userID: string | null = null,
-  teamID: string | null = null,
-  team_alias: string | null = null,
-  page: number = 1,
-  page_size: number = 10,
-  sort_by: string | null = null,
-  sort_order: "asc" | "desc" | null = null,
-): Promise<TeamListResponse> => {
-  /**
-   * Get list of teams with filtering and sorting options
-   */
-  try {
-    return await apiClient.get(`/v2/team/list`, {
-      accessToken,
-      query: {
-        user_id: userID || undefined,
-        organization_id: organizationID || undefined,
-        team_id: teamID || undefined,
-        team_alias: team_alias || undefined,
-      },
-    });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1275,25 +1212,6 @@ export const organizationInfoCall = async (accessToken: string, organizationID: 
     }
 
     const data = await response.json();
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const organizationUpdateCall = async (
-  accessToken: string,
-  formValues: Record<string, any>, // Assuming formValues is an object
-) => {
-  try {
-    const data = await apiClient.patch(`/organization/update`, {
-      accessToken,
-      body: {
-        ...formValues, // Include formValues in the request body
-      },
-    });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1549,6 +1467,31 @@ export const teamDailyActivityAggregatedCall = async (
   }
 };
 
+export const teamDailyActivityKeySearchCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [search: string, teamIds?: string[] | null]
+) => {
+  const [search, teamIds = null] = options;
+  try {
+    return await apiClient.get(`/team/daily/activity/aggregated/search`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        search,
+        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
+        exclude_team_ids: "litellm-dashboard",
+      },
+    });
+  } catch (error) {
+    console.error("Failed to search team daily activity keys:", error);
+    throw error;
+  }
+};
+
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 
 export const teamSpendByUserCall = async (
@@ -1675,6 +1618,32 @@ export const claimOnboardingToken = async (
     console.error("Failed to delete key:", error);
     throw error;
   }
+};
+
+/**
+ * Revokes the UI session key server-side (POST /session/logout). Best-effort
+ * with a short timeout: logout must still complete locally when the server is
+ * unreachable, so callers swallow rejections.
+ */
+export const sessionLogoutCall = async (accessToken: string): Promise<{ message: string }> => {
+  return await apiClient.post(`/session/logout`, {
+    accessToken,
+    signal: AbortSignal.timeout(3000),
+  });
+};
+
+export const changePasswordCall = async (
+  accessToken: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ user_id: string; message: string }> => {
+  return await apiClient.post(`/user/password/change`, {
+    accessToken,
+    body: {
+      current_password: currentPassword,
+      new_password: newPassword,
+    },
+  });
 };
 
 export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string, formData: any) => {
@@ -2043,16 +2012,6 @@ export const allTagNamesCall = async (accessToken: string) => {
   }
 };
 
-export const allEndUsersCall = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/customer/list`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch end users:", error);
-    throw error;
-  }
-};
-
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
     return await apiClient.get(`/user/filter/ui`, {
@@ -2061,6 +2020,7 @@ export const userFilterUICall = async (accessToken: string, params: URLSearchPar
         user_email: params.get("user_email") || undefined,
         user_id: params.get("user_id") || undefined,
         team_id: params.get("team_id") || undefined,
+        search: params.get("search") || undefined,
       },
     });
   } catch (error) {
@@ -2081,6 +2041,7 @@ interface UiSpendLogsParams {
   end_user?: string;
   status_filter?: string;
   cache_hit_filter?: string;
+  span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
   /** Filter by model ID (litellm model deployment id) */
@@ -2318,38 +2279,6 @@ export const adminTopModelsCall = async (accessToken: string) => {
   }
 };
 
-export const keyInfoCall = async (accessToken: string, keys: string[]) => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/key/info` : `/v2/key/info`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        keys: keys,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      if (errorData.includes("Invalid proxy server token passed")) {
-        throw new Error("Invalid proxy server token passed");
-      }
-      handleError(errorData);
-      throw new Error("Network response was not ok");
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
 export const testConnectionRequest = async (
   accessToken: string,
   litellm_params: Record<string, any>,
@@ -2450,7 +2379,8 @@ export const testModelGroupConnection = async (
 
 export interface AutoRouterRoutingTestRequest {
   prompt: string;
-  complexity_router_config: ComplexityRouterConfigPayload;
+  complexity_router_config: ComplexityRouterConfigPayload | Record<string, unknown>;
+  saved_model_id?: string;
   default_model?: string;
   router_name?: string;
   team_id?: string;
@@ -2647,6 +2577,36 @@ export const userDailyActivityAggregatedCall = async (
     });
   } catch (error) {
     console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
+
+export const userDailyActivityKeySearchCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [search: string, userId?: string | null]
+) => {
+  const [search, userId = null] = options;
+  try {
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    return await apiClient.get(`/user/daily/activity/aggregated/search`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        search,
+        user_id: userId || undefined,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to search user daily activity keys:", error);
     throw error;
   }
 };
@@ -2946,11 +2906,14 @@ export interface Member {
   role: string;
   user_id: string | null;
   user_email?: string | null;
+  user_alias?: string | null;
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
   budget_duration?: string | null;
   allowed_models?: string[] | null;
+  temp_budget_increase?: number | null;
+  temp_budget_expiry?: string | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
@@ -3084,6 +3047,12 @@ export const teamMemberUpdateCall = async (
     }
     if (formValues.allowed_models !== undefined) {
       requestBody.allowed_models = formValues.allowed_models;
+    }
+    if ("temp_budget_increase" in formValues) {
+      requestBody.temp_budget_increase = orNull(formValues.temp_budget_increase);
+    }
+    if ("temp_budget_expiry" in formValues) {
+      requestBody.temp_budget_expiry = orNull(formValues.temp_budget_expiry);
     }
 
     const response = await fetch(url, {
@@ -3319,19 +3288,6 @@ export const serviceHealthCheck = async (accessToken: string, service: string) =
   }
 };
 
-export const getBudgetList = async (accessToken: string) => {
-  /**
-   * Get all configurable params for setting a budget
-   */
-  try {
-    const data = await apiClient.get(`/budget/list`, { accessToken });
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to get callbacks:", error);
-    throw error;
-  }
-};
 export const getCallbacksCall = async (accessToken: string, userID: string, userRole: string) => {
   /**
    * Get all the models user has access to
@@ -3791,6 +3747,34 @@ export const updateMCPSemanticFilterSettings = async (accessToken: string, setti
     return data;
   } catch (error) {
     console.error("Failed to update MCP semantic filter settings:", error);
+    throw error;
+  }
+};
+
+export type WebSearchInterceptionSettings = components["schemas"]["WebSearchInterceptionSettings"];
+export type WebSearchInterceptionSettingsResponse = components["schemas"]["WebSearchInterceptionSettingsResponse"];
+
+export const getWebSearchInterceptionSettings = async (
+  accessToken: string,
+): Promise<WebSearchInterceptionSettingsResponse> => {
+  try {
+    return await apiClient.get<WebSearchInterceptionSettingsResponse>(`/get/websearch_interception_settings`, {
+      accessToken,
+    });
+  } catch (error) {
+    console.error("Failed to get web search interception settings:", error);
+    throw error;
+  }
+};
+
+export const updateWebSearchInterceptionSettings = async (
+  accessToken: string,
+  settings: WebSearchInterceptionSettings,
+) => {
+  try {
+    return await apiClient.patch(`/update/websearch_interception_settings`, { accessToken, body: settings });
+  } catch (error) {
+    console.error("Failed to update web search interception settings:", error);
     throw error;
   }
 };
@@ -5108,6 +5092,36 @@ export const fetchMCPSubmissions = async (accessToken: string) => {
   }
 };
 
+export const fetchMCPGatewaySessions = async (accessToken: string): Promise<MCPGatewaySessionsResponse> =>
+  apiClient.get<MCPGatewaySessionsResponse>(`/v1/mcp/sessions`, { accessToken });
+
+export const terminateMCPGatewaySessions = async (
+  accessToken: string,
+  selector: MCPGatewaySessionSelector,
+): Promise<MCPGatewaySessionsTerminateResponse> =>
+  apiClient.delete<MCPGatewaySessionsTerminateResponse>(`/v1/mcp/sessions`, { accessToken, query: { ...selector } });
+
+export const fetchMCPServerUserCredentials = async (
+  accessToken: string,
+  serverId: string,
+): Promise<MCPServerUserCredentialListItem[]> =>
+  apiClient.get<MCPServerUserCredentialListItem[]>(`/v1/mcp/server/${encodeURIComponent(serverId)}/user-credentials`, {
+    accessToken,
+  });
+
+export const revokeMCPServerUserCredential = async (
+  accessToken: string,
+  serverId: string,
+  userId: string,
+  credentialType: MCPServerUserCredentialType,
+): Promise<void> => {
+  const route = credentialType === "oauth2" ? "oauth-user-credential" : "user-credential";
+  await apiClient.delete(`/v1/mcp/server/${encodeURIComponent(serverId)}/${route}`, {
+    accessToken,
+    query: { user_id: userId },
+  });
+};
+
 export const approveMCPServer = async (accessToken: string, serverId: string) => {
   try {
     const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${encodeURIComponent(serverId)}/approve`;
@@ -6266,6 +6280,7 @@ export const patchAgentCall = async (
     rpm_limit?: number | null;
     session_tpm_limit?: number | null;
     session_rpm_limit?: number | null;
+    access_group_ids?: string[];
   },
 ) => {
   try {
@@ -7346,37 +7361,6 @@ export const updateUserBanner = async (accessToken: string, banner: UserBannerUp
 // Claude Code Marketplace Networking Functions
 
 /**
- * Get public marketplace catalog (no authentication required)
- * Returns marketplace.json for Claude Code CLI discovery
- */
-export const getClaudeCodeMarketplace = async () => {
-  try {
-    const proxyBaseUrl = getProxyBaseUrl();
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/claude-code/marketplace.json` : `/claude-code/marketplace.json`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch Claude Code marketplace:", error);
-    throw error;
-  }
-};
-
-/**
  * List all Claude Code plugins (admin only)
  * @param accessToken - Admin access token
  * @param enabledOnly - If true, only return enabled plugins (default: false)
@@ -7407,41 +7391,6 @@ export const getClaudeCodePluginsList = async (accessToken: string, enabledOnly:
     return data;
   } catch (error) {
     console.error("Failed to fetch Claude Code plugins list:", error);
-    throw error;
-  }
-};
-
-/**
- * Get details for a specific Claude Code plugin (admin only)
- * @param accessToken - Admin access token
- * @param pluginName - Name of the plugin
- */
-export const getClaudeCodePluginDetails = async (accessToken: string, pluginName: string) => {
-  try {
-    const proxyBaseUrl = getProxyBaseUrl();
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/claude-code/plugins/${pluginName}`
-      : `/claude-code/plugins/${pluginName}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error(`Failed to fetch plugin "${pluginName}":`, error);
     throw error;
   }
 };
@@ -8011,6 +7960,10 @@ export const storeMCPUserEnvVars = async (
     accessToken,
     body: { values },
   });
+};
+
+export const clearMCPUserEnvVars = async (accessToken: string, serverId: string): Promise<MCPUserEnvVarsStatus> => {
+  return apiClient.delete<MCPUserEnvVarsStatus>(`/v1/mcp/server/${serverId}/user-env-vars`, { accessToken });
 };
 
 export const listMCPUserEnvVarStatus = async (accessToken: string): Promise<MCPUserEnvVarsStatus[]> => {

@@ -1,22 +1,33 @@
+import copy
 import functools
 import json
 import os
-from unittest.mock import MagicMock, patch
+import sys
+from typing import Final
 
 import pytest
 
-
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
+    encrypted_content_from_signature,
+    encrypted_reasoning_signature,
     get_file_ids_from_messages,
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
+    is_encrypted_reasoning_block,
+    merge_consecutive_system_messages,
+    responses_reasoning_items_from_thinking_blocks,
     split_concatenated_json_objects,
+    strip_encrypted_reasoning_from_messages,
+    system_messages_first,
     update_messages_with_model_file_ids,
 )
+
+_ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
 
 def test_get_format_from_file_id():
@@ -342,6 +353,20 @@ def test_get_file_ids_from_messages_file_field_not_dict():
     ]
 
     assert get_file_ids_from_messages(messages) == []
+
+
+def test_get_file_ids_from_messages_skips_bare_string_content_items():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                "what type of file is this?",
+                {"type": "file", "file": {"file_id": "file-abc"}},
+            ],
+        }
+    ]
+
+    assert get_file_ids_from_messages(messages) == ["file-abc"]
 
 
 def test_update_messages_with_model_file_ids_skips_non_openai_file_blocks():
@@ -1097,6 +1122,38 @@ def test_drop_tool_reference_parts_leaves_non_tool_messages_alone():
     assert result[2]["content"] == ""
 
 
+class TestSystemMessagesFirst:
+    def test_stable_partition_keeps_order_within_each_group(self):
+        messages = [
+            {"role": "user", "content": "u1"},
+            {"role": "system", "content": "s1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "developer", "content": "d1"},
+            {"role": "tool", "tool_call_id": "c1", "content": "t1"},
+            {"role": "system", "content": "s2"},
+        ]
+
+        result = system_messages_first(messages)
+
+        assert [m["content"] for m in result] == ["s1", "d1", "s2", "u1", "a1", "t1"]
+        assert [m["content"] for m in messages] == ["u1", "s1", "a1", "d1", "t1", "s2"]
+        assert all(
+            result_message is original for result_message, original in zip(result[3:], messages[::2], strict=True)
+        )
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [],
+            [{"role": "user", "content": "u1"}, {"role": "assistant", "content": "a1"}],
+            [{"role": "system", "content": "s1"}, {"role": "user", "content": "u1"}],
+            [{"role": "system", "content": "s1"}, {"role": "system", "content": "s2"}],
+        ],
+    )
+    def test_already_ordered_messages_come_back_unchanged(self, messages):
+        assert system_messages_first(messages) == messages
+
+
 class TestFlattenTopLevelSchemaCombinators:
     def _customer_anyof_schema(self):
         return {
@@ -1435,7 +1492,7 @@ class TestFlattenTopLevelSchemaCombinators:
         assert schema == snapshot
 
 
-class TestToolWithFlattenedParameters:
+class TestToolWithSanitizedParameters:
     def _anyof_tool(self):
         return {
             "type": "function",
@@ -1462,11 +1519,12 @@ class TestToolWithFlattenedParameters:
 
     def test_flattens_anyof_parameters_into_new_tool(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            tool_with_flattened_parameters,
+            flatten_combinators_and_drop_non_python_regex_patterns,
+            tool_with_sanitized_parameters,
         )
 
         tool = self._anyof_tool()
-        result = tool_with_flattened_parameters(tool)
+        result = tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns)
 
         assert result is not tool
         parameters = result["function"]["parameters"]
@@ -1479,7 +1537,8 @@ class TestToolWithFlattenedParameters:
 
     def test_clean_parameters_return_the_same_tool_object(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            tool_with_flattened_parameters,
+            flatten_combinators_and_drop_non_python_regex_patterns,
+            tool_with_sanitized_parameters,
         )
 
         tool = {
@@ -1490,7 +1549,23 @@ class TestToolWithFlattenedParameters:
             },
         }
 
-        assert tool_with_flattened_parameters(tool) is tool
+        assert tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns) is tool
+
+    def test_pattern_only_sanitizer_drops_the_regex_and_keeps_the_union(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_non_python_regex_patterns,
+            tool_with_sanitized_parameters,
+        )
+
+        tool = self._anyof_tool()
+        tool["function"]["parameters"]["properties"]["id"]["pattern"] = _ARTIFACT_FIELD_PATTERN
+
+        result = tool_with_sanitized_parameters(tool, drop_non_python_regex_patterns)
+
+        parameters = result["function"]["parameters"]
+        assert parameters["properties"]["id"] == {"type": "string"}
+        assert parameters["anyOf"] == self._anyof_tool()["function"]["parameters"]["anyOf"]
+        assert tool["function"]["parameters"]["properties"]["id"]["pattern"] == _ARTIFACT_FIELD_PATTERN
 
     @pytest.mark.parametrize(
         "tool",
@@ -1503,10 +1578,127 @@ class TestToolWithFlattenedParameters:
     )
     def test_non_dict_function_or_parameters_return_the_same_tool_object(self, tool):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            tool_with_flattened_parameters,
+            flatten_combinators_and_drop_non_python_regex_patterns,
+            tool_with_sanitized_parameters,
         )
 
-        assert tool_with_flattened_parameters(tool) is tool
+        assert tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns) is tool
+
+
+class TestDropNonPythonRegexPatterns:
+    """Claude Code's Artifact tool declares ECMA-262 ``\\p{..}`` escapes that OpenAI's
+    validator, which compiles ``pattern`` values and ``patternProperties`` keys with
+    Python ``re``, refuses as "not a 'regex'"."""
+
+    def _schema(self, pattern):
+        return {
+            "type": "object",
+            "properties": {
+                "field": {"type": "string", "pattern": pattern},
+                "writes": {
+                    "type": "array",
+                    "items": {"properties": {"doc_id": {"type": "string", "pattern": pattern}}},
+                },
+                "query": {"anyOf": [{"type": "string", "pattern": pattern}, {"type": "null"}]},
+                "pair": {"type": "array", "prefixItems": [{"type": "string", "pattern": pattern}]},
+                "extra": {"type": "object", "additionalProperties": {"type": "string", "pattern": pattern}},
+                "tagged": {
+                    "type": "object",
+                    "patternProperties": {pattern: {"type": "string"}, "^x_": {"type": "integer"}},
+                },
+            },
+            "$defs": {"segment": {"type": "string", "pattern": pattern}},
+            "required": ["field"],
+        }
+
+    def test_drops_every_regex_python_re_rejects_from_every_schema_position(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_non_python_regex_patterns,
+        )
+
+        schema = self._schema(_ARTIFACT_FIELD_PATTERN)
+
+        result = drop_non_python_regex_patterns(schema)
+
+        assert '"pattern"' not in json.dumps(result)
+        properties = result["properties"]
+        assert properties["field"] == {"type": "string"}
+        assert properties["writes"]["items"]["properties"]["doc_id"] == {"type": "string"}
+        assert properties["query"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+        assert properties["pair"]["prefixItems"] == [{"type": "string"}]
+        assert properties["extra"]["additionalProperties"] == {"type": "string"}
+        assert properties["tagged"]["patternProperties"] == {"^x_": {"type": "integer"}}
+        assert result["$defs"]["segment"] == {"type": "string"}
+        assert result["required"] == ["field"]
+        assert schema == self._schema(_ARTIFACT_FIELD_PATTERN)
+
+    def test_keeps_regexes_python_re_compiles_and_returns_the_same_object(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_non_python_regex_patterns,
+        )
+
+        schema = self._schema(r'^(?!__.*__$)[^"\\./[\]]{1,200}$')
+
+        assert drop_non_python_regex_patterns(schema) is schema
+
+    def test_pattern_keys_inside_data_positions_are_not_regexes(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_non_python_regex_patterns,
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string"},
+                "template": {"type": "object", "default": {"pattern": _ARTIFACT_FIELD_PATTERN}},
+                "samples": {"type": "array", "examples": [{"pattern": _ARTIFACT_FIELD_PATTERN}]},
+                "fixed": {"const": {"pattern": _ARTIFACT_FIELD_PATTERN}},
+                "vendor": {"type": "string", "x-litellm": {"pattern": _ARTIFACT_FIELD_PATTERN}},
+            },
+            "required": ["pattern"],
+        }
+
+        assert drop_non_python_regex_patterns(schema) is schema
+
+    def test_regex_nested_past_what_python_re_can_parse_is_dropped_not_raised(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_non_python_regex_patterns,
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {"deep": {"type": "string", "pattern": "(" * 2000 + "a" + ")" * 2000}},
+        }
+
+        assert drop_non_python_regex_patterns(schema)["properties"]["deep"] == {"type": "string"}
+
+    def test_walks_schemas_deeper_than_the_interpreter_recursion_limit(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_non_python_regex_patterns,
+        )
+
+        depth = sys.getrecursionlimit()
+        leaf = {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}
+        schema = functools.reduce(
+            lambda inner, _: {"type": "object", "properties": {"child": inner}}, range(depth), leaf
+        )
+
+        result = drop_non_python_regex_patterns(schema)
+
+        assert functools.reduce(lambda node, _: node["properties"]["child"], range(depth), result) == {"type": "string"}
+        assert functools.reduce(lambda node, _: node["properties"]["child"], range(depth), schema) is leaf
+
+    def test_leaves_levels_past_the_json_nesting_limit_alone(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_non_python_regex_patterns,
+        )
+
+        leaf = {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}
+        schema = functools.reduce(
+            lambda inner, _: {"type": "object", "properties": {"child": inner}}, range(1100), leaf
+        )
+
+        assert drop_non_python_regex_patterns(schema) is schema
 
 
 class TestRequestContainsImageContent:
@@ -1554,3 +1746,209 @@ class TestRequestContainsImageContent:
         for _ in range(50):
             nested = {"type": "tool_result", "content": [nested]}
         assert request_contains_image_content([{"role": "user", "content": [nested]}]) is False
+
+
+class TestEncryptedReasoningReplay:
+    """Regression for https://github.com/BerriAI/litellm/issues/40288."""
+
+    def test_signature_round_trips_the_encrypted_content(self):
+        assert encrypted_content_from_signature(encrypted_reasoning_signature("gAAAA_bytes")) == "gAAAA_bytes"
+
+    @pytest.mark.parametrize(
+        "signature", [None, "", "ErcBCkgIValidAnthropicSignature", "litellm_encrypted_reasoning:", 7]
+    )
+    def test_anything_else_is_not_encrypted_content(self, signature):
+        assert encrypted_content_from_signature(signature) is None
+
+    def test_encrypted_thinking_block_replays_its_own_item(self):
+        items = responses_reasoning_items_from_thinking_blocks(
+            [{"type": "thinking", "thinking": "Plan.", "signature": encrypted_reasoning_signature("gAAAA_1")}]
+        )
+        assert items == (
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Plan."}],
+                "encrypted_content": "gAAAA_1",
+            },
+        )
+
+    def test_encrypted_redacted_block_replays_with_an_empty_summary(self):
+        items = responses_reasoning_items_from_thinking_blocks(
+            [{"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_1")}]
+        )
+        assert items == ({"type": "reasoning", "summary": [], "encrypted_content": "gAAAA_1"},)
+
+    def test_plain_blocks_collapse_into_one_summary_item_around_encrypted_ones(self):
+        items = responses_reasoning_items_from_thinking_blocks(
+            [
+                {"type": "thinking", "thinking": "A.", "signature": None},
+                {"type": "thinking", "thinking": "B.", "signature": ""},
+                {"type": "thinking", "thinking": "C.", "signature": encrypted_reasoning_signature("gAAAA_c")},
+                {"type": "redacted_thinking", "data": "anthropic-minted-opaque-data"},
+                {"type": "thinking", "thinking": "D."},
+            ]
+        )
+        assert items == (
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "A."}, {"type": "summary_text", "text": "B."}],
+            },
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "C."}], "encrypted_content": "gAAAA_c"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "D."}]},
+        )
+        assert all("id" not in item for item in items)
+
+    def test_blocks_without_text_or_encrypted_content_produce_nothing(self):
+        assert responses_reasoning_items_from_thinking_blocks([{"type": "thinking", "thinking": ""}]) == ()
+        assert responses_reasoning_items_from_thinking_blocks([]) == ()
+
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            ({"type": "thinking", "thinking": "x", "signature": encrypted_reasoning_signature("g")}, True),
+            ({"type": "redacted_thinking", "data": encrypted_reasoning_signature("g")}, True),
+            ({"type": "thinking", "thinking": "x", "signature": ENCRYPTED_REASONING_SIGNATURE_PREFIX}, True),
+            ({"type": "redacted_thinking", "data": ENCRYPTED_REASONING_SIGNATURE_PREFIX}, True),
+            ({"type": "thinking", "thinking": "x", "signature": "ErcBCkgIValid"}, False),
+            ({"type": "redacted_thinking", "data": "EmwKAhgBEgy"}, False),
+            ({"type": "text", "text": encrypted_reasoning_signature("g")}, False),
+            ("not a block", False),
+        ],
+    )
+    def test_is_encrypted_reasoning_block(self, block, expected):
+        assert is_encrypted_reasoning_block(block) is expected
+
+    def test_strip_drops_every_bridge_tagged_block_and_leaves_no_unsigned_thinking_behind(self):
+        assistant_content = [
+            {"type": "thinking", "thinking": "minted by Anthropic", "signature": "ErcBCkgIValid"},
+            {"type": "thinking", "thinking": "packed by the bridge", "signature": encrypted_reasoning_signature("g1")},
+            {"type": "redacted_thinking", "data": encrypted_reasoning_signature("g2")},
+            {"type": "thinking", "thinking": "", "signature": encrypted_reasoning_signature("g3")},
+            {"type": "text", "text": "answer"},
+        ]
+        messages = [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": assistant_content},
+            {"role": "user", "content": [{"type": "text", "text": "follow-up"}]},
+        ]
+
+        strip_encrypted_reasoning_from_messages(messages)
+
+        assert messages[1]["content"] is assistant_content
+        assert assistant_content == [
+            {"type": "thinking", "thinking": "minted by Anthropic", "signature": "ErcBCkgIValid"},
+            {"type": "text", "text": "answer"},
+        ]
+        assert all(block["signature"] for block in assistant_content if block["type"] == "thinking")
+        assert messages[0] == {"role": "user", "content": "question"}
+        assert messages[2] == {"role": "user", "content": [{"type": "text", "text": "follow-up"}]}
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            "not a list",
+            None,
+            [{"role": "user", "content": None}],
+            [{"role": "user", "content": "plain string"}],
+            ["not a message"],
+            [{"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "ErcBCkgIValid"}]}],
+        ],
+    )
+    def test_strip_leaves_history_without_bridge_reasoning_untouched(self, messages):
+        before = copy.deepcopy(messages)
+
+        strip_encrypted_reasoning_from_messages(messages)
+
+        assert messages == before
+
+
+class TestMergeConsecutiveSystemMessages:
+    def test_merges_each_run_of_string_system_messages_with_a_blank_line(self):
+        messages = [
+            {"role": "system", "content": "You are terse.", "cache_control": {"type": "ephemeral"}},
+            {"role": "system", "content": "Skills: none."},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "system", "content": "Reminder A"},
+            {"role": "system", "content": "Reminder B"},
+            {"role": "user", "content": "Bye"},
+        ]
+
+        merged = merge_consecutive_system_messages(messages)
+
+        assert merged == [
+            {"role": "system", "content": "You are terse.\n\nSkills: none.", "cache_control": {"type": "ephemeral"}},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "system", "content": "Reminder A\n\nReminder B"},
+            {"role": "user", "content": "Bye"},
+        ]
+
+    def test_merges_into_text_parts_when_any_system_content_is_a_list(self):
+        cached_part = {"type": "text", "text": "Skills: none.", "cache_control": {"type": "ephemeral"}}
+        messages = [
+            {"role": "system", "content": "You are terse."},
+            {"role": "system", "content": [cached_part, {"type": "text", "text": "Be brief."}]},
+            {"role": "system", "content": "Answer in English."},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        merged = merge_consecutive_system_messages(messages)
+
+        assert merged == [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse."},
+                    cached_part,
+                    {"type": "text", "text": "Be brief."},
+                    {"type": "text", "text": "Answer in English."},
+                ],
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+        assert merged[0]["content"][1] is cached_part
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "Hello"}],
+            [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}],
+            [
+                {"role": "system", "content": "You are terse."},
+                {"role": "user", "content": "Hello"},
+                {"role": "system", "content": "Reminder"},
+            ],
+            [],
+        ],
+        ids=["single-system", "no-system", "separated-systems", "empty"],
+    )
+    def test_leaves_messages_without_consecutive_system_messages_untouched(self, messages):
+        before = copy.deepcopy(messages)
+
+        merged = merge_consecutive_system_messages(messages)
+
+        assert merged == before
+        assert [message is original for message, original in zip(merged, messages)] == [True] * len(messages)
+
+    @pytest.mark.parametrize(
+        ("messages", "expected_content"),
+        [
+            ([{"role": "system"}, {"role": "system", "content": "Skills: none."}], "Skills: none."),
+            ([{"role": "system", "content": "You are terse."}, {"role": "system"}], "You are terse."),
+            (
+                [{"role": "system"}, {"role": "system", "content": [{"type": "text", "text": "Be brief."}]}],
+                [{"type": "text", "text": "Be brief."}],
+            ),
+        ],
+        ids=["missing-then-str", "str-then-missing", "missing-then-list"],
+    )
+    def test_skips_system_messages_without_content_when_merging(self, messages, expected_content):
+        merged = merge_consecutive_system_messages([*messages, {"role": "user", "content": "Hello"}])
+
+        assert merged == [{"role": "system", "content": expected_content}, {"role": "user", "content": "Hello"}]
+
+    def test_keeps_the_first_message_when_no_system_message_in_the_run_has_content(self):
+        merged = merge_consecutive_system_messages([{"role": "system"}, {"role": "system"}, {"role": "user", "content": "Hi"}])
+
+        assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]

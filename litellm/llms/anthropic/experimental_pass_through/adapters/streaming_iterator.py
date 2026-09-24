@@ -11,7 +11,6 @@ from typing import (
     Final,
     Literal,
     Protocol,
-    cast,  # noqa: TID251  # rebuilt message_delta dict spans the ContentBlockDelta/MessageBlockDelta union
     get_args,
 )
 
@@ -19,12 +18,15 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.exceptions import MidStreamFallbackError
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
     ContentBlockDelta,
     ContextManagementResponse,
     MessageBlockDelta,
+    MessageDelta,
     StreamingContentBlockDeltaType,
     UsageDelta,
     UsageIteration,
@@ -56,6 +58,25 @@ def _optional_attr(obj: object, name: str) -> object:
 def _optional_attr_sequence(obj: object, name: str) -> Sequence[object]:
     value: Final = getattr(obj, name, None)
     return value if value else ()
+
+
+def _error_status_and_message(exc: Exception) -> tuple[int, str]:
+    if isinstance(exc, (BaseLLMException, MidStreamFallbackError)):
+        return exc.status_code, exc.message
+    return 500, str(exc) or "Upstream stream ended before completion"
+
+
+def _mid_stream_error_sse_event(exc: Exception) -> bytes:
+    from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
+        AnthropicExceptionMapping,
+    )
+
+    status_code, message = _error_status_and_message(exc)
+    error_response = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status_code,
+        raw_message=message,
+    )
+    return f"event: error\ndata: {json.dumps(error_response)}\n\n".encode()
 
 
 def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
@@ -355,10 +376,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         usage_dict: UsageDelta = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
             chunk.usage
         )
-        merged_chunk["usage"] = usage_dict
         if self.applied_edits and "context_management" not in merged_chunk:
             merged_chunk["context_management"] = ContextManagementResponse(applied_edits=list(self.applied_edits))
-        return self._augment_message_delta_usage(merged_chunk)
+        return self._augment_message_delta_usage({**merged_chunk, "usage": usage_dict})
 
     def _handle_choiceless_chunk(self, chunk: "ModelResponseStream") -> bool:
         """Consume an OpenAI-compatible chunk that carries no ``choices``.
@@ -427,8 +447,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             }
             iterations.append(message_iteration)
         augmented_usage["iterations"] = iterations
-        augmented["usage"] = augmented_usage
-        return augmented
+        return {**augmented, "usage": augmented_usage}
 
     def _next_compaction_event(self) -> dict[str, object] | None:
         """Return the next compaction content-block SSE event, or ``None``.
@@ -990,14 +1009,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Async version of anthropic_sse_wrapper.
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
         """
-        async for chunk in self:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
-            else:
-                # For non-dict chunks, forward the original value unchanged
-                yield chunk
+        try:
+            async for chunk in self:
+                if isinstance(chunk, dict):
+                    event_type: str = str(chunk.get("type", "message"))
+                    payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                    yield payload.encode()
+                else:
+                    yield chunk
+        except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
+            verbose_logger.exception("Anthropic Adapter - mid-stream error, emitting Anthropic error event: %s", e)
+            yield _mid_stream_error_sse_event(e)
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
@@ -1006,26 +1028,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self,
         processed_chunk: ContentBlockDelta | MessageBlockDelta,
     ) -> ContentBlockDelta | MessageBlockDelta:
-        if processed_chunk.get("type") != "message_delta" or not self._refusal_text:
+        if processed_chunk["type"] != "message_delta" or not self._refusal_text:
             return processed_chunk
-        delta: Final = cast(Mapping[str, object], processed_chunk["delta"])  # cast-ok: keys checked before use
+        delta: Final = processed_chunk["delta"]
         if delta.get("stop_reason") == "max_tokens":
             return processed_chunk
         from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
             refusal_stop_details,
         )
 
-        return cast(  # cast-ok: rebuilt dict matches the message_delta TypedDict shape for this branch
-            ContentBlockDelta | MessageBlockDelta,
-            {  # mutable-ok: fresh translation payload; never mutated after construction
-                **processed_chunk,
-                "delta": {  # mutable-ok: fresh message_delta payload; never mutated after construction
-                    **delta,
-                    "stop_reason": "refusal",
-                    "stop_details": refusal_stop_details(self._refusal_text),
-                },
-            },
-        )
+        refusal_delta: Final[MessageDelta] = {
+            **delta,
+            "stop_reason": "refusal",
+            "stop_details": refusal_stop_details(self._refusal_text),
+        }
+        refusal_chunk: Final[MessageBlockDelta] = {**processed_chunk, "delta": refusal_delta}
+        return refusal_chunk
 
     @staticmethod
     def _delta_has_content(processed_chunk: Mapping[str, object]) -> bool:

@@ -1698,7 +1698,7 @@ def test_decrypt_global_env_var_drops_undecryptable_value(
 @pytest.mark.asyncio
 async def test_missing_user_env_vars_error_renders_in_mcp_call_tool():
     """The MCP ``call_tool`` handler must turn ``MCPMissingUserEnvVarsError``
-    into a friendly ``CallToolResult`` with ``isError=True`` so Claude Code
+    into a friendly ``CallToolResult`` with ``is_error=True`` so Claude Code
     surfaces the setup URL instead of an opaque internal error."""
     from mcp.types import TextContent
 
@@ -1716,7 +1716,7 @@ async def test_missing_user_env_vars_error_renders_in_mcp_call_tool():
         content=[TextContent(text=str(err), type="text")],
         isError=True,
     )
-    assert result.isError is True
+    assert result.is_error is True
     text = result.content[0].text  # type: ignore[union-attr]
     assert "CorporateDB" in text
     assert "CORP_USERNAME" in text

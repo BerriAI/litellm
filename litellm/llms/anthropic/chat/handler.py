@@ -4,7 +4,8 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
@@ -25,15 +26,12 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
-from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
     MessageBlockDelta,
     MessageStartBlock,
-    UsageDelta,
 )
 from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
@@ -44,6 +42,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     build_code_interpreter_log_outputs,
+    build_web_search_call,
 )
 from litellm.types.utils import (
     Delta,
@@ -374,24 +373,22 @@ class AnthropicChatCompletion(BaseLLM):
             """Filter beta headers and emit pre_call, returning `(headers, data)`.
 
             The pair stays mutable because the streaming path rewrites it in
-            place (`data["stream"] = True`) before sending. A Rust attempt that
-            declined already emitted pre_call for this request, so skip it there.
+            place (`data["stream"] = True`) before sending.
             """
             request_headers, data = update_request_with_filtered_beta(
                 headers=headers,
                 request_data=request_data,
                 provider=custom_llm_provider,
             )
-            if not serves_via_rust:
-                logging_obj.pre_call(
-                    input=messages,
-                    api_key=api_key,
-                    additional_args={
-                        "complete_input_dict": data,
-                        "api_base": api_base,
-                        "headers": request_headers,
-                    },
-                )
+            logging_obj.pre_call(
+                input=messages,
+                api_key=api_key,
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": api_base,
+                    "headers": request_headers,
+                },
+            )
             print_verbose(f"_is_function_call: {_is_function_call}")
             return request_headers, data
 
@@ -454,68 +451,6 @@ class AnthropicChatCompletion(BaseLLM):
                 json_mode=json_mode,
                 timeout=timeout,
             )
-
-        # The Rust core owns the whole call for the subset it accepts, so ask
-        # before transforming: whichever path runs emits pre_call exactly once.
-        # `get_config` merges the class-level defaults (Anthropic's required
-        # `max_tokens` among them) that `transform_request` would have applied.
-        rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
-            **AnthropicConfig.get_config(model=model),
-            **optional_params,
-        }
-        serves_via_rust: Final = rust_chat_completions_accepts(
-            model=model,
-            messages=messages,
-            optional_params=rust_optional_params,
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            stream=stream,
-        )
-        if serves_via_rust:
-            rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
-                "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
-                    "model": model,
-                    "messages": messages,
-                    **rust_optional_params,
-                },
-                "api_base": api_base,
-                "headers": headers,
-            }
-            logging_obj.pre_call(input=messages, api_key=api_key, additional_args=rust_logging_args)
-            log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
-                logging_obj=logging_obj,
-                messages=messages,
-                api_key=api_key,
-                additional_args=rust_logging_args,
-            )
-            if acompletion is True:
-                return rust_chat_completions_bridge.achat_completions_or_fallback(
-                    model=model,
-                    messages=messages,
-                    optional_params=rust_optional_params,
-                    model_response=model_response,
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=headers,
-                    timeout=timeout,
-                    on_response=log_rust_post_call,
-                    python_fallback=acompletion_dispatch,
-                )
-            rust_response: Final = rust_chat_completions_bridge.chat_completions(
-                model=model,
-                messages=messages,
-                optional_params=rust_optional_params,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=headers,
-                timeout=timeout,
-                on_response=log_rust_post_call,
-            )
-            if rust_response is not None:
-                return rust_response
 
         if acompletion is True:
             return acompletion_dispatch()
@@ -622,6 +557,7 @@ class ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
         self.speed = speed
+        self._cumulative_usage: Mapping[str, object] = MappingProxyType({})
         # rewritten-name -> caller's original. Built per-request from the
         # forward map in AnthropicConfig._build_request_tool_name_maps; only
         # contains entries we actually rewrote, so a tool legitimately named
@@ -631,6 +567,7 @@ class ModelResponseIterator:
         self.tool_name_reverse_map: dict[str, str] = tool_name_reverse_map or {}
         # Generate response ID once per stream to match OpenAI-compatible behavior
         self.response_id = _generate_id()
+        self.served_model: str | None = None
 
         # Track if we're currently streaming a response_format tool
         self.is_response_format_tool: bool = False
@@ -649,6 +586,7 @@ class ModelResponseIterator:
         # Accumulate web_search_tool_result blocks for multi-turn reconstruction
         # See: https://github.com/BerriAI/litellm/issues/17737
         self.web_search_results: list[dict[str, object]] = []
+        self._web_search_calls: dict[str, object] = {}  # mutable-ok: provider call state by id
 
         # Accumulate compaction blocks for multi-turn reconstruction
         self.compaction_blocks: list[dict[str, object]] = []
@@ -658,7 +596,7 @@ class ModelResponseIterator:
         self.reasoning_content_chunks: list[str] = []
 
         # Track server tool use inputs and results for code_interpreter_results
-        self._server_tool_inputs: dict[str, Any] = {}
+        self._server_tool_inputs: dict[str, object] = {}
         self.tool_results: list[dict[str, Any]] = []
         self._current_server_tool_id: str | None = None
         self._container_id: str | None = None
@@ -694,10 +632,12 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(self, anthropic_usage_chunk: dict | UsageDelta) -> Usage:
+    def _handle_usage(self, anthropic_usage_chunk: Mapping[str, object]) -> Usage:
+        # message_delta usage is cumulative but may omit fields reported at message_start.
+        self._cumulative_usage = MappingProxyType({**self._cumulative_usage, **anthropic_usage_chunk})
         reasoning_content: Final = "".join(self.reasoning_content_chunks) if self.reasoning_content_chunks else None
         usage: Final = AnthropicConfig().calculate_usage(
-            usage_object=cast(dict, anthropic_usage_chunk),
+            usage_object=self._cumulative_usage,
             reasoning_content=reasoning_content,
             speed=self.speed,
         )
@@ -724,10 +664,11 @@ class ModelResponseIterator:
         content_block: Final = ContentBlockDelta(**chunk)
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
 
-        self.content_blocks.append(content_block)
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
-        elif "partial_json" in content_block["delta"]:
+            return text, tool_use, thinking_blocks, provider_specific_fields, reasoning_content
+        self.content_blocks.append(content_block)
+        if "partial_json" in content_block["delta"]:
             # Only emit tool calls if we're in a tool_use or server_tool_use block
             # web_search_tool_result blocks also have input_json_delta but should not be treated as tool calls
             # See: https://github.com/BerriAI/litellm/issues/17254
@@ -820,6 +761,19 @@ class ModelResponseIterator:
             content_block_start = ContentBlockStartText(**chunk)
 
         return content_block_start
+
+    def _web_search_call_snapshot(self) -> dict[str, object]:
+        return dict(self._web_search_calls)  # mutable-ok: stream payload snapshot
+
+    def _complete_web_search_call(self, result: dict[str, object]) -> None:
+        tool_use_id: Final = result.get("tool_use_id")
+        if not isinstance(tool_use_id, str) or tool_use_id not in self._web_search_calls:
+            return
+        self._web_search_calls[tool_use_id] = build_web_search_call(
+            tool_id=tool_use_id,
+            tool_input=self._server_tool_inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
+            result=result,
+        )
 
     def _build_code_interpreter_results(self) -> list:
         """Convert accumulated tool_results to OutputCodeInterpreterCall objects.
@@ -922,6 +876,14 @@ class ModelResponseIterator:
                         self._current_server_tool_id = content_block_start["content_block"]["id"]
                         tool_input: Final = content_block_start["content_block"].get("input", {})
                         self._server_tool_inputs[self._current_server_tool_id] = tool_input
+                        if _stream_tool_name == "web_search":
+                            self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
+                                self._current_server_tool_id,
+                                tool_input,
+                                {"content": []},  # mutable-ok: no provider result yet
+                                status="in_progress",
+                            )
+                            provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     # Include caller information if present (for programmatic tool calling)
                     if "caller" in content_block_start["content_block"]:
                         caller_data: Final = content_block_start["content_block"]["caller"]
@@ -956,7 +918,9 @@ class ModelResponseIterator:
                         # The full content comes in content_block_start, not in deltas
                         # See: https://github.com/BerriAI/litellm/issues/17737
                         self.web_search_results.append(content_block_start["content_block"])
+                        self._complete_web_search_call(content_block_start["content_block"])
                         provider_specific_fields["web_search_results"] = self.web_search_results
+                        provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     elif content_type == "web_fetch_tool_result":
                         # Capture web_fetch_tool_result for multi-turn reconstruction
                         # The full content comes in content_block_start, not in deltas
@@ -1041,6 +1005,9 @@ class ModelResponseIterator:
                 }
                 """
                 message_start_block: Final = MessageStartBlock(**chunk)
+                start_message: Final = message_start_block["message"]
+                if "model" in start_message:
+                    self.served_model = start_message["model"]
                 if "usage" in message_start_block["message"]:
                     usage = self._handle_usage(anthropic_usage_chunk=message_start_block["message"]["usage"])
             elif type_chunk == "error":
@@ -1072,6 +1039,7 @@ class ModelResponseIterator:
                 ],
                 usage=usage,
                 id=self.response_id,
+                model=self.served_model,
             )
 
             return returned_chunk
@@ -1141,7 +1109,9 @@ class ModelResponseIterator:
         # (matches OpenAI behavior and non-streaming Anthropic implementation)
         if self.converted_response_format_tool:
             finish_reason = "stop"
-        usage: Final = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+        usage: Final = (
+            self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
+        )
         container: Final = message_delta["delta"].get("container")
         return finish_reason, usage, container
 

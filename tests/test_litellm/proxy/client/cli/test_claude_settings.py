@@ -1,139 +1,80 @@
 import json
 import os
+import pathlib
 import shlex
 import stat
+import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from pathlib import Path
+from threading import Event
+from typing import Final
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
-from litellm.litellm_core_utils.cli_token_utils import CliTokenRecord
-from litellm.proxy.client.cli import cli
-from litellm.litellm_core_utils.private_json import commit_staged_json
+from litellm.litellm_core_utils.private_json import commit_staged_json, write_private_bytes
 from litellm.proxy.client.cli.commands.claude_settings import (
     ANTHROPIC_DEFAULT_MODEL_ENV_KEYS,
     AUTOROUTE_BACKUP_PATH,
     BACKUP_PATH,
+    CLAUDE_SETTINGS_PATH,
+    CONFIGURE_STATE_PATH,
     OWNED_ENV_KEYS,
     OWNED_TOP_LEVEL_KEYS,
     SETTINGS_FILE_OWNERS,
-    ApiKeyHelper,
     ClaudeSettingsError,
     KeepModel,
     SettingsFileOwner,
     StartOn,
     StaticToken,
     UnpinModel,
+    claude_settings_path,
     configure_claude_settings,
+    install_statusline_script,
+    configure_state_path,
     merge_claude_settings,
-    resolve_api_key_helper,
+    statusline_command,
     unconfigure_claude_settings,
+    with_status_line,
 )
 
 
 def _owners(*backup_paths):
-    """Stand-in owners for the real `lite up` / `lite autoroute up` registry."""
+    """Stand-in owners for the real `lite up` / `lite autoroute start` registry."""
     return tuple(SettingsFileOwner(path, "lite up", "lite down") for path in backup_paths)
 
 
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
 AUTH_MODULE = "litellm.proxy.client.cli.commands.auth"
-WINDOWS_LITE_EXE = "C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\lite.EXE"
-
-CMD_METACHARACTERS = frozenset("&|<>^()")
-CMD_PERCENT_GUARD = "%%cd:~,%"
-
-
-def _through_cmd_exe(command):
-    """The line cmd.exe hands to CreateProcess after reading the apiKeyHelper.
-
-    A `"` toggles cmd's quote state and the metacharacters only act outside it. cmd expands
-    `%VAR%` even inside quotes, so every `%` has to arrive as the `%%cd:~,%` guard: the first
-    `%` has no variable name and stays literal, and `%cd:~,%` is a zero length substring of `cd`.
-    """
-    assert not any(CMD_METACHARACTERS & set(run) for run in command.split('"')[::2]), command
-    assert command.count("%") == 3 * command.count(CMD_PERCENT_GUARD), command
-    return command.replace(CMD_PERCENT_GUARD, "%")
-
-
-def _through_c_runtime(command_line):
-    """argv as the Microsoft C runtime builds it for the `lite` executable.
-
-    Outside quotes whitespace ends an argument. A `"` toggles quoting, and inside quotes `""`
-    is a literal quote. Backslashes are literal unless they run up to a `"`, where each pair
-    is one backslash and an odd one left over makes the quote literal.
-    """
-    argv = []
-    current = None
-    quoted = False
-    i = 0
-    while i < len(command_line):
-        ch = command_line[i]
-        if ch in " \t" and not quoted:
-            if current is not None:
-                argv.append(current)
-            current = None
-            i += 1
-            continue
-        if current is None:
-            current = ""
-        if ch == "\\":
-            run = len(command_line[i:]) - len(command_line[i:].lstrip("\\"))
-            before_quote = command_line[i + run : i + run + 1] == '"'
-            current += "\\" * (run // 2 if before_quote else run)
-            if before_quote and run % 2:
-                current += '"'
-                i += 1
-            i += run
-        elif ch == '"':
-            if quoted and command_line[i + 1 : i + 2] == '"':
-                current += '"'
-                i += 1
-            else:
-                quoted = not quoted
-            i += 1
-        else:
-            current += ch
-            i += 1
-    return argv if current is None else [*argv, current]
-
-
 @pytest.fixture
 def paths(tmp_path):
     return tmp_path / "claude" / "settings.json", tmp_path / "backup.json"
 
 
-@pytest.fixture
-def lite_on_path():
-    with patch(f"{CLAUDE_SETTINGS_MODULE}.shutil.which", return_value="/usr/local/bin/lite"):
-        yield
-
-
-def _helper_configure(base_url, settings_path, owners, state_path=None):
-    """`lite login --config-claude`'s shape: the login credential behind apiKeyHelper, no pinned model."""
+def _static_configure(base_url, settings_path, owners, state_path=None):
+    """`lite configure claude --api-key`'s shape: a virtual key as a static token, no pinned model."""
     state = state_path if state_path is not None else settings_path.parent.parent / "state.json"
-    root = base_url.rstrip("/")
-    configure_claude_settings(
-        root, ApiKeyHelper(resolve_api_key_helper(root)), KeepModel(), settings_path, state, owners
-    )
+    configure_claude_settings(base_url.rstrip("/"), StaticToken("sk-virtual-key"), KeepModel(), settings_path, state, owners)
 
 
-class TestConfigureWithTheLoginHelper:
-    def test_creates_the_file_and_its_parent_when_missing(self, paths, lite_on_path):
+class TestConfigureClaudeSettings:
+    def test_creates_the_file_and_its_parent_when_missing(self, paths):
         settings_path, backup_path = paths
         assert not settings_path.parent.exists()
 
-        _helper_configure("https://proxy.example.com/", settings_path, _owners(backup_path))
+        _static_configure("https://proxy.example.com/", settings_path, _owners(backup_path))
 
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://proxy.example.com"
+        assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-virtual-key"
         assert written["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert written["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
-        assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://proxy.example.com auth print-token"
-        assert "model" not in written
+        assert "apiKeyHelper" not in written
+        assert "model" not in written and "ANTHROPIC_MODEL" not in written["env"]
 
-    def test_updates_an_existing_file_preserving_unrelated_settings(self, paths, lite_on_path):
+    def test_updates_an_existing_file_preserving_unrelated_settings(self, paths):
         settings_path, backup_path = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(
@@ -142,191 +83,95 @@ class TestConfigureWithTheLoginHelper:
                     "theme": "dark",
                     "permissions": {"allow": ["Bash"]},
                     "env": {"SOME_OTHER_VAR": "keep-me", "ANTHROPIC_BASE_URL": "https://old.example.com"},
-                    "apiKeyHelper": "old-helper",
                 }
             )
         )
 
-        _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
+        _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
 
         written = json.loads(settings_path.read_text())
         assert written["theme"] == "dark"
         assert written["permissions"] == {"allow": ["Bash"]}
         assert written["env"]["SOME_OTHER_VAR"] == "keep-me"
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://proxy.example.com"
-        assert written["apiKeyHelper"] != "old-helper"
 
-    def test_rerunning_against_a_new_proxy_refreshes_both_base_url_and_helper(self, paths, lite_on_path):
-        settings_path, backup_path = paths
-
-        _helper_configure("https://first.example.com", settings_path, _owners(backup_path))
-        _helper_configure("https://second.example.com", settings_path, _owners(backup_path))
-
-        written = json.loads(settings_path.read_text())
-        assert written["env"]["ANTHROPIC_BASE_URL"] == "https://second.example.com"
-        assert "second.example.com" in written["apiKeyHelper"]
-        assert "first.example.com" not in written["apiKeyHelper"]
-
-    def test_drops_stray_static_credentials_so_the_helper_token_wins(self, paths, lite_on_path):
-        # Claude Code prefers ANTHROPIC_AUTH_TOKEN over apiKeyHelper, so a virtual key left behind
-        # by an earlier `lite configure claude --api-key` would silently keep winning.
+    def test_a_helper_left_by_an_older_lite_is_stripped_so_only_the_static_token_is_sent(self, paths):
+        # Older `lite` versions wrote `apiKeyHelper: lite auth print-token`; Claude Code would keep spawning
+        # `lite` (and its keychain probe) on every credential refresh, so configure takes the slot over.
         settings_path, backup_path = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(
-            json.dumps({"env": {"ANTHROPIC_API_KEY": "sk-leaked", "ANTHROPIC_AUTH_TOKEN": "sk-old"}})
+            json.dumps({"apiKeyHelper": "/usr/local/bin/lite auth print-token", "env": {"ANTHROPIC_API_KEY": "sk-leaked"}})
         )
 
-        _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
+        _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
 
-        env = json.loads(settings_path.read_text())["env"]
-        assert "ANTHROPIC_API_KEY" not in env and "ANTHROPIC_AUTH_TOKEN" not in env
+        written = json.loads(settings_path.read_text())
+        assert "apiKeyHelper" not in written
+        assert "ANTHROPIC_API_KEY" not in written["env"]
+        assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-virtual-key"
 
-    def test_written_file_is_owner_only(self, paths, lite_on_path):
+    def test_written_file_is_owner_only(self, paths):
         settings_path, backup_path = paths
-        _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
+        _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
         assert stat.S_IMODE(settings_path.stat().st_mode) == 0o600
 
-    def test_refuses_while_lite_up_holds_a_backup(self, paths, lite_on_path):
+    def test_refuses_while_lite_up_holds_a_backup(self, paths):
         settings_path, backup_path = paths
         backup_path.write_text("{}")
 
         with pytest.raises(ClaudeSettingsError, match="lite down"):
-            _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
+            _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
 
         assert not settings_path.exists()
 
-    def test_refuses_on_corrupt_existing_settings_without_touching_the_file(self, paths, lite_on_path):
+    def test_refuses_on_corrupt_existing_settings_without_touching_the_file(self, paths):
         settings_path, backup_path = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text("not json at all {{{")
 
         with pytest.raises(ClaudeSettingsError, match="invalid JSON"):
-            _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
+            _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
 
         assert settings_path.read_text() == "not json at all {{{"
 
-    def test_reports_an_actionable_error_when_lite_is_not_on_path(self, paths):
-        settings_path, backup_path = paths
-        with patch(f"{CLAUDE_SETTINGS_MODULE}.shutil.which", return_value=None):
-            with pytest.raises(ClaudeSettingsError, match="Could not find `lite`"):
-                _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
-
-        assert not settings_path.exists()
-
-    def test_reports_an_actionable_error_on_a_non_utf8_file(self, paths, lite_on_path):
-        """Bytes that are not valid UTF-8 must not escape as UnicodeDecodeError.
-
-        UnicodeDecodeError is a ValueError, not an OSError, so a decode-side catch
-        is easy to miss; login's broad `except Exception` would then relabel it as
-        an authentication failure and exit 0.
-        """
+    def test_reports_an_actionable_error_on_a_non_utf8_file(self, paths):
+        # UnicodeDecodeError is a ValueError, not an OSError, so a decode-side catch is easy to miss.
         settings_path, backup_path = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.write_bytes(b'{"theme": "\xff\xfe"}')
 
         with pytest.raises(ClaudeSettingsError, match="invalid JSON"):
-            _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
+            _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
 
-    def test_reports_an_actionable_error_when_the_file_cannot_be_read(self, paths, lite_on_path):
-        """An unreadable settings file must not surface as "Authentication failed".
-
-        login wraps the whole flow in a broad `except Exception`, so any OSError
-        escaping this function gets relabelled as an auth failure and sends the
-        user looking at their SSO config instead of at file permissions.
-        """
+    def test_reports_an_actionable_error_when_the_file_cannot_be_read(self, paths):
         settings_path, backup_path = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.mkdir()
 
         with pytest.raises(ClaudeSettingsError, match="Could not read"):
-            _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
+            _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
 
-    def test_reports_an_actionable_error_when_the_file_cannot_be_written(self, paths, lite_on_path):
+    def test_reports_an_actionable_error_when_the_file_cannot_be_written(self, paths):
         settings_path, backup_path = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.parent.chmod(0o500)
         try:
             with pytest.raises(ClaudeSettingsError, match="Could not write"):
-                _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
+                _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
         finally:
             settings_path.parent.chmod(0o700)
         assert not settings_path.exists()
 
 
-class TestApiKeyHelperIsActuallyInvocable:
-    """The helper string is executed verbatim by Claude Code, so it has to parse.
-
-    Asserting only on its text is what let a malformed command (`--base-url`, a
-    top-level group option, placed after the `print-token` subcommand) ship: click
-    rejects it with "No such option" and every Claude Code request loses its token.
-    """
-
-    def _helper_args(self, base_url):
-        with patch(f"{CLAUDE_SETTINGS_MODULE}.shutil.which", return_value="/usr/local/bin/lite"):
-            return shlex.split(resolve_api_key_helper(base_url))[1:]
-
-    def test_the_generated_command_parses(self):
-        result = CliRunner().invoke(cli, self._helper_args("http://localhost:4000"))
-
-        assert "No such option" not in result.output
-        assert result.exit_code != 2
-
-    def test_the_generated_command_reaches_print_token(self):
-        with patch(f"{AUTH_MODULE}.load_cli_token", return_value=None):
-            result = CliRunner().invoke(cli, self._helper_args("http://localhost:4000"))
-
-        assert "Not authenticated" in result.output
-
-    def test_the_generated_command_carries_the_base_url_through(self):
-        stale = CliTokenRecord(
-            base_url="http://other-proxy.example.com",
-            key="sk-stale",
-            timestamp=time.time(),
-        )
-        with patch(f"{AUTH_MODULE}.load_cli_token", return_value=stale):
-            result = CliRunner().invoke(cli, self._helper_args("http://localhost:4000"))
-
-        assert "Not authenticated for this server" in result.output
-
-    def _windows_argv(self, lite_exe, base_url):
-        with patch(f"{CLAUDE_SETTINGS_MODULE}.shutil.which", return_value=lite_exe):
-            helper = resolve_api_key_helper(base_url, platform="win32")
-        return _through_c_runtime(_through_cmd_exe(helper))
-
-    @pytest.mark.parametrize(
-        ("lite_exe", "base_url"),
-        [
-            (WINDOWS_LITE_EXE, "http://localhost:4000"),
-            ("C:\\Program Files\\LiteLLM\\lite.EXE", "https://gateway.example.com/?a=1&b=2"),
-            ("C:\\Users\\u\\Scripts\\lite.EXE", "https://gateway.example.com/team%20a/%7Eproxy"),
-            ('C:\\odd "dir"\\lite.EXE', "http://localhost:4000/x\\"),
-        ],
-    )
-    def test_the_windows_command_survives_cmd_exe_and_the_c_runtime(self, lite_exe, base_url):
-        assert self._windows_argv(lite_exe, base_url) == [lite_exe, "--base-url", base_url, "auth", "print-token"]
-
-    def test_the_windows_command_carries_the_base_url_through_cmd_quoting(self):
-        stale = CliTokenRecord(
-            base_url="http://other-proxy.example.com",
-            key="sk-stale",
-            timestamp=time.time(),
-        )
-        argv = self._windows_argv(WINDOWS_LITE_EXE, "http://localhost:4000")
-        with patch(f"{AUTH_MODULE}.load_cli_token", return_value=stale):
-            result = CliRunner().invoke(cli, argv[1:])
-
-        assert argv[0] == WINDOWS_LITE_EXE
-        assert "Not authenticated for this server" in result.output
-
-
 class TestConflictingOwnersOfTheSettingsFile:
-    """Both `lite up` and `lite autoroute up` restore a backup when they stop.
+    """Both `lite up` and `lite autoroute start` restore a backup when they stop.
 
     Guarding only one of them leaves the other free to silently revert this
     write, which is the exact hazard the guard exists to prevent.
     """
 
-    def test_any_owner_holding_a_backup_blocks_the_write(self, tmp_path, lite_on_path):
+    def test_any_owner_holding_a_backup_blocks_the_write(self, tmp_path):
         settings_path = tmp_path / "claude" / "settings.json"
 
         for index, owner in enumerate(SETTINGS_FILE_OWNERS):
@@ -334,20 +179,20 @@ class TestConflictingOwnersOfTheSettingsFile:
             backup.write_text("{}")
             stand_in = SettingsFileOwner(backup, owner.start_command, owner.stop_command)
             with pytest.raises(ClaudeSettingsError, match="currently managing"):
-                _helper_configure("https://proxy.example.com", settings_path, (stand_in,))
+                _static_configure("https://proxy.example.com", settings_path, (stand_in,))
             backup.unlink()
             assert not settings_path.exists()
 
-    def test_the_error_names_the_owner_that_actually_holds_the_file(self, tmp_path, lite_on_path):
+    def test_the_error_names_the_owner_that_actually_holds_the_file(self, tmp_path):
         settings_path = tmp_path / "claude" / "settings.json"
         backup = tmp_path / "auto.json"
         backup.write_text("{}")
-        autoroute = SettingsFileOwner(backup, "lite autoroute up", "lite autoroute down")
+        autoroute = SettingsFileOwner(backup, "lite autoroute start", "lite autoroute stop")
 
-        with pytest.raises(ClaudeSettingsError, match="`lite autoroute up` is currently managing"):
-            _helper_configure("https://proxy.example.com", settings_path, (autoroute,))
-        with pytest.raises(ClaudeSettingsError, match="Run `lite autoroute down` first"):
-            _helper_configure("https://proxy.example.com", settings_path, (autoroute,))
+        with pytest.raises(ClaudeSettingsError, match="`lite autoroute start` is currently managing"):
+            _static_configure("https://proxy.example.com", settings_path, (autoroute,))
+        with pytest.raises(ClaudeSettingsError, match="Run `lite autoroute stop` first"):
+            _static_configure("https://proxy.example.com", settings_path, (autoroute,))
 
     def test_the_registry_matches_the_paths_the_commands_actually_use(self):
         """A second definition of the autoroute dir must not drift from this one."""
@@ -355,11 +200,11 @@ class TestConflictingOwnersOfTheSettingsFile:
 
         assert AUTOROUTE_BACKUP_PATH == AUTOROUTE_DIR / "claude_settings_backup.json"
         assert {o.backup_path for o in SETTINGS_FILE_OWNERS} == {BACKUP_PATH, AUTOROUTE_BACKUP_PATH}
-        assert {o.stop_command for o in SETTINGS_FILE_OWNERS} == {"lite down", "lite autoroute down"}
+        assert {o.stop_command for o in SETTINGS_FILE_OWNERS} == {"lite down", "lite autoroute stop"}
 
 
 class TestDoesNotDestroyUserOwnedStructure:
-    def test_writes_through_a_symlinked_settings_file(self, tmp_path, lite_on_path):
+    def test_writes_through_a_symlinked_settings_file(self, tmp_path):
         """os.replace() swaps the symlink for a regular file, detaching a dotfiles repo.
 
         There is no backup here to undo that, so the link must survive and its
@@ -372,27 +217,90 @@ class TestDoesNotDestroyUserOwnedStructure:
         link.parent.mkdir()
         link.symlink_to(real)
 
-        _helper_configure("https://proxy.example.com", link, ())
+        _static_configure("https://proxy.example.com", link, ())
 
         assert link.is_symlink()
         assert json.loads(real.read_text())["env"]["ANTHROPIC_BASE_URL"] == "https://proxy.example.com"
         assert json.loads(real.read_text())["theme"] == "dark"
 
-    def test_refuses_rather_than_discarding_a_non_object_env(self, paths, lite_on_path):
+    def test_refuses_rather_than_discarding_a_non_object_env(self, paths):
         """merge coerces a non-dict env to {}; that is silent data loss on a persistent write."""
         settings_path, backup_path = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(json.dumps({"theme": "dark", "env": "not-an-object"}))
 
         with pytest.raises(ClaudeSettingsError, match="non-object"):
-            _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
+            _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
 
         assert json.loads(settings_path.read_text())["env"] == "not-an-object"
 
 
+class TestClaudeSettingsPath:
+    def test_defaults_to_the_home_settings_file(self):
+        assert claude_settings_path({}) == CLAUDE_SETTINGS_PATH
+        assert claude_settings_path({"CLAUDE_CONFIG_DIR": ""}) == CLAUDE_SETTINGS_PATH
+
+    def test_follows_claude_config_dir_like_claude_code_does(self, tmp_path):
+        assert claude_settings_path({"CLAUDE_CONFIG_DIR": str(tmp_path)}) == tmp_path / "settings.json"
+
+    def test_expands_a_tilde_in_claude_config_dir(self):
+        assert claude_settings_path({"CLAUDE_CONFIG_DIR": "~/.claude-work"}) == (
+            Path.home() / ".claude-work" / "settings.json"
+        )
+
+
+class TestConfigureStatePath:
+    """Each settings file gets its own undo receipt: the default file keeps the long-standing path, and
+    a CLAUDE_CONFIG_DIR file gets one keyed by its resolved location, so `lite unconfigure claude`
+    under one config dir never restores the other file's history."""
+
+    @pytest.fixture
+    def default_paths(self, tmp_path):
+        default_settings = tmp_path / "home" / ".claude" / "settings.json"
+        default_state = tmp_path / "home" / ".litellm" / "claude_configure_state.json"
+        with (
+            patch(f"{CLAUDE_SETTINGS_MODULE}.CLAUDE_SETTINGS_PATH", default_settings),
+            patch(f"{CLAUDE_SETTINGS_MODULE}.CONFIGURE_STATE_PATH", default_state),
+        ):
+            yield default_settings, default_state
+
+    def test_the_default_file_keeps_the_default_receipt(self, default_paths):
+        default_settings, default_state = default_paths
+        assert configure_state_path(default_settings) == default_state
+
+    def test_a_symlink_alias_of_the_default_file_shares_its_receipt(self, default_paths):
+        default_settings, default_state = default_paths
+        default_settings.parent.mkdir(parents=True)
+        alias = default_settings.parent.parent / "claude-alias"
+        alias.symlink_to(default_settings.parent, target_is_directory=True)
+        assert configure_state_path(alias / "settings.json") == default_state
+
+    def test_another_settings_file_gets_a_receipt_of_its_own_beside_the_default_one(self, default_paths, tmp_path):
+        _default_settings, default_state = default_paths
+        work_state = configure_state_path(tmp_path / "work" / "settings.json")
+        play_state = configure_state_path(tmp_path / "play" / "settings.json")
+        assert work_state != default_state and play_state != default_state
+        assert work_state != play_state
+        assert work_state.parent == play_state.parent == default_state.parent / "claude_configure_state"
+        assert work_state == configure_state_path(tmp_path / "work" / "settings.json")
+
+    def test_configure_and_unconfigure_under_a_config_dir_leave_the_default_receipt_alone(
+        self, default_paths, tmp_path
+    ):
+        _default_settings, default_state = default_paths
+        work_settings = tmp_path / "work" / "settings.json"
+        work_state = configure_state_path(work_settings)
+        configure_claude_settings(
+            "https://proxy.example.com", StaticToken("sk-virtual-key"), KeepModel(), work_settings, work_state, ()
+        )
+        assert work_state.exists() and not default_state.exists()
+        outcome = unconfigure_claude_settings(work_settings, work_state, ())
+        assert outcome.file_removed and not work_settings.exists()
+        assert not work_state.exists()
+
+
 class TestMergeClaudeSettings:
-    """One merge for every way Claude Code gets wired: `lite up`, `lite login --config-claude`,
-    `lite configure claude` and `lite autoroute up`."""
+    """One merge for every way Claude Code gets wired: `lite up`, `lite configure claude` and `lite autoroute start`."""
 
     def test_a_static_token_lands_in_env_and_the_helper_slot_is_cleared(self):
         settings = {"apiKeyHelper": "/usr/local/bin/lite auth print-token", "env": {"ANTHROPIC_API_KEY": "leaked"}}
@@ -406,12 +314,6 @@ class TestMergeClaudeSettings:
         assert "model" not in merged
         assert not any(key in merged["env"] for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS)
 
-    def test_a_helper_lands_top_level_and_the_static_slots_are_cleared(self):
-        settings = {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-old", "ANTHROPIC_API_KEY": "leaked"}}
-        merged = merge_claude_settings(settings, "http://127.0.0.1:4000", ApiKeyHelper("lite auth print-token"))
-        assert merged["apiKeyHelper"] == "lite auth print-token"
-        assert "ANTHROPIC_AUTH_TOKEN" not in merged["env"] and "ANTHROPIC_API_KEY" not in merged["env"]
-
     def test_keeps_existing_switch_values_and_unrelated_keys_without_mutating_the_input(self):
         settings = {"theme": "dark", "env": {"SOME_OTHER_VAR": "value", "ENABLE_TOOL_SEARCH": "false"}}
         merged = merge_claude_settings(settings, "http://127.0.0.1:4000", StaticToken("token-abc"))
@@ -420,16 +322,25 @@ class TestMergeClaudeSettings:
         assert merged["env"]["ENABLE_TOOL_SEARCH"] == "false"
         assert settings == {"theme": "dark", "env": {"SOME_OTHER_VAR": "value", "ENABLE_TOOL_SEARCH": "false"}}
 
-    def test_a_default_model_sets_only_the_row_claude_code_starts_on(self):
+    def test_a_default_model_pins_the_starting_row_and_the_model_a_resumed_session_keeps(self):
+        # `model` is only the row Claude Code starts on: a resumed session re-sends the model its transcript
+        # recorded, which behind a raw-model auto-router is the tier model (403 for a key scoped to the
+        # router). ANTHROPIC_MODEL outranks the transcript on resume, so the pin has to land there too.
         merged = merge_claude_settings(
             {}, "http://127.0.0.1:4000", StaticToken("token-abc"), default_model="claude-auto"
         )
         assert merged["model"] == "claude-auto"
+        assert merged["env"]["ANTHROPIC_MODEL"] == "claude-auto"
         assert not any(key in merged["env"] for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS)
+
+    def test_without_a_default_model_neither_pin_is_written_and_a_users_own_stays(self):
+        settings = {"model": "mine", "env": {"ANTHROPIC_MODEL": "mine-too"}}
+        merged = merge_claude_settings(settings, "http://127.0.0.1:4000", StaticToken("token-abc"))
+        assert merged["model"] == "mine" and merged["env"]["ANTHROPIC_MODEL"] == "mine-too"
 
     def test_a_tier_model_forces_every_claude_code_tier_as_autoroute_needs(self):
         # Router's auto-router registry is keyed by the literal requested model string with no
-        # wildcard resolution, so `lite autoroute up` overrides the env var each tier reads.
+        # wildcard resolution, so `lite autoroute start` overrides the env var each tier reads.
         settings = {"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-4-8"}}
         merged = merge_claude_settings(
             settings, "http://127.0.0.1:4000", StaticToken("token-abc"), tier_model="autorouter"
@@ -447,7 +358,7 @@ class TestMergeClaudeSettings:
             "apiKeyHelper": "old-helper",
             "model": "old-model",
         }
-        for credential in (StaticToken("token-abc"), ApiKeyHelper("helper")):
+        for credential in (StaticToken("token-abc"), StaticToken("token-rotated")):
             merged = merge_claude_settings(settings, "http://127.0.0.1:4000", credential, default_model="claude-auto")
             changed_top_level = {key for key in set(settings) | set(merged) if settings.get(key) != merged.get(key)}
             assert changed_top_level - {"env"} <= set(OWNED_TOP_LEVEL_KEYS)
@@ -463,7 +374,7 @@ class TestMergeClaudeSettings:
 
 PROXY = "http://127.0.0.1:4000"
 ANTHROPIC = "https://api.anthropic.com"
-HELPER = ApiKeyHelper("lite auth print-token")
+RELOGIN = StaticToken("sk-fresh-login")
 ORIGINAL = {
     "theme": "dark",
     "permissions": {"allow": ["Bash"]},
@@ -547,18 +458,19 @@ UNDO_SCENARIOS = {
         {
             "restored": {
                 "env.ANTHROPIC_BASE_URL",
+                "env.ANTHROPIC_AUTH_TOKEN",
                 "env.ENABLE_TOOL_SEARCH",
                 "env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
-                "apiKeyHelper",
+                "statusLine",
             },
             "kept": (),
         },
-        {"credential": HELPER, "model": KeepModel()},
+        {"credential": RELOGIN, "model": KeepModel()},
     ),
     "repeat across credential kinds keeps the first snapshot": (
         ORIGINAL,
         [
-            {"credential": HELPER, "model": UnpinModel()},
+            {"credential": RELOGIN, "model": UnpinModel()},
             {"credential": StaticToken("sk-rotated"), "model": StartOn("claude-sonnet-4-6")},
         ],
         ORIGINAL,
@@ -571,13 +483,13 @@ UNDO_SCENARIOS = {
         {"model": "claude-opus-5"},
         {},
     ),
-    "re-login keeps our pin": (None, [{"credential": HELPER, "model": KeepModel()}], None, {"file_removed": True}),
+    "re-login keeps our pin": (None, [{"credential": RELOGIN, "model": KeepModel()}], None, {"file_removed": True}),
     "edit between configures survives an unpin repeat": (
         ORIGINAL,
         [
             _set("model", "my-favourite"),
             _set("env.ENABLE_TOOL_SEARCH", "false"),
-            {"credential": HELPER, "model": UnpinModel()},
+            {"credential": RELOGIN, "model": UnpinModel()},
         ],
         {**ORIGINAL, "env": {**ORIGINAL["env"], "ENABLE_TOOL_SEARCH": "false"}, "model": "my-favourite"},
         {"kept": {"env.ENABLE_TOOL_SEARCH", "model"}},
@@ -587,14 +499,14 @@ UNDO_SCENARIOS = {
         [
             _set("model", "my-favourite"),
             _set("env.ENABLE_TOOL_SEARCH", "false"),
-            {"credential": HELPER, "model": KeepModel()},
+            {"credential": RELOGIN, "model": KeepModel()},
         ],
         {**ORIGINAL, "env": {**ORIGINAL["env"], "ENABLE_TOOL_SEARCH": "false"}, "model": "my-favourite"},
         {"kept": {"env.ENABLE_TOOL_SEARCH", "model"}},
     ),
     "edit between configures: a same-model repeat displaces it, so it is what comes back": (
         ORIGINAL,
-        [_set("model", "my-favourite"), _set("env.ENABLE_TOOL_SEARCH", "false"), {"credential": HELPER}],
+        [_set("model", "my-favourite"), _set("env.ENABLE_TOOL_SEARCH", "false"), {"credential": RELOGIN}],
         {**ORIGINAL, "env": {**ORIGINAL["env"], "ENABLE_TOOL_SEARCH": "false"}, "model": "my-favourite"},
         {"kept": {"env.ENABLE_TOOL_SEARCH"}, "restored_includes": {"model"}},
     ),
@@ -627,12 +539,12 @@ UNDO_SCENARIOS = {
         None,
         [
             _set("env.ANTHROPIC_API_KEY", "sk-user"),
-            {"credential": HELPER, "model": KeepModel()},
+            {"credential": RELOGIN, "model": KeepModel()},
             _set("env.ANTHROPIC_BASE_URL", _ABSENT),
         ],
         None,
         {"withheld": {("env.ANTHROPIC_API_KEY", PROXY)}, "file_removed": True, "receipt_kept": True},
-        {"credential": HELPER, "model": KeepModel()},
+        {"credential": RELOGIN, "model": KeepModel()},
     ),
     "a credential the user changed is kept, never also withheld": (
         ORIGINAL,
@@ -715,11 +627,10 @@ class TestConfigureAndUnconfigure:
     @pytest.mark.parametrize(
         ("path", "value", "repeat_credential"),
         [
-            ("env.ANTHROPIC_API_KEY", "sk-user-added-later", HELPER),
-            ("env.ANTHROPIC_AUTH_TOKEN", "sk-users-own-token", HELPER),
+            ("env.ANTHROPIC_API_KEY", "sk-user-added-later", RELOGIN),
             ("apiKeyHelper", "/opt/mine/helper", StaticToken("sk-rotated")),
         ],
-        ids=["user-adds-api-key", "user-replaces-our-token", "user-sets-own-helper"],
+        ids=["user-adds-api-key", "user-sets-own-helper"],
     )
     def test_a_credential_the_user_set_between_two_configures_is_what_comes_back(
         self, tmp_path, path, value, repeat_credential
@@ -727,7 +638,7 @@ class TestConfigureAndUnconfigure:
         # The repeat's merge clears the slot, so the displaced value is snapshotted and is what returns;
         # it was set while the file pointed at the proxy, so it returns once the file points there again.
         rig = _Rig(tmp_path, {"theme": "dark"})
-        rig.configure(credential=HELPER, model=KeepModel())
+        rig.configure(credential=RELOGIN, model=KeepModel())
         rig.edit(_set(path, value))
         rig.configure(credential=repeat_credential, model=KeepModel())
         assert not _lookup(rig.read(), path)
@@ -838,3 +749,228 @@ class TestConfigureAndUnconfigure:
 def _lookup(settings, path):
     section, _, key = path.rpartition(".")
     return (settings.get(section) or {}).get(key) if section else settings.get(key)
+
+
+class TestStatusLine:
+    """Every configure registers the status line, and only while the slot is empty or already ours."""
+
+    COMMAND = "/opt/lite/bin/python /Users/me/.litellm/statusline.py"
+
+    def test_an_empty_slot_gets_our_status_line(self):
+        assert with_status_line({}, self.COMMAND)["statusLine"] == {"type": "command", "command": self.COMMAND}
+
+    def test_a_users_own_status_line_is_never_replaced(self):
+        theirs = {"type": "command", "command": "~/.claude/my-statusline.sh"}
+        assert with_status_line({"statusLine": theirs}, self.COMMAND)["statusLine"] == theirs
+
+    def test_ours_under_an_older_interpreter_is_refreshed(self):
+        stale = {"type": "command", "command": "/old/python /Users/me/.litellm/statusline.py"}
+        assert with_status_line({"statusLine": stale}, self.COMMAND)["statusLine"]["command"] == self.COMMAND
+
+    def test_the_merge_carries_it(self):
+        merged = merge_claude_settings({}, PROXY, StaticToken("tok"), status_line=self.COMMAND)
+        assert merged["statusLine"] == {"type": "command", "command": self.COMMAND}
+
+    def test_the_installed_script_is_the_bundled_one_and_the_command_runs_this_interpreter(self, tmp_path):
+        from litellm.proxy.client.cli.commands import statusline_script
+
+        script = tmp_path / "lite" / "statusline.py"
+        command = install_statusline_script(script)
+        assert script.read_bytes().split(b"\n", 1)[1] == pathlib.Path(statusline_script.__file__).read_bytes()
+        assert shlex.split(command) == [sys.executable, str(script)]
+        assert command == statusline_command(script)
+        assert stat.S_IMODE(script.stat().st_mode) == 0o600
+        assert stat.S_IMODE(script.parent.stat().st_mode) == 0o700
+        assert install_statusline_script(script) == command
+
+    def test_a_reinstall_replaces_the_script_in_one_step_and_a_refused_one_leaves_the_old_script_whole(self, tmp_path):
+        # Claude Code may be running the script at the moment `lite` reinstalls it; the file it has open
+        # must stay complete, and a reinstall that cannot land must not leave a truncated script behind.
+        script = tmp_path / "lite" / "statusline.py"
+        install_statusline_script(script)
+        bundled = script.read_bytes()
+        with script.open("rb") as running:
+            install_statusline_script(script)
+            assert running.read() == bundled
+        assert {child.name for child in script.parent.iterdir()} <= {"statusline.py", "statusline.py.lock"}
+
+        if os.geteuid() != 0:
+            script.parent.chmod(0o500)
+            try:
+                with pytest.raises(ClaudeSettingsError, match="Could not install the status line script"):
+                    install_statusline_script(script)
+            finally:
+                script.parent.chmod(0o700)
+            assert script.read_bytes() == bundled
+
+    @pytest.mark.parametrize(
+        ("installed_version", "older_version"),
+        (("2.10.0", "2.9.0"), ("2.1.0", "2.1.0rc1"), ("2.1.0rc1", "2.1.0.dev2"), ("2.1.0.post1", "2.1.0")),
+    )
+    def test_an_older_cli_preserves_the_newer_footer(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], installed_version: str, older_version: str
+    ) -> None:
+        script: Final = tmp_path / "statusline.py"
+        command: Final = install_statusline_script(script, package_version=installed_version)
+        installed: Final = script.read_bytes()
+        modified: Final = script.stat().st_mtime_ns
+
+        assert install_statusline_script(script, package_version=older_version) == command
+
+        assert script.read_bytes() == installed
+        assert script.stat().st_mtime_ns == modified
+        assert f"Keeping the status line from LiteLLM {installed_version}" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "old_header", (b"", b"# litellm-statusline-version: invalid\n", b"# litellm-statusline-version: \xff\n")
+    )
+    def test_a_legacy_or_damaged_version_marker_is_repaired(self, tmp_path: Path, old_header: bytes) -> None:
+        from litellm.proxy.client.cli.commands import statusline_script
+
+        script: Final = tmp_path / "statusline.py"
+        script.write_bytes(old_header + b"print('old footer')\n")
+
+        install_statusline_script(script, package_version="2.1.0")
+
+        assert script.read_bytes() == (
+            b"# litellm-statusline-version: 2.1.0\n" + Path(statusline_script.__file__).read_bytes()
+        )
+
+    @pytest.mark.parametrize("next_version", ("2.1.0", "2.2.0"))
+    def test_an_equal_or_newer_cli_refreshes_the_footer(self, tmp_path: Path, next_version: str) -> None:
+        from litellm.proxy.client.cli.commands import statusline_script
+
+        script: Final = tmp_path / "statusline.py"
+        script.write_bytes(b"# litellm-statusline-version: 2.1.0\nprint('old footer')\n")
+
+        install_statusline_script(script, package_version=next_version)
+
+        assert script.read_bytes() == (
+            f"# litellm-statusline-version: {next_version}\n".encode() + Path(statusline_script.__file__).read_bytes()
+        )
+
+    def test_configure_keeps_a_newer_footer_while_updating_settings(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        script: Final = tmp_path / "statusline.py"
+        script.write_bytes(b"# litellm-statusline-version: 999999.0.0\nprint('newer footer')\n")
+        installed: Final = script.read_bytes()
+        rig: Final = _Rig(tmp_path, {"theme": "dark"})
+
+        rig.configure(script_path=script)
+
+        assert script.read_bytes() == installed
+        assert rig.read()["statusLine"]["command"] == statusline_command(script)
+        assert rig.read()["env"]["ANTHROPIC_BASE_URL"] == PROXY
+        assert "Keeping the status line" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("package_version", ("unknown", "", "invalid-version"))
+    @pytest.mark.parametrize("existing", (None, b"print('legacy footer')\n", b"# litellm-statusline-version: invalid\n"))
+    def test_an_unknown_cli_version_can_install_and_refresh_an_unversioned_footer(
+        self, tmp_path: Path, package_version: str, existing: bytes | None
+    ) -> None:
+        from litellm.proxy.client.cli.commands import statusline_script
+
+        script: Final = tmp_path / "statusline.py"
+        if existing is not None:
+            script.write_bytes(existing)
+
+        assert install_statusline_script(script, package_version=package_version) == statusline_command(script)
+        assert script.read_bytes() == Path(statusline_script.__file__).read_bytes()
+
+    def test_an_unknown_cli_version_preserves_a_versioned_footer(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        script: Final = tmp_path / "statusline.py"
+        command: Final = install_statusline_script(script, package_version="2.1.0")
+        installed: Final = script.read_bytes()
+
+        assert install_statusline_script(script, package_version="unknown") == command
+        assert script.read_bytes() == installed
+        assert "Keeping the status line from LiteLLM 2.1.0" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(("first_version", "second_version"), (("2.0", "3.0"), ("3.0", "2.0")))
+    def test_overlapping_installs_keep_the_newest_footer(
+        self, tmp_path: Path, first_version: str, second_version: str
+    ) -> None:
+        from litellm.proxy.client.cli.commands import statusline_script
+
+        script: Final = tmp_path / "statusline.py"
+        first_writing: Final = Event()
+        release_first: Final = Event()
+        second_started: Final = Event()
+
+        def paused_write(path: str, data: bytes) -> None:
+            first_writing.set()
+            assert release_first.wait(5), "First installer was never released"
+            write_private_bytes(path, data)
+
+        def second_install() -> str:
+            second_started.set()
+            return install_statusline_script(script, package_version=second_version)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first: Final = pool.submit(install_statusline_script, script, package_version=first_version, write=paused_write)
+            try:
+                assert first_writing.wait(5), "First installer did not reach the write"
+                second: Final = pool.submit(second_install)
+                assert second_started.wait(5), "Second installer did not start"
+                with pytest.raises(FutureTimeoutError):
+                    second.result(timeout=0.5)
+            finally:
+                release_first.set()
+            assert first.result(timeout=5) == statusline_command(script)
+            assert second.result(timeout=5) == statusline_command(script)
+
+        assert script.read_bytes() == b"# litellm-statusline-version: 3.0\n" + Path(statusline_script.__file__).read_bytes()
+
+    def test_a_failed_install_keeps_the_footer_and_releases_the_lock(self, tmp_path: Path) -> None:
+        script: Final = tmp_path / "statusline.py"
+        install_statusline_script(script, package_version="2.0")
+        installed: Final = script.read_bytes()
+
+        def failed_write(path: str, data: bytes) -> None:
+            raise OSError("disk full")
+
+        with pytest.raises(ClaudeSettingsError, match="disk full"):
+            install_statusline_script(script, package_version="3.0", write=failed_write)
+        assert script.read_bytes() == installed
+        assert install_statusline_script(script, package_version="3.0") == statusline_command(script)
+        assert script.read_bytes().startswith(b"# litellm-statusline-version: 3.0\n")
+
+    def test_configure_installs_it_and_unconfigure_removes_only_ours(self, tmp_path):
+        rig = _Rig(tmp_path, {"theme": "dark"})
+        script = tmp_path / "statusline.py"
+        rig.configure(script_path=script)
+        assert rig.read()["statusLine"]["command"] == statusline_command(script)
+        assert script.exists()
+
+        outcome = rig.unconfigure()
+        assert rig.read() == {"theme": "dark"}
+        assert "statusLine" in outcome.restored
+
+    def test_a_status_line_the_user_replaced_after_configure_survives_unconfigure(self, tmp_path):
+        rig = _Rig(tmp_path, None)
+        rig.configure(model=KeepModel(), script_path=tmp_path / "statusline.py")
+        theirs = {"type": "command", "command": "~/.claude/my-statusline.sh"}
+        rig.edit(lambda settings: {**settings, "statusLine": theirs})
+
+        outcome = rig.unconfigure()
+        assert rig.read()["statusLine"] == theirs
+        assert "statusLine" in outcome.kept
+
+    def test_a_receipt_from_before_the_status_line_existed_still_unconfigures(self, tmp_path):
+        # Older receipts never claimed statusLine; a key no configure wrote is never ours, so it stays.
+        rig = _Rig(tmp_path, None)
+        script = tmp_path / "statusline.py"
+        rig.configure(model=KeepModel(), script_path=script)
+        receipt = json.loads(rig.state.read_text())
+        receipt["written"].pop("statusLine")
+        receipt["previous"].pop("statusLine")
+        rig.state.write_text(json.dumps(receipt))
+
+        outcome = rig.unconfigure()
+        restored = rig.read()
+        assert "ANTHROPIC_AUTH_TOKEN" not in restored.get("env", {})
+        assert restored["statusLine"]["command"] == statusline_command(script)
+        assert "statusLine" not in outcome.restored

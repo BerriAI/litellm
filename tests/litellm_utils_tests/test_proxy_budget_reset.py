@@ -102,21 +102,24 @@ def _wire_batcher_for_test(prisma_client, fail_commit=False):
     return batch_calls
 
 
-def _wire_cascade_reads_for_test(prisma_client):
+def _wire_cascade_reads_for_test(prisma_client, endusers=()):
     """
     The budget tier's cascade reads the rows it is about to zero, so their
     spend counters can be invalidated after the commit. Give each of those
     tables an awaitable find_many so the reads resolve instead of falling into
     the job's warn-and-continue path.
+
+    End users are read by the post-commit invalidation walk rather than by
+    ``get_data``, so callers that care about customers pass them here.
     """
     for table in (
         "litellm_teammembership",
         "litellm_verificationtoken",
         "litellm_organizationtable",
         "litellm_tagtable",
-        "litellm_endusertable",
     ):
         getattr(prisma_client.db, table).find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=list(endusers))
 
 
 @pytest.mark.asyncio
@@ -163,6 +166,9 @@ async def test_reset_budget_keys_partial_failure():
     key1, key2, key3, key4, key5, key6 = (
         _attrify(k) for k in [key1, key2, key3, key4, key5, key6]
     )
+    pre_reset_spend = {
+        k["token"]: k["spend"] for k in [key2, key3, key4, key5, key6]
+    }
     prisma_client.get_data = AsyncMock(
         return_value=[key1, key2, key3, key4, key5, key6]
     )
@@ -201,7 +207,7 @@ async def test_reset_budget_keys_partial_failure():
     # And every write must carry only {spend, budget_reset_at} — never the full row.
     for c in key_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
-        assert c["data"]["spend"] == 0
+        assert c["data"]["spend"] == {"decrement": pre_reset_spend[c["where"]["token"]]}
 
     # Verify that the failure logging hook was scheduled (due to the failure for key1)
     failure_hook_calls = (
@@ -252,6 +258,9 @@ async def test_reset_budget_users_partial_failure():
     user1, user2, user3, user4, user5, user6 = (
         _attrify(u) for u in [user1, user2, user3, user4, user5, user6]
     )
+    pre_reset_spend = {
+        u["user_id"]: u["spend"] for u in [user2, user3, user4, user5, user6]
+    }
     prisma_client.get_data = AsyncMock(
         return_value=[user1, user2, user3, user4, user5, user6]
     )
@@ -280,7 +289,9 @@ async def test_reset_budget_users_partial_failure():
     assert written_ids == ["user2", "user3", "user4", "user5", "user6"]
     for c in user_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
-        assert c["data"]["spend"] == 0
+        assert c["data"]["spend"] == {
+            "decrement": pre_reset_spend[c["where"]["user_id"]]
+        }
 
     failure_hook_calls = (
         proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
@@ -401,7 +412,7 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance()
 
     enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
-    assert enduser_writes[0]["where"]["user_id"]["in"] == [f"user{i}" for i in range(1, 7)]
+    assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
 
     budget_writes = [c for c in batch_calls if c["table"] == "budget"]
@@ -441,6 +452,7 @@ async def test_reset_budget_teams_partial_failure():
     for t in [team1, team2]:
         t.setdefault("team_id", t["id"])
     team1, team2 = _attrify(team1), _attrify(team2)
+    pre_reset_spend = team2["spend"]
     prisma_client.get_data = AsyncMock(return_value=[team1, team2])
 
     async def fake_reset_team(team, current_time, reset_settings=None):
@@ -465,7 +477,7 @@ async def test_reset_budget_teams_partial_failure():
     assert len(team_writes) == 1
     assert team_writes[0]["where"] == {"team_id": "team2"}
     assert set(team_writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
-    assert team_writes[0]["data"]["spend"] == 0
+    assert team_writes[0]["data"]["spend"] == {"decrement": pre_reset_spend}
 
     failure_hook_calls = (
         proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
@@ -542,7 +554,12 @@ async def test_reset_budget_continues_other_categories_on_failure():
     user1, user2 = _attrify(user1), _attrify(user2)
     team1, team2 = _attrify(team1), _attrify(team2)
     enduser1 = _attrify(enduser1)
-    _wire_cascade_reads_for_test(prisma_client)
+    pre_reset_spend = {
+        **{k["token"]: k["spend"] for k in [key1, key2]},
+        **{u["user_id"]: u["spend"] for u in [user2]},
+        **{t["team_id"]: t["spend"] for t in [team1, team2]},
+    }
+    _wire_cascade_reads_for_test(prisma_client, endusers=[enduser1])
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -593,7 +610,10 @@ async def test_reset_budget_continues_other_categories_on_failure():
     called_tables = {
         call.kwargs.get("table_name") for call in prisma_client.get_data.await_args_list
     }
-    assert called_tables == {"key", "user", "team", "budget", "enduser"}
+    assert called_tables == {"key", "user", "team", "budget"}
+    # Customers are not part of that set: the cascade zeroes them by budget link
+    # and reads them only afterwards, to invalidate their cached spend.
+    prisma_client.db.litellm_endusertable.find_many.assert_awaited()
 
     # Every category writes through the batch path now, so update_data is unused.
     prisma_client.update_data.assert_not_awaited()
@@ -602,7 +622,7 @@ async def test_reset_budget_continues_other_categories_on_failure():
     assert len([c for c in batch_calls if c["table"] == "team_membership"]) == 1
     enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
-    assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1"]}}
+    assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
 
     # Check the new batch write path: 2 keys + 1 user (user1 failed) + 2 teams.
@@ -618,7 +638,9 @@ async def test_reset_budget_continues_other_categories_on_failure():
     # Every batched write must carry only the two reset fields, never the full row.
     for c in key_writes + user_writes + team_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
-        assert c["data"]["spend"] == 0
+        assert c["data"]["spend"] == {
+            "decrement": pre_reset_spend[next(iter(c["where"].values()))]
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1013,7 +1035,7 @@ async def test_service_logger_endusers_success():
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
     batch_calls = _wire_batcher_for_test(prisma_client)
-    _wire_cascade_reads_for_test(prisma_client)
+    _wire_cascade_reads_for_test(prisma_client, endusers=endusers)
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -1031,7 +1053,7 @@ async def test_service_logger_endusers_success():
 
     enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
-    assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1", "user2"]}}
+    assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
 
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_called_once()
     (
@@ -1078,7 +1100,7 @@ async def test_service_logger_endusers_failure():
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
     _wire_batcher_for_test(prisma_client, fail_commit=True)
-    _wire_cascade_reads_for_test(prisma_client)
+    _wire_cascade_reads_for_test(prisma_client, endusers=endusers)
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -1105,7 +1127,9 @@ async def test_service_logger_endusers_failure():
     ) = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_budgets_found") == len(budgets)
-    assert event_metadata.get("num_endusers_found") == len(endusers)
+    # Customers are read by the post-commit invalidation walk, which a failed
+    # commit never reaches, so a failure reports none touched.
+    assert event_metadata.get("num_endusers_found") == 0
     assert "endusers_found" not in event_metadata
     assert "budgets_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()

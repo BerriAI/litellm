@@ -1,44 +1,10 @@
-# AGENTS.md
+# Rust workspace rules
 
-litellm-rust has five crates. A crate is a layer or shared foundation, not a route. Routes (ocr, realtime, chat) and providers (mistral, openai) are modules inside the layers.
+## Test placement
 
-## Crates
-
-| Crate | Role |
-|-------|------|
-| litellm-core | The LiteLLM SDK in Rust. One public entrypoint per top-level call (`messages::messages()`), owning types, transforms, provider resolution, auth, and the provider HTTP call. Call it, get a typed response. |
-| litellm-config | Config-loading boundary. Returns resolved core deployment data and optionally delegates loading to Python. |
-| litellm-ai-gateway | The axum server (behind the `server` feature) plus the WebSocket hosts. Translates HTTP/WS to core entrypoints; owns no provider logic and no handlers. |
-| litellm-python-interop | Domain-neutral PyO3 foundation for GIL handling and typed Python/Serde conversion. |
-| litellm-python-bridge | PyO3 cdylib exposing LiteLLM Rust APIs to the Python SDK. Owns API registration, domain wiring, and Python exception mapping. |
-
-Dependency direction is acyclic: `litellm-config` depends on `litellm-core`, the gateway depends on both, and `litellm-python-bridge` depends on the domain layers and `litellm-python-interop`. The interop foundation depends on no LiteLLM domain crate.
-
-## Where a route lives
-
-A top-level LiteLLM call is a module under `crates/core/src/<route>/`, shaped like `messages`:
-
-```
-core/src/messages/
-  mod.rs             # pub async fn messages(..) -> CoreResult<..>  (+ messages_stream for SSE)
-  types.rs           # request/response types, MessagesRequest
-  transformation.rs  # the provider template trait
-  prepare.rs         # provider resolution, auth headers, URL
-  handler.rs         # the provider call
-  client.rs          # the shared reqwest client
-```
-
-Handlers never live in `ai-gateway`. `ocr`, `audio_transcription`, and `realtime` are still hosted there from before this rule; they move to `core` as they are touched.
-
-Adding a crate: default to a module. A new crate requires a real trigger: separate artifact (binary/cdylib), proc-macro, shared foundation, or publishable standalone. A new provider or route is none of these.
-
-Adding a crate fails crates/core/tests/workspace_crate_allowlist.rs until you update its allowlist and this file — intentional.
-
-## Style
-
-All Rust in `litellm-rust/` follows the official Rust Style Guide:
-https://doc.rust-lang.org/style-guide/
-
-`rustfmt` implements its formatting by default, so run `cargo fmt` before committing; CI gates every PR on `cargo fmt --check`. Do not hand-format against rustfmt or add a `rustfmt.toml` that diverges from the default style.
-
-Beyond formatting, follow the guide's naming and idiom conventions rustfmt cannot auto-apply: `snake_case` items/functions/modules, `UpperCamelCase` types/traits/variants, `SCREAMING_SNAKE_CASE` constants/statics (acronyms as one word, e.g. `HttpClient`), and the import grouping and item ordering it prescribes. See CLAUDE.md for the detailed version.
+- Never create a `tests.rs` (or `test.rs`) file under `src/`, and never `#[path = "tests.rs"] mod tests;`
+- A test that reaches private items lives inline, in a `#[cfg(test)] mod tests { ... }` at the bottom of the file that owns those items
+- A test that only uses the crate's public API lives in `crates/<crate>/tests/<subject>.rs`, next to `src/`
+- Split a mixed test file along that line instead of widening visibility to move it
+- A test for another crate's item belongs in that crate, not in a downstream one
+- Never set `autotests = false` or hand-list `[[test]]` targets; every file directly under `tests/` is discovered by cargo, and a shared helper goes in `tests/<name>/mod.rs` or `tests/<subject>/support.rs` so it is not picked up as a test crate of its own

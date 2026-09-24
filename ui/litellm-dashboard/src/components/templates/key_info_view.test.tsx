@@ -119,6 +119,7 @@ describe("KeyInfoView", () => {
     key_name: "sk-...TUuw",
     key_alias: "asdasdas",
     spend: 0,
+    total_spend: 0,
     max_budget: 0,
     expires: "null",
     models: [],
@@ -270,6 +271,23 @@ describe("KeyInfoView", () => {
       expect(await findLastUpdatedText()).toMatch(/Jun \d+, 2021/);
       expect(screen.queryByText(/Jun \d+, 2023/)).not.toBeInTheDocument();
     });
+  });
+
+  it("shows lifetime spend separately from the resettable period spend", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, spend: 0.25, total_spend: 340.5 }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("$0.2500")).toBeInTheDocument();
+    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $340.5000");
   });
 
   it("should render the key's saved router fallbacks", async () => {

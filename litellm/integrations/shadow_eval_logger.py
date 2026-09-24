@@ -11,6 +11,7 @@ across pods or stop races; the hook reads active jobs through a short-TTL cache.
 
 import asyncio
 import hashlib
+import json
 import random
 import traceback
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -27,7 +28,8 @@ from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.integrations.websearch_interception.tools import is_web_search_tool_responses
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, independent_snapshot
 from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
 from litellm.litellm_core_utils.llm_judge import (
     default_router_provider,
@@ -280,10 +282,8 @@ class _SurfaceOps:
     request (messages plus translated generation params) and how its response yields
     the judgeable final text. Membership in this table IS the sampling allowlist;
     unknown call types fail closed. ``wire_params`` marks the surfaces whose params
-    come from the proxy's wire-body snapshot, which is taken before the guardrail
-    pre-call hook: those rows must not sample a request a pre-call guardrail rewrote,
-    or the shadow call would replay content (tools, unmasked entities) the guardrail
-    removed."""
+    come from the proxy's native request snapshot. Requests rewritten by guardrails
+    require a post-hook snapshot whose guardrail history is still current."""
 
     __slots__ = ("chat_request", "final_text", "wire_params")
 
@@ -310,19 +310,85 @@ _NON_MUTATING_GUARDRAIL_MODES: Final = frozenset(
 )
 
 
+def _guardrail_is_non_mutating(entry: Mapping[str, object], allowed_modes: frozenset[str]) -> bool:
+    modes: Final = entry.get("guardrail_mode")
+    return all(
+        isinstance(mode, str) and mode in allowed_modes
+        for mode in (modes if isinstance(modes, list | tuple) else (modes,))
+    )
+
+
 def _request_mutating_guardrail_ran(request_metadata: Mapping[str, object]) -> bool:
-    """Whether a guardrail that can rewrite the outbound request ran on this one, read
-    from the same guardrail-information entries spend logging uses. str-enum modes
-    compare equal to their plain-string values, and an entry whose mode is missing or
-    unrecognized counts as mutating."""
     raw: Final = request_metadata.get("standard_logging_guardrail_information")
     entries: Final = raw if isinstance(raw, Sequence) else ()
-    modes_per_entry: Final = tuple(entry.get("guardrail_mode") for entry in entries if isinstance(entry, Mapping))
     return any(
-        not all(
-            mode in _NON_MUTATING_GUARDRAIL_MODES for mode in (modes if isinstance(modes, list | tuple) else (modes,))
+        not _guardrail_is_non_mutating(entry, _NON_MUTATING_GUARDRAIL_MODES)
+        for entry in entries
+        if isinstance(entry, Mapping)
+    )
+
+
+def request_guardrail_fingerprint(request_metadata: Mapping[str, object]) -> str | None:
+    raw: Final = request_metadata.get("standard_logging_guardrail_information")
+    entries: Final = raw if isinstance(raw, Sequence) else ()
+    replay_safe_modes: Final = _NON_MUTATING_GUARDRAIL_MODES - frozenset(("logging_only",))
+    relevant: Final = tuple(
+        entry
+        for entry in entries
+        if isinstance(entry, Mapping) and not _guardrail_is_non_mutating(entry, replay_safe_modes)
+    )
+    try:
+        serialized: Final = json.dumps(relevant, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(serialized.encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class GuardrailRequestSnapshot:
+    body: Mapping[str, object]
+    fingerprint: str
+
+    @staticmethod
+    def capture(body: Mapping[str, object], metadata: Mapping[str, object]) -> "GuardrailRequestSnapshot | None":
+        if not _request_mutating_guardrail_ran(metadata):
+            return None
+        fingerprint: Final = request_guardrail_fingerprint(metadata)
+        if fingerprint is None:
+            return None
+        return GuardrailRequestSnapshot(
+            body=MappingProxyType(
+                _CHAT_REQUEST_ADAPTER.validate_python(
+                    independent_snapshot(dict(body))  # mutable-ok: snapshot helper requires a plain dictionary
+                )
+            ),
+            fingerprint=fingerprint,
         )
-        for modes in modes_per_entry
+
+
+def _post_guardrail_kwargs(
+    kwargs: Mapping[str, object],
+    request_metadata: Mapping[str, object],
+    ops: _SurfaceOps,
+    guardrail_snapshot: GuardrailRequestSnapshot | None,
+) -> Mapping[str, object] | None:
+    if guardrail_snapshot is None or guardrail_snapshot.fingerprint != request_guardrail_fingerprint(request_metadata):
+        return None
+    raw_params: Final = kwargs.get("litellm_params")
+    litellm_params: Final = raw_params if isinstance(raw_params, Mapping) else _EMPTY_METADATA
+    raw_request: Final = litellm_params.get("proxy_server_request")
+    request: Final = raw_request if isinstance(raw_request, Mapping) else _EMPTY_METADATA
+    body: Final = guardrail_snapshot.body
+    return MappingProxyType(
+        {
+            **kwargs,
+            "messages": body.get("input" if ops is _RESPONSES_OPS else "messages"),
+            "system": body.get("system"),
+            "instructions": body.get("instructions"),
+            "litellm_params": MappingProxyType(
+                {**litellm_params, "proxy_server_request": MappingProxyType({**request, "body": body})}
+            ),
+        }
     )
 
 
@@ -335,6 +401,16 @@ def _forwards_nothing(value: object) -> bool:
     return value is None or (isinstance(value, list) and len(value) == 0)
 
 
+def _request_has_hosted_web_search(request: Mapping[str, object]) -> bool:
+    if request.get("web_search_options") is not None:
+        return True
+    tools: Final = request.get("tools")
+    return isinstance(tools, Sequence) and any(
+        isinstance(tool, Mapping) and tool.get("type") != "function" and is_web_search_tool_responses(tool)
+        for tool in tools
+    )
+
+
 def _judgeable_sample(
     ops: _SurfaceOps,
     kwargs: Mapping[str, object],
@@ -343,9 +419,14 @@ def _judgeable_sample(
 ) -> tuple[tuple[Mapping[str, object], ...], Mapping[str, object], str] | None:
     """The normalized chat conversation, the forwardable generation params, and the
     judgeable final text; None when this request's shapes cannot be sampled (no text and no
-    tool call to serialize, or a shape the owner transformations reject)."""
+    tool call to serialize, hosted web search the shadow cannot replay comparably,
+    or a shape the owner transformations reject)."""
+    if _request_has_hosted_web_search(_proxy_wire_body(kwargs) if ops.wire_params else model_parameters):
+        return None
     try:
         request: Final = ops.chat_request(kwargs, model_parameters)
+        if _request_has_hosted_web_search(request):
+            return None
         items: Final = _MESSAGE_ITEMS_ADAPTER.validate_python(request.get("messages"))
         messages: Final = _CHAT_MESSAGES_ADAPTER.validate_python(
             tuple(m.model_dump(exclude_none=True) if isinstance(m, BaseModel) else m for m in items)
@@ -792,7 +873,6 @@ class ShadowEvalLogger(CustomLogger):
                 await prisma.db.litellm_shadowevalattempt.group_by(
                     by=["job_id"],
                     count=True,
-                    # mutable-ok: Prisma aggregate spec
                     sum={"judge_cost": True, "shadow_cost": True, "shadow_classifier_cost": True},
                     where={"job_id": {"in": [str(record.id) for record in records]}},  # mutable-ok: Prisma filter
                 )
@@ -820,7 +900,7 @@ class ShadowEvalLogger(CustomLogger):
                 {target: tuple(job for _, job in group) for target, group in groupby(by_target, key=itemgetter(0))}
             )
             await self._jobs_cache.async_set_cache(_JOBS_CACHE_KEY, jobs)
-            self._job_starts = {}  # rebind-ok: new generation, counts absorbed into the fill
+            self._job_starts = {}
             return jobs
         except Exception as e:  # noqa: BLE001  # a DB blip must never break request logging
             verbose_logger.debug("shadow_eval: active-job read failed: %s", e)
@@ -865,6 +945,8 @@ class ShadowEvalLogger(CustomLogger):
         response_obj: object,
         start_time: object,
         end_time: object,
+        *,
+        guardrail_snapshot: GuardrailRequestSnapshot | None = None,
     ) -> None:
         try:
             payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")  # pyright: ignore[reportAssignmentType]  # untyped callback kwargs
@@ -898,8 +980,13 @@ class ShadowEvalLogger(CustomLogger):
             ops: Final = _SURFACE_OPS.get(str(payload.get("call_type") or ""))
             if ops is None:
                 return  # only surfaces this table can normalize are comparable; unknown types fail closed
-            if ops.wire_params and _request_mutating_guardrail_ran(request_metadata):
-                return  # the wire-body snapshot predates the rewrite; replaying it would resurrect stripped content
+            sample_kwargs: Final = (
+                _post_guardrail_kwargs(kwargs, request_metadata, ops, guardrail_snapshot)
+                if ops.wire_params and _request_mutating_guardrail_ran(request_metadata)
+                else kwargs
+            )
+            if sample_kwargs is None:
+                return
             active_jobs: Final = await self._active_jobs()
             eligible: Final = self._sampled_jobs(
                 tuple(job for target in targets for job in active_jobs.get(target, ())),
@@ -911,7 +998,7 @@ class ShadowEvalLogger(CustomLogger):
                 return
             sample: Final = _judgeable_sample(
                 ops,
-                kwargs,
+                sample_kwargs,
                 MappingProxyType(dict(payload.get("model_parameters") or {})),  # mutable-ok: frozen snapshot
                 response_obj,
             )
@@ -945,7 +1032,7 @@ class ShadowEvalLogger(CustomLogger):
                         real_cache_hit=real_cache_hit,
                         control_tier=control_tier,
                         shadow_params=shadow_params,
-                        parent_metadata=MappingProxyType(dict(request_metadata)),  # mutable-ok: frozen snapshot
+                        parent_metadata=MappingProxyType(dict(request_metadata)),
                     )
                 ).add_done_callback(self._release_shadow_slot)
         except Exception as e:  # noqa: BLE001  # logging hooks must never fail the request
@@ -1259,7 +1346,7 @@ class ShadowEvalLogger(CustomLogger):
             {
                 "role": "user",
                 "content": _judge_user_prompt(conversation, response_a, response_b, _tool_definitions_text(tools)),
-            },  # mutable-ok: SDK message
+            },
         ]
         try:
             response: Final = await judge_acompletion(

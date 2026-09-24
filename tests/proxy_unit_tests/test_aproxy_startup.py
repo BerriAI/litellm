@@ -22,7 +22,7 @@ from litellm.proxy.proxy_server import (
 
 
 @pytest.mark.asyncio
-async def test_proxy_gunicorn_startup_direct_config():
+async def test_proxy_gunicorn_startup_direct_config(monkeypatch):
     """
     gunicorn startup requires the config to be passed in via environment variables
 
@@ -30,6 +30,7 @@ async def test_proxy_gunicorn_startup_direct_config():
 
     Test both approaches
     """
+    monkeypatch.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
     try:
         from litellm._logging import verbose_proxy_logger, verbose_router_logger
         import logging
@@ -59,7 +60,8 @@ async def test_proxy_gunicorn_startup_direct_config():
 
 
 @pytest.mark.asyncio
-async def test_proxy_gunicorn_startup_config_dict():
+async def test_proxy_gunicorn_startup_config_dict(monkeypatch):
+    monkeypatch.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
     try:
         from litellm._logging import verbose_proxy_logger, verbose_router_logger
         import logging

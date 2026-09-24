@@ -10,13 +10,14 @@ import os
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Annotated, Final
 
 import requests
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
+from pydantic.types import StringConstraints
 
 PI_CONFIG_DIR_ENV: Final = "PI_CODING_AGENT_DIR"
 PI_PROVIDER_NAME: Final = "litellm"
@@ -24,7 +25,7 @@ LITELLM_PROXY_API_KEY_ENV: Final = "LITELLM_PROXY_API_KEY"
 _REJECTED_STATUSES: Final = frozenset((401, 403))
 
 
-class ListingFailure(StrEnum):
+class ListingFailure(str, Enum):
     """Why a proxy could not be listed, decided once where the HTTP outcome is classified.
 
     `unreachable` means no response at all; the other kinds prove the proxy answered, so callers
@@ -51,12 +52,25 @@ class ModelLimits:
     max_tokens: int | None
 
 
-class _Model(BaseModel):
-    id: str
+_NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
+
+
+class ListedModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: _NonEmptyString
+    source_model: _NonEmptyString | None = None
 
 
 class _ModelList(BaseModel):
-    data: tuple[_Model, ...]
+    data: tuple[ListedModel, ...]
+
+    @model_validator(mode="after")
+    def unique_id_mappings(self) -> "_ModelList":
+        mappings: Final = frozenset((model.id, model.source_model or model.id) for model in self.data)
+        if len(frozenset(model.id for model in self.data)) != len(mappings):
+            raise ValueError("model ids must not map to multiple source models")
+        return self
 
 
 class _ModelGroup(BaseModel):
@@ -69,17 +83,18 @@ class _ModelGroupList(BaseModel):
     data: tuple[_ModelGroup, ...]
 
 
-def fetch_model_ids(
+def fetch_model_listing(
     base_url: str,
     api_key: str,
     *,
     get: Callable[..., requests.Response] = requests.get,
-) -> tuple[str, ...] | PiSyncError:
+    headers: Mapping[str, str] = MappingProxyType({}),
+) -> tuple[ListedModel, ...] | PiSyncError:
     url: Final = base_url.rstrip("/") + "/v1/models"
     try:
         resp: Final = get(
             url,
-            headers={"Authorization": f"Bearer {api_key}"},  # mutable-ok: requests headers require a dict
+            headers={"Authorization": f"Bearer {api_key}", **headers},  # mutable-ok: requests headers require a dict
             timeout=10,
         )
     except requests.RequestException as e:
@@ -94,10 +109,21 @@ def fetch_model_ids(
         listing: Final = _ModelList.model_validate(resp.json())
     except (ValueError, ValidationError) as e:
         return PiSyncError(f"Unexpected /v1/models response from the proxy: {e}", kind=ListingFailure.BAD_BODY)
-    ids: Final = tuple(dict.fromkeys(model.id for model in listing.data))
-    if not ids:
+    models: Final = tuple(dict.fromkeys(listing.data))
+    if not models:
         return PiSyncError("The proxy returned no models for your key.", kind=ListingFailure.EMPTY)
-    return ids
+    return models
+
+
+def fetch_model_ids(
+    base_url: str,
+    api_key: str,
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+    headers: Mapping[str, str] = MappingProxyType({}),
+) -> tuple[str, ...] | PiSyncError:
+    listed: Final = fetch_model_listing(base_url, api_key, get=get, headers=headers)
+    return listed if isinstance(listed, PiSyncError) else tuple(dict.fromkeys(model.id for model in listed))
 
 
 _NO_LIMITS: Final[Mapping[str, ModelLimits]] = MappingProxyType({})
@@ -149,7 +175,7 @@ def _model_entry(
     )
     output: Final[dict[str, JsonValue]] = (  # mutable-ok: JSON field
         {"maxTokens": limit.max_tokens} if limit and limit.max_tokens else {}
-    )  # mutable-ok: JSON field
+    )
     return {"id": model_id, **context, **output}  # mutable-ok: JSON serialization requires a mutable object
 
 
@@ -182,9 +208,7 @@ def sync_models_json(
 ) -> PiSyncError | None:
     """Replace only the litellm provider entry, leaving the rest of the file intact."""
     try:
-        current: Final = (  # mutable-ok: JSON object default
-            _MODELS_FILE_ADAPTER.validate_json(path.read_text()) if path.exists() else {}
-        )
+        current: Final = _MODELS_FILE_ADAPTER.validate_json(path.read_text()) if path.exists() else {}
     except (OSError, ValidationError) as e:
         return PiSyncError(f"Could not read {path} as a JSON object: {e}. Fix or move the file, then retry.")
     existing_providers: Final = current.get("providers", {})  # mutable-ok: JSON object default
@@ -222,11 +246,13 @@ __all__ = (
     "LITELLM_PROXY_API_KEY_ENV",
     "PI_CONFIG_DIR_ENV",
     "PI_PROVIDER_NAME",
+    "ListedModel",
     "ListingFailure",
     "ModelLimits",
     "PiSyncError",
     "fetch_model_ids",
     "fetch_model_limits",
+    "fetch_model_listing",
     "models_json_path",
     "provider_block",
     "sync_models_json",

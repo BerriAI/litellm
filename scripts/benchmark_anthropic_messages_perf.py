@@ -256,7 +256,6 @@ general_settings:
   master_key: {api_key}
 
 litellm_settings:
-  telemetry: false
 """,
         encoding="utf-8",
     )

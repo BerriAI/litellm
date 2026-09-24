@@ -5,8 +5,9 @@ A rule-based routing strategy that uses weighted scoring across multiple dimensi
 to classify requests by complexity and route them to appropriate models.
 
 By default, scoring is local (regex/keyword-based) with no external API calls and <1ms
-latency. Optionally, classifier_type="llm" routes classification through a configured
-model instead, trading that latency/cost guarantee for potentially better accuracy.
+latency. Optionally, classifier_type="llm" selects a tier through a configured model,
+while classifier_type="capability" forecasts efficient-model success and applies a
+Switchyard-compatible threshold policy.
 keyword_tier_rules (lexical or, with semantic_keyword_matching, embedding-based) are
 evaluated before either classification strategy and force a tier outright when matched.
 
@@ -16,6 +17,8 @@ Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import random
 import re
 import time
@@ -25,9 +28,10 @@ from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 
 from litellm._logging import verbose_router_logger
+from litellm.caching.affinity_cache import claim_affinity_pin
 from litellm.constants import (
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -36,9 +40,11 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    is_codex_user_agent,
 )
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -46,25 +52,42 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     request_contains_image_content,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
+from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
+from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
+    ChatCompletionSystemMessage,
     ChatCompletionTextObject,
+    ChatCompletionUserMessage,
+    ResponsesAPIResponse,
 )
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
     RoutingDecisionCause,
+    StandardLoggingHeuristicV2Forecast,
     StandardLoggingRoutingDecision,
     StandardLoggingRoutingDecisionTierBoundaries,
 )
 
+from .capability_classifier import (
+    CapabilityClassifierForecast,
+    capability_classifier_response_format,
+    capability_classifier_system_prompt,
+    parse_capability_classifier_verdict,
+    unwrap_classifier_json,
+)
 from .classification_rubrics import BUSINESS_TIER_CRITERIA, calibration_examples_section
 from .config import (
     CALIBRATION_EXAMPLES_HEADING,
@@ -84,8 +107,18 @@ from .config import (
     ComplexityRouterConfig,
     ComplexityTier,
     CustomDimension,
+    JevClassifierConfig,
     TierDefinition,
 )
+from .jev_classifier import (
+    DEFAULT_JEV_INSTRUCTIONS,
+    HttpJevClassifierClient,
+    JevClassifierClient,
+    JevVerdict,
+    build_jev_request,
+    jev_classifier_cost,
+)
+from .llm_v2 import LLM_V2_PROMPT_VERSION, LLMV2Decision, LLMV2TaskContext, LLMV2Verdict, llm_v2_response_format
 from .stall_detector import detect_stalled_task
 
 if TYPE_CHECKING:
@@ -147,6 +180,16 @@ _CLASSIFICATION_TIER_CRITERIA: Final[Mapping[ComplexityTier, str]] = MappingProx
             "open-ended analysis, proofs, famous hard problems, step-by-step reasoning, tradeoffs, or anything "
             "where a correct answer requires careful thought rather than a quick lookup."
         ),
+    }
+)
+
+_JEV_TIER_CRITERIA: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        ComplexityTier.NON_REASONING.value: "Relaying, reformatting, or extracting stated information without judgment",
+        ComplexityTier.SIMPLE.value: "Greetings, chitchat, or short factual lookups with known answers",
+        ComplexityTier.MEDIUM.value: "Everyday requests needing explanation, light reasoning, or minor technical work",
+        ComplexityTier.COMPLEX.value: "Non-trivial code, architecture, multi-step work, or specialized domain depth",
+        ComplexityTier.REASONING.value: "Open-ended analysis, proofs, tradeoffs, or tasks requiring careful thought",
     }
 )
 
@@ -359,12 +402,12 @@ def _append_custom_keywords(base_keywords: list[str], custom_keywords: list[str]
     return [*base_keywords, *deduped_custom.values()]
 
 
-def _parent_session_kwargs(request_kwargs: Mapping[str, Any] | None) -> Mapping[str, Any]:
+def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, Any]:
     kwargs: Final = request_kwargs or {}
     return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
 
 
-def _response_cost_or_none(response: ModelResponse) -> float | None:
+def _response_cost_or_none(response: ModelResponse | ResponsesAPIResponse) -> float | None:
     hidden_params: Final = response._hidden_params
     if not isinstance(hidden_params, dict):
         return None
@@ -387,6 +430,13 @@ def _effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | N
 _REMINDER_OPEN: Final = "<system-reminder>"
 _REMINDER_CLOSE: Final = "</system-reminder>"
 _DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
+_CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
+    ("<environment_context>", "</environment_context>"),
+    ("<recommended_plugins>", "</recommended_plugins>"),
+    ("<user_instructions>", "</user_instructions>"),
+    ("<environments_instructions>", "</environments_instructions>"),
+    ("# agents.md instructions for ", "</instructions>"),
+)
 
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
@@ -484,6 +534,42 @@ def _human_text(content: object, marker_pairs: tuple[tuple[str, str], ...] = _DE
     model and therefore the spend. An unclosed tag is not a block and is left intact.
     """
     return _strip_reminder_blocks(_message_text(content), marker_pairs)
+
+
+def _encrypted_classifier_task(
+    request_kwargs: Mapping[str, object] | None,
+    marker_pairs: tuple[tuple[str, str], ...],
+) -> dict[str, object] | None:
+    from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
+
+    raw_input: Final = (request_kwargs or EMPTY_MAPPING).get("input")
+    if not isinstance(raw_input, list) or (request_kwargs or EMPTY_MAPPING).get("messages"):
+        return None
+    try:
+        items: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(raw_input)
+    except ValidationError:
+        return None
+    current: Final = next(
+        (
+            item
+            for item in reversed(items)
+            if (messages := resolve_structured_messages(messages=None, request_kwargs={"input": [item]}))
+            and any(_iter_human_asks_newest_first(messages, marker_pairs))
+        ),
+        None,
+    )
+    if current is None or current.get("type") != "agent_message" or not isinstance(current.get("content"), list):
+        return None
+    try:
+        parts: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(current["content"])
+    except ValidationError:
+        return None
+    if not any(part.get("type") == "encrypted_content" and part.get("encrypted_content") for part in parts):
+        return None
+    return {
+        **current,
+        "content": [part for part in parts if part.get("type") in ("input_text", "encrypted_content")],
+    }
 
 
 def _iter_human_asks_newest_first(
@@ -591,6 +677,18 @@ def _last_human_ask_index(
     )
 
 
+def _is_reminder_only_turn(message: Mapping[str, object], marker_pairs: tuple[tuple[str, str], ...]) -> bool:
+    if message.get("role") != "user":
+        return False
+    content: Final = message.get("content")
+    if not isinstance(content, str) and not (
+        isinstance(content, list) and all(isinstance(part, Mapping) and part.get("type") == "text" for part in content)
+    ):
+        return False
+    text: Final = _message_text(content)
+    return bool(text.strip()) and not _strip_reminder_blocks(text, marker_pairs)
+
+
 def _newest_turn_is_human_ask(
     messages: Sequence[Mapping[str, object]] | None,
     marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
@@ -601,21 +699,23 @@ def _newest_turn_is_human_ask(
     Anchored on `_last_human_ask_index` so every surface's plumbing reads as a continuation:
     chat-completions tool turns are role=tool, Messages-surface tool_result turns flatten to empty
     human text, and a hybrid turn carrying an ask alongside a tool_result still counts as an ask.
-    Compared against the newest non-system message rather than the raw tail, because Claude Code
-    appends a system-role reminder after the human turn; that trailing plumbing is neither an ask
-    nor loop traffic and must not turn a fresh ask into a continuation. An unreadable request (no
-    messages) is treated as a continuation: there is no ask to classify, which is the same reading
-    `_extract_current_ask_and_system_prompt` gives it downstream.
+    Trailing system messages and complete text-only reminders do not turn a fresh ask into a
+    continuation. Assistant turns and non-text content, including tool results alongside reminders,
+    still form continuation boundaries. An unreadable request has no ask to classify.
     """
     if not messages:
         return False
-    newest_non_system: Final = next(
-        (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") != "system"),
+    newest_activity: Final = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].get("role") != "system" and not _is_reminder_only_turn(messages[index], marker_pairs)
+        ),
         None,
     )
-    if newest_non_system is None:
+    if newest_activity is None:
         return False
-    return _last_human_ask_index(messages, marker_pairs) == newest_non_system
+    return _last_human_ask_index(messages, marker_pairs) == newest_activity
 
 
 def _iter_system_scope_texts(
@@ -876,6 +976,7 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
             "modality_escalation",
             "modality_pin_override",
             "health_failover",
+            "health_default_fallback",
         )
         and not decision.get("context_escalated")
         and _CLASSIFIER_CIRCUIT_OPEN_SIGNAL not in (decision.get("signals") or ())
@@ -928,18 +1029,86 @@ class ClassificationOutcome(NamedTuple):
         "heuristic_v2",
         "reasoning_override",
         "llm_classifier",
+        "capability_classifier",
+        "jev_classifier",
+        "llm_v2_classifier",
+        "llm_v2_fallback",
         "heuristic_first_short_circuit",
         "hybrid_short_circuit",
         "housekeeping",
         "classifier_plugin",
         "classifier_fallback",
+        "capability_classifier_fallback",
         "default_model_fallback",
     ]
     classifier_cost: float | None = None
+    capability_forecast: CapabilityClassifierForecast | None = None
+    llm_v2_forecast: LLMV2Decision | None = None
+    jev_verdict: JevVerdict | None = None
+    heuristic_v2_forecast: StandardLoggingHeuristicV2Forecast | None = None
 
 
 def _with_signal(outcome: ClassificationOutcome, signal: str | None) -> ClassificationOutcome:
     return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
+
+
+def _with_llm_v2_forecast(
+    decision: StandardLoggingRoutingDecision, forecast: LLMV2Decision
+) -> StandardLoggingRoutingDecision:
+    """Preserve full numeric precision for both solver forecasts and the applied policy."""
+    enriched: Final[StandardLoggingRoutingDecision] = {
+        **decision,
+        "classifier_efficient_p_solve": forecast.verdict.forecasts.efficient.p_solve,
+        "classifier_capable_p_solve": forecast.verdict.forecasts.capable.p_solve,
+        "classifier_max_quality_gap": forecast.max_quality_gap,
+        "classifier_prompt_version": LLM_V2_PROMPT_VERSION,
+    }
+    if forecast.calibration_version is None:
+        return enriched
+    calibrated: Final[StandardLoggingRoutingDecision] = {
+        **enriched,
+        "classifier_calibrated_efficient_p_solve": forecast.efficient,
+        "classifier_calibrated_capable_p_solve": forecast.capable,
+        "classifier_calibration_version": forecast.calibration_version,
+    }
+    return calibrated
+
+
+def _with_classifier_forecast(
+    decision: StandardLoggingRoutingDecision, outcome: ClassificationOutcome
+) -> StandardLoggingRoutingDecision:
+    """Attach validated forecasts and their applied policy to the routing decision."""
+    if outcome.heuristic_v2_forecast is not None:
+        return {**decision, "heuristic_v2_forecast": outcome.heuristic_v2_forecast}
+    if outcome.jev_verdict is not None:
+        forecasted_decision: Final[StandardLoggingRoutingDecision] = {
+            **decision,
+            "classifier_probabilities": outcome.jev_verdict.probabilities,
+            "classifier_confidence": outcome.jev_verdict.confidence,
+        }
+        return forecasted_decision
+    if outcome.llm_v2_forecast is not None:
+        return _with_llm_v2_forecast(decision, outcome.llm_v2_forecast)
+    forecast: Final = outcome.capability_forecast
+    if forecast is None:
+        return decision
+    verdict: Final = forecast.verdict
+    enriched: Final[StandardLoggingRoutingDecision] = {
+        **decision,
+        "classifier_crux": verdict.crux,
+        "classifier_primary_rule": verdict.primary_rule,
+        "classifier_capability_boundary": verdict.capability_boundary,
+        "classifier_p_solve": verdict.p_solve,
+        "classifier_threshold": forecast.threshold,
+    }
+    if forecast.calibration_version is None:
+        return enriched
+    calibrated: Final[StandardLoggingRoutingDecision] = {
+        **enriched,
+        "classifier_calibrated_p_solve": forecast.p_solve,
+        "classifier_calibration_version": forecast.calibration_version,
+    }
+    return calibrated
 
 
 class _ClassifierCircuitBreaker:
@@ -1037,6 +1206,15 @@ def _group_provably_fits(facts: tuple[int | None, bool], needed: int, buffer: fl
     return window is not None and not has_unknown and needed <= int(window * buffer)
 
 
+class _RequestContextFit(NamedTuple):
+    facts: Mapping[str, tuple[int | None, bool]]
+    needed: int | None
+    buffer: float
+
+    def accepts(self, model: str) -> bool:
+        return self.needed is None or _window_can_hold(self.facts.get(model, (None, True))[0], self.needed, self.buffer)
+
+
 class _ContextWindowPlacement(NamedTuple):
     """Where the context-window gate placed the request: the placement tier, the subset of its
     pool the pick may use, and every configured group not provably misfit (the adaptive filter)."""
@@ -1048,10 +1226,10 @@ class _ContextWindowPlacement(NamedTuple):
 
 class _SessionAffinityPin(NamedTuple):
     model: str
-    tier: ComplexityTier | None
+    tier: ComplexityTier | str | None
 
 
-def _parse_session_affinity_pin(value: object) -> _SessionAffinityPin | None:
+def _parse_session_affinity_pin(value: object, active_tiers: tuple[str, ...]) -> _SessionAffinityPin | None:
     if isinstance(value, str):
         return _SessionAffinityPin(model=value, tier=None)
     parts: Final[tuple[object, object] | None] = (
@@ -1066,8 +1244,11 @@ def _parse_session_affinity_pin(value: object) -> _SessionAffinityPin | None:
     model, tier_value = parts
     if not isinstance(model, str):
         return None
-    tier: Final = ComplexityTier(tier_value) if isinstance(tier_value, str) else None
-    return _SessionAffinityPin(model=model, tier=tier)
+    if tier_value is None:
+        return _SessionAffinityPin(model=model, tier=None)
+    if not isinstance(tier_value, str) or tier_value not in active_tiers:
+        return None
+    return _SessionAffinityPin(model=model, tier=_built_in_tier_or_none(tier_value) or tier_value)
 
 
 def _session_affinity_cache_value(model: str, tier: ComplexityTier | str | None) -> Mapping[str, str | None]:
@@ -1090,13 +1271,26 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
+    @staticmethod
+    def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
+        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
+        if not api_key:
+            raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
+        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        return HttpJevClassifierClient(
+            api_key=api_key,
+            api_base=api_base,
+            http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+        )
+
     def __init__(
         self,
         model_name: str,
         litellm_router_instance: Router,
-        complexity_router_config: dict[str, Any] | None = None,
+        complexity_router_config: Mapping[str, object] | None = None,
         default_model: str | None = None,
         derive_savings_baseline: bool = True,
+        jev_client: JevClassifierClient | None = None,
     ):
         """
         Initialize ComplexityRouter.
@@ -1123,6 +1317,19 @@ class ComplexityRouter(CustomLogger):
         # Override default_model if provided
         if default_model:
             self.config.default_model = default_model
+
+        jev_config: Final = self.config.jev_classifier_config
+        self._jev_client: JevClassifierClient | None = (
+            jev_client
+            if jev_client is not None
+            else self._build_jev_client(jev_config)
+            if self.config.classifier_type == "jev" and jev_config is not None
+            else None
+        )
+
+        self._tier_affinity_config = hashlib.sha256(
+            self.config.model_dump_json(include=MappingProxyType({"tiers": True, "tier_model_configs": True})).encode()
+        ).hexdigest()
 
         # Checked here rather than on the config model because the deployment's
         # complexity_router_default_model arrives outside complexity_router_config and is
@@ -1194,22 +1401,39 @@ class ComplexityRouter(CustomLogger):
         self._classifier_system_prompt: str | None = (
             self._build_classifier_system_prompt() if llm_classifier_configured else None
         )
+        capability_config: Final = self.config.capability_classifier_config
         self._classifier_response_format: Mapping[str, object] | None = (
-            type_to_response_format_param(_tier_classification_model(self.config.classifier_wire_labels()))
+            (
+                capability_classifier_response_format(
+                    capability_config.response_format if capability_config is not None else "json_schema"
+                )
+                if self.config.classifier_type == "capability"
+                else llm_v2_response_format(self.config.llm_v2_config.response_format)
+                if self.config.llm_v2_config is not None
+                else type_to_response_format_param(_tier_classification_model(self.config.classifier_wire_labels()))
+            )
             if llm_classifier_configured
             else None
         )
-        self._classifier_circuit_breaker: _ClassifierCircuitBreaker | None = (
-            _ClassifierCircuitBreaker(self.config.classifier_llm_config.circuit_breaker_cooldown_seconds)
+        circuit_breaker_cooldown: Final[float | None] = (
+            self.config.classifier_llm_config.circuit_breaker_cooldown_seconds
             if (
                 llm_classifier_configured
                 and self.config.classifier_llm_config is not None
                 and self.config.classifier_llm_config.circuit_breaker_enabled
             )
+            else jev_config.circuit_breaker_cooldown_seconds
+            if (self.config.classifier_type == "jev" and jev_config is not None and jev_config.circuit_breaker_enabled)
             else None
         )
+        self._classifier_circuit_breaker: _ClassifierCircuitBreaker | None = (
+            _ClassifierCircuitBreaker(circuit_breaker_cooldown) if circuit_breaker_cooldown is not None else None
+        )
         self._tier_success_predictor: TierSuccessPredictor | None = (
-            TierSuccessPredictor(resolve_tier_artifact(self.config.heuristic_v2_artifact))
+            TierSuccessPredictor(
+                resolve_tier_artifact(self.config.heuristic_v2_artifact),
+                routing_threshold=self.config.heuristic_v2_success_threshold,
+            )
             if self.config.classifier_type == "heuristic_v2"
             else None
         )
@@ -1221,6 +1445,15 @@ class ComplexityRouter(CustomLogger):
         llm_config: Final = self.config.classifier_llm_config
         if llm_config is None:
             raise ValueError("classifier_llm_config is not set")
+        if self.config.classifier_type == "capability":
+            capability: Final = self.config.capability_classifier_config
+            return capability_classifier_system_prompt(
+                capability.response_format if capability is not None else "json_schema"
+            )
+        v2: Final = self.config.llm_v2_config
+        if v2 is not None:
+            pools: Final = self._tier_pools()
+            return v2.system_prompt(pools[v2.efficient_tier][0], pools[v2.capable_tier][0])
         definitions: Final = self.config.tier_definitions
         if definitions is not None:
             return custom_tier_classification_prompt(
@@ -1547,6 +1780,7 @@ class ComplexityRouter(CustomLogger):
         conversation_continuing: bool = True,
         tier_litellm_params: Mapping[str, object] | None = None,
         context_escalation_original_tier: ComplexityTier | str | None = None,
+        previous_decision: StandardLoggingRoutingDecision | None = None,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
 
@@ -1606,7 +1840,16 @@ class ComplexityRouter(CustomLogger):
             masked_tier_litellm_params: Final = mask_credentials_in_payload(tier_litellm_params)
             if isinstance(masked_tier_litellm_params, Mapping):
                 decision["tier_litellm_params"] = masked_tier_litellm_params
-        return decision
+        forecast_fields: Final = MappingProxyType(
+            {
+                field: value
+                for field, value in (previous_decision.items() if previous_decision is not None else ())
+                if field.startswith("classifier_") or field == "heuristic_v2_forecast"
+            }
+        )
+        return cast(  # cast-ok: retaining optional keys from a typed decision preserves their declared values
+            StandardLoggingRoutingDecision, {**forecast_fields, **decision}
+        )
 
     async def aclassify(
         self,
@@ -1630,11 +1873,19 @@ class ComplexityRouter(CustomLogger):
             return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
+        if self.config.classifier_type == "jev":
+            return await self._jev_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+        if self.config.classifier_type in ("heuristic_first", "hybrid") and _encrypted_classifier_task(
+            request_kwargs, self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        ):
+            return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
             return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "hybrid" and self.config.classifier_llm_config is not None:
             return await self._classify_hybrid(prompt, system_prompt, request_kwargs, messages)
-        if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
+        if self.config.classifier_type == "capability" and self.config.classifier_llm_config is not None:
+            return await self._capability_classifier_outcome(prompt, request_kwargs, messages)
+        if self.config.classifier_type not in ("llm", "llm_v2") or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
@@ -1655,13 +1906,22 @@ class ComplexityRouter(CustomLogger):
             score=None,
             signals=(f"request-type:{request_type.value}", *probability_signals),
             cause="heuristic_v2",
+            heuristic_v2_forecast=StandardLoggingHeuristicV2Forecast(
+                probabilities={
+                    candidate.value: prediction.probabilities[index]
+                    for index, candidate in enumerate(TIER_SEVERITY_ORDER, start=1)
+                },
+                threshold=predictor.routing_threshold,
+                predicted_tier=tier.value,
+                request_type=request_type.value,
+            ),
         )
 
     async def _classify_heuristic_first(
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        request_kwargs: dict[str, object] | None,  # mutable-ok: handed to _classify_with_llm as-is
         messages: Sequence[Mapping[str, object]] | None,
     ) -> ClassificationOutcome:
         """Score locally, and only pay for the classifier call when the scorer did not confidently
@@ -1694,7 +1954,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        request_kwargs: dict[str, object] | None,  # mutable-ok: handed to _classify_with_llm as-is
         messages: Sequence[Mapping[str, object]] | None,
     ) -> ClassificationOutcome:
         """Score locally, and only pay for the classifier when the score sits near a tier boundary.
@@ -1745,11 +2005,71 @@ class ComplexityRouter(CustomLogger):
             )
         )
 
+    async def _capability_classifier_outcome(
+        self,
+        prompt: str,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        """Forecast efficient-tier success, then apply the deterministic boundary policy."""
+        breaker: Final = self._classifier_circuit_breaker
+        permit: Final = breaker.acquire_permit() if breaker is not None else None
+        if breaker is not None and permit is None:
+            return self._capability_classifier_failure_outcome(
+                "capability classifier circuit is open", signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL
+            )
+        try:
+            tier, classifier_cost, forecast = await self._classify_with_capability_llm(prompt, request_kwargs, messages)
+            if breaker is not None and permit is not None:
+                breaker.record_success(permit)
+            return ClassificationOutcome(
+                tier=tier,
+                score=None,
+                signals=(
+                    f"capability-boundary:{forecast.verdict.capability_boundary}",
+                    f"capability-rule:{forecast.verdict.primary_rule}",
+                ),
+                cause="capability_classifier",
+                classifier_cost=classifier_cost,
+                capability_forecast=forecast,
+            )
+        except asyncio.CancelledError:
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=False)
+            raise
+        except Exception as e:  # noqa: BLE001 -- every unavailable or invalid judge verdict must fail closed
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
+            return self._capability_classifier_failure_outcome(f"capability classifier failed ({e})")
+
+    def _capability_classifier_failure_outcome(self, reason: str, signal: str | None = None) -> ClassificationOutcome:
+        """Fail closed to the configured capable tier without consulting another taxonomy."""
+        capability: Final = self.config.capability_classifier_config
+        if capability is None:
+            raise ValueError("capability_classifier_config is not set")
+        verbose_router_logger.warning(
+            "ComplexityRouter: %s, routing to capable_tier %s", reason, capability.capable_tier
+        )
+        signals: Final = (
+            ("capability-classifier-fallback",)
+            if signal is None
+            else (
+                "capability-classifier-fallback",
+                signal,
+            )
+        )
+        return ClassificationOutcome(
+            tier=ComplexityTier(capability.capable_tier),
+            score=None,
+            signals=signals,
+            cause="capability_classifier_fallback",
+        )
+
     async def _llm_classifier_outcome(
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        request_kwargs: dict[str, object] | None,  # mutable-ok: handed to _classify_with_llm as-is
         messages: Sequence[Mapping[str, object]] | None,
         scored: ClassificationOutcome | None = None,
     ) -> ClassificationOutcome:
@@ -1769,6 +2089,14 @@ class ComplexityRouter(CustomLogger):
                 signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
             )
         try:
+            if self.config.classifier_type == "llm_v2":
+                v2_outcome: Final = await self._classify_with_llm_v2(prompt, system_prompt, request_kwargs, messages)
+                if breaker is not None and permit is not None:
+                    if v2_outcome.cause == "llm_v2_fallback":
+                        breaker.record_failure(permit, is_timeout=False)
+                    else:
+                        breaker.record_success(permit)
+                return v2_outcome
             tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)
@@ -1786,7 +2114,102 @@ class ComplexityRouter(CustomLogger):
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
             if breaker is not None and permit is not None:
                 breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
-            return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt, scored)
+            return self._classifier_failure_outcome(
+                f"LLM classifier failed ({type(e).__name__})", prompt, system_prompt, scored
+            )
+
+    async def _jev_classifier_outcome(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        config: Final = self.config.jev_classifier_config
+        client: Final = self._jev_client
+        if config is None or client is None:
+            return self._classifier_failure_outcome("jev classifier is not configured", prompt, system_prompt)
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        if _encrypted_classifier_task(request_kwargs, marker_pairs) is not None:
+            return self._classifier_failure_outcome(
+                "jev classifier does not support encrypted agent tasks", prompt, system_prompt
+            )
+        breaker: Final = self._classifier_circuit_breaker
+        permit: Final = breaker.acquire_permit() if breaker is not None else None
+        if breaker is not None and permit is None:
+            return self._classifier_failure_outcome(
+                "jev classifier circuit is open",
+                prompt,
+                system_prompt,
+                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
+            )
+        criteria: Final[Mapping[str, str]] = (
+            MappingProxyType(
+                {
+                    definition.name: definition.description
+                    or _JEV_TIER_CRITERIA.get(definition.name.upper(), definition.name)
+                    for definition in self.config.tier_definitions
+                }
+            )
+            if self.config.tier_definitions is not None
+            else MappingProxyType(
+                {label: _JEV_TIER_CRITERIA[tier.value] for tier, label in self.config.labeled_tiers()}
+            )
+        )
+        timeout_s: Final = config.timeout_ms / 1000
+        request: Final = build_jev_request(
+            prompt=self._classifier_context_payload(prompt, system_prompt, request_kwargs, messages),
+            system_prompt=None,
+            model=config.model,
+            instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
+            criteria=criteria,
+        )
+        try:
+            response: Final = await asyncio.wait_for(client.evaluate(request, timeout_s, request_kwargs), timeout_s)
+            answer: Final = response.answers.get("tier")
+            if answer is None:
+                raise ValueError("Jev response is missing the 'tier' answer")
+            tier: Final = self.config.resolve_classified_tier(answer.choice)
+            if tier is None:
+                raise ValueError(f"Jev classifier returned unknown tier {answer.choice!r}")
+            tier_name: Final = _tier_name(tier)
+            if not self._tier_pools().get(tier_name):
+                raise ValueError(f"Jev classifier returned tier {tier_name!r}, which has no models configured")
+            model: Final = response.model or config.model
+            verdict: Final = JevVerdict(
+                label=answer.choice,
+                probabilities=answer.probabilities,
+                confidence=answer.confidence,
+                model=model,
+                cost=jev_classifier_cost(response, config.model),
+            )
+            if breaker is not None and permit is not None:
+                breaker.record_success(permit)
+            return ClassificationOutcome(
+                tier=tier,
+                score=None,
+                signals=(
+                    f"jev-classifier:{tier_name}",
+                    f"jev-confidence={answer.confidence:.6f}",
+                    *(
+                        f"tier-probability:{label}={probability:.6f}"
+                        for label, probability in answer.probabilities.items()
+                    ),
+                ),
+                cause="jev_classifier",
+                classifier_cost=verdict.cost,
+                jev_verdict=verdict,
+            )
+        except asyncio.CancelledError:
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=False)
+            raise
+        except Exception as e:  # noqa: BLE001 -- external Jev call can fail in many distinct ways
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
+            return self._classifier_failure_outcome(
+                f"jev classifier failed ({type(e).__name__})", prompt, system_prompt
+            )
 
     def _classifier_failure_outcome(
         self,
@@ -1801,6 +2224,18 @@ class ComplexityRouter(CustomLogger):
 
         A caller that already scored the prompt passes `scored` so the heuristic arm returns that
         verdict instead of running the same scan again on the request path."""
+        v2: Final = self.config.llm_v2_config
+        if v2 is not None:
+            verbose_router_logger.warning("ComplexityRouter: %s, routing to llm_v2 capable tier", reason)
+            return _with_signal(
+                ClassificationOutcome(
+                    tier=ComplexityTier(v2.capable_tier),
+                    score=None,
+                    signals=("llm-v2:fallback-capable",),
+                    cause="llm_v2_fallback",
+                ),
+                signal,
+            )
         fallback_tier: Final = self.config.fallback_tier
         if fallback_tier is not None:
             verbose_router_logger.warning("ComplexityRouter: %s, routing to fallback_tier %s", reason, fallback_tier)
@@ -1827,8 +2262,8 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to resolve_structured_messages as-is
-        raw_messages: list[dict[str, Any]] | None,  # mutable-ok: same shape _run_routing_plugins receives
+        request_kwargs: dict[str, object] | None,  # mutable-ok: handed to resolve_structured_messages as-is
+        raw_messages: list[dict[str, object]] | None,  # mutable-ok: same shape _run_routing_plugins receives
     ) -> ClassificationOutcome:
         from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
         from litellm.types.router import RoutingContext
@@ -1913,6 +2348,59 @@ class ComplexityRouter(CustomLogger):
             tier=tier, score=None, signals=("classifier-failed:default-model",), cause="default_model_fallback"
         )
 
+    def _classifier_caller_constraints(
+        self, system_prompt: str | None, request_kwargs: Mapping[str, object] | None
+    ) -> str | None:
+        """Exclude Claude Code's environment and skill catalogs from task forecasts."""
+        return (
+            None
+            if any(
+                is_claude_code_user_agent(user_agent)
+                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
+                if isinstance(user_agent := metadata.get("user_agent"), str)
+            )
+            else system_prompt
+        )
+
+    def _classifier_context_payload(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+        *,
+        encrypted_task: bool = False,
+    ) -> str:
+        include_assistant: Final = self.config.classifier_context_include_assistant_turns
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
+        prior_turns: Final = (
+            _extract_prior_turns(
+                messages,
+                current_ask=prompt,
+                window_size=self.config.classifier_context_window_size,
+                budget_chars=self.config.classifier_context_budget_chars,
+                per_turn_chars=self.config.classifier_context_per_turn_chars,
+                include_assistant=include_assistant,
+                marker_pairs=marker_pairs,
+            )
+            if context_enabled
+            else ()
+        )
+        has_prior_conversation: Final = (
+            context_enabled
+            and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant, marker_pairs), 2)))
+            > 1
+        )
+        return self._build_classifier_user_payload(
+            prompt="The delegated task in the following agent_message." if encrypted_task else prompt,
+            system_prompt=self._classifier_caller_constraints(system_prompt, request_kwargs),
+            prior_turns=prior_turns,
+            messages=messages,
+            has_prior_conversation=has_prior_conversation,
+            label_roles=include_assistant,
+        )
+
     async def _classify_with_llm(
         self,
         prompt: str,
@@ -1924,16 +2412,12 @@ class ComplexityRouter(CustomLogger):
         Call the configured classifier model with a system/user role split and prior-turn context.
 
         Builds a structured classification prompt with:
-        - System message: the stable classifier rubric AND the caller's own system prompt (task
-          constraints). This is the largest, most repeated part of the call, so keeping it in the
-          system role lets the provider prompt-cache it across a session's classifier calls.
-        - User message: the variable payload -- a few prior user turns for context and the current
-          ask to classify.
+        - System message: the stable classifier rubric.
+        - User message: the caller's system prompt quoted as task context, prior turns, and the current ask.
 
         Args:
             prompt: The current user ask text (already extracted as the real human ask, not tool results)
-            system_prompt: The caller's system prompt (task constraints), always included so later
-                turns never lose it
+            system_prompt: Caller task constraints, omitted from classification for Claude Code requests
             request_kwargs: Request metadata for spend attribution
             messages: Full message history for extracting prior turns and the trajectory signal
         """
@@ -1943,48 +2427,11 @@ class ComplexityRouter(CustomLogger):
         if llm_config is None or classifier_system_prompt is None or classifier_response_format is None:
             raise ValueError("classifier_llm_config is not set")
 
-        include_assistant: Final = self.config.classifier_context_include_assistant_turns
-        context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
-        prior_turns: Final = (
-            _extract_prior_turns(
-                messages,
-                current_ask=prompt,
-                window_size=self.config.classifier_context_window_size,
-                budget_chars=self.config.classifier_context_budget_chars,
-                per_turn_chars=self.config.classifier_context_per_turn_chars,
-                include_assistant=include_assistant,
-                marker_pairs=self._reminder_markers,
-            )
-            if context_enabled
-            else ()
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or {})
+        encrypted_task: Final = _encrypted_classifier_task(request_kwargs, marker_pairs)
+        user_payload: Final = self._classifier_context_payload(
+            prompt, system_prompt, request_kwargs, messages, encrypted_task=encrypted_task is not None
         )
-        has_prior_conversation: Final = (
-            context_enabled
-            and len(
-                tuple(
-                    islice(
-                        _iter_context_turns_newest_first(messages or (), include_assistant, self._reminder_markers), 2
-                    )
-                )
-            )
-            > 1
-        )
-
-        user_payload: Final = self._build_classifier_user_payload(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            prior_turns=prior_turns,
-            messages=messages,
-            has_prior_conversation=has_prior_conversation,
-            label_roles=include_assistant,
-        )
-
-        request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
-        metadata: Final = {  # mutable-ok: SDK metadata kwarg is enriched by the request pipeline
-            **forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
-            INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
-        }
-        turn_off_message_logging: Final = _effective_turn_off_message_logging(request_kwargs)
 
         image_parts: Final = self._classifier_image_parts(messages)
         user_content: Final[str | Sequence[ChatCompletionTextObject | ChatCompletionImageObject]] = (
@@ -1999,46 +2446,238 @@ class ComplexityRouter(CustomLogger):
             {"role": "system", "content": classifier_system_prompt},
             {"role": "user", "content": user_content},
         ]
-        response_format: Final = classifier_response_format
-        classifier_call_params: Mapping[str, str] = EMPTY_MAPPING
-        if llm_config.reasoning_effort is not None:
-            classifier_call_params = MappingProxyType({"reasoning_effort": llm_config.reasoning_effort})
+        content, classifier_cost = await self._call_classifier_model(
+            messages_for_call, request_kwargs, encrypted_task=encrypted_task
+        )
+        raw_tier: Final = _LabeledTierClassification.model_validate_json(content).tier
+        tier: Final = self.config.resolve_classified_tier(raw_tier)
+        if tier is None:
+            raise ValueError(f"LLM classifier returned an unrecognized tier: {raw_tier!r}")
+        return tier, classifier_cost
 
-        proxy_server_request: Final = {
-            "body": {
-                "model": llm_config.model,
-                "messages": messages_for_call,
-                "response_format": response_format,
-                **classifier_call_params,
+    async def _classify_with_capability_llm(
+        self,
+        prompt: str,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> tuple[ComplexityTier, float | None, CapabilityClassifierForecast]:
+        """Call the packaged capability forecaster and apply its two-tier policy."""
+        capability: Final = self.config.capability_classifier_config
+        classifier_system_prompt: Final = self._classifier_system_prompt
+        if capability is None or classifier_system_prompt is None:
+            raise ValueError("capability classifier is not configured")
+
+        markers: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        encrypted_task: Final = _encrypted_classifier_task(request_kwargs, markers)
+        asks_newest_first: Final = (
+            () if encrypted_task is not None else tuple(_iter_human_asks_newest_first(messages or (), markers))
+        )
+        opening_task: Final = (
+            "The delegated task in the following agent_message."
+            if encrypted_task is not None
+            else asks_newest_first[-1]
+            if asks_newest_first
+            else prompt
+        )
+        latest_follow_up: Final = asks_newest_first[0] if len(asks_newest_first) > 1 else None
+        task_messages: list[AllMessageValues] = [  # mutable-ok: the latest message gains optional image parts below
+            {"role": "user", "content": opening_task},  # mutable-ok: SDK messages are dict-shaped
+        ]
+        if latest_follow_up is not None:
+            task_messages.append(
+                {"role": "user", "content": latest_follow_up}  # mutable-ok: SDK messages are dict-shaped
+            )
+
+        image_parts: Final = self._classifier_image_parts(messages)
+        if image_parts:
+            latest_text: Final = latest_follow_up or opening_task
+            task_messages[-1] = {  # mutable-ok: SDK messages are dict-shaped
+                "role": "user",
+                "content": [  # mutable-ok: multimodal SDK content is a JSON array
+                    {"type": "text", "text": latest_text},  # mutable-ok: SDK content parts are dict-shaped
+                    *image_parts,
+                ],
             }
+        messages_for_call: Final[list[AllMessageValues]] = [  # mutable-ok: provider SDK requires a concrete list
+            {"role": "system", "content": classifier_system_prompt},  # mutable-ok: SDK messages are dict-shaped
+            *task_messages,
+        ]
+        content, classifier_cost = await self._call_classifier_model(
+            messages_for_call,
+            request_kwargs,
+            max_output_tokens=capability.max_output_tokens,
+            encrypted_task=encrypted_task,
+        )
+        verdict: Final = parse_capability_classifier_verdict(content)
+        threshold: Final = verdict.routing_threshold(capability.base_threshold, capability.threshold_step)
+        calibration: Final = capability.calibration
+        forecast: Final = CapabilityClassifierForecast(
+            verdict=verdict,
+            threshold=threshold,
+            p_solve=calibration.calibrate(verdict.p_solve) if calibration is not None else verdict.p_solve,
+            calibration_version=calibration.version if calibration is not None else None,
+        )
+        selected_tier: Final = (
+            capability.efficient_tier if forecast.meets_routing_threshold() else capability.capable_tier
+        )
+        return ComplexityTier(selected_tier), classifier_cost, forecast
+
+    async def _classify_with_llm_v2(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        v2: Final = self.config.llm_v2_config
+        if v2 is None or self._classifier_system_prompt is None:
+            raise ValueError("llm_v2_config is not set")
+        request: Final[Mapping[str, object]] = request_kwargs or MappingProxyType({})
+        markers: Final = self._reminder_markers_for_request(request)
+        encrypted: Final = _encrypted_classifier_task(request_kwargs, markers)
+        asks: Final = (
+            ("The delegated task in the following agent_message.",)
+            if encrypted is not None
+            else tuple(reversed(tuple(_iter_human_asks_newest_first(messages or (), markers))))
+        )
+        task_context: Final[LLMV2TaskContext] = {
+            "caller_constraints": self._classifier_caller_constraints(system_prompt, request_kwargs),
+            "task_and_follow_ups": asks or (prompt,),
         }
+        task: Final = json.dumps(task_context)
+        image_parts: Final = self._classifier_image_parts(messages)
+        text_part: Final[ChatCompletionTextObject] = {"type": "text", "text": task}
+        user_content: Final[str | Sequence[ChatCompletionTextObject | ChatCompletionImageObject]] = (
+            [text_part, *image_parts] if image_parts else task  # mutable-ok: provider adapters require content arrays
+        )
+        system_message: Final[ChatCompletionSystemMessage] = {
+            "role": "system",
+            "content": self._classifier_system_prompt,
+        }
+        user_message: Final[ChatCompletionUserMessage] = {"role": "user", "content": user_content}
+        messages_for_call: Final[list[AllMessageValues]] = [  # mutable-ok: Router requires an SDK message list
+            system_message,
+            user_message,
+        ]
+        content, classifier_cost = await self._call_classifier_model(
+            messages_for_call, request_kwargs, encrypted_task=encrypted, max_output_tokens=v2.max_output_tokens
+        )
+        try:
+            verdict: Final = LLMV2Verdict.model_validate_json(unwrap_classifier_json(content))
+        except ValidationError:
+            return self._classifier_failure_outcome("Invalid LLM V2 forecast", prompt, system_prompt)._replace(
+                classifier_cost=classifier_cost
+            )
+        decision: Final = v2.classify(verdict)
+        return ClassificationOutcome(
+            tier=ComplexityTier(v2.efficient_tier if decision.use_efficient else v2.capable_tier),
+            score=None,
+            signals=decision.signals,
+            cause="llm_v2_classifier",
+            classifier_cost=classifier_cost,
+            llm_v2_forecast=decision,
+        )
+
+    async def _call_classifier_model(
+        self,
+        messages_for_call: list[AllMessageValues],  # mutable-ok: provider SDK requires a concrete message list
+        request_kwargs: Mapping[str, object] | None,
+        max_output_tokens: int | None = None,
+        encrypted_task: Mapping[str, object] | None = None,
+    ) -> tuple[str, float | None]:
+        """Execute one structured classifier call with the router's shared safeguards."""
+        llm_config: Final = self.config.classifier_llm_config
+        response_format: Final = self._classifier_response_format
+        if llm_config is None or response_format is None:
+            raise ValueError("classifier_llm_config is not set")
+
+        request_values: Final = request_kwargs or EMPTY_MAPPING
+        request_metadata = request_values.get("litellm_metadata") or request_values.get("metadata")
+        metadata: Final = {  # mutable-ok: SDK metadata kwarg is enriched by the request pipeline
+            **forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
+            INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+        }
+        classifier_call_params: Final = (
+            MappingProxyType({"reasoning_effort": llm_config.reasoning_effort})
+            if llm_config.reasoning_effort is not None
+            else EMPTY_MAPPING
+        )
+        classifier_payload: Final = (
+            self._native_classifier_payload(messages_for_call, response_format, encrypted_task)
+            if encrypted_task is not None
+            else MappingProxyType(
+                {"messages": messages_for_call, "response_format": response_format, **classifier_call_params}
+            )
+        )
+        payload: Final = MappingProxyType(
+            {
+                **classifier_payload,
+                **(
+                    MappingProxyType(
+                        {"max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens}
+                    )
+                    if max_output_tokens is not None
+                    else EMPTY_MAPPING
+                ),
+            }
+        )
+        proxy_server_request: Final = {
+            "originating_request_masked": masked_originating_request(request_kwargs),
+            "body": {"model": llm_config.model, **payload},  # mutable-ok: logging SDK expects a JSON request body
+        }
+        classify: Final = (
+            self.litellm_router_instance.aresponses
+            if encrypted_task is not None
+            else self.litellm_router_instance.acompletion
+        )
 
         classifier_timeout_s: Final[float] = llm_config.timeout_ms / 1000
-        response: Final[ModelResponse] = await asyncio.wait_for(
-            self.litellm_router_instance.acompletion(
+        response: Final[ModelResponse | ResponsesAPIResponse] = await asyncio.wait_for(
+            classify(
                 model=llm_config.model,
-                messages=messages_for_call,
                 stream=False,
-                response_format=response_format,
                 timeout=classifier_timeout_s,
                 num_retries=0,
                 disable_fallbacks=True,
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
-                turn_off_message_logging=turn_off_message_logging,
-                **classifier_call_params,
+                turn_off_message_logging=_effective_turn_off_message_logging(request_kwargs),
+                **payload,
                 **_parent_session_kwargs(request_kwargs),
             ),
             timeout=classifier_timeout_s,
         )
-        content: Final = response.choices[0].message.content
-        if not content:
-            raise ValueError("LLM classifier returned empty content")
-        raw_tier: Final = _LabeledTierClassification.model_validate_json(content).tier
-        tier: Final = self.config.resolve_classified_tier(raw_tier)
-        if tier is None:
-            raise ValueError(f"LLM classifier returned an unrecognized tier: {raw_tier!r}")
-        return tier, _response_cost_or_none(response)
+        content: Final = (
+            response.output_text if isinstance(response, ResponsesAPIResponse) else response.choices[0].message.content
+        )
+        return content or "", _response_cost_or_none(response)
+
+    def _native_classifier_payload(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: existing transformation accepts the SDK message list
+        response_format: Mapping[str, object],
+        encrypted_task: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            LiteLLMResponsesTransformationHandler,
+        )
+
+        transformation: Final = LiteLLMResponsesTransformationHandler()
+        input_items, instructions = transformation.convert_chat_completion_messages_to_responses_api(messages)
+        llm_config: Final = self.config.classifier_llm_config
+        reasoning: Final = (
+            {"reasoning": {"effort": llm_config.reasoning_effort}}
+            if llm_config is not None and llm_config.reasoning_effort is not None
+            else {}
+        )
+        return {
+            "input": [*input_items, encrypted_task],
+            "instructions": instructions,
+            "text": transformation.transform_response_format_to_text_format(dict(response_format)),
+            "store": False,
+            "_require_encrypted_task_support": True,
+            **reasoning,
+        }
 
     @staticmethod
     def _build_classifier_user_payload(
@@ -2148,18 +2787,70 @@ class ComplexityRouter(CustomLogger):
     def _tier_pools(self) -> dict[str, list[str]]:
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
 
+    async def _pin_model_for_tier(
+        self,
+        tier: ComplexityTier | str,
+        model: str,
+        candidates: tuple[str, ...],
+        request_kwargs: dict[str, object],  # mutable-ok: adaptive feedback metadata must follow the selected model
+        retained_pin: _SessionAffinityPin | None = None,
+    ) -> str:
+        if not self._uses_deployment_pin or model not in candidates:
+            return model
+        retained_model: Final = (
+            retained_pin.model
+            if retained_pin is not None
+            and retained_pin.tier is not None
+            and _tier_name(retained_pin.tier) == _tier_name(tier)
+            else None
+        )
+        if retained_model is not None and retained_model in candidates:
+            self._restamp_adaptive_choice(request_kwargs, model, retained_model)
+            return retained_model
+        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs)
+        if session_id is None:
+            return model
+        caller: Final = DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs)
+        identity: Final = (self.model_name, self._tier_affinity_config, caller, session_id, _tier_name(tier))
+        cache_identity: Final = (
+            (*identity, ("replay_fallback", retained_model)) if retained_model is not None else identity
+        )
+        cache_key: Final = (
+            "complexity_router_tier_model_affinity:v1:"
+            + hashlib.sha256(json.dumps(cache_identity).encode()).hexdigest()
+        )
+        winner: Final = await claim_affinity_pin(
+            self.litellm_router_instance.cache,
+            cache_key,
+            MappingProxyType({"model": model}),
+            self.config.session_affinity_ttl_seconds,
+            eligible_values=tuple(MappingProxyType({"model": candidate}) for candidate in candidates),
+        )
+        pinned: Final[object] = winner.get("model") if isinstance(winner, Mapping) else None
+        if not isinstance(pinned, str) or pinned not in candidates:
+            return model
+        self._restamp_adaptive_choice(request_kwargs, model, pinned)
+        return pinned
+
     async def _pick_model_for_tier(
         self,
         tier: ComplexityTier | str,
-        raw_messages: list[dict[str, Any]] | None,
-        resolved_messages: list[dict[str, Any]] | None,
+        raw_messages: list[dict[str, object]] | None,
+        resolved_messages: list[dict[str, object]] | None,
         request_kwargs: dict,
         allowed_models: tuple[str, ...] | None = None,
+        retained_pin: _SessionAffinityPin | None = None,
     ) -> str:
         if not self.config.plugins:
-            if allowed_models is not None:
-                return self._pick_from_tier_value(allowed_models, _tier_name(tier))
-            return self.get_model_for_tier(tier)
+            candidates: Final = (
+                allowed_models if allowed_models is not None else tuple(self._tier_pools().get(_tier_name(tier), ()))
+            )
+            selected: Final = (
+                self._pick_from_tier_value(allowed_models, _tier_name(tier))
+                if allowed_models is not None
+                else self.get_model_for_tier(tier)
+            )
+            return await self._pin_model_for_tier(tier, selected, candidates, request_kwargs, retained_pin)
 
         from litellm.types.router import RoutingContext
 
@@ -2258,11 +2949,45 @@ class ComplexityRouter(CustomLogger):
         self._adaptive_chosen_model_key = ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY
         return self.adaptive_router
 
+    def _adaptive_candidate_models(
+        self,
+        classified_tier: ComplexityTier | str,
+        hard_floor: ComplexityTier | str | None = None,
+        hard_ceiling: ComplexityTier | str | None = None,
+        fit_filter: frozenset[str] | None = None,
+    ) -> tuple[str, ...]:
+        pools: Final = self._tier_pools()
+        candidates: Final = (
+            tuple(pools.get(_tier_name(classified_tier), ()))
+            if self.config.adaptive_eligible == "classified_tier"
+            else tuple(dict.fromkeys(chain.from_iterable(pools.values())))
+        )
+        floor: Final = self._active_tier_severity(hard_floor) if hard_floor is not None else None
+        ceiling: Final = self._active_tier_severity(hard_ceiling) if hard_ceiling is not None else None
+        return tuple(
+            model
+            for model in _allowed(candidates, fit_filter)
+            if (
+                floor is None
+                or any(
+                    self._active_tier_severity(tier) >= floor
+                    for tier in self._model_tiers.get(model, (classified_tier,))
+                )
+            )
+            and (
+                ceiling is None
+                or any(
+                    self._active_tier_severity(tier) <= ceiling
+                    for tier in self._model_tiers.get(model, (classified_tier,))
+                )
+            )
+        )
+
     def _soft_floor_pick(
         self,
         classified_tier: ComplexityTier | str,
         user_message: str,
-        request_kwargs: dict[str, Any] | None = None,
+        request_kwargs: dict[str, object] | None = None,
         hard_floor: ComplexityTier | str | None = None,
         hard_ceiling: ComplexityTier | str | None = None,
         fit_filter: frozenset[str] | None = None,
@@ -2325,34 +3050,17 @@ class ComplexityRouter(CustomLogger):
                         ],
                     }
             return chosen_model
-        if self.config.adaptive_eligible == "classified_tier":
-            candidates = list(classified_candidates)
-            if not candidates:
-                return self._fitting_tier_fallback(classified_tier, fit_filter)
-        else:
-            candidates = list(_allowed(tuple(adaptive.config.available_models), fit_filter))
+        candidates: Final = self._adaptive_candidate_models(classified_tier, fit_filter=fit_filter)
 
         all_costs: Final = [adaptive.model_to_cost.get(m, 0.0) for m in candidates]
         quality_weight: Final = self.config.adaptive_weights.quality
         cost_weight: Final = self.config.adaptive_weights.cost
         penalty_weight: Final = self.config.tier_distance_penalty
 
-        floor_severity: Final = self._active_tier_severity(hard_floor) if hard_floor is not None else None
-        ceiling_severity: Final = self._active_tier_severity(hard_ceiling) if hard_ceiling is not None else None
         best_model: str | None = None
         best_score = float("-inf")
         candidate_scores: Final[list[dict[str, object]]] = []
-        for model in candidates:
-            if floor_severity is not None and all(
-                self._active_tier_severity(model_tier) < floor_severity
-                for model_tier in self._model_tiers.get(model, (classified_tier,))
-            ):
-                continue
-            if ceiling_severity is not None and all(
-                self._active_tier_severity(model_tier) > ceiling_severity
-                for model_tier in self._model_tiers.get(model, (classified_tier,))
-            ):
-                continue
+        for model in self._adaptive_candidate_models(classified_tier, hard_floor, hard_ceiling, fit_filter):
             cell = adaptive._cells[(request_type, model)]
             quality_sample = thompson_sample(cell)
             cost_score = normalized_cost(adaptive.model_to_cost.get(model, 0.0), all_costs)
@@ -2427,7 +3135,7 @@ class ComplexityRouter(CustomLogger):
             body if isinstance(body, Mapping) else None,
             resolved_messages,
             tuple(self.config.plan_mode_patterns or ()),
-            self._reminder_markers,
+            self._reminder_markers_for_request(request_kwargs),
         )
 
     def _matched_housekeeping_sentinel(self, newest_ask: str | None) -> str | None:
@@ -2533,8 +3241,6 @@ class ComplexityRouter(CustomLogger):
         """Prompt content the resolved message list never carries: the Responses API's
         `instructions`, the /v1/messages top-level `system` block, and tool definitions.
         A coding agent's context is dominated by these."""
-        import json
-
         instructions: Final = request_kwargs.get("instructions")
         proxy_request: Final = request_kwargs.get("proxy_server_request")
         body: Final = proxy_request.get("body") if isinstance(proxy_request, Mapping) else None
@@ -2568,17 +3274,40 @@ class ComplexityRouter(CustomLogger):
         """Real-tokenizer count of the resolved messages plus the out-of-band carriers, off the
         event loop; None when counting fails, and the gate then leaves the placement alone."""
         import litellm
-        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.litellm_core_utils.token_counter import offload_token_count
 
         out_of_band: Final = self._out_of_band_request_text(request_kwargs)
         try:
-            counted: Final = await asyncify(litellm.token_counter)(
+            counted: Final = await offload_token_count(litellm.token_counter)(
                 messages=cast(list, resolved_messages)  # cast-ok: token_counter only iterates the sequence
             )
-            return counted + (await asyncify(litellm.token_counter)(text=out_of_band) if out_of_band else 0)
+            return counted + (await offload_token_count(litellm.token_counter)(text=out_of_band) if out_of_band else 0)
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.debug("ComplexityRouter: context-window token count failed. Got - %s", e)
             return None
+
+    async def _request_context_fit(
+        self,
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: Mapping[str, object],
+    ) -> _RequestContextFit:
+        if (
+            compaction_pending(request_kwargs)
+            or not self.config.enable_context_window_escalation
+            or not resolved_messages
+        ):
+            return _RequestContextFit(EMPTY_MAPPING, None, self.config.context_window_escalation_buffer)
+        names: Final = frozenset(model for pool in self._tier_pools().values() for model in pool) | frozenset(
+            (self.config.default_model,) if self.config.default_model else ()
+        )
+        facts: Final = MappingProxyType({name: self._group_window_facts(name) for name in names})
+        known: Final = tuple(window for window, _ in facts.values() if window is not None)
+        buffer: Final = self.config.context_window_escalation_buffer
+        needs_count: Final = known and self._request_byte_upper_bound(resolved_messages, request_kwargs) > int(
+            min(known) * buffer
+        )
+        needed: Final = await self._counted_request_tokens(resolved_messages, request_kwargs) if needs_count else None
+        return _RequestContextFit(facts=facts, needed=needed, buffer=buffer)
 
     async def _context_window_placement(
         self,
@@ -2586,28 +3315,26 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Sequence[Mapping[str, object]] | None,
         request_kwargs: Mapping[str, object],
         pool_override: tuple[str, ...] | None = None,
+        context_fit: _RequestContextFit | None = None,
     ) -> _ContextWindowPlacement | None:
         """Correct a decided placement whose models provably cannot hold the prompt, or None
         (the placement stands). Only a real tokenizer count ever moves a request, escalation
         lands only on groups whose every deployment declares a fitting window, and a group
         with no resolvable window is never moved on faith in either direction."""
-        if not self.config.enable_context_window_escalation or not resolved_messages:
+        if (
+            compaction_pending(request_kwargs)
+            or not self.config.enable_context_window_escalation
+            or not resolved_messages
+        ):
             return None
         pools: Final = self._tier_pools()
         pool: Final = pool_override if pool_override is not None else tuple(pools.get(_tier_name(tier), ()))
         if not pool:
             return None
-        facts: Final = MappingProxyType({group: self._group_window_facts(group) for group in pool})
-        known_windows: Final = tuple(window for window, _ in facts.values() if window is not None)
-        if not known_windows:
+        fit: Final = context_fit or await self._request_context_fit(resolved_messages, request_kwargs)
+        if fit.needed is None:
             return None
-        buffer: Final = self.config.context_window_escalation_buffer
-        if self._request_byte_upper_bound(resolved_messages, request_kwargs) <= int(min(known_windows) * buffer):
-            return None
-        needed: Final = await self._counted_request_tokens(resolved_messages, request_kwargs)
-        if needed is None:
-            return None
-        return self._placement_for_tokens(tier=tier, pool=pool, pools=pools, facts=facts, needed=needed)
+        return self._placement_for_tokens(tier=tier, pool=pool, pools=pools, facts=fit.facts, needed=fit.needed)
 
     def _placement_for_tokens(
         self,
@@ -2619,14 +3346,16 @@ class ComplexityRouter(CustomLogger):
         needed: int,
     ) -> _ContextWindowPlacement | None:
         buffer: Final = self.config.context_window_escalation_buffer
-        in_tier: Final = tuple(group for group in pool if _window_can_hold(facts[group][0], needed, buffer))
+        in_tier: Final = tuple(
+            group for group in pool if _window_can_hold(facts.get(group, (None, True))[0], needed, buffer)
+        )
         if in_tier and len(in_tier) == len(pool):
             return None
         holdable: Final = frozenset(
             group
             for tier_pool in pools.values()
             for group in tier_pool
-            if _window_can_hold(self._group_window_facts(group)[0], needed, buffer)
+            if _window_can_hold(facts.get(group, (None, True))[0], needed, buffer)
         )
         if in_tier:
             return _ContextWindowPlacement(tier=tier, allowed_models=in_tier, holdable_models=holdable)
@@ -2634,7 +3363,7 @@ class ComplexityRouter(CustomLogger):
             proven = tuple(
                 group
                 for group in pools.get(name, ())
-                if _group_provably_fits(self._group_window_facts(group), needed, buffer)
+                if _group_provably_fits(facts.get(group, (None, True)), needed, buffer)
             )
             if proven:
                 return _ContextWindowPlacement(
@@ -2705,19 +3434,21 @@ class ComplexityRouter(CustomLogger):
         )
         return higher_tiers[0] if higher_tiers else tier
 
-    def _escalated_pin(self, pinned_model: str) -> str | None:
+    def _escalated_pin(self, pinned_model: str, tier: ComplexityTier | str | None = None) -> _SessionAffinityPin | None:
         """Bump a session's pinned model to the next-higher configured tier.
 
         Returns None when the pin no longer maps to any configured tier, signalling
         a full reclassification instead.
         """
-        pinned_tier: Final = self._tier_for_model(pinned_model)
+        pinned_tier: Final = tier if tier is not None else self._tier_for_model(pinned_model)
         if pinned_tier is None:
             return None
         escalated_tier: Final = self._escalate_tier(pinned_tier)
         if escalated_tier == pinned_tier:
-            return pinned_model
-        return self.get_model_for_tier(escalated_tier)
+            return _SessionAffinityPin(pinned_model, pinned_tier)
+        return _SessionAffinityPin(
+            self.get_model_for_tier(escalated_tier), _built_in_tier_or_none(_tier_name(escalated_tier))
+        )
 
     def _vision_verdicts(self, model_name: str) -> tuple[bool | None, ...]:
         """Declared vision support per deployment serving the name: True, False, or None when
@@ -2777,9 +3508,11 @@ class ComplexityRouter(CustomLogger):
     async def _gate_response_modality(
         self,
         response: PreRoutingHookResponse,
-        messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
+        messages: list[dict[str, object]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
         resolved_messages: Sequence[Mapping[str, object]] | None,
         request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        context_fit: _RequestContextFit | None = None,
+        retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
         """Replace a routed model that cannot accept this request's image input.
 
@@ -2810,7 +3543,8 @@ class ComplexityRouter(CustomLogger):
             or self._model_accepts_image_input(response.model)
         ):
             return response
-        eligible: Final = self._modality_eligible_models()
+        fit: Final = context_fit or await self._request_context_fit(resolved_messages, request_kwargs)
+        eligible: Final = frozenset(name for name in self._modality_eligible_models() if fit.accepts(name))
         names: Final = self.config.tier_names()
         pools: Final = self._tier_pools()
         decided: Final = decision.get("tier") if decision is not None else None
@@ -2827,6 +3561,7 @@ class ComplexityRouter(CustomLogger):
                 repick_messages,  # pyright: ignore[reportArgumentType]  # hook-resolved message dicts; the pick only reads them
                 request_kwargs,
                 allowed_models=tuple(entry for entry in pools.get(capable, ()) if entry in eligible),
+                retained_pin=retained_pin,
             )
         elif self._modality_default_model_usable(request_kwargs, resolved_messages, eligible):
             new_tier = None
@@ -2876,6 +3611,7 @@ class ComplexityRouter(CustomLogger):
             context_escalation_original_tier=(
                 decision.get("context_escalation_original_tier") if decision is not None else None
             ),
+            previous_decision=decision,
         )
         from litellm.types.router import PreRoutingHookResponse as HookResponse
 
@@ -2929,12 +3665,15 @@ class ComplexityRouter(CustomLogger):
 
         Every way the owner says "nothing here can serve this" is a negative verdict: no healthy
         deployment for the group at all (BadRequestError, which ContextWindowExceededError
-        subclasses), every deployment filtered out (RouterRateLimitError), and every deployment
-        over its RPM (RouterRateLimitErrorBasic). Anything else is unknown rather than negative,
-        so it reads as capacity: absent information must never decide the verdict.
+        subclasses), every deployment filtered out (RouterRateLimitError), every deployment over
+        its RPM (RouterRateLimitErrorBasic), and every deployment refused by a filter that reports
+        exhaustion as a bare ValueError naming a RouterErrors marker -- provider and deployment
+        budgets, and tag routing, which have no typed error of their own. Anything else is unknown
+        rather than negative, so it reads as capacity: absent information must never decide the
+        verdict.
         """
         from litellm.exceptions import BadRequestError
-        from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
+        from litellm.types.router import RouterErrors, RouterRateLimitError, RouterRateLimitErrorBasic
 
         probe_kwargs: Final = dict(request_kwargs)  # mutable-ok: the owner pops routing keys off the dict it is handed
         try:
@@ -2944,10 +3683,15 @@ class ComplexityRouter(CustomLogger):
                 messages=messages,
                 input=input,
                 parent_otel_span=_get_parent_otel_span_from_kwargs(request_kwargs),
+                health_check_probe=True,
             )
-        except (RouterRateLimitError, RouterRateLimitErrorBasic, BadRequestError):
+        except (RouterRateLimitError, RouterRateLimitErrorBasic, BadRequestError) as exc:
+            verbose_router_logger.debug("health probe unavailable model=%s error=%s", model_name, type(exc).__name__)
             return False
         except Exception as exc:  # noqa: BLE001  # a speculative eligibility read must fail open on unknown faults
+            if isinstance(exc, ValueError) and any(marker.value in str(exc) for marker in RouterErrors):
+                verbose_router_logger.debug("health probe exhausted model=%s error=%s", model_name, exc)
+                return False
             verbose_router_logger.debug(
                 "ComplexityRouter: eligibility probe for %s failed, treating the group as live: %s", model_name, exc
             )
@@ -2957,80 +3701,131 @@ class ComplexityRouter(CustomLogger):
     async def _gate_response_health(
         self,
         response: PreRoutingHookResponse,
-        messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
+        messages: list[dict[str, object]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
         resolved_messages: Sequence[Mapping[str, object]] | None,
         request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        context_fit: _RequestContextFit | None = None,
+        retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
-        """Replace a decided model group that has no serving capacity with a live peer in the same tier.
-
-        Applied to the decided response at the hook's exits, so every arm that can place a request
-        is covered by one owner: a fresh classification, a replayed or escalated session pin, a
-        plan-mode floor, a context-window escalation, an adaptive pick, and whatever arm is added
-        next. Peers come from the DECIDED tier only; climbing to another tier is deliberately not
-        done here, since a higher tier costs more than the classifier asked for.
-
-        Serving capacity is one question asked of one owner (`_model_group_can_serve`), so the
-        substitute is only ever a group the pipeline would actually accept for this request. The
-        pick then runs through `_pick_model_for_tier`, so routing plugins decide the substitute
-        exactly as they decided the original.
-
-        Fails open everywhere it cannot be sure: an unreadable eligibility view, a decision
-        carrying no tier (default_model), or a tier whose every peer is unusable too. It fails
-        CLOSED on a plugin that empties the pool, leaving the original decision to fail rather
-        than serving a model the plugin excluded.
-        """
+        """Try compatible tier recovery before the default, preserving request policy and fit."""
         decision: Final = response.routing_decision
         decided_tier: Final = decision.get("tier") if decision is not None else None
         if decision is None or not isinstance(decided_tier, str):
             return response
-        peers: Final = tuple(self._tier_pools().get(decided_tier, ()))
-        if len(peers) < 2:
-            return response
-        if await self._model_group_can_serve(response.model, messages, input, request_kwargs):
+        fit: Final = context_fit or await self._request_context_fit(resolved_messages, request_kwargs)
+        if fit.accepts(response.model) and await self._model_group_can_serve(
+            response.model, messages, input, request_kwargs
+        ):
             return response
         eligible: Final = (
             self._modality_eligible_models()
             if self.config.modality_routing and resolved_messages and request_contains_image_content(resolved_messages)
             else None
         )
-        candidates: Final = tuple(
-            peer for peer in peers if peer != response.model and (eligible is None or peer in eligible)
+        pools: Final = self._tier_pools()
+        context_recovery: Final = bool(decision.get("context_escalated")) or any(
+            not fit.accepts(model) for model in pools.get(decided_tier, ())
         )
-        if not candidates:
-            return response
-        servable: Final = await asyncio.gather(
-            *(self._model_group_can_serve(peer, messages, input, request_kwargs) for peer in candidates)
+        modality_recovery: Final = eligible is not None
+        names: Final = self.config.tier_names()
+        tiers: Final = (
+            tuple(names[names.index(decided_tier) :])
+            if (context_recovery or modality_recovery) and decided_tier in names
+            else (decided_tier,)
         )
-        live: Final = tuple(peer for peer, can_serve in zip(candidates, servable) if can_serve)
-        if not live:
-            return response
-        repick_messages: Final = (
-            list(resolved_messages) if resolved_messages else None  # mutable-ok: the pick's param is list-typed
-        )
-        try:
-            new_model: Final = await self._pick_model_for_tier(
-                decided_tier if self.config.has_custom_tiers else ComplexityTier(decided_tier),
-                messages,
-                repick_messages,  # pyright: ignore[reportArgumentType]  # hook-resolved message dicts; the pick only reads them
-                request_kwargs,
-                allowed_models=live,
+
+        async def recover_tier(candidate_tier: str) -> PreRoutingHookResponse | None:
+            peers: Final = tuple(
+                model
+                for model in pools.get(candidate_tier, ())
+                if not context_recovery
+                or candidate_tier == decided_tier
+                or fit.needed is None
+                or _group_provably_fits(fit.facts.get(model, (None, True)), fit.needed, fit.buffer)
             )
-        except ValueError as exc:
-            verbose_router_logger.debug(
-                "ComplexityRouter: health failover found no candidate the routing plugins allow: %s", exc
+            candidates: Final = tuple(
+                peer
+                for peer in peers
+                if peer != response.model and fit.accepts(peer) and (eligible is None or peer in eligible)
             )
+            servable: Final = await asyncio.gather(
+                *(self._model_group_can_serve(peer, messages, input, request_kwargs) for peer in candidates)
+            )
+            live: Final = tuple(peer for peer, can_serve in zip(candidates, servable) if can_serve)
+            if live:
+                repick_messages: Final = (
+                    list(resolved_messages) if resolved_messages else None  # mutable-ok: the pick's param is list-typed
+                )
+                try:
+                    new_model: Final = await self._pick_model_for_tier(
+                        candidate_tier if self.config.has_custom_tiers else ComplexityTier(candidate_tier),
+                        messages,
+                        repick_messages,  # pyright: ignore[reportArgumentType]  # hook-resolved message dicts; the pick only reads them
+                        request_kwargs,
+                        allowed_models=live,
+                        retained_pin=retained_pin,
+                    )
+                except ValueError as exc:
+                    verbose_router_logger.debug(
+                        "ComplexityRouter: health failover found no candidate the routing plugins allow: %s", exc
+                    )
+                else:
+                    self._restamp_adaptive_choice(request_kwargs, response.model, new_model)
+                    verbose_router_logger.info(
+                        "ComplexityRouter: routing decision cause=health_failover, routed_model=%s, displaced=%s",
+                        new_model,
+                        response.model,
+                    )
+                    new_decision: Final = self._build_routing_decision(
+                        routed_model=new_model,
+                        cause="health_failover",
+                        tier=candidate_tier,
+                        score=decision.get("score"),
+                        signals=(*(decision.get("signals") or ()), f"health_displaced:{response.model}"),
+                        matched_keyword=decision.get("matched_keyword"),
+                        escalation_keyword=decision.get("escalation_keyword"),
+                        escalated=bool(decision.get("escalated", False)),
+                        classifier_model=decision.get("classifier_model"),
+                        classifier_cost=decision.get("classifier_cost"),
+                        conversation_continuing=bool(decision.get("conversation_continuing", True)),
+                        tier_litellm_params=self._litellm_params_for_model(candidate_tier, new_model),
+                        context_escalation_original_tier=decision.get("context_escalation_original_tier"),
+                        previous_decision=decision,
+                    )
+                    return response.model_copy(
+                        update={  # mutable-ok: model_copy types update as a plain dict
+                            "model": new_model,
+                            "litellm_params": self._litellm_params_for_model(candidate_tier, new_model),
+                            "routing_decision": new_decision,
+                        }
+                    )
+            return None
+
+        for candidate_tier in tiers:
+            if (recovered := await recover_tier(candidate_tier)) is not None:
+                return recovered
+        default_model: Final = self.config.default_model
+        plan_mode_active: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages) is not None
+        if (
+            plan_mode_active
+            or self.config.plugins
+            or not default_model
+            or default_model == response.model
+            or not fit.accepts(default_model)
+            or (eligible is not None and default_model not in eligible)
+            or not await self._model_group_can_serve(default_model, messages, input, request_kwargs)
+        ):
             return response
-        self._restamp_adaptive_choice(request_kwargs, response.model, new_model)
+        self._restamp_adaptive_choice(request_kwargs, response.model, default_model)
         verbose_router_logger.info(
-            "ComplexityRouter: routing decision cause=health_failover, routed_model=%s, displaced=%s",
-            new_model,
+            "ComplexityRouter: routing decision cause=health_default_fallback, routed_model=%s, displaced=%s",
+            default_model,
             response.model,
         )
-        new_decision: Final = self._build_routing_decision(
-            routed_model=new_model,
-            cause="health_failover",
-            tier=decision.get("tier"),
+        default_decision: Final = self._build_routing_decision(
+            routed_model=default_model,
+            cause="health_default_fallback",
             score=decision.get("score"),
             signals=(*(decision.get("signals") or ()), f"health_displaced:{response.model}"),
             matched_keyword=decision.get("matched_keyword"),
@@ -3039,14 +3834,15 @@ class ComplexityRouter(CustomLogger):
             classifier_model=decision.get("classifier_model"),
             classifier_cost=decision.get("classifier_cost"),
             conversation_continuing=bool(decision.get("conversation_continuing", True)),
-            tier_litellm_params=self._litellm_params_for_model(decided_tier, new_model),
+            tier_litellm_params=self._litellm_params_for_model(None, default_model),
             context_escalation_original_tier=decision.get("context_escalation_original_tier"),
+            previous_decision=decision,
         )
         return response.model_copy(
             update={  # mutable-ok: model_copy types update as a plain dict
-                "model": new_model,
-                "litellm_params": self._litellm_params_for_model(decided_tier, new_model),
-                "routing_decision": new_decision,
+                "model": default_model,
+                "litellm_params": self._litellm_params_for_model(None, default_model),
+                "routing_decision": default_decision,
             }
         )
 
@@ -3063,8 +3859,13 @@ class ComplexityRouter(CustomLogger):
         """The adaptive feedback loop reads its chosen-model marker from request metadata; a
         gate rewrite must move the marker with the model or rewards land on the displaced one."""
         metadata: Final = request_kwargs.get("metadata")
-        if isinstance(metadata, dict) and metadata.get("adaptive_router_chosen_model") == old_model:
+        if not isinstance(metadata, dict):
+            return
+        if metadata.get("adaptive_router_chosen_model") == old_model:
             metadata["adaptive_router_chosen_model"] = new_model
+        decision: Final = metadata.get("adaptive_router_decision")
+        if isinstance(decision, dict) and decision.get("chosen_model") == old_model:
+            decision["chosen_model"] = new_model
 
     def _lexical_tier_override(self, user_message: str) -> KeywordOverride | None:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.
@@ -3221,9 +4022,9 @@ class ComplexityRouter(CustomLogger):
 
     def _resolve_messages(
         self,
-        messages: list[dict[str, Any]] | None,
+        messages: list[dict[str, object]] | None,
         request_kwargs: dict,
-    ) -> list[dict[str, Any]] | None:
+    ) -> list[dict[str, object]] | None:
         """
         Resolve messages from the request, converting from other formats if needed.
 
@@ -3238,7 +4039,7 @@ class ComplexityRouter(CustomLogger):
 
     @staticmethod
     def _extract_user_message_and_system_prompt(
-        messages: list[dict[str, Any]],
+        messages: Sequence[Mapping[str, object]],
     ) -> tuple[str | None, str | None]:
         """
         Deprecated: use _extract_current_ask_and_system_prompt instead.
@@ -3247,6 +4048,18 @@ class ComplexityRouter(CustomLogger):
         and harness messages) and the last system prompt.
         """
         return _extract_current_ask_and_system_prompt(messages)
+
+    def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
+        if self.config.reminder_markers is not None:
+            return self._reminder_markers
+        if any(
+            is_codex_user_agent(user_agent)
+            for metadata_key in ("litellm_metadata", "metadata")
+            if isinstance(metadata := request_kwargs.get(metadata_key), Mapping)
+            if isinstance(user_agent := metadata.get("user_agent"), str)
+        ):
+            return _CODEX_REMINDER_MARKERS
+        return _DEFAULT_REMINDER_MARKERS
 
     @staticmethod
     def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
@@ -3349,6 +4162,8 @@ class ComplexityRouter(CustomLogger):
         # chat-completions messages, so it is real work on every non-chat surface, and
         # both the conversation shape and the classifier read the same list.
         resolved_messages: Final = self._resolve_messages(messages, request_kwargs)
+        context_fit: Final = await self._request_context_fit(resolved_messages, request_kwargs)
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs)
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
         use_session_affinity: Final = self._uses_tier_pin
@@ -3358,30 +4173,47 @@ class ComplexityRouter(CustomLogger):
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
         pin_replay_allowed: Final = bool(self.config.session_affinity) or not _newest_turn_is_human_ask(
-            resolved_messages, self._reminder_markers
+            resolved_messages, marker_pairs
         )
 
         if cache_key is not None and pin_replay_allowed:
             pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
-            pinned_pin: Final = _parse_session_affinity_pin(pinned_value)
+            pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
-                routed_model: str | None = pinned_pin.model
-                pin_escalation_keyword: str | None = None
-                if self.escalation_keywords:
-                    user_message: Final = (
-                        _newest_turn_ask(resolved_messages, self._reminder_markers) if resolved_messages else None
+                user_message: Final = _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None
+                pin_escalation_keyword: Final = (
+                    self._matched_escalation_keyword(user_message) if user_message is not None else None
+                )
+                selected_pin: Final = (
+                    self._escalated_pin(pinned_pin.model, pinned_pin.tier)
+                    if pin_escalation_keyword is not None
+                    else _SessionAffinityPin(
+                        pinned_pin.model,
+                        pinned_pin.tier if pinned_pin.tier is not None else self._tier_for_model(pinned_pin.model),
                     )
-                    if user_message is not None:
-                        pin_escalation_keyword = self._matched_escalation_keyword(user_message)
-                    if pin_escalation_keyword is not None:
-                        routed_model = self._escalated_pin(pinned_pin.model)
-                if routed_model is not None:
-                    escalated: Final = routed_model != pinned_pin.model
-                    resolved_pin_tier: Final = (
-                        pinned_pin.tier
-                        if not escalated and pinned_pin.tier is not None
-                        else self._tier_for_model(routed_model)
+                )
+                if selected_pin is not None:
+                    escalated: Final = selected_pin.model != pinned_pin.model or (
+                        pin_escalation_keyword is not None
+                        and pinned_pin.tier is not None
+                        and selected_pin.tier != pinned_pin.tier
                     )
+                    resolved_pin_tier: Final = selected_pin.tier
+                    session_model: Final = (
+                        await self._pin_model_for_tier(
+                            resolved_pin_tier,
+                            selected_pin.model,
+                            tuple(self._tier_pools().get(_tier_name(resolved_pin_tier), ())),
+                            request_kwargs,
+                        )
+                        if escalated and resolved_pin_tier is not None
+                        else selected_pin.model
+                    )
+                    retained_pin: Final = _SessionAffinityPin(session_model, resolved_pin_tier)
+                    if resolved_pin_tier is not None:
+                        await self._pin_model_for_tier(
+                            resolved_pin_tier, session_model, (session_model,), request_kwargs
+                        )
                     # The floor outranks the pin because plan mode is a transient state of the
                     # session, not a request to move it: the turns carrying the sentinel route at
                     # the floor, and the stored pin deliberately keeps the session's own model so
@@ -3392,13 +4224,29 @@ class ComplexityRouter(CustomLogger):
                     plan_floored: Final = (
                         pinned_tier is not None and self._apply_plan_mode_floor(pinned_tier) != pinned_tier
                     )
-                    session_model: Final = routed_model
-                    if plan_floored and pinned_tier is not None:
-                        routed_model = self.get_model_for_tier(self._apply_plan_mode_floor(pinned_tier))
-                    pin_source_tier: Final = self._tier_for_model(routed_model)
+                    floor_model: Final = (
+                        await self._pick_model_for_tier(
+                            self._apply_plan_mode_floor(pinned_tier),
+                            messages,
+                            resolved_messages,
+                            request_kwargs,
+                            retained_pin=retained_pin,
+                        )
+                        if plan_floored and pinned_tier is not None
+                        else session_model
+                    )
+                    pin_source_tier: Final = (
+                        self._apply_plan_mode_floor(pinned_tier)
+                        if plan_floored and pinned_tier is not None
+                        else resolved_pin_tier
+                    )
                     pin_placement: Final = (
                         await self._context_window_placement(
-                            pin_source_tier, resolved_messages, request_kwargs, pool_override=(routed_model,)
+                            pin_source_tier,
+                            resolved_messages,
+                            request_kwargs,
+                            pool_override=(floor_model,),
+                            context_fit=context_fit,
                         )
                         if pin_source_tier is not None
                         else None
@@ -3410,11 +4258,18 @@ class ComplexityRouter(CustomLogger):
                         and _tier_name(pin_placement.tier) != _tier_name(pin_source_tier)
                         else None
                     )
-                    if pin_placement is not None and pin_context_original_tier is not None:
-                        # The stored pin below keeps the session's own model on purpose.
-                        routed_model = self._pick_from_tier_value(
-                            pin_placement.allowed_models, _tier_name(pin_placement.tier)
+                    routed_model: Final = (
+                        await self._pick_model_for_tier(
+                            pin_placement.tier,
+                            messages,
+                            resolved_messages,
+                            request_kwargs,
+                            allowed_models=pin_placement.allowed_models,
+                            retained_pin=retained_pin,
                         )
+                        if pin_placement is not None and pin_context_original_tier is not None
+                        else floor_model
+                    )
                     # Refresh the TTL on every hit so an active session doesn't lose its
                     # pin mid-conversation just because it outlives the original write.
                     await self.litellm_router_instance.cache.async_set_cache(
@@ -3442,7 +4297,7 @@ class ComplexityRouter(CustomLogger):
                     routed_pin_tier: Final = (
                         pin_placement.tier
                         if pin_placement is not None and pin_context_original_tier is not None
-                        else (self._tier_for_model(routed_model) if plan_floored else resolved_pin_tier)
+                        else pin_source_tier
                     )
                     session_tier_litellm_params: Final = self._litellm_params_for_model(routed_pin_tier, routed_model)
                     has_original_messages: Final = messages is not None and len(messages) > 0
@@ -3468,11 +4323,15 @@ class ComplexityRouter(CustomLogger):
                                 messages,
                                 resolved_messages,
                                 request_kwargs,
+                                context_fit,
+                                retained_pin,
                             ),
                             messages,
                             input,
                             resolved_messages,
                             request_kwargs,
+                            context_fit,
+                            retained_pin,
                         )
                     )
 
@@ -3484,14 +4343,18 @@ class ComplexityRouter(CustomLogger):
             specific_deployment=specific_deployment,
             conversation_continuing=conversation_continuing,
             resolved_messages=resolved_messages,
+            context_fit=context_fit,
         )
         response: Final = (
             await self._gate_response_health(
-                await self._gate_response_modality(routed_response, messages, resolved_messages, request_kwargs),
+                await self._gate_response_modality(
+                    routed_response, messages, resolved_messages, request_kwargs, context_fit
+                ),
                 messages,
                 input,
                 resolved_messages,
                 request_kwargs,
+                context_fit,
             )
             if routed_response is not None
             else None
@@ -3521,11 +4384,12 @@ class ComplexityRouter(CustomLogger):
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
         conversation_continuing: bool = True,
         resolved_messages: Sequence[Mapping[str, object]] | None = None,
+        context_fit: _RequestContextFit | None = None,
     ) -> PreRoutingHookResponse | None:
         """
         Classifies the request by complexity and returns the appropriate model.
@@ -3557,7 +4421,8 @@ class ComplexityRouter(CustomLogger):
         # Determine whether the original request used messages directly
         has_original_messages: Final = messages is not None and len(messages) > 0
 
-        user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages, self._reminder_markers)
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs)
+        user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages, marker_pairs)
         classifier_images: Final = self._classifier_image_parts(resolved_messages)
 
         if user_message is None and not classifier_images:
@@ -3591,7 +4456,7 @@ class ComplexityRouter(CustomLogger):
             )
 
         ask: Final = user_message or ""
-        newest_ask: Final = _newest_turn_ask(resolved_messages, self._reminder_markers)
+        newest_ask: Final = _newest_turn_ask(resolved_messages, marker_pairs)
         escalation_keyword: Final = self._matched_escalation_keyword(newest_ask) if newest_ask is not None else None
         # Resolved here rather than beside the classifier because the keyword-override path below
         # returns before any classification runs, and a forced tier gets stuck for the same reason
@@ -3696,7 +4561,9 @@ class ComplexityRouter(CustomLogger):
         plan_floored: Final = tier != pre_floor_tier
         if plan_floored:
             signals = (*signals, "plan_mode_floor")
-        context_placement: Final = await self._context_window_placement(tier, resolved_messages, request_kwargs)
+        context_placement: Final = await self._context_window_placement(
+            tier, resolved_messages, request_kwargs, context_fit=context_fit
+        )
         tier, signals, context_original_tier = _apply_context_placement(tier, signals, context_placement)
         score_repr: Final = f"{score:.3f}" if score is not None else "n/a"
         fallback_model: Final = self.config.default_model if not self.config.plugins else None
@@ -3749,13 +4616,26 @@ class ComplexityRouter(CustomLogger):
             housekeeping_ceiling: Final = tier if outcome.cause == "housekeeping" else None
             # A context-escalated tier becomes the hard floor: a floor the bandit can slide
             # under is not a floor.
-            routed_model = self._soft_floor_pick(
+            adaptive_floor: Final = (
+                tier
+                if context_original_tier is not None
+                or outcome.cause in ("capability_classifier", "capability_classifier_fallback")
+                else plan_floor
+            )
+            adaptive_fit: Final = context_placement.holdable_models if context_placement is not None else None
+            sampled_model: Final = self._soft_floor_pick(
                 tier,
                 ask,
                 request_kwargs,
-                hard_floor=tier if context_original_tier is not None else plan_floor,
+                hard_floor=adaptive_floor,
                 hard_ceiling=housekeeping_ceiling,
-                fit_filter=context_placement.holdable_models if context_placement is not None else None,
+                fit_filter=adaptive_fit,
+            )
+            routed_model = await self._pin_model_for_tier(  # rebind-ok: reuse the eligible tier winner
+                tier,
+                sampled_model,
+                self._adaptive_candidate_models(tier, adaptive_floor, housekeeping_ceiling, adaptive_fit),
+                request_kwargs,
             )
             adaptive: Final = self._ensure_adaptive_router()
             if adaptive is not None:
@@ -3790,8 +4670,11 @@ class ComplexityRouter(CustomLogger):
 
         tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
         classifier_model: Final = (
-            self.config.classifier_llm_config.model
-            if outcome.cause == "llm_classifier" and self.config.classifier_llm_config is not None
+            f"typesafe/{outcome.jev_verdict.model}"
+            if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
+            else self.config.classifier_llm_config.model
+            if outcome.cause in ("llm_classifier", "capability_classifier", "llm_v2_classifier", "llm_v2_fallback")
+            and self.config.classifier_llm_config is not None
             else None
         )
         # cause=default_model_fallback means no tier was decided: the classifier failed and the
@@ -3814,23 +4697,24 @@ class ComplexityRouter(CustomLogger):
         decision_keyword: Final = (
             plan_mode_sentinel if plan_floored else (housekeeping_sentinel if outcome.cause == "housekeeping" else None)
         )
+        routing_decision: Final = self._build_routing_decision(
+            routed_model=routed_model,
+            conversation_continuing=conversation_continuing,
+            cause=decision_cause,
+            tier=classified_pool_tier,
+            score=score,
+            signals=decision_signals,
+            matched_keyword=decision_keyword,
+            escalation_keyword=escalation_keyword,
+            escalated=escalated,
+            classifier_model=classifier_model,
+            classifier_cost=outcome.classifier_cost,
+            tier_litellm_params=tier_litellm_params,
+            context_escalation_original_tier=context_original_tier,
+        )
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages if has_original_messages else None,
             litellm_params=tier_litellm_params,
-            routing_decision=self._build_routing_decision(
-                routed_model=routed_model,
-                conversation_continuing=conversation_continuing,
-                cause=decision_cause,
-                tier=classified_pool_tier,
-                score=score,
-                signals=decision_signals,
-                matched_keyword=decision_keyword,
-                escalation_keyword=escalation_keyword,
-                escalated=escalated,
-                classifier_model=classifier_model,
-                classifier_cost=outcome.classifier_cost,
-                tier_litellm_params=tier_litellm_params,
-                context_escalation_original_tier=context_original_tier,
-            ),
+            routing_decision=_with_classifier_forecast(routing_decision, outcome),
         )

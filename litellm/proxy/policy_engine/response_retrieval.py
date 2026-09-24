@@ -84,7 +84,9 @@ def _retrieval_context(
 
 
 def _post_call_pipelines_for_context(context: PolicyMatchContext) -> tuple[PolicyPipelines, Mapping[str, str]]:
-    matches: Final = get_attachment_registry().get_attached_policies_with_reasons(context)
+    matches: Final = get_attachment_registry().get_attached_policies_with_reasons(
+        context, PolicyMatcher.policy_applies(context)
+    )
     if not matches:
         return (), MappingProxyType({})
     applied_policy_names: Final = PolicyMatcher.get_policies_with_matching_conditions(

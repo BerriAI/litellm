@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     _add_key_name_and_team_to_alert,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -99,6 +100,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting_args={},
         default_webhook_url: str | None = None,
         alert_type_config: dict[str, dict] | None = None,
+        async_http_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         if alerting_threshold is None:
@@ -107,7 +109,9 @@ class SlackAlerting(CustomBatchLogger):
         self.alerting = alerting
         self.alert_types = alert_types
         self.internal_usage_cache = internal_usage_cache or DualCache()
-        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        self.async_http_handler = async_http_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
         self.alert_to_webhook_url = process_slack_alerting_variables(alert_to_webhook_url=alert_to_webhook_url)
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
@@ -647,10 +651,10 @@ class SlackAlerting(CustomBatchLogger):
                 event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
                 event = "threshold_crossed"
-                event_message += "5% Threshold Crossed "
+                event_message += "5% or less of budget remaining"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
                 event = "threshold_crossed"
-                event_message += "15% Threshold Crossed"
+                event_message += "15% or less of budget remaining"
 
         return event, event_message
 
@@ -673,7 +677,7 @@ class SlackAlerting(CustomBatchLogger):
         Create a standard message for a budget alert
         """
         _all_fields_as_dict: Final[dict[str, object]] = user_info.model_dump(exclude_none=True)
-        _all_fields_as_dict.pop("token")
+        _all_fields_as_dict.pop("token", None)
         msg = ""
         for k, v in _all_fields_as_dict.items():
             if isinstance(v, Litellm_EntityType):
@@ -1583,12 +1587,12 @@ Model Info:
         if not self.log_queue:
             return
 
-        squashed_queue: Final = squash_payloads(self.log_queue)
-        tasks: Final = [
-            send_to_webhook(slackAlertingInstance=self, item=item["item"], count=item["count"])
-            for item in squashed_queue.values()
-        ]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(
+            *(
+                send_to_webhook(slackAlertingInstance=self, item=squashed.item, count=squashed.count)
+                for squashed in squash_payloads(self.log_queue)
+            )
+        )
         self.log_queue.clear()
 
     async def _flush_digest_buckets(self):

@@ -10,12 +10,15 @@
 ## LiteLLM versions of the OpenAI Exception Types
 
 import enum
+from collections.abc import Sequence
 from typing import Any, Final
 
 import httpx
 import openai
 
+import litellm
 from litellm.types.utils import LiteLLMCommonStrings
+from litellm.types.vector_stores import VectorStoreSearchFailure
 
 
 class RateLimitErrorCategory(str, enum.Enum):
@@ -288,6 +291,29 @@ class ImageFetchError(BadRequestError):
         )
 
 
+VECTOR_STORE_SEARCH_FAILED_CODE: Final = "vector_store_search_failed"
+
+
+class VectorStoreSearchError(BadRequestError):
+    def __init__(
+        self,
+        failures: Sequence[VectorStoreSearchFailure],
+        model: str | None = None,
+        llm_provider: str | None = None,
+    ) -> None:
+        self.failures: Final[tuple[VectorStoreSearchFailure, ...]] = tuple(failures)
+        detail: Final = "; ".join(f"{failure['vector_store_id']}: {failure['error']}" for failure in self.failures)
+        super().__init__(
+            message=(
+                "The request could not be grounded in every configured vector store. "
+                f"{len(self.failures)} vector store search(es) failed: {detail}"
+            ),
+            model=model,
+            llm_provider=llm_provider,
+            body={"type": "invalid_request_error", "code": VECTOR_STORE_SEARCH_FAILED_CODE},
+        )
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,
@@ -439,6 +465,7 @@ class RateLimitError(openai.RateLimitError):
         rate_limit_type: str | RateLimitType | None = None,
         headers: dict[str, str] | None = None,
         detail: Any = None,
+        body: object | None = None,
     ):
         self.status_code = 429
         self.message = f"litellm.RateLimitError: {message}"
@@ -475,13 +502,14 @@ class RateLimitError(openai.RateLimitError):
         self.response = httpx.Response(
             status_code=429,
             headers=_response_headers,
+            content=response.content if response is not None else None,
             request=httpx.Request(
                 method="POST",
                 url=" https://cloud.google.com/vertex-ai/",
             ),
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
         self.code = "429"
         self.type = "throttling_error"
@@ -739,6 +767,7 @@ class InternalServerError(openai.InternalServerError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: object | None = None,
     ):
         self.status_code = 500
         self.message = f"litellm.InternalServerError: {message}"
@@ -757,8 +786,9 @@ class InternalServerError(openai.InternalServerError):
             ),
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
+        self.type = "internal_server_error"
 
     def __str__(self):
         _message = self.message
@@ -789,6 +819,7 @@ class APIError(openai.APIError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: object | None = None,
     ):
         self.status_code = status_code
         self.message = f"litellm.APIError: {message}"
@@ -799,7 +830,7 @@ class APIError(openai.APIError):
         self.num_retries = num_retries
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        super().__init__(self.message, request=request, body=None)
+        super().__init__(self.message, request=request, body=body)
 
     def __str__(self):
         _message = self.message
@@ -960,6 +991,10 @@ LITELLM_EXCEPTION_TYPES: Final = [
 ]
 
 
+class ModelNotMappedError(Exception):
+    pass
+
+
 class BudgetExceededError(Exception):
     def __init__(
         self,
@@ -972,7 +1007,7 @@ class BudgetExceededError(Exception):
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
-        self.status_code = 429
+        self.status_code = litellm.budget_exceeded_status_code
         self.llm_provider = llm_provider or ""
         self.entity_type = entity_type
         self.entity_id = entity_id

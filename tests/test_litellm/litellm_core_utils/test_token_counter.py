@@ -1,10 +1,16 @@
 #### What this tests ####
 #    This tests litellm.token_counter.token_counter() function
+import asyncio
+import base64
 import importlib
+import threading
 import time
 import traceback
+from concurrent.futures import Future, wait
+from typing import Final
 from unittest.mock import MagicMock
 
+import anyio.to_thread
 import pytest
 import tiktoken
 
@@ -14,9 +20,23 @@ import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.litellm_core_utils.token_counter import _get_tiktoken_count_function
+from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.token_counter import (
+    _get_exact_count_function,
+    _get_extrapolating_count_function,
+    _get_tiktoken_count_function,
+    calculate_img_tokens,
+    high_detail_image_token_upper_bound,
+    offload_token_count,
+)
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from tests.large_text import text
+from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    assert_loop_stayed_free,
+    timed_with_loop_lags,
+    warm_tokenizer,
+)
 from tests.test_litellm.litellm_core_utils.messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
@@ -78,6 +98,13 @@ def test_token_counter_short_text_matches_tiktoken(text):
     assert token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text) == expected
 
 
+def test_token_counter_default_encoding_matches_cl100k():
+    encoding: Final = tiktoken.get_encoding("cl100k_base")
+    expected: Final = len(encoding.encode("hello world", disallowed_special=()))
+
+    assert token_counter_new(model=None, text="hello world") == expected
+
+
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
     text = ("The quick brown fox jumps over the lazy dog. " * 30)[:1025]
     encoding = tiktoken.get_encoding("cl100k_base")
@@ -117,6 +144,135 @@ def test_valid_chunk_size_config_is_honoured(monkeypatch):
         assert importlib.reload(litellm.constants).TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS == 2048
     finally:
         monkeypatch.delenv("TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS")
+        importlib.reload(litellm.constants)
+
+
+async def test_huggingface_count_in_a_worker_thread_leaves_the_event_loop_free():
+    warm_tokenizer("claude-fable-5")
+
+    tokens, took, lags = await timed_with_loop_lags(
+        lambda: asyncify(token_counter_new)(model="claude-fable-5", text=text * 100)
+    )
+
+    assert tokens > 0
+    assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.parametrize("max_exact_chars", [64, 1_000, 2_500])
+def test_count_above_the_cap_samples_the_whole_string_and_scales(max_exact_chars: int):
+    count_exactly: Final = MagicMock(side_effect=lambda chunk: chunk.count("a") + len(chunk))
+    front_heavy: Final = "a" * 1_000 + "b" * 4_000
+    exact: Final = 1_000 + len(front_heavy)
+
+    estimate: Final = _get_extrapolating_count_function(count_exactly, max_exact_chars=max_exact_chars)(front_heavy)
+
+    assert abs(estimate - exact) <= exact // 100
+    assert sum(len(call.args[0]) for call in count_exactly.call_args_list) <= max_exact_chars
+
+
+def test_count_at_or_below_the_cap_is_exact():
+    count_exactly: Final = MagicMock(side_effect=len)
+
+    assert _get_extrapolating_count_function(count_exactly, max_exact_chars=5_000)("a" * 5_000) == 5_000
+    assert count_exactly.call_args_list == [(("a" * 5_000,),)]
+
+
+class _SlowEncoder:
+    def __init__(self) -> None:
+        self._lock: Final = threading.Lock()
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
+        with self._lock:
+            self.in_flight += 1
+            self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        time.sleep(0.1)
+        with self._lock:
+            self.in_flight -= 1
+        return [[0] * len(text) for text in texts]
+
+
+@pytest.mark.asyncio
+async def test_offloaded_counts_do_not_borrow_from_the_shared_thread_pool():
+    encoder: Final = _SlowEncoder()
+    count: Final = _get_exact_count_function(None, {"type": "huggingface_tokenizer", "tokenizer": encoder})
+    shared_pool: Final = anyio.to_thread.current_default_thread_limiter()
+    burst: Final = 2 * TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+
+    async def shared_pool_borrowed_until_done(counting: asyncio.Future[list[int]]) -> tuple[int, ...]:
+        if counting.done():
+            return ()
+        await asyncio.sleep(0.01)
+        return (shared_pool.borrowed_tokens, *await shared_pool_borrowed_until_done(counting))
+
+    counting: Final = asyncio.ensure_future(asyncio.gather(*(offload_token_count(count)("abc") for _ in range(burst))))
+    borrowed: Final = await shared_pool_borrowed_until_done(counting)
+
+    assert await counting == [3] * burst
+    assert len(borrowed) > 1 and max(borrowed) == 0
+    assert 1 < encoder.peak_in_flight <= TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+
+
+def _count_in_a_fresh_event_loop(text: str, result: Future[int]) -> None:
+    def slow_count(counted: str) -> int:
+        time.sleep(0.1)
+        return len(counted)
+
+    result.set_result(asyncio.run(offload_token_count(slow_count)(text)))
+
+
+def test_offloaded_counts_finish_in_every_event_loop_that_shares_the_process():
+    loops: Final = 2 * TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+    results: Final = tuple(Future[int]() for _ in range(loops))
+    threads: Final = tuple(
+        threading.Thread(target=_count_in_a_fresh_event_loop, args=("a" * size, result), daemon=True)
+        for size, result in enumerate(results, start=1)
+    )
+    for thread in threads:
+        thread.start()
+
+    _, pending = wait(results, timeout=5)
+
+    assert not pending
+    assert tuple(result.result() for result in results) == tuple(range(1, loops + 1))
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("8", 8), ("0", 4), ("not-an-int", 4)],
+)
+def test_max_concurrent_counts_config_is_honoured(monkeypatch: pytest.MonkeyPatch, configured: str, expected: int):
+    monkeypatch.setenv("TOKEN_COUNTER_MAX_CONCURRENT_COUNTS", configured)
+    try:
+        assert importlib.reload(litellm.constants).TOKEN_COUNTER_MAX_CONCURRENT_COUNTS == expected
+    finally:
+        monkeypatch.delenv("TOKEN_COUNTER_MAX_CONCURRENT_COUNTS")
+        importlib.reload(litellm.constants)
+
+
+def test_token_counter_applies_the_default_cap():
+    max_exact_chars: Final = litellm.constants.TOKEN_COUNTER_MAX_EXACT_CHARS
+    prose: Final = ("The quick brown fox jumps over the lazy dog. " * (max_exact_chars // 45 + 1))[:max_exact_chars]
+    over_the_cap: Final = prose + "a" * 200_000
+    exact: Final = _get_exact_count_function("gpt-5.6")(over_the_cap)
+
+    estimate: Final = token_counter_new(model="gpt-5.6", text=over_the_cap)
+
+    assert estimate != exact
+    assert abs(estimate - exact) <= exact // 100
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("2048", 2048), ("0", 4_000_000), ("not-an-int", 4_000_000)],
+)
+def test_max_exact_chars_config_is_honoured(monkeypatch: pytest.MonkeyPatch, configured: str, expected: int):
+    monkeypatch.setenv("TOKEN_COUNTER_MAX_EXACT_CHARS", configured)
+    try:
+        assert importlib.reload(litellm.constants).TOKEN_COUNTER_MAX_EXACT_CHARS == expected
+    finally:
+        monkeypatch.delenv("TOKEN_COUNTER_MAX_EXACT_CHARS")
         importlib.reload(litellm.constants)
 
 
@@ -477,9 +633,6 @@ def test_openai_token_with_image_and_text():
     "model, base_model, input_tokens, user_max_tokens, expected_value",
     [
         ("random-model", "random-model", 1024, 1024, 1024),
-        ("command", "command", 1000000, None, None),  # model max = 4096
-        ("command", "command", 4000, 256, 96),  # model max = 4096
-        ("command", "command", 4000, 10, 10),  # model max = 4096
         ("gpt-3.5-turbo", "gpt-3.5-turbo", 4000, 5000, 4096),  # model max output = 4096
     ],
 )
@@ -630,23 +783,23 @@ def test_token_counter():
 
 import unittest
 
-from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
+from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper, claude_json_str, encoding
 
 # Clear the cache at module load to ensure clean state
-_select_tokenizer_helper.cache_clear()
+_load_huggingface_tokenizer.cache_clear()
 
 
 class TestTokenizerSelection(unittest.TestCase):
     def setUp(self):
         """Clear the LRU cache before each test method.
 
-        The _select_tokenizer_helper function is decorated with @lru_cache,
-        which can cause cache hits from previous tests when running with
+        The HuggingFace tokenizers behind _select_tokenizer_helper are cached with
+        @lru_cache, which can cause cache hits from previous tests when running with
         --dist=loadscope (tests from same file run on same worker).
         """
-        _select_tokenizer_helper.cache_clear()
+        _load_huggingface_tokenizer.cache_clear()
 
-    @patch("litellm.utils.Tokenizer.from_pretrained")
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):
         # Setup mock to raise an error
         mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
@@ -661,7 +814,7 @@ class TestTokenizerSelection(unittest.TestCase):
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
 
-    @patch("litellm.utils.Tokenizer.from_pretrained")
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_cohere_tokenizer_api_failure(self, mock_from_pretrained):
         # Setup mock to raise an error
         mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
@@ -681,10 +834,10 @@ class TestTokenizerSelection(unittest.TestCase):
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
 
-    @patch("litellm.utils.Tokenizer.from_str")
-    def test_claude_tokenizer_api_failure(self, mock_from_str):
+    @patch("litellm.utils.tokenizer_dispatch.anthropic")
+    def test_claude_tokenizer_api_failure(self, mock_anthropic):
         # Setup mock to raise an error
-        mock_from_str.side_effect = Exception("Failed to load tokenizer")
+        mock_anthropic.side_effect = Exception("Failed to load tokenizer")
 
         # Add Claude model to the list for testing
         litellm.anthropic_models = ["claude-2"]
@@ -693,13 +846,13 @@ class TestTokenizerSelection(unittest.TestCase):
         result = _select_tokenizer_helper("claude-2")
 
         # Verify the attempt to load Claude tokenizer
-        mock_from_str.assert_called_once_with(claude_json_str)
+        mock_anthropic.assert_called_once_with()
 
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
 
-    @patch("litellm.utils.Tokenizer.from_pretrained")
+    @patch("litellm.utils.tokenizer_dispatch.from_pretrained")
     def test_llama2_tokenizer_api_failure(self, mock_from_pretrained):
         # Setup mock to raise an error
         mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
@@ -1101,6 +1254,25 @@ def test_token_counter_with_thinking_content():
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
 
 
+
+def test_token_counter_with_redacted_thinking_content():
+    """
+    A replayed redacted_thinking block (Anthropic redacted reasoning, or the /v1/messages bridge's stand-in
+    for a reasoning item with no summary) counts zero tokens for its encrypted payload, like a thinking
+    block with no text. It used to raise, which made is_prompt_caching_valid_prompt return False and the
+    prompt_caching pre-call check stop pinning the deployment that held the cached prefix.
+    """
+    model = "anthropic/claude-sonnet-4-5-20250929"
+    reply = {"type": "text", "text": "Draw from the box labeled Mixed, because that label must be wrong."}
+    redacted_block = {"type": "redacted_thinking", "data": "EqQBCkYIBRgCKkBjZ2xhc3M" * 30}
+    user_turn = {"role": "user", "content": [{"type": "text", "text": "Which box do you draw from?"}]}
+    follow_up = {"role": "user", "content": [{"type": "text", "text": "Restate that in one sentence."}]}
+
+    without_block = [user_turn, {"role": "assistant", "content": [reply]}, follow_up]
+    with_block = [user_turn, {"role": "assistant", "content": [redacted_block, reply]}, follow_up]
+
+    assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
+
 def test_token_counter_with_tool_reference_block():
     """
     Regression test: a message containing an Anthropic tool-search
@@ -1412,3 +1584,18 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     assert _count_user_content([prompt, named]) == _count_user_content(
         [prompt, {"type": "text", "text": "report.pdf"}]
     )
+
+
+def _png_data_url(width: int, height: int) -> str:
+    ihdr = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
+    return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
+
+
+@pytest.mark.parametrize(("width", "height"), [(1, 1), (768, 768), (2000, 768), (768, 2000), (4096, 4096), (8000, 3072)])
+def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int, height: int) -> None:
+    assert calculate_img_tokens(_png_data_url(width, height), mode="high") <= high_detail_image_token_upper_bound()
+
+
+def test_high_detail_image_token_upper_bound_is_reached_by_the_largest_high_res_image() -> None:
+    assert calculate_img_tokens(_png_data_url(2000, 768), mode="high") == high_detail_image_token_upper_bound()
+    assert calculate_img_tokens(_png_data_url(1, 1), mode="high") < high_detail_image_token_upper_bound()

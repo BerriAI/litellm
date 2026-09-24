@@ -47,6 +47,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import (
     CLI_SSO_CLAIM_MAP,
     CLI_SSO_CLAIM_MAX_SCALAR_LENGTH,
@@ -100,6 +101,7 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
     show_missing_vars_in_env,
 )
+from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
@@ -336,24 +338,29 @@ def _check_cli_sso_start_rate_limit(
         )
 
 
+def _read_cli_sso_flow(cache: DualCache, cache_key: str) -> object:
+    redis_cache: Final = cache.redis_cache
+    if redis_cache is None:
+        return cache.get_cache(key=cache_key)
+    try:
+        return redis_cache.get_cache(key=cache_key)
+    except RedisCircuitBreakerOpenError:
+        return None
+
+
 def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
     if isinstance(login_id, str) and login_id.startswith("sk-"):
         raise HTTPException(
             status_code=400,
             detail=(
                 "Your litellm CLI is out of date and uses a login flow this proxy no longer supports. "
-                "Upgrade it with `pip install -U 'litellm[proxy]'` and run `litellm-proxy login` again."
+                "Upgrade it with `pip install -U 'litellm[proxy]'` and run `lite login` again."
             ),
         )
     if not _is_valid_cli_sso_login_id(login_id):
         raise HTTPException(status_code=400, detail="Invalid CLI login session id")
 
-    cache_key: Final = _get_cli_sso_flow_cache_key(cast(str, login_id))
-    redis_cache: Final = cache.redis_cache
-    if redis_cache is not None:
-        flow = redis_cache.get_cache(key=cache_key)
-    else:
-        flow = cache.get_cache(key=cache_key)
+    flow = _read_cli_sso_flow(cache, _get_cli_sso_flow_cache_key(cast(str, login_id)))
     if isinstance(flow, str):
         try:
             flow = _as_object(json.loads(flow))
@@ -368,7 +375,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
         raise HTTPException(
             status_code=400,
             detail=(
-                "CLI login session not found or expired. Run `litellm-proxy login` again. "
+                "CLI login session not found or expired. Run `lite login` again. "
                 "If this happens immediately after starting a login, the proxy is likely running multiple "
                 "replicas without a shared cache; configure a Redis cache "
                 "so every replica can see the login session."
@@ -1104,10 +1111,7 @@ async def google_login(
 
     from fastapi.responses import HTMLResponse
 
-    hide_default_credentials_hint: Final = (
-        os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
-        or general_settings.get("hide_default_credentials_hint", False) is True
-    )
+    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
     form_response: Final = HTMLResponse(
         content=build_ui_login_form(
             show_deprecation_banner=True,
@@ -3588,6 +3592,7 @@ class SSOAuthenticationHandler:
         verbose_proxy_logger.info("user_defined_values for creating ui key: %s", user_defined_values)
 
         response: Final = await generate_key_helper_fn(
+            llm_router=None,
             request_type="key",
             duration=LITELLM_UI_SESSION_DURATION,
             key_max_budget=litellm.max_ui_session_budget,
@@ -3660,6 +3665,7 @@ class SSOAuthenticationHandler:
             auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
             disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
             server_root_path=get_server_root_path(),
+            password_reset_required=False,
         )
 
         from litellm.proxy.auth.login_utils import encode_ui_session_jwt

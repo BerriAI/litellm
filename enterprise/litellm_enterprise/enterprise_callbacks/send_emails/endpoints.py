@@ -60,6 +60,11 @@ async def _get_email_settings(prisma_client) -> Dict[str, bool]:
 
 async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
     """Helper function to save email settings to general_settings in db"""
+    from litellm.proxy.proxy_server import proxy_config
+
+    proxy_config.reject_config_owned_writes(
+        section_name="general_settings", changed_keys={"email_settings": settings}
+    )
     try:
         verbose_proxy_logger.debug(
             f"Saving email settings to general_settings: {settings}"
@@ -168,6 +173,8 @@ async def update_event_settings(
         await _save_email_settings(prisma_client, settings_dict)
 
         return {"message": "Email event settings updated successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating email settings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -197,6 +204,8 @@ async def reset_event_settings(
         await _save_email_settings(prisma_client, default_settings)
 
         return {"message": "Email event settings reset to defaults"}
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error resetting email settings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -37,7 +37,7 @@ Safe to enable globally:
 """
 
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Optional, Protocol, cast
 
 import httpx
@@ -48,6 +48,12 @@ from litellm.exceptions import (
     ServiceUnavailableError,
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    anthropic_content_lists,
+    encrypted_content_of_block,
+    strip_encrypted_reasoning_from_messages,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.types.llms.openai import AllMessageValues
@@ -138,14 +144,44 @@ class EncryptedContentAffinityCheck(CustomLogger):
             # If no encoded ID, check if encrypted_content itself is wrapped
             encrypted_content = item.get("encrypted_content")
             if encrypted_content and isinstance(encrypted_content, str):
-                (
-                    model_id,
-                    _,
-                ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(encrypted_content)
+                model_id = EncryptedContentAffinityCheck._model_id_from_wrapped_encrypted_content(encrypted_content)
                 if model_id:
                     return model_id
 
         return None
+
+    @staticmethod
+    def _anthropic_content_blocks(messages: object) -> Iterator[Mapping[str, object]]:
+        if not isinstance(messages, list):
+            return iter(())
+        return (
+            cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
+            for content in anthropic_content_lists(cast(list[object], messages))  # cast-ok: narrowed by isinstance
+            for block in cast(list[object], content)  # cast-ok: narrowed by isinstance
+            if isinstance(block, Mapping)
+        )
+
+    @staticmethod
+    def _model_id_from_wrapped_encrypted_content(encrypted_content: str) -> str | None:
+        model_id, _ = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(encrypted_content)
+        return model_id or None
+
+    @staticmethod
+    def _extract_model_id_from_anthropic_messages(messages: object) -> str | None:
+        return next(
+            (
+                model_id
+                for block in EncryptedContentAffinityCheck._anthropic_content_blocks(messages)
+                if (encrypted_content := encrypted_content_of_block(block)) is not None
+                if (
+                    model_id := EncryptedContentAffinityCheck._model_id_from_wrapped_encrypted_content(
+                        encrypted_content
+                    )
+                )
+                is not None
+            ),
+            None,
+        )
 
     @staticmethod
     def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
@@ -178,11 +214,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _encryption_boundary_key(
         litellm_params: object,
-    ) -> tuple | None:
+    ) -> tuple[object, object] | None:
         """
-        ``(api_base, api_key)`` pair identifying an Azure resource. Two
-        deployments sharing both are interchangeable for ``encrypted_content``
-        follow-ups; Azure rejects content produced by any other resource.
+        ``(api_base, api_key)`` identifies an upstream encryption boundary.
+        The values are resolved from the deployment and its named credential
+        without modifying the deployment.
 
         Accepts any object exposing dict-style ``.get(key, default)``: plain
         dicts (the common case in ``healthy_deployments``) as well as
@@ -197,9 +233,25 @@ class EncryptedContentAffinityCheck(CustomLogger):
             return None
         api_base: Final = getter("api_base")
         api_key: Final = getter("api_key")
-        if not api_base or not api_key:
+        credential_name: Final = getter("litellm_credential_name")
+        credential_values: Final[Mapping[str, object] | None] = (
+            CredentialAccessor.get_credential_values(credential_name)
+            if isinstance(credential_name, str) and credential_name
+            else None
+        )
+        effective_api_base: Final = (
+            credential_values.get("api_base")
+            if credential_values is not None and "api_base" in credential_values
+            else api_base
+        )
+        effective_api_key: Final = (
+            credential_values.get("api_key")
+            if credential_values is not None and "api_key" in credential_values
+            else api_key
+        )
+        if not effective_api_base or not effective_api_key:
             return None
-        return (api_base, api_key)
+        return (effective_api_base, effective_api_key)
 
     def _find_deployments_on_same_encryption_boundary(
         self,
@@ -240,8 +292,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
-        If the request ``input`` contains litellm-encoded item IDs, decode the
-        embedded ``model_id`` and pin the request to that deployment. Raises
+        If the request ``input`` contains litellm-encoded item IDs, or its Anthropic
+        ``messages`` replay a bridge-tagged thinking block, decode the embedded
+        ``model_id`` and pin the request to that deployment. Raises
         ``RateLimitError`` / ``ServiceUnavailableError`` when the originating
         deployment is a member of the routed model group but currently unavailable
         and no encryption-boundary peer exists, rather than dispatching a doomed
@@ -270,12 +323,15 @@ class EncryptedContentAffinityCheck(CustomLogger):
             request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = True
 
         request_input: Final = request_kwargs.get("input")
-        model_id: Final = self._extract_model_id_from_input(request_input)
+        anthropic_messages: Final = messages or request_kwargs.get("messages")
+        model_id: Final = self._extract_model_id_from_input(
+            request_input
+        ) or self._extract_model_id_from_anthropic_messages(anthropic_messages)
         if not model_id:
             return typed_healthy_deployments
 
         verbose_router_logger.debug(
-            "EncryptedContentAffinityCheck: decoded model_id=%s from input item IDs",
+            "EncryptedContentAffinityCheck: decoded model_id=%s from the request's encrypted content markers",
             model_id,
         )
 
@@ -327,6 +383,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 model,
             )
             ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(request_input)
+            strip_encrypted_reasoning_from_messages(anthropic_messages)
             return typed_healthy_deployments
 
         # The origin is a member of the routed group but currently unavailable (cooled down); fail fast

@@ -28,6 +28,28 @@ vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
   useMCPServers: () => ({ data: [{ server_id: "srv-1", server_name: "github" }] }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: () => ({
+    data: [{ access_group_id: "ag-1", access_group_name: "support-tools" }],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@/components/common_components/AccessGroupSelector", () => ({
+  default: ({ value, onChange }: { value?: string[]; onChange: (value: string[]) => void }) => (
+    <div>
+      <span data-testid="selected-access-groups">{(value ?? []).join(",")}</span>
+      <button type="button" onClick={() => onChange(["ag-1"])}>
+        Attach ag-1
+      </button>
+      <button type="button" onClick={() => onChange([])}>
+        Detach all access groups
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
   default: () => <div data-testid="mcp-server-selector" />,
 }));
@@ -76,6 +98,38 @@ describe("AgentInfoView settings", () => {
     expect(payload.tpm_limit).toBe(42);
     const clearedMcpGrants = { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} };
     expect(payload.object_permission).toEqual(clearedMcpGrants);
+    expect(payload.access_group_ids).toEqual([]);
+  });
+
+  it("sends the newly attached access group in the update payload", async () => {
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Attach ag-1" }));
+    expect(screen.getByTestId("selected-access-groups")).toHaveTextContent("ag-1");
+
+    fireEvent.click(screen.getByRole("button", { name: /Save Changes/ }));
+
+    await waitFor(() => expect(networking.patchAgentCall).toHaveBeenCalledTimes(1));
+    const [, , payload] = vi.mocked(networking.patchAgentCall).mock.calls[0];
+    expect(payload.access_group_ids).toEqual(["ag-1"]);
+  });
+
+  it("loads the attached access groups into the editor and sends an empty list once detached", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({ ...agent, access_group_ids: ["ag-1"] });
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Settings" }));
+    expect(await screen.findByTestId("selected-access-groups")).toHaveTextContent("ag-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Detach all access groups" }));
+    fireEvent.click(screen.getByRole("button", { name: /Save Changes/ }));
+
+    await waitFor(() => expect(networking.patchAgentCall).toHaveBeenCalledTimes(1));
+    const [, , payload] = vi.mocked(networking.patchAgentCall).mock.calls[0];
+    expect(payload.access_group_ids).toEqual([]);
   });
 
   it("shows MCP grants with server names on the overview tab", async () => {
@@ -87,5 +141,21 @@ describe("AgentInfoView settings", () => {
     render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
 
     expect(await screen.findByText("github (srv-1)")).toBeInTheDocument();
+  });
+
+  it("shows attached access groups with their names on the overview tab", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({ ...agent, access_group_ids: ["ag-1", "ag-unknown"] });
+
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    expect(await screen.findByText("support-tools (ag-1)")).toBeInTheDocument();
+    expect(screen.getByText("ag-unknown")).toBeInTheDocument();
+  });
+
+  it("shows None when the agent has no access groups attached", async () => {
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    expect(await screen.findByText("Access Groups")).toBeInTheDocument();
+    expect(screen.getByText("None")).toBeInTheDocument();
   });
 });

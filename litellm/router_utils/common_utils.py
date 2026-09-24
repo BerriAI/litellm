@@ -1,16 +1,18 @@
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
 
+import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.types.router import CredentialLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -73,6 +75,36 @@ def truncate_fallback_error_detail(detail: str) -> str:
         return detail
     dropped: Final = len(detail) - ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
     return f"{detail[:ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS]}... [truncated {dropped} characters]"
+
+
+def format_no_fallback_group_message(lookup_groups: Sequence[str], fallbacks: Sequence[Mapping[str, object]]) -> str:
+    """User-facing explanation appended when a request fails and no fallback chain matches its model group."""
+    requested: Final = " -> ".join(lookup_groups)
+    configured: Final = tuple(dict.fromkeys(key for entry in fallbacks for key in entry))
+    configured_text: Final = (
+        f" Fallbacks are configured for: {', '.join(configured)}." if configured else " No fallbacks are configured."
+    )
+    return (
+        f"\n\nLiteLLM: model group '{requested}' failed with the error above and no fallback model group was found "
+        f"for it, so the request was not retried on another model.{configured_text}"
+        " Add a fallbacks entry for that model group (Router fallbacks or proxy router_settings.fallbacks)"
+        " to retry on another model."
+    )
+
+
+def format_fallback_outcome_message(
+    model_group: str | None,
+    fallback_model_group: Sequence[object] | None,
+    fallback_failure_detail: str,
+) -> str:
+    """User-facing explanation appended when the fallback orchestrator gives up and re-raises the primary error."""
+    lead: Final = f"\n\nLiteLLM: model group '{model_group}' failed with the error above."
+    if not fallback_model_group:
+        return f"{lead} No fallback was attempted."
+    targets: Final = ", ".join(str(mask_sensitive_structure(target)) for target in fallback_model_group)
+    if not fallback_failure_detail:
+        return f"{lead} Fallback model group(s) configured: {targets}."
+    return f"{lead} Fallback to {targets} also failed: {fallback_failure_detail}"
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
@@ -254,6 +286,32 @@ PROVIDER_SCOPED_CREDENTIAL_PARAMS: Final[Mapping[str, frozenset[str]]] = Mapping
         "vertex_project": _VERTEX_PROVIDERS,
     }
 )
+
+
+def provider_for_generic_call(litellm_params: Mapping[str, object]) -> str | None:
+    """
+    The provider the router hands a deployment's generic SDK call, or None when it cannot be resolved.
+
+    A model that carries its own provider prefix keeps that prefix even where get_llm_provider
+    would resolve it to a sibling provider (azure_ai/<openai model> on an Azure OpenAI host
+    resolves to azure): the SDK call still receives the prefixed model, and an explicit provider
+    that contradicts the prefix makes get_llm_provider re-prefix it into a deployment name that
+    does not exist upstream.
+    """
+    declared: Final = litellm_params.get("custom_llm_provider")
+    if isinstance(declared, str) and declared:
+        return declared
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str) or not model:
+        return None
+    prefix: Final = model.split("/", 1)[0]
+    if "/" in model and prefix in litellm.provider_list:
+        return prefix
+    try:
+        _, inferred, _, _ = get_llm_provider(model=model)
+    except BadRequestError:
+        return None
+    return inferred
 
 
 def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mapping[str, object]) -> str | None:

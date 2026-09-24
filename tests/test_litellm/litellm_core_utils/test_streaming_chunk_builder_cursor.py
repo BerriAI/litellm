@@ -15,16 +15,16 @@ calculate_usage() never fires, and the request is billed for 1 output
 token even when several thousand tokens of text were actually streamed.
 
 These tests pin the post-fix behavior: completion_tokens should reset
-to 0 when the only update we saw was the cursor, allowing the
+to None when the only update we saw was the cursor, allowing the
 text-based fallback to estimate from the real completion text.
 """
 
-
 import pytest
 
-
+import litellm
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
     Delta,
     ModelResponseStream,
     StreamingChoices,
@@ -35,6 +35,7 @@ from litellm.types.utils import (
 def _make_chunk(
     *,
     content: str = "",
+    reasoning_content: str | None = None,
     usage: Usage = None,
     finish_reason: str = None,
     custom_llm_provider: str = "anthropic",
@@ -48,7 +49,7 @@ def _make_chunk(
             StreamingChoices(
                 finish_reason=finish_reason,
                 index=0,
-                delta=Delta(content=content, role="assistant"),
+                delta=Delta(content=content, role="assistant", reasoning_content=reasoning_content),
             )
         ],
         usage=usage,
@@ -62,16 +63,14 @@ def _make_chunk(
 class TestAnthropicCursorBug:
     """The core regression: completion_tokens=1 cursor must not leak through."""
 
-    def test_only_message_start_cursor_resets_completion_to_zero(self):
+    def test_only_message_start_cursor_resets_completion_to_unreported(self):
         """
         Stream cancelled before message_delta — only the message_start cursor
-        (output_tokens=1) was seen. Per-chunk accumulator must reset to 0 so
+        (output_tokens=1) was seen. Per-chunk accumulator must reset to None so
         token_counter fallback can estimate from completion text.
         """
         # Anthropic message_start: input_tokens accurate, output_tokens=1 cursor
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025))
         # Several content_block_delta chunks (no usage attached)
         text_chunks = [
             _make_chunk(content="Hello"),
@@ -84,11 +83,11 @@ class TestAnthropicCursorBug:
         result = processor._calculate_usage_per_chunk(chunks=chunks)
 
         assert result["prompt_tokens"] == 1024
-        # The cursor value of 1 must NOT leak through — should be reset to 0
+        # The cursor value of 1 must NOT leak through — should be reset to None
         # so the text-based fallback estimates the real completion length.
-        assert result["completion_tokens"] == 0, (
+        assert result["completion_tokens"] is None, (
             "completion_tokens=1 from message_start cursor leaked through. "
-            "Should reset to 0 when only cursor was seen, so token_counter "
+            "Should reset to None when only cursor was seen, so token_counter "
             "fallback in calculate_usage() can estimate from completion text."
         )
 
@@ -97,9 +96,7 @@ class TestAnthropicCursorBug:
         Normal complete stream: message_start cursor=1, then message_delta=3847.
         Last-wins must give 3847 (the real value).
         """
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025))
         text_chunks = [_make_chunk(content=t) for t in ["Hello", " world", "!"]]
         # message_delta with the real cumulative output_tokens
         message_delta = _make_chunk(
@@ -119,19 +116,14 @@ class TestAnthropicCursorBug:
         End-to-end via calculate_usage(): cursor-only stream + real completion
         text should produce a token-counter estimate, NOT 1.
         """
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025))
         # ~50 visible chars ≈ ~12 tokens (anthropic-style tokenizer ballpark)
         text_chunks = [
             _make_chunk(content="Based on your question, I think the answer is "),
             _make_chunk(content="forty-two. Here is my reasoning: "),
         ]
         chunks = [message_start, *text_chunks]
-        completion_output = (
-            "Based on your question, I think the answer is forty-two. "
-            "Here is my reasoning: "
-        )
+        completion_output = "Based on your question, I think the answer is forty-two. Here is my reasoning: "
 
         processor = ChunkProcessor(chunks=chunks, messages=[])
         usage = processor.calculate_usage(
@@ -149,9 +141,7 @@ class TestAnthropicCursorBug:
 
     def test_cache_fields_preserved_from_message_start(self):
         """cache_read / cache_creation come from message_start and must survive."""
-        message_start_usage = Usage(
-            prompt_tokens=1024, completion_tokens=1, total_tokens=1025
-        )
+        message_start_usage = Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
         # Anthropic puts these in message_start
         message_start_usage.cache_read_input_tokens = 512
         message_start_usage.cache_creation_input_tokens = 128
@@ -193,9 +183,7 @@ class TestAnthropicCursorBug:
         on a 1-token string also gives ~1, so billing is still approximately
         correct. This test pins that the result is sane (1 or 0).
         """
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=20, completion_tokens=1, total_tokens=21)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=20, completion_tokens=1, total_tokens=21))
         text_chunk = _make_chunk(content="Yes.")
         # Anthropic's message_delta also gives output_tokens=1 in this case
         message_delta = _make_chunk(
@@ -231,9 +219,7 @@ class TestAnthropicCursorBug:
         must fire so token_counter estimates from completion text instead of
         billing the placeholder.
         """
-        message_start_usage = Usage(
-            prompt_tokens=1024, completion_tokens=1, total_tokens=1025
-        )
+        message_start_usage = Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
         message_start_usage.cache_read_input_tokens = 4096
         message_start = _make_chunk(usage=message_start_usage)
         # Subsequent chunks with cache fields but no completion_tokens
@@ -247,11 +233,119 @@ class TestAnthropicCursorBug:
         result = processor._calculate_usage_per_chunk(chunks=chunks)
 
         assert result["cache_read_input_tokens"] == 4096
-        assert result["completion_tokens"] == 0, (
+        assert result["completion_tokens"] is None, (
             "cache chunks alone don't count as completion progress — only "
             "completion_tokens > 0 in a usage event proves real output happened. "
-            "Reset to 0 forces token_counter fallback."
+            "Reset to None forces token_counter fallback."
         )
+
+    @pytest.mark.parametrize("placeholder", [1, 3, 8])
+    def test_interrupted_reasoning_only_stream_estimates_from_reasoning(self, placeholder: int):
+        message_start = _make_chunk(
+            usage=Usage(
+                prompt_tokens=100,
+                completion_tokens=placeholder,
+                total_tokens=100 + placeholder,
+                completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=0, text_tokens=placeholder),
+            )
+        )
+        reasoning_text = "Let me work through the scheduling constraints step by step. " * 40
+        reasoning_chunks = [
+            _make_chunk(reasoning_content=reasoning_text[i : i + 50]) for i in range(0, len(reasoning_text), 50)
+        ]
+
+        response = litellm.stream_chunk_builder(
+            chunks=[message_start, *reasoning_chunks],
+            messages=[{"role": "user", "content": "Plan the schedule."}],
+        )
+
+        assert response.choices[0].message.reasoning_content == reasoning_text
+        reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+        assert reasoning_tokens > placeholder
+        assert response.usage.completion_tokens == reasoning_tokens, (
+            f"Expected completion_tokens to be the reasoning estimate, got "
+            f"completion_tokens={response.usage.completion_tokens} reasoning_tokens={reasoning_tokens}"
+        )
+        assert response.usage.total_tokens == response.usage.prompt_tokens + reasoning_tokens
+        details = response.usage.completion_tokens_details
+        assert details.text_tokens + details.reasoning_tokens == response.usage.completion_tokens
+
+    def test_fallback_counts_reasoning_and_text_together(self):
+        reasoning = "First I should check whether the input is sorted. " * 10
+        text = "The list is already sorted, so no work is needed."
+        chunks = [_make_chunk(reasoning_content=reasoning), _make_chunk(content=text)]
+
+        response = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "Sort it."}])
+
+        text_only = litellm.token_counter(model="claude-sonnet-4-6", text=text, count_response_tokens=True)
+        details = response.usage.completion_tokens_details
+        assert details.reasoning_tokens > 0
+        assert response.usage.completion_tokens == text_only + details.reasoning_tokens
+        assert details.text_tokens == text_only
+
+    def test_lone_usage_event_with_finish_reason_is_trusted(self):
+        chunks = [
+            _make_chunk(content="Yes, "),
+            _make_chunk(content="that works."),
+            _make_chunk(
+                usage=Usage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+                finish_reason="stop",
+            ),
+        ]
+        processor = ChunkProcessor(chunks=chunks, messages=[])
+        result = processor._calculate_usage_per_chunk(chunks=chunks)
+        assert result["completion_tokens"] == 5
+
+    def test_dict_chunks_with_finish_reason_are_trusted(self):
+        chunks = [
+            {
+                "_hidden_params": {"custom_llm_provider": "anthropic"},
+                "choices": [{"delta": {"content": "Yes, "}, "finish_reason": None}],
+            },
+            {
+                "_hidden_params": {"custom_llm_provider": "anthropic"},
+                "choices": [{"delta": {"content": "that works."}, "finish_reason": "stop"}],
+                "usage": Usage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+            },
+        ]
+        processor = ChunkProcessor(chunks=chunks, messages=[])
+        result = processor._calculate_usage_per_chunk(chunks=chunks)
+        assert result["completion_tokens"] == 5
+
+    def test_dict_chunks_without_finish_reason_reset_placeholder(self):
+        chunks = [
+            {
+                "_hidden_params": {"custom_llm_provider": "anthropic"},
+                "choices": [],
+                "usage": Usage(prompt_tokens=20, completion_tokens=1, total_tokens=21),
+            },
+            {
+                "_hidden_params": {"custom_llm_provider": "anthropic"},
+                "choices": [{"delta": {"content": "partial"}, "finish_reason": None}],
+            },
+        ]
+        processor = ChunkProcessor(chunks=chunks, messages=[])
+        result = processor._calculate_usage_per_chunk(chunks=chunks)
+        assert result["completion_tokens"] is None
+        assert result["completion_tokens_details"] is None
+
+    def test_estimated_reasoning_is_capped_to_trusted_completion_total(self):
+        chunks = [
+            _make_chunk(reasoning_content="Let me reason about this carefully and at length. " * 20),
+            _make_chunk(
+                finish_reason="stop",
+                usage=Usage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+            ),
+        ]
+        response = litellm.stream_chunk_builder(
+            chunks=chunks,
+            messages=[{"role": "user", "content": "Go."}],
+        )
+        details = response.usage.completion_tokens_details
+        assert response.usage.completion_tokens == 5
+        assert details.reasoning_tokens <= response.usage.completion_tokens
+        assert details.reasoning_tokens + details.text_tokens == response.usage.completion_tokens
+        assert details.text_tokens >= 0
 
 
 class TestProviderGuard:
@@ -297,22 +391,23 @@ class TestNonAnthropicStreamingIntact:
     """Make sure providers without cursor pattern still work."""
 
     def test_completion_tokens_above_one_never_resets(self):
-        """Any chunk reporting completion_tokens > 1 sets saw_non_cursor
-        and prevents the reset."""
+        """A non-Anthropic provider reporting completion_tokens > 1 from a
+        single usage event keeps that value."""
         chunks = [
             _make_chunk(
-                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+                custom_llm_provider="openai",
             ),
         ]
         processor = ChunkProcessor(chunks=chunks, messages=[])
         result = processor._calculate_usage_per_chunk(chunks=chunks)
         assert result["completion_tokens"] == 5
 
-    def test_no_usage_chunks_leaves_zero(self):
-        """Stream with zero usage info → completion_tokens stays 0
+    def test_no_usage_chunks_leaves_unreported(self):
+        """Stream with zero usage info → both counts stay None
         (token_counter fallback will handle it)."""
         chunks = [_make_chunk(content="hi"), _make_chunk(content=" there")]
         processor = ChunkProcessor(chunks=chunks, messages=[])
         result = processor._calculate_usage_per_chunk(chunks=chunks)
-        assert result["prompt_tokens"] == 0
-        assert result["completion_tokens"] == 0
+        assert result["prompt_tokens"] is None
+        assert result["completion_tokens"] is None

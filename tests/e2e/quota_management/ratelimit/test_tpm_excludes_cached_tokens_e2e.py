@@ -26,7 +26,7 @@ from models import (
 )
 from quota_client import QuotaClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 # Anthropic prompt caching (host has ANTHROPIC_API_KEY; Bedrock was "Operation not allowed").
 ANTHROPIC_MODEL = "anthropic/claude-haiku-4-5-20251001"

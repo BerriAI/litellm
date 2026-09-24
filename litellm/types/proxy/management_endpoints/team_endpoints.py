@@ -1,6 +1,8 @@
-from typing import Any, Literal
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -8,9 +10,38 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     Member,
+    MemberDeleteRequest,
 )
+from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
+from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
+
+
+TeamIdSearchFilter = TypedDict(
+    "TeamIdSearchFilter",
+    {  # mutable-ok: functional TypedDict field map
+        "in": NotRequired[ReadOnly[Sequence[str]]],
+        "notIn": NotRequired[ReadOnly[Sequence[str]]],
+    },
+)
+
+
+class TeamKeyActivitySearchWhere(TypedDict):
+    """Prisma filter behind `/team/daily/activity/aggregated/search`: exact token hash, or key alias
+    or user id containing the term, case-insensitive, narrowed to the teams and keys the caller may see."""
+
+    team_id: NotRequired[ReadOnly[TeamIdSearchFilter]]
+    token: NotRequired[ReadOnly[Mapping[Literal["in"], Sequence[str]]]]
+    OR: ReadOnly[
+        tuple[Mapping[Literal["token"], str] | Mapping[Literal["key_alias", "user_id"], InsensitiveContains], ...]
+    ]
+
+
+MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
+
+MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES: Final = 500
 
 
 class GetTeamMemberPermissionsRequest(BaseModel):
@@ -116,6 +147,88 @@ class BulkTeamMemberAddResponse(BaseModel):
     successful_additions: int
     failed_additions: int
     updated_team: dict[str, Any] | None = None
+
+
+class TeamMemberRef(MemberDeleteRequest):
+    """One member, named by exactly one of `user_id` or `user_email`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def one_identifier(self) -> "TeamMemberRef":
+        if self.user_id is not None and self.user_email is not None:
+            raise ValueError("Each member must be identified by exactly one of user_id or user_email")
+        return self
+
+
+class BulkTeamMemberDeleteRequest(BaseModel):
+    """Body of `POST /management/v1/teams/{team_id}/members/bulk_delete`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    members: tuple[TeamMemberRef, ...] = Field(min_length=1, max_length=MAX_BULK_TEAM_MEMBER_DELETES)
+
+
+class TeamMemberDeleteResult(BaseModel):
+    """Outcome for one requested member, in request order."""
+
+    user_id: str | None = None
+    user_email: str | None = None
+    success: bool
+    error: str | None = None
+
+
+class BulkTeamMemberDeleteResponse(ResourceResponse[tuple[TeamMemberDeleteResult, ...]]):
+    """`{data: [...]}` with one `TeamMemberDeleteResult` per requested member, in request order."""
+
+
+class TeamMemberBudgetPatch(TeamMemberRef):
+    """One member's per-member limits, merge-patch style: a field left out of the row is
+    untouched, a field sent as null is cleared, and clearing the last limit drops the
+    member back to the team default."""
+
+    max_budget_in_team: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    allowed_models: tuple[str, ...] | None = None
+
+    @field_validator("budget_duration")
+    @classmethod
+    def persistable_budget_duration(cls, value: str | None) -> str | None:
+        error: Final = budget_duration_error(value)
+        if error is not None:
+            raise ValueError(error)
+        return value
+
+
+class BulkTeamMemberBudgetUpdateRequest(BaseModel):
+    """Body of `POST /management/v1/teams/{team_id}/members/bulk_update`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    members: tuple[TeamMemberBudgetPatch, ...] = Field(min_length=1, max_length=MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES)
+
+
+class TeamMemberBudgetUpdateResult(BaseModel):
+    """Outcome for one requested member, in request order, carrying the limits in force
+    after the write rather than the ones that were asked for."""
+
+    user_id: str | None = None
+    user_email: str | None = None
+    success: bool
+    error: str | None = None
+    budget_id: str | None = None
+    max_budget: float | None = None
+    max_budget_source: Literal["member", "team_default"] | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    allowed_models: tuple[str, ...] | None = None
+
+
+class BulkTeamMemberBudgetUpdateResponse(ResourceResponse[tuple[TeamMemberBudgetUpdateResult, ...]]):
+    """`{data: [...]}` with one `TeamMemberBudgetUpdateResult` per requested member, in request order."""
 
 
 class TeamMemberInfoResponse(LiteLLM_TeamMembership):
