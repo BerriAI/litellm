@@ -462,6 +462,8 @@ _COVERED_TABLE_SPECS: Final = [
     ("mcp_server", "litellm_mcpservertable", ("credentials", "env_vars", "static_headers", "env"), ()),
     ("mcp_user_credentials", "litellm_mcpusercredentials", (), ("credential_b64",)),
     ("mcp_user_env_vars", "litellm_mcpuserenvvars", (), ("values_b64",)),
+    ("mcp_oauth_client", "litellm_mcpserveroauthclient", ("credentials",), ()),
+    ("sso_identity_assertion", "litellm_ssoidentityassertion", (), ("assertion_b64",)),
 ]
 
 
@@ -493,14 +495,27 @@ def _classify_into_report(report: LocationReport, value: str) -> None:
     report.count(classify_value(value, key="scan"))
 
 
+def _secret_map_ciphertext(value: object) -> object:
+    """The stored ciphertext behind an MCP secret map: the JSON quoted string is unwrapped, a plain map or
+    anything that is not JSON is returned as is for ``decode_secret_map`` to judge."""
+    if not isinstance(value, str) or not value.lstrip().startswith('"'):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return value
+
+
 def _classify_secret_map(value: object, key: str) -> ValueClass | None:
+    ciphertext: Final = _secret_map_ciphertext(value)
+    if isinstance(ciphertext, str) and not ciphertext.lstrip().startswith("{"):
+        require_legacy_reader_for((ciphertext,), "scan stored encryption")
     try:
         decoded: Final = decode_secret_map(value, key=key)
     except SecretMapDecodeError:
         return "undecryptable"
     if not decoded:
         return None
-    ciphertext: Final = json.loads(value) if isinstance(value, str) and value.lstrip().startswith('"') else value
     return "migrated" if is_migrated(ciphertext) else "legacy"
 
 

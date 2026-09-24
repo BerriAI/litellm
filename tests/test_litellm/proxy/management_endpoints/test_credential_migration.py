@@ -17,6 +17,7 @@ import pytest
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _V3_GCM_PREFIX,
+    encrypt_secret_map,
     encrypt_value_helper,
 )
 from litellm.proxy.management_endpoints import credential_migration as cm
@@ -155,6 +156,41 @@ async def test_migrate_and_check_refuse_without_pynacl_instead_of_miscounting_le
         await cm.migrate_encryption(prisma_client=client, user_api_key_dict=MagicMock())
     client.db.litellm_proxymodeltable.update_many.assert_not_awaited()
     client.db.litellm_config.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "db_attr, build_row",
+    [
+        ("litellm_mcpservertable", lambda ct: SimpleNamespace(server_id="s1", static_headers=json.dumps(ct))),
+        ("litellm_mcpservertable", lambda ct: SimpleNamespace(server_id="s1", env=ct)),
+        ("litellm_mcpserveroauthclient", lambda ct: SimpleNamespace(server_id="s1", credentials={"client_secret": ct})),
+        ("litellm_ssoidentityassertion", lambda ct: SimpleNamespace(user_id="u1", assertion_b64=ct)),
+    ],
+)
+@pytest.mark.asyncio
+async def test_check_refuses_without_pynacl_for_every_rotation_rewritten_location(
+    db_attr, build_row, salt_key, monkeypatch
+):
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+    legacy_map: Final = json.loads(encrypt_secret_map({"Authorization": "Bearer legacy"}))
+    legacy_value: Final = encrypt_value_helper("legacy-secret")
+    _enable_aes(monkeypatch)
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    ciphertext: Final = legacy_map if db_attr == "litellm_mcpservertable" else legacy_value
+    getattr(client.db, db_attr).find_many = AsyncMock(return_value=[build_row(ciphertext)])
+
+    with_pynacl: Final = await cm.check_encryption(prisma_client=client)
+    assert with_pynacl.residual_legacy == 1, with_pynacl.to_dict()
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    with pytest.raises(RuntimeError, match="legacy-encryption"):
+        await cm.check_encryption(prisma_client=client)
 
 
 # --------------------------- config-row walker ---------------------------
