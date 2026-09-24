@@ -2042,7 +2042,9 @@ class PrometheusLogger(CustomLogger):
             supported_enum_labels=self.get_labels_for_metric("litellm_spend_capture_rate"),
             enum_values=UserAPIKeyLabelValues(api_provider=api_provider),
         )
-        self.litellm_spend_capture_rate.labels(**labels).set(math.nan if capture_rate is None else capture_rate)
+        gauge: Final = self.litellm_spend_capture_rate
+        series: Final = gauge.labels(**labels) if labels else gauge
+        series.set(math.nan if capture_rate is None else capture_rate)
 
     @staticmethod
     def _get_remaining_from_v3_rate_limit_headers(
