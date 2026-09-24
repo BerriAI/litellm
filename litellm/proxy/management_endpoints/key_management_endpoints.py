@@ -85,6 +85,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management_endpoints.common_utils import (
+    _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
     _is_user_team_admin,
@@ -452,7 +453,7 @@ def _regenerate_request_as_update_request(key: str, data: RegenerateKeyRequest) 
     )
     if not changed_fields:
         return None
-    return UpdateKeyRequest(key=key, **changed_fields)
+    return UpdateKeyRequest.model_validate(MappingProxyType({"key": key, **changed_fields}))
 
 
 class _LegacyDumpable(Protocol):
@@ -1224,6 +1225,7 @@ async def _common_key_generation_helper(
     # default_key_generate_params injected.
     _requested_max_budget: Final = data.max_budget
     _requested_team_id: Final = data.team_id
+    _requested_metadata: Final = data.metadata  # pyright: ignore[reportUnknownMemberType]  # request models declare `metadata` as bare dict
 
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
@@ -1310,6 +1312,11 @@ async def _common_key_generation_helper(
     _check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
+    )
+    _check_disable_global_guardrails_caller_permission(
+        data.disable_global_guardrails,
+        _requested_metadata,
+        user_api_key_dict,
     )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
@@ -1966,7 +1973,7 @@ async def generate_key_fn(
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
-    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key. Proxy admin only.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
@@ -2729,6 +2736,13 @@ async def _process_single_key_update(
             prisma_client=prisma_client,
         )
 
+    _check_disable_global_guardrails_caller_permission(
+        update_key_request.disable_global_guardrails,
+        update_key_request.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
+
     enforce_batch_enqueued_token_limit_is_admin_only(
         data=update_key_request,
         existing_metadata=existing_key_row.metadata,
@@ -3024,6 +3038,12 @@ async def _validate_update_key_data(
     _check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
+    )
+    _check_disable_global_guardrails_caller_permission(
+        data.disable_global_guardrails,
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
 
     _validate_caller_can_change_key_ownership(
@@ -3328,7 +3348,7 @@ async def update_key_fn(
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
-    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key. Proxy admin only.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -5622,6 +5642,21 @@ async def _execute_virtual_key_regeneration(
     return response
 
 
+def _check_regenerate_guardrail_opt_out(
+    data: RegenerateKeyRequest | None,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if data is None:
+        return
+    _check_disable_global_guardrails_caller_permission(
+        data.disable_global_guardrails,
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        user_api_key_dict,
+        existing_metadata=existing_metadata,
+    )
+
+
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
@@ -5804,6 +5839,12 @@ async def regenerate_key_fn(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"Key {key} not found."},
             )
+
+        _check_regenerate_guardrail_opt_out(
+            data,
+            _key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+            user_api_key_dict,
+        )
 
         # check if user has permission to regenerate key
         await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(

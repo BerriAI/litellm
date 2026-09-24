@@ -2261,7 +2261,7 @@ async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
         assert mock_logger.warning.call_count == 2
         warning_messages = [call.args[0] for call in mock_logger.warning.call_args_list]
         assert any("mixed stream detected" in msg for msg in warning_messages)
-        assert any("unknown event objects" in msg for msg in warning_messages)
+        assert any("Output PII masking was skipped" in msg for msg in warning_messages)
 
 
 # ---------------------------------------------------------------------------
@@ -2517,6 +2517,147 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_for
         collected.append(chunk)
 
     assert collected == byte_chunks
+
+
+def _gemini_sse(text: str) -> bytes:
+    payload = {"candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "index": 0}]}
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_sse_bytes_are_forwarded_incrementally_until_upstream_aborts():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    frames = [_gemini_sse("Partial one from John Smith. "), _gemini_sse("Partial two. ")]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+        raise ConnectionError("upstream closed mid-stream")
+
+    async def collect() -> None:
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+    with pytest.raises(ConnectionError):
+        await collect()
+
+    assert collected == frames
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_first_frame_split_across_transport_chunks_is_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    message_start = _anthropic_sse(
+        "message_start",
+        {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+    )
+    split_at = message_start.index(b'"message_') + len(b'"message_')
+    byte_chunks = [
+        message_start[:split_at],
+        message_start[split_at:],
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_first_frame_split_across_transport_chunks_streams_incrementally():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    first = _gemini_sse("Partial one from John Smith. ")
+    second = _gemini_sse("Partial two. ")
+    collected: list[object] = []
+
+    async def mock_stream():
+        yield first[:20]
+        yield first[20:]
+        yield second
+        raise ConnectionError("upstream closed mid-stream")
+
+    async def collect() -> None:
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+    with pytest.raises(ConnectionError):
+        await collect()
+
+    assert collected == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_unterminated_first_frame_is_released_once_it_exceeds_the_cap():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    piece = b"data: " + b"x" * 1023 + b"\n"
+    pieces_to_cap = -(-(64 * 1024) // len(piece))
+    released_at: list[int] = []
+
+    async def mock_stream():
+        for index in range(pieces_to_cap * 4):
+            if collected:
+                released_at.append(index)
+            yield piece
+
+    collected: list[object] = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert released_at, "nothing reached the caller before the upstream finished"
+    assert released_at[0] == pieces_to_cap, released_at[:3]
+    assert b"".join(collected) == piece * (pieces_to_cap * 4)
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,8 @@
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -11,9 +13,31 @@ from litellm.proxy._types import (
     MemberDeleteRequest,
 )
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
+
+
+TeamIdSearchFilter = TypedDict(
+    "TeamIdSearchFilter",
+    {  # mutable-ok: functional TypedDict field map
+        "in": NotRequired[ReadOnly[Sequence[str]]],
+        "notIn": NotRequired[ReadOnly[Sequence[str]]],
+    },
+)
+
+
+class TeamKeyActivitySearchWhere(TypedDict):
+    """Prisma filter behind `/team/daily/activity/aggregated/search`: exact token hash, or key alias
+    or user id containing the term, case-insensitive, narrowed to the teams and keys the caller may see."""
+
+    team_id: NotRequired[ReadOnly[TeamIdSearchFilter]]
+    token: NotRequired[ReadOnly[Mapping[Literal["in"], Sequence[str]]]]
+    OR: ReadOnly[
+        tuple[Mapping[Literal["token"], str] | Mapping[Literal["key_alias", "user_id"], InsensitiveContains], ...]
+    ]
+
 
 MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
 

@@ -4231,7 +4231,7 @@ class Router:
         models: Final = [m.strip() for m in model.split(",")]
 
         async def _async_completion_no_exceptions(
-            model_name: str, messages: list[dict[str, str]], stream: bool, **kwargs: Any
+            model_name: str, messages: list[dict[str, str]], stream: bool, **kwargs: object
         ) -> ModelResponse | CustomStreamWrapper | Exception:
             """
             Wrapper around self.acompletion that catches exceptions and returns them as a result
@@ -5980,6 +5980,7 @@ class Router:
 
                 replace_model_in_jsonl_bool: Final = should_replace_model_in_jsonl(
                     purpose=purpose,
+                    passthrough=kwargs.get("passthrough") is True,
                 )
                 if replace_model_in_jsonl_bool:
                     file = replace_model_in_jsonl(
@@ -6736,7 +6737,7 @@ class Router:
         # Handle asynchronous call types
         async def async_wrapper(
             custom_llm_provider: str | None = None,
-            client: Any | None = None,
+            client: AsyncOpenAI | None = None,
             **kwargs,
         ):
             if call_type == "assistants":
@@ -8441,7 +8442,7 @@ class Router:
         return self._has_content_policy_fallback(model, kwargs)
 
     def _should_raise_anthropic_refusal_error(
-        self, model: str, original_generic_function: Callable, response: object, kwargs: Mapping[str, Any]
+        self, model: str, original_generic_function: Callable, response: object, kwargs: Mapping[str, object]
     ) -> bool:
         """
         The /v1/messages twin of _should_raise_content_policy_error: an Anthropic safeguard
@@ -10318,7 +10319,7 @@ class Router:
         )
 
     @staticmethod
-    def _widest_configured_limit(model_infos: Sequence[Mapping[str, Any]], field: str) -> int | None:
+    def _widest_configured_limit(model_infos: Sequence[Mapping[str, object]], field: str) -> int | None:
         """The largest usable value of ``field`` across a group's configured model_info blocks."""
         limits: Final = tuple(
             limit
@@ -13409,7 +13410,7 @@ class Router:
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None,
+        messages: list[dict[str, object]] | None,
     ) -> RoutingContext:
         """
         Build a RoutingContext for `model`, run it through `self.routing_plugins`

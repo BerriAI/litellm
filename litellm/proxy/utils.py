@@ -974,6 +974,14 @@ def _failure_usage_to_lift(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
+def _reached_deployment(litellm_logging_obj: Logging) -> bool:
+    """A provider handoff or a cached response both mean the router selected a deployment."""
+    caching_details: Final = litellm_logging_obj.caching_details
+    return litellm_logging_obj.model_call_details.get("first_api_call_start_time") is not None or (
+        caching_details is not None and caching_details.get("cache_hit") is True
+    )
+
+
 def _stamp_deployment_attribution(
     litellm_params: dict[str, object], model_group: str | None, team_id: str | None, dispatched: bool
 ) -> Mapping[str, object]:
@@ -2381,7 +2389,6 @@ class ProxyLogging:
         )
 
         try:
-            # Execute guardrail pipelines before the normal callback loop
             if not skip_guardrails:
                 data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
                     data=data,
@@ -3325,7 +3332,7 @@ class ProxyLogging:
                 _litellm_params,
                 request_data.get("model"),
                 user_api_key_dict.team_id,
-                dispatched=litellm_logging_obj.model_call_details.get("first_api_call_start_time") is not None,
+                dispatched=_reached_deployment(litellm_logging_obj),
             )
 
             litellm_logging_obj.update_environment_variables(
@@ -3949,7 +3956,7 @@ class ProxyLogging:
         request_data: dict,  # mutable-ok: same request-payload shape the hooks mutate
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
         translation: "tuple[str, BaseTranslation]",
-    ) -> "AsyncGenerator[Any, None]":
+    ) -> "AsyncGenerator[object, None]":
         """
         Execute post_call policy pipelines against a streamed response.
 
