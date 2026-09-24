@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from datetime import timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7852,3 +7853,38 @@ async def test_calculate_spend_unpriced_model_returns_400():
     assert exc_info.value.type == "invalid_request_error"
     assert exc_info.value.param == "model"
     assert model in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start,end", [("2026-01-01", "2026-01-01"), ("2026-01-02", "2026-01-01"),
+                                      ("2024-01-01", "2026-01-01"), ("invalid", "2026-01-01")])
+async def test_routing_usage_rejects_unbounded_or_empty_ranges(start, end):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.spend_management_endpoints import routing_usage
+
+    db: Final = MagicMock()
+    db.db.query_raw = AsyncMock()
+    with patch.object(ps, "prisma_client", db):
+        with pytest.raises(HTTPException) as error:
+            await routing_usage(start, end, UserAPIKeyAuth(user_role="proxy_admin"))
+    assert error.value.status_code == 400
+    db.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_routing_usage_rejects_foreign_team_and_missing_identity():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.spend_management_endpoints import routing_usage
+
+    db: Final = MagicMock()
+    db.db.query_raw = AsyncMock()
+    with patch.object(ps, "prisma_client", db), patch(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._can_team_member_view_log",
+        AsyncMock(return_value=False),
+    ):
+        with pytest.raises(HTTPException) as denied:
+            await routing_usage("2026-01-01", "2026-01-02", UserAPIKeyAuth(user_id="member"), team_id="foreign")
+        with pytest.raises(HTTPException) as anonymous:
+            await routing_usage("2026-01-01", "2026-01-02", UserAPIKeyAuth())
+    assert denied.value.status_code == anonymous.value.status_code == 403
+    db.db.query_raw.assert_not_called()

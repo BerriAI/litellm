@@ -1,3 +1,4 @@
+import RoutingBreakdown from "./EntityUsage/RoutingBreakdown";
 /**
  * New Usage Page
  *
@@ -114,6 +115,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   // For admins: null means global view (all users), a string means filter by that user
   // For non-admins: always set to their own user ID
+  const [activeUsageTab, setActiveUsageTab] = useState("cost");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(isAdmin ? null : userID || null);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
@@ -484,7 +486,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <UserDropdown value={selectedUserId} onChange={setSelectedUserId} />
                 </div>
               )}
-              <Tabs defaultValue="cost">
+              <Tabs value={activeUsageTab} onValueChange={setActiveUsageTab}>
                 <div className="flex justify-between items-center">
                   <TabsList className="mt-1">
                     <TabsTrigger value="cost" className="flex-none px-3">
@@ -498,6 +500,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     </TabsTrigger>
                     <TabsTrigger value="mcp" className="flex-none px-3">
                       MCP Server Activity
+                    </TabsTrigger>
+                    <TabsTrigger value="routing" className="flex-none px-3">
+                      Routing breakdown
                     </TabsTrigger>
                     <TabsTrigger value="endpoints" className="flex-none px-3">
                       Endpoint Activity
@@ -884,6 +889,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />
+                </TabsContent>
+                <TabsContent value="routing">
+                  {activeUsageTab === "routing" && (
+                    <RoutingBreakdown
+                      accessToken={accessToken}
+                      startTime={startTime}
+                      endTime={endTime}
+                      userId={effectiveUserId ?? undefined}
+                      enabled
+                    />
+                  )}
                 </TabsContent>
                 <TabsContent value="endpoints" keepMounted>
                   <EndpointUsage userSpendData={userSpendData} />

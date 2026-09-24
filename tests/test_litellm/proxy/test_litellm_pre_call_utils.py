@@ -1051,6 +1051,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_policies": ["spoofed-policy"],
         "policy_sources": {"spoofed-policy": "request"},
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
+        "routing_origin": {"kind": "router", "router_name": "forged"},
         "litellm_gateway_injected_cache": "forged-deployment-id",
         "_session_deployment_affinity_ttl": 999999,
         "internal_call_origin": "autorouter_classifier",
@@ -1066,6 +1067,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "disable_global_guardrails": True,
         "enable_prompt_caching": True,
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
+        "routing_origin": {"kind": "router", "router_name": "forged"},
         "litellm_gateway_injected_cache": "forged-deployment-id",
         "metadata": copy.deepcopy(malicious_metadata),
         "litellm_metadata": copy.deepcopy(malicious_metadata),
@@ -1086,6 +1088,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "mock_tool_calls" not in updated
     assert "disable_global_guardrails" not in updated
     assert "enable_prompt_caching" not in updated
+    assert "routing_origin" not in updated
     assert "routing_decision" not in updated
     assert "litellm_gateway_injected_cache" not in updated
     assert "weights" not in updated
@@ -1106,6 +1109,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "applied_policies",
         "policy_sources",
         "routing_decision",
+        "routing_origin",
         "litellm_gateway_injected_cache",
         "_session_deployment_affinity_ttl",
         "internal_call_origin",
@@ -8436,3 +8440,21 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     for name, value in secrets.items():
         assert updated["secret_fields"]["raw_headers"][name.lower()] == value
         assert request.headers[name] == value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/messages", "/v1/responses"])
+async def test_routing_origin_cannot_be_forged_on_any_inference_surface(path):
+    request: Final = Request({"type": "http", "method": "POST", "path": path, "headers": [],
+                       "scheme": "http", "server": ("localhost", 4000), "query_string": b"",
+                       "client": ("127.0.0.1", 12345)})
+    forged: Final = {"routing_origin": {"kind": "router", "router_name": "forged-router"}}
+    result: Final = await add_litellm_data_to_request(
+        data={"model": "model", "messages": [{"role": "user", "content": "hello"}],
+              **forged, "metadata": dict(forged), "litellm_metadata": dict(forged)},
+        request=request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(), general_settings={}, version="test",
+    )
+    assert "routing_origin" not in result
+    assert "routing_origin" not in result.get("metadata", {})
+    assert "routing_origin" not in result.get("litellm_metadata", {})

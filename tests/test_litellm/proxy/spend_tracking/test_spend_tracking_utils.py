@@ -5223,3 +5223,12 @@ def test_baseline_estimate_metadata_comes_from_the_logging_stamp() -> None:
     assert result["autorouter_savings_estimate"] == recorded
     absent: Final = _get_spend_logs_metadata({"autorouter_savings_estimate": supplied})  # mutable-ok: legacy metadata helper accepts dicts
     assert absent["autorouter_savings_estimate"] is None
+
+
+def test_routing_origin_is_retained_in_spend_metadata_without_an_attempt_decision():
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_spend_logs_metadata
+
+    origin: Final = {"kind": "router", "router_name": "original-router"}
+    metadata: Final = _get_spend_logs_metadata({"routing_origin": origin})
+    assert metadata["routing_origin"] == origin
+    assert metadata["routing_decision"] is None

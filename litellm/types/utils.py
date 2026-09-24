@@ -3026,6 +3026,11 @@ RoutingDecisionCause = Literal[
 ]
 
 
+class RoutingOrigin(TypedDict):
+    kind: ReadOnly[Literal["direct", "router"]]
+    router_name: ReadOnly[str | None]
+
+
 InternalCallOrigin = Literal[
     "autorouter_classifier",
     "autorouter_compaction",
@@ -3054,6 +3059,7 @@ class StandardLoggingHeuristicV2Forecast(TypedDict):
 class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
+    decision_id: ReadOnly[str]
     router_model_name: str
     router_type: Literal["complexity", "adaptive", "quality"]
     routed_model: str
@@ -3103,6 +3109,7 @@ PROMPT_QUOTING_ROUTING_DECISION_FIELDS: frozenset[str] = frozenset(
 )
 DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
     {
+        "decision_id",
         "router_model_name",
         "router_type",
         "routed_model",

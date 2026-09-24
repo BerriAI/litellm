@@ -1,3 +1,4 @@
+import type { ColumnDef } from "@tanstack/react-table";
 import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
@@ -15,44 +16,65 @@ type TopModel = {
 
 interface TopModelViewProps {
   topModels: TopModel[];
+  onSelectModel?: (model: string) => void;
   topModelsLimit: number;
   setTopModelsLimit: (limit: number) => void;
 }
 
 export const TOP_MODEL_LIMITS = [5, 10, 25, 50];
 
-export default function TopModelView({ topModels, topModelsLimit, setTopModelsLimit }: TopModelViewProps) {
+export default function TopModelView({
+  topModels,
+  topModelsLimit,
+  setTopModelsLimit,
+  onSelectModel,
+}: TopModelViewProps) {
   const [modelViewMode, setModelViewMode] = useState<"chart" | "table">("table");
 
-  const columns = [
+  const columns: ColumnDef<TopModel>[] = [
     {
       header: "Model",
       accessorKey: "key",
-      cell: (info: any) => info.getValue() || "-",
+      cell: ({ row }) =>
+        onSelectModel ? (
+          <button
+            className="text-info hover:underline"
+            onClick={() => onSelectModel(row.original.key)}
+            aria-label={`View routing for ${row.original.key}`}
+          >
+            {row.original.key || "-"}
+          </button>
+        ) : (
+          row.original.key || "-"
+        ),
     },
     {
       header: "Spend (USD)",
       accessorKey: "spend",
       meta: { numeric: true },
-      cell: (info: any) => <MoneyCell value={info.getValue()} decimals={2} />,
+      cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
     },
     {
       header: "Successful",
       accessorKey: "successful_requests",
       meta: { numeric: true },
-      cell: (info: any) => <span className="text-success">{info.getValue()?.toLocaleString() || 0}</span>,
+      cell: ({ row }) => (
+        <span className="text-success">{row.original.successful_requests?.toLocaleString() || 0}</span>
+      ),
     },
     {
       header: "Failed",
       accessorKey: "failed_requests",
       meta: { numeric: true },
-      cell: (info: any) => <span className="text-destructive">{info.getValue()?.toLocaleString() || 0}</span>,
+      cell: ({ row }) => (
+        <span className="text-destructive">{row.original.failed_requests?.toLocaleString() || 0}</span>
+      ),
     },
     {
       header: "Tokens",
       accessorKey: "tokens",
       meta: { numeric: true },
-      cell: (info: any) => info.getValue()?.toLocaleString() || 0,
+      cell: ({ row }) => row.original.tokens?.toLocaleString() || 0,
     },
   ];
   const processedTopModels = topModels.slice(0, topModelsLimit);

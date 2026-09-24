@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.classifier_logging import classifier_audit_field
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.spend_tracking.routing_usage import ROUTING_USAGE_SQL, RoutingUsageResponse, RoutingUsageRow
 
 # NOTE: Avoid module-level import from common_utils: proxy_server imports this
 # module while common_utils may pull proxy_server during init, which can leave
@@ -1750,6 +1751,75 @@ def _parse_spend_report_date_range(start_date: str | None, end_date: str | None)
             detail=f"Date range too large; maximum is {_SPEND_REPORT_MAX_RANGE_DAYS} days",
         )
     return parsed
+
+
+@router.get(
+    "/spend/routing",
+    tags=["budget & spend tracking"],  # mutable-ok: FastAPI requires list-valued route tags
+    response_model=RoutingUsageResponse,
+)
+async def routing_usage(
+    start_date: str,
+    end_date: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    team_id: str | None = None,
+    team_ids: Annotated[tuple[str, ...] | None, fastapi.Query()] = None,
+    user_id: str | None = None,
+    api_key: str | None = None,
+    router_name: str | None = None,
+    model: str | None = None,
+) -> RoutingUsageResponse:
+    """Historical routing and recorded inference spend within a half-open UTC date range.
+
+    Only retained spend logs are covered. Classifier spend is recorded parent-decision
+    overhead, deduplicated across retries. Missing or orphan classifier costs are unknown.
+    """
+    from litellm.proxy.proxy_server import disable_spend_logs, general_settings, prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=503, detail=CommonProxyErrors.db_not_connected_error.value)
+    start, end = _parse_spend_report_date_range(start_date, end_date)
+    if start == end:
+        raise HTTPException(status_code=400, detail="end_date must be after start_date (exclusive UTC bound)")
+    admin: Final = _is_admin_view_safe(user_api_key_dict)
+    requested_teams: Final = tuple(sorted(frozenset((*((team_id,) if team_id else ()), *(team_ids or ())))))
+    if not admin:
+        for requested_team in requested_teams:
+            if not await _can_team_member_view_log(prisma_client, user_api_key_dict, requested_team):
+                raise HTTPException(status_code=403, detail="Not authorized to view the requested team spend")
+    permitted_teams: Final = (
+        requested_teams
+        if requested_teams
+        else await _get_permitted_team_ids_for_spend_logs_or_empty(prisma_client, user_api_key_dict)
+        if not admin and user_api_key_dict.user_id is not None
+        else ()
+    )
+    if not admin and user_api_key_dict.user_id is None and not permitted_teams:
+        raise HTTPException(status_code=403, detail="No permitted spend-log identity")
+    rows: Final = TypeAdapter(tuple[RoutingUsageRow, ...]).validate_python(
+        await prisma_client.db.query_raw(
+            ROUTING_USAGE_SQL,
+            start,
+            end,
+            admin,
+            user_api_key_dict.user_id,
+            tuple(permitted_teams),
+            requested_teams or None,
+            user_id,
+            hash_token(api_key) if api_key and api_key.startswith("sk-") else api_key,
+            router_name,
+            model,
+            tuple(_INTERNAL_HEALTH_CHECK_API_KEYS),
+        )
+    )
+    retention: Final = general_settings.get("maximum_spend_logs_retention_period")
+    return RoutingUsageResponse(
+        results=rows,
+        start_date=start_date,
+        end_date=end_date,
+        spend_logs_disabled=disable_spend_logs,
+        configured_retention=retention if isinstance(retention, str) else None,
+    )
 
 
 def _resolve_spend_report_scope(

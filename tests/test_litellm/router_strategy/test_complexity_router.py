@@ -9138,6 +9138,7 @@ class TestRoutingDecisionIsPerAttempt:
 
         await router.async_pre_routing_hook(model="smart-router", request_kwargs=request_kwargs, messages=messages)
         assert "routing_decision" in request_kwargs[bucket]
+        assert request_kwargs[bucket]["routing_origin"] == {"kind": "router", "router_name": "smart-router"}
 
         # The fallback attempt reuses the same kwargs and selects no strategy.
         response = await router.async_pre_routing_hook(
@@ -9145,6 +9146,7 @@ class TestRoutingDecisionIsPerAttempt:
         )
         assert response is None
         assert "routing_decision" not in request_kwargs[bucket]
+        assert request_kwargs[bucket]["routing_origin"] == {"kind": "router", "router_name": "smart-router"}
 
     @pytest.mark.parametrize("unusable_bucket", [None, "not-a-dict"])
     @pytest.mark.asyncio
@@ -9167,11 +9169,35 @@ class TestRoutingDecisionIsPerAttempt:
         assert bucket["routing_decision"]["router_model_name"] == "smart-router"
 
 
+    @pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+    @pytest.mark.asyncio
+    async def test_direct_fallback_enters_router_and_preserves_first_origin(self, bucket):
+        router: Final = Router(model_list=self.MODEL_LIST)
+        kwargs: Final = {bucket: {}}
+        messages: Final = [{"role": "user", "content": "Hello!"}]
+        await router.async_pre_routing_hook(model="gpt-4o-mini", request_kwargs=kwargs, messages=messages)
+        assert kwargs[bucket]["routing_origin"] == {"kind": "direct", "router_name": None}
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=kwargs, messages=messages)
+        assert kwargs[bucket]["routing_origin"] == {"kind": "router", "router_name": "smart-router"}
+        Router._record_routing_origin(kwargs, "second-router")
+        assert kwargs[bucket]["routing_origin"] == {"kind": "router", "router_name": "smart-router"}
+        assert "routing_origin" not in kwargs.get("metadata" if bucket == "litellm_metadata" else "litellm_metadata", {})
+
+
 class TestRecordRoutingDecision:
     """Direct coverage of the single recording point, whose contract is write-or-clear:
     the request's metadata must describe the current attempt and nothing else."""
 
     DECISION = {"router_model_name": "smart-router", "router_type": "complexity", "routed_model": "gpt-4o-mini"}
+
+    def test_new_classifications_have_distinct_cost_deduplication_ids(self) -> None:
+        request_kwargs: Final = {"metadata": {}}
+        Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=self.DECISION)
+        first: Final = request_kwargs["metadata"]["routing_decision"]
+        Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=self.DECISION)
+        second: Final = request_kwargs["metadata"]["routing_decision"]
+        assert first["decision_id"] != second["decision_id"]
+        assert {key: value for key, value in second.items() if key != "decision_id"} == self.DECISION
 
     def test_none_clears_a_previous_decision_from_both_buckets(self):
         request_kwargs: Dict = {

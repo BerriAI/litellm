@@ -14809,6 +14809,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Routing Usage
+         * @description Historical routing and recorded inference spend within a half-open UTC date range.
+         *
+         *     Only retained spend logs are covered. Classifier spend is recorded parent-decision
+         *     overhead, deduplicated across retries. Missing or orphan classifier costs are unknown.
+         */
+        get: operations["routing_usage_spend_routing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/tags": {
         parameters: {
             query?: never;
@@ -41270,6 +41293,51 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** RoutingUsageResponse */
+        RoutingUsageResponse: {
+            /** Configured Retention */
+            configured_retention: string | null;
+            /**
+             * Coverage
+             * @default retained_spend_logs
+             * @constant
+             */
+            coverage: "retained_spend_logs";
+            /** End Date */
+            end_date: string;
+            /** Results */
+            results: components["schemas"]["RoutingUsageRow"][];
+            /** Spend Logs Disabled */
+            spend_logs_disabled: boolean;
+            /** Start Date */
+            start_date: string;
+        };
+        /** RoutingUsageRow */
+        RoutingUsageRow: {
+            /**
+             * Attribution
+             * @enum {string}
+             */
+            attribution: "direct" | "router" | "unattributed";
+            /** Cache Hits */
+            cache_hits: number;
+            /** Classifier Cost Known Requests */
+            classifier_cost_known_requests: number;
+            /** Classifier Spend */
+            classifier_spend: number;
+            /** Failed Attempts */
+            failed_attempts: number;
+            /** Inference Spend */
+            inference_spend: number;
+            /** Model */
+            model: string;
+            /** Provider */
+            provider: string;
+            /** Requests */
+            requests: number;
+            /** Router Name */
+            router_name: string | null;
+        };
         /**
          * Run
          * @description Represents a run from the OpenAI Evals API
@@ -42405,6 +42473,8 @@ export interface components {
             context_escalation_original_tier?: string;
             /** Conversation Continuing */
             conversation_continuing?: boolean;
+            /** Decision Id */
+            decision_id?: string;
             /** Escalated */
             escalated?: boolean;
             /** Escalation Keyword */
@@ -65797,6 +65867,44 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    routing_usage_spend_routing_get: {
+        parameters: {
+            query: {
+                start_date: string;
+                end_date: string;
+                team_id?: string | null;
+                team_ids?: string[] | null;
+                user_id?: string | null;
+                api_key?: string | null;
+                router_name?: string | null;
+                model?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingUsageResponse"];
                 };
             };
             /** @description Validation Error */

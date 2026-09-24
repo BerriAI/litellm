@@ -1,3 +1,4 @@
+import RoutingBreakdown from "./RoutingBreakdown";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { BarChart, DonutChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
@@ -125,6 +126,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   isOrgAdmin = false,
 }) => {
   const { teams } = useTeams();
+  const [activeTab, setActiveTab] = useState("cost");
+  const [routingModel, setRoutingModel] = useState<{ model?: string }>({});
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
@@ -599,6 +602,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               topModels={getTopModels(spendData.results, modelBreakdownKey, topModelsLimit)}
               topModelsLimit={topModelsLimit}
               setTopModelsLimit={setTopModelsLimit}
+              onSelectModel={
+                (entityType === "team" || entityType === "user") && modelViewType === "individual"
+                  ? (name) => {
+                      setRoutingModel({ model: name });
+                      setActiveTab("routing");
+                    }
+                  : undefined
+              }
             />
           </CardContent>
         </ShadcnCard>
@@ -684,6 +695,26 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       ),
     },
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
+    ...(entityType === "team" || entityType === "user"
+      ? [
+          {
+            key: "routing",
+            label: "Routing breakdown",
+            content: activeTab === "routing" && (
+              <RoutingBreakdown
+                key={JSON.stringify(routingModel)}
+                accessToken={accessToken}
+                startTime={startTime}
+                endTime={endTime}
+                teamIds={entityType === "team" && selectedTags.length ? selectedTags : undefined}
+                userId={entityType === "user" ? selectedTags[0] : undefined}
+                initialModel={routingModel.model}
+                enabled={activeTab === "routing"}
+              />
+            ),
+          },
+        ]
+      : []),
   ];
 
   const serverExport: ServerExport | undefined =
@@ -735,7 +766,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         exportBlockedReason={getExportBlockedReason(spendFetchState)}
         serverExport={serverExport}
       />
-      <Tabs defaultValue={tabs[0].key}>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="mt-1">
           {tabs.map(({ key, label }) => (
             <TabsTrigger key={key} value={key} className="flex-none px-3">

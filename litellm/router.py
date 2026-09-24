@@ -13671,6 +13671,10 @@ class Router:
         selected_strategy: Final = self._select_pre_routing_strategy(
             model=registered_model_name, request_kwargs=request_kwargs
         )
+        self._record_routing_origin(
+            request_kwargs=request_kwargs,
+            router_name=registered_model_name if selected_strategy is not None else None,
+        )
         if selected_strategy is None:
             await arm_compaction(request_kwargs, None)
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
@@ -13893,6 +13897,16 @@ class Router:
         return ConsumedRequestTagsStamp(model_group=pre_routing_hook_response.model, tags=selected_strategy.tags)
 
     @staticmethod
+    def _record_routing_origin(request_kwargs: dict[str, object], router_name: str | None) -> None:
+        from litellm.types.utils import RoutingOrigin
+
+        _, bucket = get_or_create_metadata_bucket(request_kwargs)
+        previous: Final = bucket.get("routing_origin")
+        if isinstance(previous, Mapping) and previous.get("kind") == "router" and previous.get("router_name"):
+            return
+        bucket["routing_origin"] = RoutingOrigin(kind="router" if router_name else "direct", router_name=router_name)
+
+    @staticmethod
     def _record_routing_decision(
         request_kwargs: dict,
         routing_decision: StandardLoggingRoutingDecision | None,
@@ -13926,7 +13940,8 @@ class Router:
                 None
                 if routing_decision is None
                 else Router._redact_prompt_text_if_needed(
-                    request_kwargs=request_kwargs, routing_decision=routing_decision
+                    request_kwargs=request_kwargs,
+                    routing_decision=StandardLoggingRoutingDecision(routing_decision, decision_id=str(uuid.uuid4())),
                 )
             ),
         )

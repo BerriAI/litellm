@@ -68,6 +68,21 @@ describe("TopModelView", () => {
     expect(screen.getByText("50,000")).toBeInTheDocument();
   });
 
+  it("opens the selected model routing breakdown", async () => {
+    const onSelectModel = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <TopModelView
+        topModels={[{ key: "actual-model", spend: 1, successful_requests: 2, failed_requests: 0, tokens: 30 }]}
+        topModelsLimit={5}
+        setTopModelsLimit={mockSetTopModelsLimit}
+        onSelectModel={onSelectModel}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "View routing for actual-model" }));
+    expect(onSelectModel).toHaveBeenCalledWith("actual-model");
+  });
+
   const oneModel = [{ key: "gpt-4", spend: 150.5, successful_requests: 100, failed_requests: 5, tokens: 50000 }];
 
   it("should switch to chart view when chart view button is clicked", async () => {

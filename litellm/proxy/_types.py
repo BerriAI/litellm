@@ -65,6 +65,7 @@ from litellm.types.utils import (
     LiteLLMPydanticObjectBase,
     ModelResponse,
     ProviderField,
+    RoutingOrigin,
     StandardCallbackDynamicParams,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
@@ -748,6 +749,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/tags",
         "/spend/calculate",
         "/spend/logs",
+        "/spend/routing",
         "/spend/logs/v2",
         "/spend/logs/ui",
         "/spend/logs/ui/{request_id}",
@@ -4022,6 +4024,7 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    routing_origin: ReadOnly[NotRequired["RoutingOrigin | None"]]
     autorouter_baseline_observation: ReadOnly[str | None]
     """
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
