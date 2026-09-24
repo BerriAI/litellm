@@ -117,6 +117,35 @@ fn alias_collisions_and_case_fallback_follow_python_order(
     );
 }
 
+#[test]
+fn json_entry_order_controls_alias_ownership_and_case_fallback() {
+    let forward = Catalog::parse(
+        br#"{
+            "Alpha":{"aliases":["shared"]},
+            "Beta":{"aliases":["shared"]},
+            "Foo":{},
+            "fOO":{}
+        }"#,
+        Provenance::default(),
+    )
+    .unwrap();
+    let reversed = Catalog::parse(
+        br#"{
+            "fOO":{},
+            "Foo":{},
+            "Beta":{"aliases":["shared"]},
+            "Alpha":{"aliases":["shared"]}
+        }"#,
+        Provenance::default(),
+    )
+    .unwrap();
+
+    assert_eq!(forward.lookup("shared").unwrap().canonical_key, "Alpha");
+    assert_eq!(reversed.lookup("shared").unwrap().canonical_key, "Beta");
+    assert_eq!(forward.lookup("foo").unwrap().canonical_key, "fOO");
+    assert_eq!(reversed.lookup("foo").unwrap().canonical_key, "Foo");
+}
+
 #[derive(Debug)]
 enum ValidationOutcome {
     Ok,
