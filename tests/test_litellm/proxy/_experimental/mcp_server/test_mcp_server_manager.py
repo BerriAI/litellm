@@ -4522,7 +4522,7 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     async def test_health_check_server_openapi_spec_failure_is_unhealthy(self, tmp_path):
-        """A spec that stopped loading is unhealthy, and the upstream error is what gets reported."""
+        """A spec that stopped loading is unhealthy without exposing its path."""
         missing = tmp_path / "openapi.json"
         manager = MCPServerManager()
         server = MCPServer(
@@ -4538,7 +4538,34 @@ class TestMCPServerManager:
         result = await manager.health_check_server("openapi-server")
 
         assert result.status == "unhealthy"
-        assert result.health_check_error == f"OpenAPI spec not found at {missing}"
+        assert result.health_check_error == "OpenAPI spec health check failed"
+
+    @pytest.mark.asyncio
+    async def test_health_check_server_openapi_spec_error_hides_url_credentials(self):
+        spec_url: Final = "https://example.com/openapi.json?api_key=top-secret"
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="openapi-server",
+            name="openapi-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            url="https://example.com",
+            spec_path=spec_url,
+        )
+        manager.config_mcp_servers[server.server_id] = server
+        request: Final = httpx.Request("GET", spec_url)
+        response: Final = httpx.Response(401, request=request)
+        error: Final = httpx.HTTPStatusError(f"401 at {request.url}", request=request, response=response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.load_openapi_spec_async",
+            side_effect=error,
+        ):
+            result: Final = await manager.health_check_server(server.server_id)
+
+        assert result.status == "unhealthy"
+        assert result.health_check_error == "OpenAPI spec health check failed"
+        assert "top-secret" not in (result.health_check_error or "")
 
     @pytest.mark.asyncio
     async def test_health_check_server_openapi_spec_keeps_per_user_auth_skip(self, tmp_path):
