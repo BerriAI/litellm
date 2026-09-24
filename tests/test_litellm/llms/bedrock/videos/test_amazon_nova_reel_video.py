@@ -1700,3 +1700,43 @@ def test_transform_multi_shot_manual_usage_sums_shot_durations():
         custom_llm_provider="bedrock",
     )
     assert cost == pytest.approx(18 * 0.08)
+
+
+#################################################
+# cross-region video ids resolve to the base-model deployment
+#################################################
+
+
+def test_cross_region_video_id_resolves_to_base_model_deployment():
+    """An id encoded with us.amazon.nova-reel-v1:1 must resolve to a deployment whose
+    litellm_params.model is the base bedrock/amazon.nova-reel-v1:1, so status/content
+    dispatch through the router and pick up the deployment aws_* credentials."""
+    from litellm.llms.bedrock.videos.transformation import BedrockNovaReelVideoConfig as _Config
+    from litellm.proxy.video_endpoints.endpoints import _resolve_model_name_from_decoded_model_id
+    from litellm.router import Router
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "amazon.nova-reel-v1:1",
+                "litellm_params": {"model": "bedrock/amazon.nova-reel-v1:1"},
+            }
+        ]
+    )
+    invocation_arn = "arn:aws:bedrock:us-east-1:123456789012:async-invoke/xyz"
+    video_id = encode_video_id_with_provider(invocation_arn, "bedrock", "us.amazon.nova-reel-v1:1")
+    decoded = decode_video_id_with_provider(video_id)
+    assert decoded["model_id"] == "us.amazon.nova-reel-v1:1"
+    # The pre-fix behavior: a bare resolve on the cross-region id finds nothing.
+    assert router.resolve_model_name_from_model_id(decoded["model_id"]) is None
+    resolved = _resolve_model_name_from_decoded_model_id(router, decoded["model_id"], "bedrock")
+    assert resolved == "amazon.nova-reel-v1:1"
+    # Scoped to bedrock: the same id under another provider stays unresolved.
+    assert _resolve_model_name_from_decoded_model_id(router, decoded["model_id"], "vertex_ai") is None
+    # Exact (non cross-region) ids keep resolving through the unchanged first lookup.
+    assert _resolve_model_name_from_decoded_model_id(router, "amazon.nova-reel-v1:1", "bedrock") == (
+        "amazon.nova-reel-v1:1"
+    )
+    # The status transform still encodes the cross-region id verbatim.
+    assert _Config.extract_invocation_arn(video_id) == invocation_arn

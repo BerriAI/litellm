@@ -1,6 +1,6 @@
 #### Video Endpoints #####
 
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
@@ -27,7 +27,34 @@ from litellm.types.videos.utils import (
     decode_video_id_with_provider,
 )
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 router: Final = APIRouter()
+
+
+def _resolve_model_name_from_decoded_model_id(
+    llm_router: "Router",
+    model_id_from_decoded: str,
+    custom_llm_provider: str | None,
+) -> str | None:
+    """Resolve the router model_name from the model id encoded in a video/character id.
+
+    Bedrock cross-region inference-profile ids (e.g. ``us.amazon.nova-reel-v1:1``)
+    do not match deployments configured with the base model id
+    (``bedrock/amazon.nova-reel-v1:1``), which would drop the deployment's
+    litellm_params (aws_* credentials) on status/content calls. Mirrors the Nova
+    Canvas image-edit transform: strip the region prefix via
+    ``BedrockModelInfo.get_base_model`` and retry the resolution (bedrock only).
+    """
+    resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+    if resolved_model is None and custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+        base_model: Final = BedrockModelInfo.get_base_model(model_id_from_decoded)
+        if base_model != model_id_from_decoded:
+            resolved_model = llm_router.resolve_model_name_from_model_id(base_model)
+    return resolved_model
 
 
 @router.post(
@@ -269,7 +296,9 @@ async def video_status(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+        resolved_model: Final = _resolve_model_name_from_decoded_model_id(
+            llm_router, model_id_from_decoded, custom_llm_provider
+        )
         if resolved_model:
             data["model"] = resolved_model
 
@@ -369,7 +398,9 @@ async def video_content(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+        resolved_model: Final = _resolve_model_name_from_decoded_model_id(
+            llm_router, model_id_from_decoded, custom_llm_provider
+        )
         if resolved_model:
             data["model"] = resolved_model
     # Process request using ProxyBaseLLMRequestProcessing
@@ -477,7 +508,9 @@ async def video_remix(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+        resolved_model: Final = _resolve_model_name_from_decoded_model_id(
+            llm_router, model_id_from_decoded, custom_llm_provider
+        )
         if resolved_model:
             data["model"] = resolved_model
 
@@ -680,7 +713,9 @@ async def video_get_character(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+        resolved_model: Final = _resolve_model_name_from_decoded_model_id(
+            llm_router, model_id_from_decoded, custom_llm_provider
+        )
         if resolved_model:
             data["model"] = resolved_model
 
@@ -791,7 +826,9 @@ async def video_edit(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+        resolved_model: Final = _resolve_model_name_from_decoded_model_id(
+            llm_router, model_id_from_decoded, custom_llm_provider
+        )
         if resolved_model:
             data["model"] = resolved_model
 
@@ -888,7 +925,9 @@ async def video_extension(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+        resolved_model: Final = _resolve_model_name_from_decoded_model_id(
+            llm_router, model_id_from_decoded, custom_llm_provider
+        )
         if resolved_model:
             data["model"] = resolved_model
 
