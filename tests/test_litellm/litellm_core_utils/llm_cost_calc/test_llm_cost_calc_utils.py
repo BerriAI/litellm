@@ -755,8 +755,9 @@ def test_is_off_peak_without_override_dates_is_unchanged():
 
 
 def test_override_dates_use_weekday_timezone_calendar_on_shipped_deepseek_rows():
-    """The shipped deepseek/deepseek-flash row reads its override_dates on the
-    Asia/Shanghai calendar: the make-up Sunday bills weekday hours and the holiday is
+    """Every shipped DeepSeek row with off_peak_pricing carries the same block as
+    deepseek/deepseek-flash: the 2026 PRC holidays and make-up workdays, read on the
+    Asia/Shanghai calendar. The make-up Sunday bills weekday hours and a holiday is
     off-peak all day."""
     from datetime import datetime, timezone
 
@@ -764,6 +765,21 @@ def test_override_dates_use_weekday_timezone_calendar_on_shipped_deepseek_rows()
 
     block: Final = litellm.model_cost["deepseek/deepseek-flash"]["off_peak_pricing"]
     assert block.get("weekday_timezone") == "Asia/Shanghai"
+    deepseek_rows: Final = {
+        name: entry["off_peak_pricing"]
+        for name, entry in litellm.model_cost.items()
+        if name.startswith("deepseek")
+        and not name.startswith("openrouter/")
+        and isinstance(entry, dict)
+        and "off_peak_pricing" in entry
+    }
+    assert deepseek_rows, "expected at least the deepseek/deepseek-flash row"
+    drifted: Final = [
+        name
+        for name, row in deepseek_rows.items()
+        if row.get("windows") != block["windows"] or row.get("weekday_timezone") != block["weekday_timezone"]
+    ]
+    assert not drifted, f"off_peak schedule drift on {drifted}"
 
     shanghai_make_up_sunday = datetime(2026, 1, 3, 17, 0, tzinfo=timezone.utc)
     make_up_sunday_peak = datetime(2026, 1, 4, 2, 0, tzinfo=timezone.utc)

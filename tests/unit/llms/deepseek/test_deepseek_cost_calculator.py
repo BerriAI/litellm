@@ -20,7 +20,7 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Generator[None, Non
 
 PEAK_MOMENTS: Final = (
     pytest.param(datetime(2026, 9, 22, 8, 0, tzinfo=timezone.utc), id="tuesday-08:00"),
-    pytest.param(datetime(2026, 9, 25, 9, 59, tzinfo=timezone.utc), id="friday-09:59"),
+    pytest.param(datetime(2026, 9, 18, 9, 59, tzinfo=timezone.utc), id="friday-09:59"),
     pytest.param(datetime(2026, 9, 21, 1, 0, tzinfo=timezone.utc), id="monday-01:00"),
 )
 OFF_PEAK_MOMENTS: Final = (
