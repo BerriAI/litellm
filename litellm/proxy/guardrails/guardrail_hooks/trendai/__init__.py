@@ -31,7 +31,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         timeout=settings.timeout,
         stream_overlap_size=settings.stream_overlap_size,
         response_content_chunk_size_bytes=settings.response_content_chunk_size_bytes,
-        logging_only_scan=settings.logging_only_scan,
         guardrail_name=guardrail_name,
         event_hook=_normalize_event_hook(litellm_params.mode),
         default_on=litellm_params.default_on is True,
