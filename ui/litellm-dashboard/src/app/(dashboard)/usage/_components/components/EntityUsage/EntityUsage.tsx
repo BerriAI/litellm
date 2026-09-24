@@ -170,13 +170,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const spendData = loadedPages?.base === spendDataBase ? loadedPages.merged : spendDataBase;
   const apiKeyTruncation = getApiKeyTruncation(spendData.metadata?.api_key_limit, spendData.metadata?.total_api_keys);
 
+  const keyPageWindow =
+    accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null;
   const loadMoreKeys =
-    aggregatedFetchFn && accessToken && startTime && endTime && spendData.metadata?.next_cursor
+    aggregatedFetchFn && keyPageWindow && spendData.metadata?.next_cursor
       ? () =>
           teamDailyActivityAggregatedCall(
-            accessToken,
-            startTime,
-            endTime,
+            keyPageWindow.accessToken,
+            keyPageWindow.startTime,
+            keyPageWindow.endTime,
             Array.isArray(entityFilterArg) ? entityFilterArg : null,
             spendData.metadata?.next_cursor ?? null,
           ).then((page: EntitySpendData) => {

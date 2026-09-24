@@ -441,13 +441,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   );
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
   const aggregatedCursor = activeAggregated?.metadata?.next_cursor;
+  const keyPageWindow = useMemo(
+    () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null),
+    [accessToken, startTime, endTime],
+  );
   const loadMoreKeys = useCallback(() => {
-    if (!accessToken || !startTime || !endTime || !aggregatedCursor) return Promise.resolve();
+    if (!keyPageWindow || !aggregatedCursor) return Promise.resolve();
     const rangeKey = currentAggregatedRangeKey;
     return userDailyActivityAggregatedCall(
-      accessToken,
-      startTime,
-      endTime,
+      keyPageWindow.accessToken,
+      keyPageWindow.startTime,
+      keyPageWindow.endTime,
       effectiveUserId,
       false,
       null,
@@ -457,7 +461,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         prev && prev.rangeKey === rangeKey ? { rangeKey, value: mergeKeyPage(prev.value, page) } : prev,
       );
     });
-  }, [accessToken, startTime, endTime, effectiveUserId, aggregatedCursor, currentAggregatedRangeKey]);
+  }, [keyPageWindow, effectiveUserId, aggregatedCursor, currentAggregatedRangeKey]);
   const searchKeys = useCallback(
     (q: string) => {
       if (!accessToken || !startTime || !endTime) return Promise.resolve({});
