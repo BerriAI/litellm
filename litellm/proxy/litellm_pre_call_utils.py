@@ -152,12 +152,15 @@ def _session_id_from_baggage(baggage: str) -> str | None:
 
 def _caller_set_trace_field(data: Mapping[str, object], metadata_variable_name: str, field: str) -> bool:
     active: Final = data.get(metadata_variable_name)
-    active_mapping: Final = cast(Mapping[str, object], active) if isinstance(active, Mapping) else None
-    if active_mapping is not None and field in active_mapping:
-        return bool(active_mapping.get(field))
+    if isinstance(active, Mapping) and field in active:
+        active_map: Final = cast(Mapping[str, object], active)  # cast-ok: isinstance above, free-form JSON values
+        return bool(active_map[field])
     promoted: Final = metadata_variable_name == "litellm_metadata" and field in LITELLM_TRACE_CONTROL_METADATA_FIELDS
     requester: Final = data.get("metadata")
-    return promoted and isinstance(requester, Mapping) and bool(cast(Mapping[str, object], requester).get(field))
+    if not promoted or not isinstance(requester, Mapping):
+        return False
+    requester_map: Final = cast(Mapping[str, object], requester)  # cast-ok: isinstance above, free-form JSON values
+    return bool(requester_map.get(field))
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -1591,7 +1594,9 @@ class LiteLLMProxyRequestSetup:
         # trace_id.
         normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
         if "litellm_trace_id" not in data and not _caller_set_trace_field(
-            cast(Mapping[str, object], data), _metadata_variable_name, "trace_id"
+            cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
+            _metadata_variable_name,
+            "trace_id",
         ):
             traceparent: Final = normalized_headers.get("traceparent")
             if isinstance(traceparent, str):
@@ -1603,7 +1608,9 @@ class LiteLLMProxyRequestSetup:
                         "Extracted trace_id from W3C traceparent header: %s", trace_id_from_traceparent
                     )
         if "litellm_session_id" not in data and not _caller_set_trace_field(
-            cast(Mapping[str, object], data), _metadata_variable_name, "session_id"
+            cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
+            _metadata_variable_name,
+            "session_id",
         ):
             baggage: Final = normalized_headers.get("baggage")
             if isinstance(baggage, str):
