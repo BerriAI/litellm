@@ -228,8 +228,6 @@ COST_DESCRIPTIONS: dict[str, str] = {
 def cost_description(key: str) -> Optional[str]:
     if key in COST_DESCRIPTIONS:
         return COST_DESCRIPTIONS[key]
-    if key.endswith("_balanced"):
-        return "Balanced service-tier rate for the same-named base field."
     if key.endswith("_flex"):
         return "Flex service-tier rate for the same-named base field."
     if key.endswith("_priority"):

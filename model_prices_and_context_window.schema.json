@@ -202,8 +202,7 @@
         },
         "cache_read_input_token_cost_balanced": {
           "type": "number",
-          "minimum": 0,
-          "description": "Balanced service-tier rate for the same-named base field."
+          "minimum": 0
         },
         "cache_read_input_token_cost_batches": {
           "type": "number",
@@ -383,8 +382,7 @@
         },
         "input_cost_per_token_balanced": {
           "type": "number",
-          "minimum": 0,
-          "description": "Balanced service-tier rate for the same-named base field."
+          "minimum": 0
         },
         "input_cost_per_token_batches": {
           "type": "number",
@@ -724,8 +722,7 @@
         },
         "output_cost_per_token_balanced": {
           "type": "number",
-          "minimum": 0,
-          "description": "Balanced service-tier rate for the same-named base field."
+          "minimum": 0
         },
         "output_cost_per_token_batches": {
           "type": "number",
