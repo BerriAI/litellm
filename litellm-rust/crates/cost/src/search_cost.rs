@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use crate::catalog::ModelInfoCatalog;
 use crate::error::CostError;
+use crate::wire::py_float;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParallelAiPricing {
@@ -64,11 +65,7 @@ pub fn parallel_ai_search_cost(
 }
 
 fn rate(value: Option<&Value>) -> f64 {
-    match value {
-        Some(Value::Number(value)) => value.as_f64().unwrap_or(0.0),
-        Some(Value::String(value)) => value.parse().unwrap_or(0.0),
-        _ => 0.0,
-    }
+    value.and_then(py_float).unwrap_or(0.0)
 }
 
 pub fn search_provider_cost_from_model_info(

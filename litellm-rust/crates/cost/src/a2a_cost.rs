@@ -1,12 +1,9 @@
 use crate::error::CostError;
+use crate::wire::py_float;
 use serde_json::Value;
 
 fn amount(value: &Value) -> Result<f64, CostError> {
-    match value {
-        Value::Number(number) => number.as_f64().ok_or(CostError::InvalidCost),
-        Value::String(number) => number.parse().map_err(|_| CostError::InvalidCost),
-        _ => Err(CostError::InvalidCost),
-    }
+    py_float(value).ok_or(CostError::InvalidCost)
 }
 
 pub fn calculate_token_based_cost(

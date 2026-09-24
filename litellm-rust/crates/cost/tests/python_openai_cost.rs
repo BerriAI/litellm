@@ -77,3 +77,17 @@ fn video_generation_cost_rejects_invalid_duration() {
         Err(CostError::InvalidQuantity)
     );
 }
+
+#[rstest]
+#[case::padded_string(json!({"output_cost_per_second": " 0.05 "}), Some(0.05))]
+#[case::boolean(json!({"output_cost_per_second": true}), Some(1.0))]
+#[case::resolution_tier_first(json!({"output_cost_per_second": 0.05, "output_cost_per_second_720p": "0.1"}), Some(0.1))]
+fn video_output_cost_per_second_converts_rates_like_python_float(
+    #[case] model_info: serde_json::Value,
+    #[case] expected: Option<f64>,
+) {
+    assert_eq!(
+        video_output_cost_per_second(&model_info, Some("720p")),
+        expected
+    );
+}

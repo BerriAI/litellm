@@ -1,13 +1,10 @@
 use serde_json::{Number, Value};
 
 use crate::provider::LlmProviders;
+use crate::wire::py_float_unless_bool;
 
 fn rate(value: Option<&Value>) -> Option<f64> {
-    match value? {
-        Value::Number(value) => value.as_f64(),
-        Value::String(value) => value.trim().parse().ok(),
-        _ => None,
-    }
+    value.and_then(py_float_unless_bool)
 }
 
 fn number(value: f64) -> Option<Value> {

@@ -203,3 +203,17 @@ fn apply_server_side_tool_usage_details_preserves_existing_cache_usage() {
     assert_eq!(prompt.cached_tokens, 7);
     assert_eq!(prompt.web_search_requests, Some(4));
 }
+
+#[rstest]
+#[case::padded_string(json!({"search_context_cost_per_query": {"search_context_size_medium": " 0.02 "}}), 0.02)]
+#[case::skips_unparseable_and_zero(json!({"search_context_cost_per_query": {"search_context_size_medium": "n/a", "search_context_size_low": 0, "search_context_size_high": 0.03}}), 0.03)]
+#[case::default_when_nothing_prices(json!({}), 0.005)]
+fn web_search_cost_per_call_takes_the_first_positive_float(
+    #[case] model_info: Value,
+    #[case] expected: f64,
+) {
+    assert_eq!(
+        litellm_cost::xai_cost::web_search_cost_per_call_from_model_info(&model_info, 0.005),
+        expected
+    );
+}

@@ -3,15 +3,10 @@ use serde_json::Value;
 
 use crate::off_peak::{open_off_peak_block, parse_off_peak_rate};
 use crate::responses_usage::ChatUsage;
-use crate::wire::is_truthy;
+use crate::wire::{is_truthy, py_float};
 
 fn rate(value: Option<&Value>) -> f64 {
-    match value {
-        Some(Value::Number(value)) => value.as_f64().unwrap_or(0.0),
-        Some(Value::String(value)) => value.parse().unwrap_or(0.0),
-        Some(Value::Bool(value)) => f64::from(*value as u8),
-        _ => 0.0,
-    }
+    value.and_then(py_float).unwrap_or(0.0)
 }
 
 fn cost_per_query(model_info: &Value) -> f64 {

@@ -1,3 +1,4 @@
+use crate::wire::py_float;
 use serde_json::Value;
 
 fn range(tier: &Value) -> Option<(f64, f64)> {
@@ -31,12 +32,7 @@ pub fn select_tier_for_input(tiers: &[Value], input_tokens: i64) -> Option<&Valu
 }
 
 fn coerce(value: &Value) -> f64 {
-    match value {
-        Value::Number(value) => value.as_f64().unwrap_or(0.0),
-        Value::String(value) => value.trim().parse().unwrap_or(0.0),
-        Value::Bool(value) => f64::from(*value),
-        _ => 0.0,
-    }
+    py_float(value).unwrap_or(0.0)
 }
 
 pub fn tier_rate(tier: &Value, cost_key: &str, fallback_cost_key: Option<&str>) -> f64 {

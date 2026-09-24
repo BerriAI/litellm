@@ -2,6 +2,7 @@ use crate::error::CostError;
 use serde_json::Value;
 
 use crate::non_token::{Charge, Unit, calculate};
+use crate::wire::py_float;
 
 pub use crate::non_token::video_resolution_to_cost_field_suffix;
 
@@ -17,11 +18,7 @@ pub fn video_output_cost_per_second(
     model_info: &Value,
     video_resolution: Option<&str>,
 ) -> Option<f64> {
-    let rate = |value: &Value| {
-        value
-            .as_f64()
-            .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
-    };
+    let rate = |value: &Value| py_float(value);
     let tier_rate = video_resolution
         .and_then(video_resolution_to_cost_field_suffix)
         .and_then(|suffix| model_info.get(format!("output_cost_per_second_{suffix}")))

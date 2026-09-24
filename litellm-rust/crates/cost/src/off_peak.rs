@@ -1,3 +1,4 @@
+use crate::wire::py_float_unless_bool;
 use jiff::{Timestamp, tz::TimeZone};
 use serde_json::Value;
 
@@ -115,11 +116,7 @@ pub fn open_off_peak_block(model_info: &Value, at: Timestamp) -> Option<&Value> 
 }
 
 pub fn parse_off_peak_rate(value: Option<&Value>) -> Option<f64> {
-    match value? {
-        Value::Number(number) => number.as_f64(),
-        Value::String(number) => number.trim().parse().ok(),
-        _ => None,
-    }
+    value.and_then(py_float_unless_bool)
 }
 
 pub fn apply_off_peak_pricing(model_info: &Value, at: Timestamp, rates: TokenRates) -> TokenRates {

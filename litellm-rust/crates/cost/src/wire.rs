@@ -96,6 +96,10 @@ pub fn py_float(value: &Value) -> Option<f64> {
     number::float(&python_value(value)).ok()
 }
 
+pub fn py_float_unless_bool(value: &Value) -> Option<f64> {
+    (!value.is_boolean()).then(|| py_float(value)).flatten()
+}
+
 pub fn lax_int(value: &Value) -> Option<i64> {
     i64::try_from(&pydantic::lax_int(&python_value(value)).ok()?).ok()
 }

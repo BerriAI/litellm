@@ -34,6 +34,7 @@ use crate::speech_cost::count_characters;
 use crate::together_cost::together_pricing_model;
 use crate::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
+use crate::wire::py_float;
 
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltInToolCostConfig<'a> {
@@ -159,11 +160,7 @@ fn flat_priced(
 }
 
 fn number(value: Option<&Value>) -> Option<f64> {
-    match value? {
-        Value::Number(value) => value.as_f64(),
-        Value::String(value) => value.parse().ok(),
-        _ => None,
-    }
+    value.and_then(py_float)
 }
 
 fn count_text_usage(input: CompletionTextInput<'_>) -> Result<ChatUsage, CostError> {

@@ -5,6 +5,7 @@ use crate::generic_usage::{parse_completion_tokens_details, parse_prompt_tokens_
 use crate::off_peak::{open_off_peak_block, parse_off_peak_rate};
 use crate::responses_usage::ChatUsage;
 use crate::tiered_pricing::{select_tier_for_input, tier_rate};
+use crate::wire::py_float;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TokenBreakdown {
@@ -48,12 +49,7 @@ pub fn extract_token_breakdown(usage: &ChatUsage) -> TokenBreakdown {
 }
 
 fn rate(value: Option<&Value>) -> f64 {
-    match value {
-        Some(Value::Number(value)) => value.as_f64().unwrap_or(0.0),
-        Some(Value::String(value)) => value.parse().unwrap_or(0.0),
-        Some(Value::Bool(value)) => f64::from(*value as u8),
-        _ => 0.0,
-    }
+    value.and_then(py_float).unwrap_or(0.0)
 }
 
 fn flat_rate(model_info: &Value, key: &str, fallback: &str) -> f64 {

@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::responses_usage::{ChatUsage, PromptTokenDetails};
+use crate::wire::{py_float, py_int};
 
 pub fn reported_cost(usage: &ChatUsage) -> Option<f64> {
     usage.cost.filter(|cost| cost.is_finite() && *cost >= 0.0)
@@ -18,12 +19,10 @@ pub fn web_search_cost_per_call_from_model_info(model_info: &Value, default_rate
     ]
     .into_iter()
     .filter_map(|key| {
-        let value = model_info.get("search_context_cost_per_query")?.get(key)?;
-        match value {
-            Value::Number(value) => value.as_f64(),
-            Value::String(value) => value.parse().ok(),
-            _ => None,
-        }
+        model_info
+            .get("search_context_cost_per_query")?
+            .get(key)
+            .and_then(py_float)
     })
     .find(|rate| *rate > 0.0)
     .unwrap_or(default_rate)
@@ -47,14 +46,9 @@ pub fn cost_per_web_search_request(
 }
 
 fn count(value: Option<&Value>) -> Option<u64> {
-    match value? {
-        Value::Number(value) => value
-            .as_u64()
-            .or_else(|| value.as_f64().map(|value| value as u64)),
-        Value::String(value) => value.parse().ok(),
-        Value::Bool(value) => Some(u64::from(*value)),
-        _ => None,
-    }
+    value
+        .and_then(py_int)
+        .and_then(|count| u64::try_from(count).ok())
 }
 
 pub fn apply_server_side_tool_usage_details_to_usage(
