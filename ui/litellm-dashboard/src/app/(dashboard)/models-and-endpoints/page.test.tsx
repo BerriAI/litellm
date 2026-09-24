@@ -125,6 +125,7 @@ describe("ModelsAndEndpointsPage", () => {
     renderPage();
     expect(screen.getByTestId("team-info")).toHaveTextContent("team:team-9");
     expect(screen.getByTestId("team-info")).toHaveAttribute("data-team-admin", "false");
+    expect(teamInfoProps).toHaveBeenLastCalledWith(expect.objectContaining({ is_proxy_admin: false }));
   });
 
   it("hides admin-only tabs for a non-admin user", () => {

@@ -208,7 +208,7 @@ describe("ModelsAndEndpointsPage ?team drill-in", () => {
       team_member_permissions: [],
     } as never);
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData() as never);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- jsdom has no ResizeObserver global to type against
     (global as any).ResizeObserver = class {
       observe() {}
       unobserve() {}
@@ -228,7 +228,7 @@ describe("ModelsAndEndpointsPage ?team drill-in", () => {
     await user.click(await screen.findByRole("button", { name: /edit settings/i }));
     await screen.findByLabelText(/Team Name/);
 
-    expect(screen.getByText("Disable all global guardrails")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: /Disable all global guardrails/i })).toBeChecked();
   });
 
   it("keeps the switch hidden from an internal user session on the same team", async () => {
