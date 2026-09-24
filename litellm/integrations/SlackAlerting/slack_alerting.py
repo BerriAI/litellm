@@ -5,7 +5,7 @@ import datetime
 import os
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -54,6 +54,7 @@ from litellm.types.integrations.slack_alerting import *
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
     DEPRECATION_IDLE_POLL_SECONDS,
+    EmailSender,
 )
 
 from ..email_templates.templates import *
@@ -83,6 +84,30 @@ def _proxy_llm_router() -> Router | None:
     return llm_router
 
 
+def _proxy_prisma_client() -> "PrismaClient | None":
+    from litellm.proxy.proxy_server import prisma_client
+
+    return prisma_client
+
+
+def _proxy_email_logger() -> EmailSender | None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    return proxy_logging_obj.email_logging_instance
+
+
+async def _pass_failed(pass_run: Awaitable[object], name: str) -> bool:
+    try:
+        await pass_run
+    except Exception as e:  # noqa: BLE001  # a failed pass must not kill the loop
+        verbose_proxy_logger.exception("Error in model deprecation %s loop: %s", name, e)
+        return True
+    return False
+
+
+_CHANNELS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+
+
 class SlackAlerting(CustomBatchLogger):
     """
     Class for sending Slack Alerts
@@ -97,7 +122,7 @@ class SlackAlerting(CustomBatchLogger):
         alert_types: list[AlertType] = DEFAULT_ALERT_TYPES,
         alert_to_webhook_url: dict[AlertType, list[str] | str]
         | None = None,  # if user wants to separate alerts to diff channels
-        alerting_args={},
+        alerting_args: Mapping[str, object] | None = None,
         default_webhook_url: str | None = None,
         alert_type_config: dict[str, dict] | None = None,
         async_http_handler: AsyncHTTPHandler | None = None,
@@ -114,7 +139,9 @@ class SlackAlerting(CustomBatchLogger):
         )
         self.alert_to_webhook_url = process_slack_alerting_variables(alert_to_webhook_url=alert_to_webhook_url)
         self.is_running = False
-        self.alerting_args = SlackAlertingArgs(**alerting_args)
+        self.alerting_args = (
+            SlackAlertingArgs() if alerting_args is None else SlackAlertingArgs.model_validate(alerting_args)
+        )
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
@@ -127,6 +154,8 @@ class SlackAlerting(CustomBatchLogger):
                 self.alert_type_config[key] = AlertTypeConfig(**val) if isinstance(val, dict) else val
         self.digest_buckets: dict[str, DigestEntry] = {}
         self.digest_lock = asyncio.Lock()
+        self.deprecation_alert_backoff_until: float = 0.0
+        self.deprecation_email_backoff_until: float = 0.0
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def update_values(
@@ -135,7 +164,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting_threshold: float | None = None,
         alert_types: list[AlertType] | None = None,
         alert_to_webhook_url: dict[AlertType, list[str] | str] | None = None,
-        alerting_args: dict | None = None,
+        alerting_args: Mapping[str, object] | None = None,
         llm_router: Router | None = None,
         alert_type_config: dict[str, dict] | None = None,
     ):
@@ -148,7 +177,7 @@ class SlackAlerting(CustomBatchLogger):
         if alert_types is not None:
             self.alert_types = alert_types
         if alerting_args is not None:
-            self.alerting_args = SlackAlertingArgs(**alerting_args)
+            self.alerting_args = SlackAlertingArgs.model_validate(alerting_args)
             if not self.periodic_started:
                 asyncio.create_task(self.periodic_flush())
                 self.periodic_started = True
@@ -1085,8 +1114,14 @@ Model Info:
     async def model_removed_alert(self, model_name: str):
         pass
 
+    def _channels(self) -> tuple[str, ...]:
+        return _CHANNELS_ADAPTER.validate_python(self.alerting or ())
+
     def _deprecation_alerts_enabled(self) -> bool:
-        return self.alerting is not None and AlertType.model_deprecation_warnings in self.alert_types
+        channels: Final = self._channels()
+        return (
+            "slack" in channels or MS_TEAMS_ALERTING_DESTINATION in channels
+        ) and AlertType.model_deprecation_warnings in self.alert_types
 
     async def send_model_deprecation_alert(
         self,
@@ -1158,25 +1193,96 @@ Model Info:
             return False
         return await self.send_model_deprecation_alert(llm_router=llm_router, pod_lock_manager=pod_lock_manager)
 
+    def _deprecation_emails_enabled(self) -> bool:
+        return (
+            "email" in self._channels()
+            and AlertType.model_deprecation_warnings in self.alert_types
+            and bool(self.alerting_args.model_deprecation_email_thresholds)
+        )
+
+    async def _run_deprecation_email_pass(
+        self,
+        llm_router: Router | None,
+        pod_lock_manager: "PodLockManager | None",
+        get_prisma_client: Callable[[], "PrismaClient | None"],
+        get_email_logger: Callable[[], EmailSender | None],
+        send_emails: "Callable[..., Awaitable[int]] | None",
+    ) -> int:
+        """Email team admins the milestones crossed, resolving against the DB at most once a day"""
+        if llm_router is None or not self._deprecation_emails_enabled():
+            return 0
+
+        from litellm.proxy.common_utils.model_deprecation_notifications import (
+            DeprecationEmailContext,
+            email_pass_done_today,
+            make_email_deliverer,
+            send_model_deprecation_emails,
+        )
+
+        if await email_pass_done_today(self.internal_usage_cache):
+            return 0
+        prisma_client: Final = get_prisma_client()
+        if prisma_client is None:
+            verbose_proxy_logger.debug("model_deprecation: no database connected, skipping email pass")
+            return 0
+        run: Final = send_emails or send_model_deprecation_emails
+        return await run(
+            DeprecationEmailContext(
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+                cache=self.internal_usage_cache,
+                alerting_args=self.alerting_args,
+                pod_lock_manager=pod_lock_manager,
+                deliver=make_email_deliverer(get_email_logger()),
+            )
+        )
+
+    async def _run_deprecation_passes(
+        self,
+        get_llm_router: Callable[[], Router | None],
+        pod_lock_manager: "PodLockManager | None",
+        get_prisma_client: Callable[[], "PrismaClient | None"],
+        get_email_logger: Callable[[], EmailSender | None],
+        send_emails: "Callable[..., Awaitable[int]] | None",
+        now: Callable[[], float] = time.time,
+    ) -> None:
+        """Run the Slack pass then the email pass; a pass that raised is skipped for a day while the other keeps polling"""
+        llm_router: Final = get_llm_router()
+        current: Final = now()
+        if current >= self.deprecation_alert_backoff_until and await _pass_failed(
+            self._run_deprecation_alert_pass(llm_router, pod_lock_manager), "alert"
+        ):
+            self.deprecation_alert_backoff_until = current + DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS
+        if current >= self.deprecation_email_backoff_until and await _pass_failed(
+            self._run_deprecation_email_pass(
+                llm_router, pod_lock_manager, get_prisma_client, get_email_logger, send_emails
+            ),
+            "email",
+        ):
+            self.deprecation_email_backoff_until = current + DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS
+
     async def run_scheduled_deprecation_check(
         self,
         get_llm_router: Callable[[], Router | None] = _proxy_llm_router,
         pod_lock_manager: "PodLockManager | None" = None,
+        get_prisma_client: Callable[[], "PrismaClient | None"] = _proxy_prisma_client,
+        get_email_logger: Callable[[], EmailSender | None] = _proxy_email_logger,
+        send_emails: "Callable[..., Awaitable[int]] | None" = None,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
-        """Poll every pass for a loaded router, the alert being on, and no alert in the last day, then alert
+        """Poll for a loaded router and run both passes every poll interval
 
-        A pass that could not alert (no router yet, alert type off, a sibling pod holds the daily lock, or a
-        redis blip at claim time) is retried on the next poll instead of costing a day, while a pass that
-        raised (a missing webhook, say) backs off a full day so a misconfiguration logs once, not every poll
+        A pass that could not act (no router yet, alert type off, a sibling pod holds the daily lock, or a
+        redis blip at claim time) simply runs again next poll, while a pass that raised (a missing webhook,
+        say) is skipped for a full day so a misconfiguration logs once, not every poll, without stalling
+        the other pass
         """
+        sleep_fn: Final = sleep or asyncio.sleep
         while True:
-            try:
-                await self._run_deprecation_alert_pass(get_llm_router(), pod_lock_manager)
-            except Exception as e:  # noqa: BLE001  # a failed alert must not kill the loop
-                verbose_proxy_logger.exception("Error in model deprecation alert loop: %s", e)
-                await asyncio.sleep(DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS)
-                continue
-            await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
+            await self._run_deprecation_passes(
+                get_llm_router, pod_lock_manager, get_prisma_client, get_email_logger, send_emails
+            )
+            await sleep_fn(DEPRECATION_IDLE_POLL_SECONDS)
 
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """

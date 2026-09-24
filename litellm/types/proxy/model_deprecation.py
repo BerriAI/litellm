@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -12,6 +13,15 @@ DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS: Final = 24 * 60 * 60
 DEPRECATION_IDLE_POLL_SECONDS: Final = 30
 
 DeprecationStatus = Literal["upcoming", "imminent", "deprecated"]
+
+
+class EmailSender(Protocol):
+    """The proxy's configured email logger, as far as deprecation digests need it"""
+
+    DEFAULT_LITELLM_EMAIL: str
+
+    async def send_email(self, from_email: str, to_email: Sequence[str], subject: str, html_body: str) -> None:
+        """Deliver one HTML email to the given recipients"""
 
 
 class ModelDeprecationInfo(BaseModel):
