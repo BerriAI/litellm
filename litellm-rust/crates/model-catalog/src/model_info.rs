@@ -244,6 +244,9 @@ pub struct ModelInfo {
     /// Priority service-tier rate for the same-named base field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_token_cost_above_272k_tokens_priority: Option<f64>,
+    /// Rate applied once the prompt exceeds the token threshold in the field name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_token_cost_above_32k_tokens: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_token_cost_batches: Option<f64>,
     /// Flex service-tier rate for the same-named base field.
@@ -283,6 +286,9 @@ pub struct ModelInfo {
     /// Priority service-tier rate for the same-named base field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_read_input_token_cost_above_272k_tokens_priority: Option<f64>,
+    /// Rate applied once the prompt exceeds the token threshold in the field name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_token_cost_above_32k_tokens: Option<f64>,
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_read_input_token_cost_above_512k_tokens: Option<f64>,
@@ -377,6 +383,9 @@ pub struct ModelInfo {
     /// Priority service-tier rate for the same-named base field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token_above_272k_tokens_priority: Option<f64>,
+    /// Rate applied once the prompt exceeds the token threshold in the field name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_cost_per_token_above_32k_tokens: Option<f64>,
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token_above_512k_tokens: Option<f64>,
@@ -498,6 +507,9 @@ pub struct ModelInfo {
     /// Priority service-tier rate for the same-named base field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_cost_per_token_above_272k_tokens_priority: Option<f64>,
+    /// Rate applied once the prompt exceeds the token threshold in the field name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_token_above_32k_tokens: Option<f64>,
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_cost_per_token_above_512k_tokens: Option<f64>,
