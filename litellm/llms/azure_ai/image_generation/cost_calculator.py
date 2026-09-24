@@ -56,15 +56,17 @@ def cost_calculator(
         return usage_cost
 
     num_images: Final = n if n is not None else len(image_response.data or ())
-    generated_meters: Final = (
-        ("output_cost_per_image", num_images),
-        ("input_cost_per_pixel", _generated_pixels(optional_params, size) * num_images),
-    )
-    generated_cost: Final = next(
-        (rate * units for key, units in generated_meters if (rate := _rate(resolved, key)) is not None),
-        0.0,
-    )
-    reference_cost: Final = (_rate(resolved, "input_cost_per_reference_pixel") or 0.0) * (
-        image_response.reference_pixels or 0
-    )
+    generated_cost: Final = _generated_cost(resolved, num_images, _generated_pixels(optional_params, size))
+    reference_rate: Final = _rate(resolved, "input_cost_per_reference_pixel") or 0.0
+    reference_cost: Final = reference_rate * (image_response.reference_pixels or 0)
     return generated_cost + reference_cost
+
+
+def _generated_cost(resolved: ModelInfo, num_images: int, pixels_per_image: int) -> float:
+    per_image: Final = _rate(resolved, "output_cost_per_image")
+    if per_image is not None:
+        return per_image * num_images
+    per_pixel: Final = _rate(resolved, "input_cost_per_pixel")
+    if per_pixel is not None:
+        return per_pixel * pixels_per_image * num_images
+    return 0.0
