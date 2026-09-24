@@ -1095,6 +1095,9 @@ def run_server(
     if version is True:
         ProxyInitializationHelpers._echo_litellm_version()
         return
+    if validate_config is True:
+        ProxyInitializationHelpers._run_config_validation(config)
+        return
     if model and "ollama" in model and api_base is None:
         ProxyInitializationHelpers._run_ollama_serve()
     if health is True:
@@ -1102,9 +1105,6 @@ def run_server(
         return
     if test is True:
         ProxyInitializationHelpers._run_test_chat_completion(host, port, model, test)
-        return
-    if validate_config is True:
-        ProxyInitializationHelpers._run_config_validation(config)
         return
     else:
         if headers:
