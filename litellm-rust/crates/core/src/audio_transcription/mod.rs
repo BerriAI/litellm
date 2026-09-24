@@ -14,6 +14,3 @@ pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Resu
     execute_audio_transcription_provider_call(prepare_audio_transcription_provider_call(request)?)
         .await
 }
-
-#[cfg(test)]
-mod tests;

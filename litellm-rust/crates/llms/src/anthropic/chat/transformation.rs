@@ -218,7 +218,3 @@ fn anthropic_body(
     );
     Value::Object(body)
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;

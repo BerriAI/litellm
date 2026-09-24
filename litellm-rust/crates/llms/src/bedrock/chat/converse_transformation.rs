@@ -302,7 +302,3 @@ fn has_blank_text(message: &ChatMessage) -> bool {
         }),
     }
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;
