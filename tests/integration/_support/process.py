@@ -9,11 +9,23 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
 import psutil
 from integration._support.client import Gateway
+
+
+def proxy_database_environment() -> Mapping[str, str]:
+    writer: Final = os.environ.get("INTEGRATION_PROXY_DATABASE_URL", "")
+    reader: Final = os.environ.get("INTEGRATION_PROXY_READ_REPLICA_URL", "")
+    return MappingProxyType(
+        {
+            **({"DATABASE_URL": writer} if writer else {}),
+            **({"DATABASE_URL_READ_REPLICA": reader} if reader else {}),
+        }
+    )
 
 
 def in_group(process: psutil.Process, group: int) -> bool:
@@ -83,7 +95,11 @@ def owned_proxy_process(
         port: Final = reserve.getsockname()[1]
     root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
     environment: Final = {
-        **{name: value for name, value in os.environ.items() if name not in remove_environment},
+        **{
+            name: value
+            for name, value in {**os.environ, **proxy_database_environment()}.items()
+            if name not in remove_environment
+        },
         "LITELLM_MASTER_KEY": gateway.key,
         "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
         "STORE_MODEL_IN_DB": "True",

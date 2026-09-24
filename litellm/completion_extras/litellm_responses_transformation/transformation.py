@@ -191,8 +191,6 @@ def _as_chat_reasoning_items(
 ) -> list[ChatCompletionReasoningItem] | None:
     if not reasoning_items:
         return None
-    # cast-ok: _BuiltReasoningItem is the structural shape ChatCompletionReasoningItem
-    # describes, and TypedDict invariance is what stops the two from unifying here.
     return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
 
 
@@ -1370,7 +1368,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if tool_call_index_map is None:
             return output_index
         if output_index not in tool_call_index_map:
-            tool_call_index_map[output_index] = len(tool_call_index_map)  # mutable-ok: per-stream accumulator state
+            tool_call_index_map[output_index] = len(tool_call_index_map)
         return tool_call_index_map[output_index]
 
     @staticmethod

@@ -42,6 +42,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
+    is_anthropic_sse_stream,
     model_response_text,
 )
 from litellm.types.guardrails import (
@@ -91,6 +92,42 @@ def _json_escaped_len(text: str) -> int:
     3-byte UTF-8 character can occupy 6+ bytes on the wire).
     """
     return len(json.dumps(text).encode("utf-8")) - 2  # strip the surrounding quotes
+
+
+_MAX_FIRST_SSE_FRAME_BYTES: Final = 64 * 1024
+
+
+def _holds_complete_sse_frame(raw: bytes) -> bool:
+    """Whether ``raw`` holds one blank-line terminated SSE event, or is too large to keep joining."""
+    return b"\n\n" in raw or b"\r\n\r\n" in raw or len(raw) >= _MAX_FIRST_SSE_FRAME_BYTES
+
+
+async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+    """
+    Join leading raw ``bytes`` chunks until they hold one complete SSE event, so
+    the stream shape is decided on a whole frame rather than a transport fragment.
+    Everything after that first frame is forwarded untouched.
+    """
+    pending = b""
+    try:
+        async for chunk in stream:
+            if not isinstance(chunk, bytes):
+                yield chunk
+                continue
+            pending += chunk
+            if _holds_complete_sse_frame(pending):
+                break
+        else:
+            if pending:
+                yield pending
+            return
+    except Exception:
+        if pending:
+            yield pending
+        raise
+    yield pending
+    async for chunk in stream:
+        yield chunk
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -168,7 +205,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         # Per-loop semaphores bounding chunked-analyze fan-out across ALL
         # concurrent oversized blocks/requests on this instance, not per call
-        self._loop_chunk_semaphores: _LoopSemaphores = {}  # mutable-ok: per-loop semaphore cache
+        self._loop_chunk_semaphores: _LoopSemaphores = {}
 
         if mock_testing is True:  # for testing purposes only
             return
@@ -1356,7 +1393,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         all_chunks: list[ModelResponseStream] = []
         passthrough_due_to_unknown_stream_shape = False
         try:
-            stream: Final = response.__aiter__()
+            stream: Final = _coalesce_first_sse_frame(response.__aiter__())
             async for chunk in stream:
                 if isinstance(chunk, ModelResponseStream):
                     if passthrough_due_to_unknown_stream_shape:
@@ -1364,7 +1401,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     else:
                         all_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    if passthrough_due_to_unknown_stream_shape or all_chunks:
+                    first_frame_is_anthropic = (
+                        not passthrough_due_to_unknown_stream_shape
+                        and not all_chunks
+                        and is_anthropic_sse_stream((chunk,))
+                    )
+                    if not first_frame_is_anthropic:
+                        passthrough_due_to_unknown_stream_shape = (
+                            passthrough_due_to_unknown_stream_shape or not all_chunks
+                        )
                         yield chunk
                         continue
                     for masked_chunk in await self._mask_anthropic_sse_stream(chunk, stream, request_data):
@@ -1387,8 +1432,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     yield chunk
             if passthrough_due_to_unknown_stream_shape:
                 verbose_proxy_logger.warning(
-                    "Presidio apply_to_output: streaming response contained unknown event objects "
-                    "(e.g. /v1/responses events). Output PII masking was skipped for this response."
+                    "Presidio apply_to_output: streaming response was not a parsed chat completion stream "
+                    "(raw non-Anthropic SSE passthrough or /v1/responses events). "
+                    "Output PII masking was skipped for this response."
                 )
                 return
             if not all_chunks:

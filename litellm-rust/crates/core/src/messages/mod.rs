@@ -12,6 +12,9 @@ mod common_utils;
 mod handler;
 mod prepare;
 pub mod route;
+use std::sync::Arc;
+
+use litellm_secrets::source::EnvironmentSecrets;
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use route::{LocalMessagesHost, MessagesCall, MessagesOutput, messages_machine};
 use serde_json::Value;
@@ -31,9 +34,12 @@ pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesR
         api_base: request.api_base.map(Into::into),
         custom_llm_provider: request.custom_llm_provider.map(Into::into),
         extra_headers: request.extra_headers,
+        provider_specific_header: request.provider_specific_header,
         timeout: request.timeout,
+        shaping: request.shaping,
     };
-    match litellm_host::run::run(messages_machine(), &LocalMessagesHost::new(call)).await? {
+    let secrets = Arc::new(EnvironmentSecrets::python_compatible());
+    match litellm_host::run::run(messages_machine(secrets), &LocalMessagesHost::new(call)).await? {
         MessagesOutput::Message(message) => Ok(*message),
         MessagesOutput::Streamed => Err(Error::Unsupported(
             "streamed responses need a streaming host",

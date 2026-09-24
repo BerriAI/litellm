@@ -399,6 +399,7 @@ from litellm.proxy.common_utils.config_includes import resolve_include_file_path
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
+from litellm.proxy.common_utils.discoverable_model_filter import discoverable_rows, undiscoverable_model_names
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -421,6 +422,9 @@ from litellm.proxy.common_utils.model_deprecation import collect_model_deprecati
 from litellm.proxy.common_utils.model_listing_utils import (
     ClaudeCodeRoutingNames,
     TeamModelNameTranslator,
+    alias_listing_entries,
+    alias_target,
+    caller_alias_maps,
     claude_code_view_ids,
     configured_display_names,
     is_claude_code_client,
@@ -5261,9 +5265,7 @@ class ProxyConfig:
             return
 
         with open(f"{user_config_file_path}", "w") as config_file:
-            yaml.dump(
-                dict(new_config), config_file, default_flow_style=False
-            )  # mutable-ok: YAML must serialize a plain dict
+            yaml.dump(dict(new_config), config_file, default_flow_style=False)
 
     async def _save_changed_config_section(
         self,
@@ -8698,9 +8700,9 @@ class ProxyConfig:
 
     @staticmethod
     def _merge_config_and_db_search_tools(
-        config_search_tools: list[SearchToolTypedDict],
-        db_search_tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+        config_search_tools: Sequence[SearchToolTypedDict],
+        db_search_tools: Sequence[dict[str, object]],
+    ) -> list[dict[str, object]]:
         db_tool_names: Final = {tool.get("search_tool_name") for tool in db_search_tools}
         return [
             *[
@@ -9271,10 +9273,10 @@ _EMPTY_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 async def _iter_with_keepalive(
-    aiter: AsyncIterator[Any],
+    aiter: AsyncIterator[object],
     resolve_keepalive_seconds: Callable[[object], float],
     keepalive_seconds: float,
-) -> AsyncGenerator[Any, None]:
+) -> AsyncGenerator[object, None]:
     """Wrap `aiter` with idle-gap heartbeats, re-resolving the interval after each
     real chunk via `resolve_keepalive_seconds`. A mid-stream router fallback can
     swap in a deployment with a different keepalive policy, including one that
@@ -9285,7 +9287,7 @@ async def _iter_with_keepalive(
     actually produced it, in both directions. While the interval is <= 0, no
     task is created and no timeout is awaited: a chunk is forwarded the moment
     it arrives, at the same cost as a bare `async for`."""
-    pending: asyncio.Task[Any] | None = None  # rebind-ok: rebound each loop iteration
+    pending: asyncio.Task[object] | None = None  # rebind-ok: rebound each loop iteration
     current_keepalive_seconds = keepalive_seconds  # rebind-ok: re-resolved after each chunk
     try:
         while True:
@@ -10137,7 +10139,7 @@ class ProxyStartupEvent:
                         str(identity): str(fingerprint)
                         for identity, fingerprint in (decoded.items() if isinstance(decoded, Mapping) else ())
                     }
-                )  # mutable-ok: MappingProxyType owns the completed immutable baseline
+                )
             snapshot: Final = snapshot_tuning_baselines(deployments)
             try:
                 await config_table.create(
@@ -10163,7 +10165,7 @@ class ProxyStartupEvent:
                             competing_decoded.items() if isinstance(competing_decoded, Mapping) else ()
                         )
                     }
-                )  # mutable-ok: MappingProxyType owns the completed immutable baseline
+                )
         except Exception as e:  # noqa: BLE001  # enforcement is skipped for this boot; refusing every tuned router on a DB blip is the one outcome the gate forbids
             verbose_proxy_logger.warning("Heuristic-v1 tuning baseline unavailable, gate not enforced this boot: %s", e)
             return None
@@ -10199,7 +10201,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
-        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor  # rebind-ok: startup publishes the one read-only baseline snapshot
+        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
@@ -11173,14 +11175,13 @@ async def model_list(
     view_aliases: Final = (
         view_router_settings.get("model_group_alias") if isinstance(view_router_settings, Mapping) else None
     )
+    caller_aliases: Final = caller_alias_maps(
+        user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+    )
     routing_names: Final = ClaudeCodeRoutingNames(
         llm_router,
         team_id or user_api_key_dict.team_id,
-        (
-            user_api_key_dict.aliases,
-            user_api_key_dict.team_model_aliases,
-            view_aliases,
-        ),
+        (*caller_aliases.rewrite, view_aliases),
     )
 
     # Validate scope parameter if provided
@@ -11243,9 +11244,11 @@ async def model_list(
             only_model_access_groups=only_model_access_groups or False,
         )
 
-        # Hide paused/unhealthy models from the public listing
-        if hidden_names:
-            all_models = [m for m in all_models if m not in hidden_names]
+        expanded_undiscoverable_names: Final = undiscoverable_model_names(
+            all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+        )
+        if hidden_names or expanded_undiscoverable_names:
+            all_models = [m for m in all_models if m not in hidden_names and m not in expanded_undiscoverable_names]
 
         # Surface the public team name by default; legacy internal keys via flag.
         # The internal routing key drives the metadata/fallback lookup, while the
@@ -11296,15 +11299,19 @@ async def model_list(
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Hide paused/unhealthy models from the public listing
-    if hidden_names:
-        all_models = [m for m in all_models if m not in hidden_names]
+    undiscoverable_names: Final = undiscoverable_model_names(
+        all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+    )
+    if hidden_names or undiscoverable_names:
+        all_models = [m for m in all_models if m not in hidden_names and m not in undiscoverable_names]
 
     # Surface the public team name by default; legacy internal keys via flag.
     # The internal routing key drives the metadata/fallback lookup, while the
     # public name is what the client sees as the model id.
     model_data = []
-    entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+    entries: Final = alias_listing_entries(
+        TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), caller_aliases
+    )
     for response_id, lookup_id in entries:
         model_info = create_model_info_response(
             model_id=lookup_id,
@@ -11388,7 +11395,8 @@ async def model_info(
     )
 
     # Mirror /v1/models' visibility filter so first-occurrence resolution
-    # cannot land on a deployment the listing had hidden.
+    # cannot land on a deployment the listing had hidden. Undiscoverable
+    # models stay retrievable by id, they only drop out of the alias guard.
     blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
     unhealthy_names: Final = await get_hidden_unhealthy_model_names(
         healthy_only=healthy_only,
@@ -11398,10 +11406,25 @@ async def model_info(
     hidden_names: Final = blocked_names | unhealthy_names
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
+    undiscoverable_names: Final = undiscoverable_model_names(
+        all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+    )
 
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
+    aliased_model_id: Final = alias_target(
+        model_id,
+        caller_alias_maps(
+            user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+        ),
+        frozenset(
+            response_id
+            for response_id, _ in TeamModelNameTranslator.listing_entries(
+                tuple(m for m in all_models if m not in undiscoverable_names), llm_router, settings
+            )
+        ),
+    )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
-        model_id=model_id,
+        model_id=aliased_model_id or model_id,
         available_models=all_models,
         llm_router=llm_router,
         general_settings=settings,
@@ -11431,7 +11454,8 @@ async def model_info(
         fallback_type=None,
         llm_router=llm_router,
     )
-    return {**response, "id": internal_to_public.get(resolved_model_id, model_id)}  # mutable-ok: response id differs
+    response_id: Final = model_id if aliased_model_id else internal_to_public.get(resolved_model_id, model_id)
+    return {**response, "id": response_id}  # mutable-ok: response id differs
 
 
 def _blocked_response_usage(original_response: object | None) -> "litellm.Usage":
@@ -15795,7 +15819,10 @@ async def model_info_v1(
         general_settings=general_settings,
         llm_router=llm_router,
     )
-    visible_models: Final = [model for model in all_models if model.get("model_name") not in hidden_names]
+    visible_models: Final = discoverable_rows(
+        (model for model in all_models if model.get("model_name") not in hidden_names),
+        user_api_key_dict,
+    )
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
     return _model_info_json_response(visible_models)
@@ -16074,8 +16101,13 @@ async def model_group_info(
             user_api_key_cache=user_api_key_cache,
         )
     )
+    undiscoverable_group_names: Final = undiscoverable_model_names(
+        all_models_str, llm_router, user_api_key_dict, user_api_key_dict.team_id
+    )
     model_groups: list[ModelGroupInfoProxy] = _get_model_group_info(
-        llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
+        llm_router=llm_router,
+        all_models_str=[name for name in all_models_str if name not in undiscoverable_group_names],
+        model_group=model_group,
     )
 
     # Append A2A agents to model groups
