@@ -105,6 +105,7 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
+from litellm.types import utils as types_utils
 from litellm.types.litellm_params import TRUSTED_CALLBACK_VARS_FIELD
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -115,7 +116,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import Usage, all_litellm_params
+from litellm.types.utils import Usage
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
     is_tinyfish_agent_url,
@@ -584,7 +585,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _parsed_body = _parsed_body or {}
 
         owned_in_body: Final = MappingProxyType(
-            {k: _parsed_body.pop(k) for k in tuple(_parsed_body) if k in all_litellm_params}
+            {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
         )
         litellm_params_in_body: Final = MappingProxyType(
             {k: v for k, v in owned_in_body.items() if k not in _METADATA_CARRIERS}

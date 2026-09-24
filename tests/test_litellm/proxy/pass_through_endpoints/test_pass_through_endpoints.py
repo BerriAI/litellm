@@ -5,8 +5,9 @@ import logging
 import os
 import sys
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from io import BytesIO
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
@@ -16,7 +17,7 @@ import httpx
 import pytest
 from fastapi import HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -25,7 +26,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_through_module
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -46,6 +46,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.types import utils as types_utils
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -7305,84 +7306,120 @@ def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_bo
     assert kwargs["litellm_params"]["metadata"]["model_info"] == {"id": "vertex-gemini-38-flash-dep"}
 
 
-def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_litellm_params() -> None:
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _PassThroughSplit:
+    litellm_params: Mapping[str, object]
+    forwarded_body: Mapping[str, object]
+
+
+_LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+_PROXY_SERVER_REQUEST: Final = TypeAdapter(dict[str, object])
+
+
+def _split_pass_through_body(body: str) -> _PassThroughSplit:
     mock_request: Final = MagicMock(spec=Request)
     mock_request.method = "POST"
     mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
     mock_request.headers = Headers()
     mock_request.scope = MappingProxyType({})
 
-    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # untyped legacy helper
         request=mock_request,
         user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
         passthrough_logging_payload=MagicMock(),
         logging_obj=MagicMock(),
-        _parsed_body=json.loads(
-            '{"ttl": 30, "contents": [{"parts": [{"text": "hi"}]}], "num_retries": 2,'
-            ' "generationConfig": {"temperature": 0}, "litellm_trace_id": "trace-a"}'
-        ),
+        _parsed_body=json.loads(body),
         litellm_call_id="lit-owned-keys-call-id",
     )
+    litellm_params: Final = _LITELLM_PARAMS.validate_python(kwargs["litellm_params"])  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy helper
+    return _PassThroughSplit(
+        litellm_params=MappingProxyType(litellm_params),
+        forwarded_body=MappingProxyType(
+            _LITELLM_PARAMS.validate_python(
+                _PROXY_SERVER_REQUEST.validate_python(litellm_params["proxy_server_request"])["body"]
+            )
+        ),
+    )
 
-    litellm_params: Final = kwargs["litellm_params"]
-    assert tuple(litellm_params) == ("ttl", "num_retries", "litellm_trace_id", "metadata", "proxy_server_request")
-    assert (litellm_params["ttl"], litellm_params["num_retries"], litellm_params["litellm_trace_id"]) == (
-        30,
-        2,
-        "trace-a",
+
+GEMINI_BODY: Final = '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
+
+
+def _metadata_of(split: _PassThroughSplit) -> Mapping[str, object]:
+    return MappingProxyType(_LITELLM_PARAMS.validate_python(split.litellm_params["metadata"]))
+
+
+def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_litellm_params() -> None:
+    split: Final = _split_pass_through_body(
+        '{"ttl": 30, "contents": [{"parts": [{"text": "hi"}]}], "num_retries": 2,'
+        ' "generationConfig": {"temperature": 0}, "litellm_trace_id": "trace-a"}'
     )
-    assert litellm_params["proxy_server_request"]["body"] == json.loads(
-        '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
+
+    assert frozenset(split.litellm_params) == frozenset(
+        ("ttl", "num_retries", "litellm_trace_id", "metadata", "proxy_server_request")
     )
+    assert tuple(split.litellm_params[k] for k in ("ttl", "num_retries", "litellm_trace_id")) == (30, 2, "trace-a")
+    assert split.forwarded_body == json.loads(GEMINI_BODY)
+
+
+@pytest.mark.parametrize(
+    "name",
+    sorted(frozenset(litellm.all_litellm_params) - frozenset(("metadata", "litellm_metadata", "proxy_server_request"))),
+)
+def test_passthrough_keeps_each_registered_litellm_owned_name_out_of_the_forwarded_body(name: str) -> None:
+    split: Final = _split_pass_through_body(json.dumps({name: "owned", **json.loads(GEMINI_BODY)}))
+
+    assert frozenset(split.litellm_params) == frozenset((name, "metadata", "proxy_server_request"))
+    assert split.litellm_params[name] == "owned"
+    assert split.forwarded_body == json.loads(GEMINI_BODY)
 
 
 def test_passthrough_merges_both_metadata_carriers_from_the_body_into_one_metadata_key() -> None:
-    mock_request: Final = MagicMock(spec=Request)
-    mock_request.method = "POST"
-    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
-    mock_request.headers = Headers()
-    mock_request.scope = MappingProxyType({})
-
-    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-        request=mock_request,
-        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
-        passthrough_logging_payload=MagicMock(),
-        logging_obj=MagicMock(),
-        _parsed_body=json.loads(
-            '{"metadata": {"client_tag": "a"}, "contents": [{"parts": [{"text": "hi"}]}], "ttl": 30,'
-            ' "litellm_metadata": {"lm": "b"}, "generationConfig": {"temperature": 0}}'
-        ),
-        litellm_call_id="lit-metadata-carriers-call-id",
+    split: Final = _split_pass_through_body(
+        '{"metadata": {"client_tag": "a"}, "contents": [{"parts": [{"text": "hi"}]}], "ttl": 30,'
+        ' "litellm_metadata": {"lm": "b"}, "generationConfig": {"temperature": 0}}'
     )
 
-    litellm_params: Final = kwargs["litellm_params"]
-    assert tuple(litellm_params) == ("ttl", "metadata", "proxy_server_request")
-    assert tuple(litellm_params["metadata"][k] for k in ("client_tag", "lm")) == ("a", "b")
-    assert litellm_params["proxy_server_request"]["body"] == json.loads(
-        '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
+    assert frozenset(split.litellm_params) == frozenset(("ttl", "metadata", "proxy_server_request"))
+    assert _metadata_of(split) == {**_metadata_of(_split_pass_through_body(GEMINI_BODY)), "client_tag": "a", "lm": "b"}
+    assert split.forwarded_body == json.loads(GEMINI_BODY)
+
+
+def test_passthrough_lets_metadata_win_over_litellm_metadata_on_a_shared_key() -> None:
+    split: Final = _split_pass_through_body(
+        '{"litellm_metadata": {"shared": "from-litellm-metadata", "lm": "b"},'
+        ' "metadata": {"shared": "from-metadata", "client_tag": "a"}, "contents": []}'
     )
 
+    assert _metadata_of(split) == {
+        **_metadata_of(_split_pass_through_body('{"contents": []}')),
+        "shared": "from-metadata",
+        "lm": "b",
+        "client_tag": "a",
+    }
 
-def test_passthrough_reads_the_owned_names_at_request_time_not_at_import(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pass_through_module, "all_litellm_params", (*litellm.all_litellm_params, "registered_later"))
-    mock_request: Final = MagicMock(spec=Request)
-    mock_request.method = "POST"
-    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
-    mock_request.headers = Headers()
-    mock_request.scope = MappingProxyType({})
 
-    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-        request=mock_request,
-        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
-        passthrough_logging_payload=MagicMock(),
-        logging_obj=MagicMock(),
-        _parsed_body=json.loads('{"registered_later": 1, "contents": [{"parts": [{"text": "hi"}]}]}'),
-        litellm_call_id="lit-live-owned-names-call-id",
-    )
+LATE_REGISTERED_BODY: Final = '{"registered_later": 1, "contents": [{"parts": [{"text": "hi"}]}]}'
 
-    litellm_params: Final = kwargs["litellm_params"]
-    assert tuple(litellm_params) == ("registered_later", "metadata", "proxy_server_request")
-    assert litellm_params["proxy_server_request"]["body"] == json.loads('{"contents": [{"parts": [{"text": "hi"}]}]}')
+
+def test_passthrough_sees_a_name_appended_to_the_public_list_after_import() -> None:
+    litellm.all_litellm_params.append("registered_later")
+    try:
+        split: Final = _split_pass_through_body(LATE_REGISTERED_BODY)
+    finally:
+        litellm.all_litellm_params.remove("registered_later")
+
+    assert frozenset(split.litellm_params) == frozenset(("registered_later", "metadata", "proxy_server_request"))
+    assert split.forwarded_body == {"contents": [{"parts": [{"text": "hi"}]}]}
+
+
+def test_passthrough_sees_the_public_list_rebound_after_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(types_utils, "all_litellm_params", (*litellm.all_litellm_params, "registered_later"))
+
+    split: Final = _split_pass_through_body(LATE_REGISTERED_BODY)
+
+    assert frozenset(split.litellm_params) == frozenset(("registered_later", "metadata", "proxy_server_request"))
+    assert split.forwarded_body == {"contents": [{"parts": [{"text": "hi"}]}]}
 
 
 @pytest.mark.asyncio
