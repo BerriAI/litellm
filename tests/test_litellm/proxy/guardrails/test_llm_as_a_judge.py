@@ -1,18 +1,23 @@
 """Unit tests for the LLM-as-a-Judge guardrail hook."""
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
+import litellm
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     LLMAsAJudgeGuardrail,
     _build_judge_prompt,
     _extract_text_from_content,
+    _parse_judge_verdict,
     initialize_guardrail,
 )
-
+from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.utils import LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -135,17 +140,314 @@ def test_initialize_guardrail_invalid_on_failure():
         initialize_guardrail(lp, g)
 
 
+@pytest.mark.parametrize(
+    ("mode", "runs_pre_call", "runs_post_call"),
+    [
+        ("pre_call", True, False),
+        (["pre_call", "post_call"], True, True),
+        (Mode(tags={"judge": ["pre_call"]}, default="post_call"), True, False),
+        (None, False, True),
+    ],
+    ids=["scalar", "list", "tagged", "missing"],
+)
+def test_initialize_guardrail_preserves_every_mode_shape(
+    mode: str | list[str] | Mode | None,
+    runs_pre_call: bool,
+    runs_post_call: bool,
+):
+    lp: Final = _make_litellm_params(mode=mode)
+    instance: Final = initialize_guardrail(lp, _make_guardrail_dict())
+    request_data: Final[dict[str, object]] = {"metadata": {"guardrails": ["g"], "tags": ["judge"]}}
+    premium: Final = patch("litellm.proxy.proxy_server.premium_user", True)  # test-quality-ok: no seam for Mode tags
+    try:
+        with premium:
+            assert instance.should_run_guardrail(request_data, GuardrailEventHooks.pre_call) is runs_pre_call
+            assert instance.should_run_guardrail(request_data, GuardrailEventHooks.post_call) is runs_post_call
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(instance)
+
+
+def test_initialize_guardrail_rejects_unknown_mode():
+    lp: Final = _make_litellm_params(mode="sometimes")
+    with pytest.raises(ValueError, match="sometimes"):
+        initialize_guardrail(lp, _make_guardrail_dict())
+
+
 # ---------------------------------------------------------------------------
 # apply_guardrail — enforcement paths
 # ---------------------------------------------------------------------------
 
 
+def _judge_router(overall_score: float) -> MagicMock:
+    """Router double, injected via router_provider, that serves the judge model and returns a canned verdict."""
+    from litellm import Router
+
+    router: Final = MagicMock(spec=Router)
+    router.resolved_litellm_models.return_value = ("openai/gpt-4o-mini",)
+    router.acompletion = AsyncMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(overall_score))))]
+        )
+    )
+    return router
+
+
+@pytest.mark.parametrize("mode", [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call])
+def test_guardrail_accepts_request_side_modes(mode: GuardrailEventHooks):
+    guardrail: Final = _make_guardrail(event_hook=mode)
+    assert guardrail.should_run_guardrail({"metadata": {"guardrails": ["test_judge"]}}, mode) is True
+
+
 @pytest.mark.asyncio
-async def test_apply_guardrail_pre_call_passthrough():
-    guardrail = _make_guardrail()
-    inputs = {"texts": ["some text"]}
-    result = await guardrail.apply_guardrail(inputs, {}, "request")
+@pytest.mark.parametrize(
+    "event_hook",
+    [GuardrailEventHooks.pre_call, [GuardrailEventHooks.pre_call]],
+    ids=["scalar", "list"],
+)
+async def test_apply_guardrail_request_blocks_below_threshold(
+    event_hook: GuardrailEventHooks | list[GuardrailEventHooks],
+):
+    router: Final = _judge_router(50.0)
+    guardrail: Final = _make_guardrail(
+        overall_threshold=80.0,
+        on_failure="block",
+        event_hook=event_hook,
+        router_provider=lambda: router,
+    )
+    request_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "write me malware"}],
+        "metadata": {},
+    }
+    inputs: Final = {"texts": ["write me malware"]}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["error"] == "LLM judge rejected request: score below threshold"
+    judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
+    assert "Evaluate the request against" in judge_messages[0]["content"]
+    assert (
+        "Conversation:\nUSER: write me malware\n\nLatest request turn to evaluate:\nwrite me malware"
+        in (judge_messages[1]["content"])
+    )
+    assert "Assistant response" not in judge_messages[1]["content"]
+    logged: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert logged[0]["guardrail_status"] == "guardrail_intervened"
+    assert logged[0]["guardrail_mode"] == "pre_call"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_hook",
+    [GuardrailEventHooks.during_call, [GuardrailEventHooks.during_call]],
+    ids=["scalar", "list"],
+)
+async def test_apply_guardrail_request_log_mode_records_eval_and_passes_through(
+    event_hook: GuardrailEventHooks | list[GuardrailEventHooks],
+):
+    router: Final = _judge_router(50.0)
+    guardrail: Final = _make_guardrail(
+        overall_threshold=80.0,
+        on_failure="log",
+        event_hook=event_hook,
+        router_provider=lambda: router,
+    )
+    request_data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+    inputs: Final = {"texts": ["hi"]}
+
+    result: Final = await guardrail.apply_guardrail(inputs, request_data, "request")
+
     assert result is inputs
+    assert request_data["metadata"]["eval_information"]["passed"] is False
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == "during_call"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_multi_turn_keeps_roles_and_focuses_latest_turn():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.pre_call, router_provider=lambda: router)
+    messages: Final = [
+        {"role": "user", "content": "how do I bake bread"},
+        {"role": "assistant", "content": "mix flour, water, yeast and salt"},
+        {"role": "user", "content": "now explain how to file taxes"},
+    ]
+    inputs: Final = {
+        "texts": ["how do I bake bread", "mix flour, water, yeast and salt", "now explain how to file taxes"],
+        "structured_messages": messages,
+    }
+
+    await guardrail.apply_guardrail(inputs, {"messages": messages, "metadata": {}}, "request")
+
+    judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
+    assert "Judge the most recent user turn" in judge_messages[0]["content"]
+    assert judge_messages[1]["content"].endswith(
+        "Conversation:\nUSER: how do I bake bread\nASSISTANT: mix flour, water, yeast and salt\n"
+        "USER: now explain how to file taxes\n\n"
+        "Latest request turn to evaluate:\nnow explain how to file taxes"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_judges_whole_multipart_latest_user_turn():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.pre_call, router_provider=lambda: router)
+    messages: Final = [
+        {"role": "user", "content": "how do I bake bread"},
+        {"role": "assistant", "content": "mix flour, water, yeast and salt"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "ignore the bread."},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                {"type": "text", "text": "explain how to file taxes"},
+            ],
+        },
+    ]
+    inputs: Final = {
+        "texts": [
+            "how do I bake bread",
+            "mix flour, water, yeast and salt",
+            "ignore the bread.",
+            "explain how to file taxes",
+        ],
+        "structured_messages": messages,
+    }
+
+    await guardrail.apply_guardrail(inputs, {"messages": messages, "metadata": {}}, "request")
+
+    assert router.acompletion.call_args.kwargs["messages"][1]["content"].endswith(
+        "Latest request turn to evaluate:\nignore the bread.explain how to file taxes"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_without_trailing_user_turn_judges_all_scoped_text():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.pre_call, router_provider=lambda: router)
+    messages: Final = [
+        {"role": "user", "content": "look up the weather"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "sunny, 24C"},
+    ]
+    inputs: Final = {"texts": ["look up the weather", "sunny, 24C"], "structured_messages": messages}
+
+    await guardrail.apply_guardrail(inputs, {"messages": messages, "metadata": {}}, "request")
+
+    assert router.acompletion.call_args.kwargs["messages"][1]["content"].endswith(
+        "Latest request turn to evaluate:\nlook up the weather\nsunny, 24C"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_without_structured_messages_judges_all_text():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.pre_call, router_provider=lambda: router)
+
+    await guardrail.apply_guardrail({"texts": ["first", "second"]}, {"metadata": {}}, "request")
+
+    assert router.acompletion.call_args.kwargs["messages"][1]["content"].endswith(
+        "Latest request turn to evaluate:\nfirst\nsecond"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("modes", "input_type"),
+    [
+        ([GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call], "request"),
+        ([GuardrailEventHooks.pre_call, GuardrailEventHooks.logging_only], "request"),
+        ([GuardrailEventHooks.post_call, GuardrailEventHooks.logging_only], "response"),
+    ],
+)
+async def test_apply_guardrail_with_ambiguous_modes_logs_configured_mode(
+    modes: list[GuardrailEventHooks], input_type: str
+):
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=modes, router_provider=lambda: router)
+    request_data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+    await guardrail.apply_guardrail({"texts": ["hi"]}, request_data, input_type)
+
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == [
+        mode.value for mode in modes
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_response_still_judges_all_response_texts():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.post_call, router_provider=lambda: router)
+
+    await guardrail.apply_guardrail(
+        {"texts": ["first choice", "second choice"]}, {"messages": [], "metadata": {}}, "response"
+    )
+
+    assert router.acompletion.call_args.kwargs["messages"][1]["content"].endswith(
+        "Assistant response to evaluate:\nfirst choice\nsecond choice"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_type", ["request", "response"])
+async def test_apply_guardrail_logging_only_labels_both_sides_logging_only(input_type: str):
+    router: Final = _judge_router(50.0)
+    guardrail: Final = _make_guardrail(
+        on_failure="log",
+        event_hook=GuardrailEventHooks.logging_only,
+        router_provider=lambda: router,
+    )
+    request_data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+    assert guardrail.should_run_guardrail(request_data, GuardrailEventHooks.pre_call) is False
+    assert guardrail.should_run_guardrail(request_data, GuardrailEventHooks.post_call) is False
+    await guardrail.apply_guardrail({"texts": ["hi"]}, request_data, input_type)
+
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == "logging_only"
+
+
+@pytest.mark.asyncio
+async def test_logging_only_judge_does_not_judge_its_own_judge_call():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.logging_only, router_provider=lambda: router)
+    client_call: Final[dict[str, object]] = {"litellm_params": {"metadata": {"user_api_key": "hashed"}}}
+
+    assert guardrail.should_run_guardrail(client_call, GuardrailEventHooks.logging_only) is True
+    await guardrail.apply_guardrail({"texts": ["hi"]}, {"messages": [{"role": "user", "content": "hi"}]}, "request")
+
+    judge_call: Final[dict[str, object]] = {
+        "litellm_params": {"metadata": router.acompletion.call_args.kwargs["metadata"]}
+    }
+    assert guardrail.should_run_guardrail(judge_call, GuardrailEventHooks.logging_only) is False
+    assert guardrail.should_run_guardrail(client_call, GuardrailEventHooks.logging_only) is True
+
+
+@pytest.mark.parametrize(
+    "event_type", [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call, GuardrailEventHooks.post_call]
+)
+def test_client_supplied_judge_origin_does_not_bypass_enforcing_hooks(event_type: GuardrailEventHooks):
+    guardrail: Final = _make_guardrail(event_hook=event_type)
+    forged_request: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrails": [guardrail.guardrail_name],
+        "litellm_params": {"metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN}},
+    }
+
+    assert guardrail.should_run_guardrail(forged_request, event_type) is True
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_response_prompt_unchanged():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(router_provider=lambda: router)
+    request_data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+    await guardrail.apply_guardrail({"texts": ["hello there"]}, request_data, "response")
+
+    judge_messages: Final = router.acompletion.call_args.kwargs["messages"]
+    assert "assistant's response" in judge_messages[0]["content"]
+    assert "Conversation:\nUSER: hi\n\nAssistant response to evaluate:\nhello there" in judge_messages[1]["content"]
+    assert request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_mode"] == "post_call"
 
 
 @pytest.mark.asyncio
@@ -198,6 +500,84 @@ async def test_apply_guardrail_log_mode_does_not_block(mock_completion):
     assert request_data["metadata"]["eval_information"]["passed"] is False
 
 
+# ---------------------------------------------------------------------------
+# _parse_judge_verdict — tolerate fenced/prose-wrapped JSON
+# ---------------------------------------------------------------------------
+
+
+def test_parse_judge_verdict_plain_json():
+    assert _parse_judge_verdict('{"overall_score": 90}')["overall_score"] == 90
+
+
+def test_parse_judge_verdict_strips_json_fence_and_prose():
+    raw = 'Here is my verdict:\n```json\n{"overall_score": 42}\n```\nHope that helps'
+    assert _parse_judge_verdict(raw)["overall_score"] == 42
+
+
+def test_parse_judge_verdict_strips_bare_fence():
+    raw = '```\n{"overall_score": 7}\n```'
+    assert _parse_judge_verdict(raw)["overall_score"] == 7
+
+
+def test_parse_judge_verdict_extracts_json_from_surrounding_prose():
+    raw = 'Sure, here it is: {"overall_score": 55} let me know'
+    assert _parse_judge_verdict(raw)["overall_score"] == 55
+
+
+def test_parse_judge_verdict_reraises_when_no_json():
+    with pytest.raises(json.JSONDecodeError):
+        _parse_judge_verdict("no json here")
+
+
+def test_parse_judge_verdict_rejects_json_non_object():
+    """Valid JSON that is not an object (e.g. a bare list) raises ValueError."""
+    with pytest.raises(ValueError, match="judge response is not a JSON object"):
+        _parse_judge_verdict("[1, 2, 3]")
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_apply_guardrail_enforces_fenced_verdict(mock_completion):
+    """A failing verdict wrapped in a code fence blocks with a 422."""
+    fenced = "```json\n" + json.dumps(_make_verdict_response(50.0)) + "\n```"
+    mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content=fenced))])
+    guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block", router_provider=lambda: None)
+    inputs = {"texts": ["bad response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_apply_guardrail_non_object_verdict_fails_open_with_status(mock_completion):
+    """A non-object verdict fails open and logs guardrail_failed_to_respond."""
+    mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content='[{"overall_score": 50}]'))])
+    guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block", router_provider=lambda: None)
+    inputs = {"texts": ["response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert result is inputs
+    logged = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert logged[0]["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_apply_guardrail_parses_fenced_json_verdict(mock_completion):
+    """Fencing-prone judge models wrap the verdict in a ```json fence; the guardrail
+    must parse it and evaluate rather than failing open on json.loads."""
+    fenced = "```json\n" + json.dumps(_make_verdict_response(90.0)) + "\n```"
+    mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content=fenced))])
+    guardrail = _make_guardrail(overall_threshold=80.0)
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert result is inputs
+    assert request_data["metadata"]["eval_information"]["passed"] is True
+
+
 @pytest.mark.asyncio
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
 async def test_apply_guardrail_judge_error_fails_open(mock_completion):
@@ -207,6 +587,187 @@ async def test_apply_guardrail_judge_error_fails_open(mock_completion):
     request_data: dict = {"messages": [], "metadata": {}}
     result = await guardrail.apply_guardrail(inputs, request_data, "response")
     assert result is inputs
+
+
+# ---------------------------------------------------------------------------
+# judge_model credential/provider resolution — route through the proxy Router
+# ---------------------------------------------------------------------------
+
+
+def _judge_response_mock() -> MagicMock:
+    return MagicMock(choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(90.0))))])
+
+
+def _real_router(model_list, **router_kwargs):
+    """Build a real Router so the router-membership decision is exercised for
+    real (wildcards, model_group_alias, exact names), stubbing only the outbound
+    completion so no network call is made."""
+    from litellm import Router
+
+    router = Router(model_list=model_list, **router_kwargs)
+    router.acompletion = AsyncMock(return_value=_judge_response_mock())
+    return router
+
+
+@pytest.mark.parametrize(
+    "model_list, router_kwargs, judge_model",
+    [
+        (
+            [
+                {
+                    "model_name": "my-judge-alias",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+                }
+            ],
+            {},
+            "my-judge-alias",
+        ),
+        (
+            [{"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*", "api_key": "sk-ant-test"}}],
+            {},
+            "anthropic/claude-sonnet-4-6",
+        ),
+        (
+            [
+                {
+                    "model_name": "backing-group",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+                }
+            ],
+            {"model_group_alias": {"my-judge-alias": "backing-group"}},
+            "my-judge-alias",
+        ),
+        (
+            [
+                {
+                    "model_name": "backing-group",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+                }
+            ],
+            {"model_group_alias": {"my-judge-alias": {"model": "backing-group", "hidden": True}}},
+            "my-judge-alias",
+        ),
+    ],
+    ids=["plain-deployment", "wildcard-route", "model-group-alias", "hidden-model-group-alias"],
+)
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
+async def test_judge_routes_through_router_for_router_served_model(
+    mock_sdk_completion, model_list, router_kwargs, judge_model
+):
+    """Any judge_model the Router can serve must resolve its credentials via the
+    Router. Wildcard and alias shapes regress the naive `judge_model in
+    get_model_names()` check, which reports patterns/aliases literally and so
+    routes a servable model to the SDK, where deployment creds do not resolve."""
+    router = _real_router(model_list, **router_kwargs)
+    guardrail = _make_guardrail(judge_model=judge_model, router_provider=lambda: router)
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+
+    assert result is inputs
+    router.acompletion.assert_awaited_once()
+    call_kwargs = router.acompletion.await_args.kwargs
+    assert call_kwargs["model"] == judge_model
+    assert call_kwargs["num_retries"] == 0
+    assert call_kwargs["fallbacks"] == []
+    mock_sdk_completion.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
+async def test_judge_call_falls_back_to_sdk_when_model_not_in_router(mock_sdk_completion):
+    """A judge_model the Router cannot serve (e.g. a raw provider model resolved
+    from the environment) must fall back to the SDK."""
+    mock_sdk_completion.return_value = _judge_response_mock()
+    router = _real_router(
+        [{"model_name": "some-other-model", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}}]
+    )
+    guardrail = _make_guardrail(judge_model="gpt-4o-mini", router_provider=lambda: router)
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+
+    assert result is inputs
+    router.acompletion.assert_not_called()
+    mock_sdk_completion.assert_awaited_once()
+    assert mock_sdk_completion.await_args.kwargs["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
+async def test_judge_call_uses_sdk_when_no_router(mock_sdk_completion):
+    mock_sdk_completion.return_value = _judge_response_mock()
+    guardrail = _make_guardrail(judge_model="gpt-4o-mini", router_provider=lambda: None)
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+
+    assert result is inputs
+    mock_sdk_completion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
+async def test_judge_resolves_router_lazily_per_call(mock_sdk_completion):
+    """The Router is resolved at call time, not captured at construction. A
+    guardrail built before the proxy Router exists (provider returns None) starts
+    routing through the Router as soon as it is available, with no re-init. This
+    regresses the config-less DB-backed startup order where the guardrail was
+    created while the global Router was still None and then never recovered."""
+    mock_sdk_completion.return_value = _judge_response_mock()
+    holder: dict = {"router": None}
+    guardrail = _make_guardrail(judge_model="my-judge-alias", router_provider=lambda: holder["router"])
+
+    await guardrail.apply_guardrail({"texts": ["r"]}, {"messages": [], "metadata": {}}, "response")
+    mock_sdk_completion.assert_awaited_once()
+
+    holder["router"] = _real_router(
+        [
+            {
+                "model_name": "my-judge-alias",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
+            }
+        ]
+    )
+    await guardrail.apply_guardrail({"texts": ["r"]}, {"messages": [], "metadata": {}}, "response")
+    holder["router"].acompletion.assert_awaited_once()
+    mock_sdk_completion.assert_awaited_once()
+
+
+def test_default_router_provider_returns_none_when_proxy_not_importable():
+    """If the proxy dependency set is not importable, the provider must return None
+    so the judge falls back to the SDK rather than the ImportError being swallowed
+    by the fail-open handler and the guardrail silently no-opping."""
+    import sys
+
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _default_router_provider
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": None}):
+        assert _default_router_provider() is None
+
+
+def test_default_router_provider_reads_global_router():
+    """The default provider must read the live proxy global so the router is
+    resolved lazily rather than captured."""
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _default_router_provider
+
+    sentinel = object()
+    with patch("litellm.proxy.proxy_server.llm_router", sentinel):
+        assert _default_router_provider() is sentinel
+
+
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
+def test_initialize_guardrail_uses_default_router_provider(mock_mgr):
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _default_router_provider
+
+    lp = _make_litellm_params()
+    g = _make_guardrail_dict(judge_model="my-judge-alias")
+    instance = initialize_guardrail(lp, g)
+    assert instance._router_provider is _default_router_provider
 
 
 @pytest.mark.asyncio

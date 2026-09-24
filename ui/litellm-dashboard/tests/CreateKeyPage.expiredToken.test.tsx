@@ -105,16 +105,18 @@ vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
 
 // Super-light stubs for all heavy components so rendering doesn't explode
 vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
-vi.mock("@/components/user_dashboard", () => ({ default: stub("user-dashboard") }));
+vi.mock("@/app/(dashboard)/api-keys/ApiKeysDashboard", () => ({ default: stub("api-keys-dashboard") }));
 vi.mock("@/components/templates/model_dashboard", () => ({ default: stub("model-dashboard") }));
 vi.mock("@/components/teams", () => ({ default: stub("teams") }));
-vi.mock("@/components/organizations", () => ({
+vi.mock("@/app/(dashboard)/organizations/_components/organizations", () => ({
   default: stub("organizations"),
   fetchOrganizations: vi.fn(), // consumed in effects
 }));
 vi.mock("@/components/admins", () => ({ default: stub("admin-panel") }));
 vi.mock("@/components/settings", () => ({ default: stub("settings") }));
-vi.mock("@/components/general_settings", () => ({ default: stub("general-settings") }));
+vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => ({
+  default: stub("general-settings"),
+}));
 vi.mock("@/components/pass_through_settings", () => ({ default: stub("pass-through-settings") }));
 vi.mock("@/components/budgets/budget_panel", () => ({ default: stub("budget-panel") }));
 vi.mock("@/components/view_logs", () => ({ default: stub("spend-logs") }));
@@ -123,17 +125,16 @@ vi.mock("@/components/new_usage", () => ({ default: stub("new-usage") }));
 vi.mock("@/components/api_ref", () => ({ default: stub("api-ref") }));
 vi.mock("@/components/chat_ui/ChatUI", () => ({ default: stub("chat-ui") }));
 vi.mock("@/components/leftnav", () => ({ default: stub("sidebar") }));
-vi.mock("@/components/usage", () => ({ default: stub("usage") }));
+vi.mock("@/app/(dashboard)/old-usage/_components/usage", () => ({ default: stub("usage") }));
 vi.mock("@/components/cache_dashboard", () => ({ default: stub("cache-dashboard") }));
-vi.mock("@/components/guardrails", () => ({ default: stub("guardrails") }));
+vi.mock("@/app/(dashboard)/guardrails/_components", () => ({ default: stub("guardrails") }));
 vi.mock("@/components/prompts", () => ({ default: stub("prompts") }));
 vi.mock("@/components/transform_request", () => ({ default: stub("transform-request") }));
-vi.mock("@/components/mcp_tools", () => ({ MCPServers: stub("mcp-servers") }));
-vi.mock("@/components/tag_management", () => ({ default: stub("tag-management") }));
-vi.mock("@/components/vector_store_management", () => ({ default: stub("vector-stores") }));
+vi.mock("@/app/(dashboard)/mcp-servers/_components", () => ({ MCPServers: stub("mcp-servers") }));
+vi.mock("@/app/(dashboard)/tag-management/_components", () => ({ default: stub("tag-management") }));
+vi.mock("@/app/(dashboard)/vector-stores/_components", () => ({ default: stub("vector-stores") }));
 vi.mock("@/components/ui_theme_settings", () => ({ default: stub("ui-theme-settings") }));
 vi.mock("@/components/organisms/create_key_button", () => ({ fetchUserModels: vi.fn() }));
-vi.mock("@/components/common_components/fetch_teams", () => ({ fetchTeams: vi.fn() }));
 vi.mock("@/components/ui/ui-loading-spinner", () => ({
   UiLoadingSpinner: stub("spinner"),
 }));
@@ -230,7 +231,7 @@ describe("CreateKeyPage auth behavior", () => {
     // Assert: we eventually redirect to SSO login with return URL (single replace, not assign/href)
     await waitFor(() => {
       expect(window.location.replace).toHaveBeenCalledWith(
-        expect.stringContaining("https://example.com/ui/login?redirect_to="),
+        expect.stringContaining("https://example.com/ui/login/?redirect_to="),
       );
     });
 
@@ -268,9 +269,9 @@ describe("CreateKeyPage auth behavior", () => {
       expect(window.location.replace).not.toHaveBeenCalled();
     });
 
-    // And the default page content appears (UserDashboard stub; chrome now lives in the layout)
+    // And the default page content appears (ApiKeysDashboard stub; chrome now lives in the layout)
     await waitFor(() => {
-      expect(screen.getByTestId("user-dashboard")).toBeInTheDocument();
+      expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
     });
   });
 

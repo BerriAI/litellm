@@ -235,7 +235,7 @@ describe("CodeInterpreterOutput", () => {
   it("should return null when no code and no annotations", () => {
     const { container } = render(<CodeInterpreterOutput accessToken="test-token" />);
 
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should handle multiple image formats", async () => {

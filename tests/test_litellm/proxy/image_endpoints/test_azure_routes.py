@@ -1,13 +1,11 @@
 import asyncio
 import os
-import sys
 from pathlib import Path
 from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
 import litellm
 from litellm.proxy.proxy_server import app, initialize
 
@@ -120,3 +118,28 @@ def test_azure_image_edit_route(client_no_auth):
     assert called_kwargs["prompt"] == "A cute baby sea otter"
     assert response.status_code == 200
     assert response.json()["data"]
+
+
+def test_azure_image_generation_route_rejects_url_valued_path_model(client_no_auth):
+    """A URL-valued deployment segment is refused before any provider call."""
+    client, mock_aimage_generation, _ = client_no_auth
+    response = client.post(
+        "/openai/deployments/oobabooga/https://example.invalid/images/generations",
+        json={"prompt": "A cute baby sea otter", "n": 1, "size": "1024x1024"},
+    )
+
+    assert response.status_code == 400
+    assert "URL-valued" in response.text
+    mock_aimage_generation.assert_not_called()
+
+
+def test_azure_image_generation_route_allows_ordinary_path_model(client_no_auth):
+    """A deployment name that merely contains a provider prefix still routes."""
+    client, mock_aimage_generation, _ = client_no_auth
+    response = client.post(
+        "/openai/deployments/dall-e-3/images/generations",
+        json={"prompt": "A cute baby sea otter", "n": 1, "size": "1024x1024"},
+    )
+
+    assert response.status_code == 200
+    mock_aimage_generation.assert_called_once()

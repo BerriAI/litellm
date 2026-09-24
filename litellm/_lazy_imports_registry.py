@@ -5,21 +5,23 @@ This module contains all the name tuples and import maps used by the lazy import
 Separated from the handler functions for better organization.
 """
 
+from typing import Final
+
 # Cost calculator names that support lazy loading via _lazy_import_cost_calculator
-COST_CALCULATOR_NAMES = (
+COST_CALCULATOR_NAMES: Final = (
     "completion_cost",
     "cost_per_token",
     "response_cost_calculator",
 )
 
 # Litellm logging names that support lazy loading via _lazy_import_litellm_logging
-LITELLM_LOGGING_NAMES = (
+LITELLM_LOGGING_NAMES: Final = (
     "Logging",
     "modify_integration",
 )
 
 # Utils names that support lazy loading via _lazy_import_utils
-UTILS_NAMES = (
+UTILS_NAMES: Final = (
     "exception_type",
     "get_optional_params",
     "get_response_string",
@@ -66,20 +68,20 @@ UTILS_NAMES = (
 )
 
 # Token counter names that support lazy loading via _lazy_import_token_counter
-TOKEN_COUNTER_NAMES = ("get_modified_max_tokens",)
+TOKEN_COUNTER_NAMES: Final = ("get_modified_max_tokens",)
 
 # LLM client cache names that support lazy loading via _lazy_import_llm_client_cache
-LLM_CLIENT_CACHE_NAMES = (
+LLM_CLIENT_CACHE_NAMES: Final = (
     "LLMClientCache",
     "in_memory_llm_clients_cache",
 )
 
 # Bedrock type names that support lazy loading via _lazy_import_bedrock_types
-BEDROCK_TYPES_NAMES = ("COHERE_EMBEDDING_INPUT_TYPES",)
+BEDROCK_TYPES_NAMES: Final = ("COHERE_EMBEDDING_INPUT_TYPES",)
 
 # Common types from litellm.types.utils that support lazy loading via
 # _lazy_import_types_utils
-TYPES_UTILS_NAMES = (
+TYPES_UTILS_NAMES: Final = (
     "ImageObject",
     "BudgetConfig",
     "all_litellm_params",
@@ -92,7 +94,7 @@ TYPES_UTILS_NAMES = (
 )
 
 # Caching / cache classes that support lazy loading via _lazy_import_caching
-CACHING_NAMES = (
+CACHING_NAMES: Final = (
     "Cache",
     "DualCache",
     "RedisCache",
@@ -100,20 +102,20 @@ CACHING_NAMES = (
 )
 
 # HTTP handler names that support lazy loading via _lazy_import_http_handlers
-HTTP_HANDLER_NAMES = (
+HTTP_HANDLER_NAMES: Final = (
     "module_level_aclient",
     "module_level_client",
 )
 
 # Dotprompt integration names that support lazy loading via _lazy_import_dotprompt
-DOTPROMPT_NAMES = (
+DOTPROMPT_NAMES: Final = (
     "global_prompt_manager",
     "global_prompt_directory",
     "set_global_prompt_directory",
 )
 
 # LLM config classes that support lazy loading via _lazy_import_llm_configs
-LLM_CONFIG_NAMES = (
+LLM_CONFIG_NAMES: Final = (
     "AmazonConverseConfig",
     "OpenAILikeChatConfig",
     "GaladrielChatConfig",
@@ -174,13 +176,16 @@ LLM_CONFIG_NAMES = (
     "BedrockClaudePlatformMessagesConfig",
     "AmazonAnthropicClaudeMessagesConfig",
     "AmazonMantleMessagesConfig",
+    "BedrockMantleAnthropicMessagesConfig",
     "TogetherAIConfig",
+    "TogetherAIChatConfig",
     "NLPCloudConfig",
     "VertexGeminiConfig",
     "GoogleAIStudioGeminiConfig",
     "VertexAIAnthropicConfig",
     "VertexAILlama3Config",
     "VertexAIAi21Config",
+    "VertexAIMistralConfig",
     "AmazonCohereChatConfig",
     "AmazonBedrockGlobalConfig",
     "AmazonAI21Config",
@@ -231,15 +236,19 @@ LLM_CONFIG_NAMES = (
     "OpenAIResponsesAPIConfig",
     "AzureOpenAIResponsesAPIConfig",
     "AzureOpenAIOSeriesResponsesAPIConfig",
+    "AzureAIResponsesAPIConfig",
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "HostedVLLMResponsesAPIConfig",
+    "FireworksAIResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
+    "BedrockOpenAIResponsesConfig",
     "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
+    "VertexAIInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
     "BaseSkillsAPIConfig",
@@ -284,6 +293,7 @@ LLM_CONFIG_NAMES = (
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
     "DeepSeekChatConfig",
+    "TencentChatConfig",
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
@@ -305,6 +315,8 @@ LLM_CONFIG_NAMES = (
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
     "DashScopeChatConfig",
+    "QwenCloudChatConfig",
+    "QwenAIPlatformChatConfig",
     "ModelScopeChatConfig",
     "MoonshotChatConfig",
     "DockerModelRunnerChatConfig",
@@ -316,6 +328,16 @@ LLM_CONFIG_NAMES = (
     "InceptionChatConfig",
     "HyperbolicChatConfig",
     "VercelAIGatewayConfig",
+    "EdenAIChatConfig",
+    "EdenAIResponsesAPIConfig",
+    "EdenAIAnthropicMessagesConfig",
+    "EdenAIEmbeddingConfig",
+    "EdenAIAudioTranscriptionConfig",
+    "EdenAITextToSpeechConfig",
+    "EdenAIImageGenerationConfig",
+    "EdenAIVideoConfig",
+    "FalAIChatConfig",
+    "FalAIError",
     "OVHCloudChatConfig",
     "OVHCloudEmbeddingConfig",
     "CometAPIEmbeddingConfig",
@@ -327,7 +349,7 @@ LLM_CONFIG_NAMES = (
 )
 
 # Types that support lazy loading via _lazy_import_types
-TYPES_NAMES = (
+TYPES_NAMES: Final = (
     "GuardrailItem",
     "DefaultTeamSSOParams",
     "LiteLLM_UpperboundKeyGenerateParams",
@@ -343,14 +365,14 @@ TYPES_NAMES = (
 )
 
 # LLM provider logic names that support lazy loading via _lazy_import_llm_provider_logic
-LLM_PROVIDER_LOGIC_NAMES = (
+LLM_PROVIDER_LOGIC_NAMES: Final = (
     "get_llm_provider",
     "remove_index_from_tool_calls",
 )
 
 # Utils module names that support lazy loading via _lazy_import_utils_module
 # These are attributes accessed from litellm.utils module
-UTILS_MODULE_NAMES = (
+UTILS_MODULE_NAMES: Final = (
     "encoding",
     "BaseVectorStore",
     "CredentialAccessor",
@@ -422,7 +444,7 @@ UTILS_MODULE_NAMES = (
 )
 
 # Import maps for registry pattern - reduces repetition
-_UTILS_IMPORT_MAP = {
+_UTILS_IMPORT_MAP: Final = {
     "exception_type": (".utils", "exception_type"),
     "get_optional_params": (".utils", "get_optional_params"),
     "get_response_string": (".utils", "get_response_string"),
@@ -477,13 +499,13 @@ _UTILS_IMPORT_MAP = {
     ),
 }
 
-_COST_CALCULATOR_IMPORT_MAP = {
+_COST_CALCULATOR_IMPORT_MAP: Final = {
     "completion_cost": (".cost_calculator", "completion_cost"),
     "cost_per_token": (".cost_calculator", "cost_per_token"),
     "response_cost_calculator": (".cost_calculator", "response_cost_calculator"),
 }
 
-_TYPES_UTILS_IMPORT_MAP = {
+_TYPES_UTILS_IMPORT_MAP: Final = {
     "ImageObject": (".types.utils", "ImageObject"),
     "BudgetConfig": (".types.utils", "BudgetConfig"),
     "all_litellm_params": (".types.utils", "all_litellm_params"),
@@ -495,28 +517,28 @@ _TYPES_UTILS_IMPORT_MAP = {
     "GenericStreamingChunk": (".types.utils", "GenericStreamingChunk"),
 }
 
-_TOKEN_COUNTER_IMPORT_MAP = {
+_TOKEN_COUNTER_IMPORT_MAP: Final = {
     "get_modified_max_tokens": (
         "litellm.litellm_core_utils.token_counter",
         "get_modified_max_tokens",
     ),
 }
 
-_BEDROCK_TYPES_IMPORT_MAP = {
+_BEDROCK_TYPES_IMPORT_MAP: Final = {
     "COHERE_EMBEDDING_INPUT_TYPES": (
         "litellm.types.llms.bedrock",
         "COHERE_EMBEDDING_INPUT_TYPES",
     ),
 }
 
-_CACHING_IMPORT_MAP = {
+_CACHING_IMPORT_MAP: Final = {
     "Cache": ("litellm.caching.caching", "Cache"),
     "DualCache": ("litellm.caching.caching", "DualCache"),
     "RedisCache": ("litellm.caching.caching", "RedisCache"),
     "InMemoryCache": ("litellm.caching.caching", "InMemoryCache"),
 }
 
-_LITELLM_LOGGING_IMPORT_MAP = {
+_LITELLM_LOGGING_IMPORT_MAP: Final = {
     "Logging": ("litellm.litellm_core_utils.litellm_logging", "Logging"),
     "modify_integration": (
         "litellm.litellm_core_utils.litellm_logging",
@@ -524,7 +546,7 @@ _LITELLM_LOGGING_IMPORT_MAP = {
     ),
 }
 
-_DOTPROMPT_IMPORT_MAP = {
+_DOTPROMPT_IMPORT_MAP: Final = {
     "global_prompt_manager": (
         "litellm.integrations.dotprompt",
         "global_prompt_manager",
@@ -539,7 +561,7 @@ _DOTPROMPT_IMPORT_MAP = {
     ),
 }
 
-_TYPES_IMPORT_MAP = {
+_TYPES_IMPORT_MAP: Final = {
     "GuardrailItem": ("litellm.types.guardrails", "GuardrailItem"),
     "DefaultTeamSSOParams": (
         "litellm.types.proxy.management_endpoints.ui_sso",
@@ -568,7 +590,7 @@ _TYPES_IMPORT_MAP = {
     ),
 }
 
-_LLM_PROVIDER_LOGIC_IMPORT_MAP = {
+_LLM_PROVIDER_LOGIC_IMPORT_MAP: Final = {
     "get_llm_provider": (
         "litellm.litellm_core_utils.get_llm_provider_logic",
         "get_llm_provider",
@@ -579,7 +601,7 @@ _LLM_PROVIDER_LOGIC_IMPORT_MAP = {
     ),
 }
 
-_LLM_CONFIGS_IMPORT_MAP = {
+_LLM_CONFIGS_IMPORT_MAP: Final = {
     "AmazonConverseConfig": (
         ".llms.bedrock.chat.converse_transformation",
         "AmazonConverseConfig",
@@ -736,7 +758,15 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.bedrock.messages.mantle_transformation",
         "AmazonMantleMessagesConfig",
     ),
+    "BedrockMantleAnthropicMessagesConfig": (
+        ".llms.bedrock_mantle.messages.transformation",
+        "BedrockMantleAnthropicMessagesConfig",
+    ),
     "TogetherAIConfig": (".llms.together_ai.chat", "TogetherAIConfig"),
+    "TogetherAIChatConfig": (
+        ".llms.together_ai.chat.transformation",
+        "TogetherAIChatConfig",
+    ),
     "NLPCloudConfig": (".llms.nlp_cloud.chat.handler", "NLPCloudConfig"),
     "VertexGeminiConfig": (
         ".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini",
@@ -757,6 +787,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "VertexAIAi21Config": (
         ".llms.vertex_ai.vertex_ai_partner_models.ai21.transformation",
         "VertexAIAi21Config",
+    ),
+    "VertexAIMistralConfig": (
+        ".llms.vertex_ai.vertex_ai_partner_models.mistral.transformation",
+        "VertexAIMistralConfig",
     ),
     "AmazonCohereChatConfig": (
         ".llms.bedrock.chat.invoke_handler",
@@ -888,6 +922,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "OpenAITextCompletionConfig",
     ),
     "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
+    "BedrockOpenAIResponsesConfig": (
+        ".llms.bedrock.responses.transformation",
+        "BedrockOpenAIResponsesConfig",
+    ),
     "BedrockMantleChatConfig": (
         ".llms.bedrock_mantle.chat.transformation",
         "BedrockMantleChatConfig",
@@ -934,6 +972,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.azure.responses.o_series_transformation",
         "AzureOpenAIOSeriesResponsesAPIConfig",
     ),
+    "AzureAIResponsesAPIConfig": (
+        ".llms.azure_ai.responses.transformation",
+        "AzureAIResponsesAPIConfig",
+    ),
     "XAIResponsesAPIConfig": (
         ".llms.xai.responses.transformation",
         "XAIResponsesAPIConfig",
@@ -945,6 +987,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "HostedVLLMResponsesAPIConfig": (
         ".llms.hosted_vllm.responses.transformation",
         "HostedVLLMResponsesAPIConfig",
+    ),
+    "FireworksAIResponsesAPIConfig": (
+        ".llms.fireworks_ai.responses.transformation",
+        "FireworksAIResponsesAPIConfig",
     ),
     "VolcEngineResponsesAPIConfig": (
         ".llms.volcengine.responses.transformation",
@@ -973,6 +1019,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
         "GoogleAIStudioInteractionsConfig",
+    ),
+    "VertexAIInteractionsConfig": (
+        ".llms.vertex_ai.interactions.transformation",
+        "VertexAIInteractionsConfig",
     ),
     "OpenAIOSeriesConfig": (
         ".llms.openai.chat.o_series_transformation",
@@ -1096,6 +1146,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     ),
     "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
+    "TencentChatConfig": (".llms.tencent.chat.transformation", "TencentChatConfig"),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",
@@ -1158,6 +1209,14 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",
     ),
+    "QwenCloudChatConfig": (
+        ".llms.dashscope.qwencloud",
+        "QwenCloudChatConfig",
+    ),
+    "QwenAIPlatformChatConfig": (
+        ".llms.dashscope.qwen_ai_platform",
+        "QwenAIPlatformChatConfig",
+    ),
     "GDCGeminiConfig": (
         ".llms.gdc.chat.transformation",
         "GDCGeminiConfig",
@@ -1188,6 +1247,19 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.vercel_ai_gateway.chat.transformation",
         "VercelAIGatewayConfig",
     ),
+    "EdenAIChatConfig": (".llms.edenai.chat.transformation", "EdenAIChatConfig"),
+    "EdenAIResponsesAPIConfig": (".llms.edenai.responses.transformation", "EdenAIResponsesAPIConfig"),
+    "EdenAIAnthropicMessagesConfig": (".llms.edenai.messages.transformation", "EdenAIAnthropicMessagesConfig"),
+    "EdenAIEmbeddingConfig": (".llms.edenai.embedding.transformation", "EdenAIEmbeddingConfig"),
+    "EdenAIAudioTranscriptionConfig": (
+        ".llms.edenai.audio_transcription.transformation",
+        "EdenAIAudioTranscriptionConfig",
+    ),
+    "EdenAITextToSpeechConfig": (".llms.edenai.text_to_speech.transformation", "EdenAITextToSpeechConfig"),
+    "EdenAIImageGenerationConfig": (".llms.edenai.image_generation.transformation", "EdenAIImageGenerationConfig"),
+    "EdenAIVideoConfig": (".llms.edenai.videos.transformation", "EdenAIVideoConfig"),
+    "FalAIChatConfig": (".llms.fal_ai.chat.transformation", "FalAIChatConfig"),
+    "FalAIError": (".llms.fal_ai.chat.transformation", "FalAIError"),
     "OVHCloudChatConfig": (".llms.ovhcloud.chat.transformation", "OVHCloudChatConfig"),
     "OVHCloudEmbeddingConfig": (
         ".llms.ovhcloud.embedding.transformation",
@@ -1213,7 +1285,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
 }
 
 # Import map for utils module lazy imports
-_UTILS_MODULE_IMPORT_MAP = {
+_UTILS_MODULE_IMPORT_MAP: Final = {
     "encoding": ("litellm.main", "encoding"),
     "BaseVectorStore": (
         "litellm.integrations.vector_store_integrations.base_vector_store",
@@ -1457,32 +1529,30 @@ _UTILS_MODULE_IMPORT_MAP = {
 
 # Export all name tuples and import maps for use in _lazy_imports.py
 __all__ = [
-    # Name tuples
-    "COST_CALCULATOR_NAMES",
-    "LITELLM_LOGGING_NAMES",
-    "UTILS_NAMES",
-    "TOKEN_COUNTER_NAMES",
-    "LLM_CLIENT_CACHE_NAMES",
     "BEDROCK_TYPES_NAMES",
-    "TYPES_UTILS_NAMES",
     "CACHING_NAMES",
-    "HTTP_HANDLER_NAMES",
+    "COST_CALCULATOR_NAMES",
     "DOTPROMPT_NAMES",
+    "HTTP_HANDLER_NAMES",
+    "LITELLM_LOGGING_NAMES",
+    "LLM_CLIENT_CACHE_NAMES",
     "LLM_CONFIG_NAMES",
-    "TYPES_NAMES",
     "LLM_PROVIDER_LOGIC_NAMES",
+    "TOKEN_COUNTER_NAMES",
+    "TYPES_NAMES",
+    "TYPES_UTILS_NAMES",
     "UTILS_MODULE_NAMES",
-    # Import maps
-    "_UTILS_IMPORT_MAP",
-    "_COST_CALCULATOR_IMPORT_MAP",
-    "_TYPES_UTILS_IMPORT_MAP",
-    "_TOKEN_COUNTER_IMPORT_MAP",
+    "UTILS_NAMES",
     "_BEDROCK_TYPES_IMPORT_MAP",
     "_CACHING_IMPORT_MAP",
-    "_LITELLM_LOGGING_IMPORT_MAP",
+    "_COST_CALCULATOR_IMPORT_MAP",
     "_DOTPROMPT_IMPORT_MAP",
-    "_TYPES_IMPORT_MAP",
+    "_LITELLM_LOGGING_IMPORT_MAP",
     "_LLM_CONFIGS_IMPORT_MAP",
     "_LLM_PROVIDER_LOGIC_IMPORT_MAP",
+    "_TOKEN_COUNTER_IMPORT_MAP",
+    "_TYPES_IMPORT_MAP",
+    "_TYPES_UTILS_IMPORT_MAP",
+    "_UTILS_IMPORT_MAP",
     "_UTILS_MODULE_IMPORT_MAP",
 ]

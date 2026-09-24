@@ -2,11 +2,7 @@ import os
 import re
 import inspect
 from typing import Type
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 
 
@@ -55,13 +51,11 @@ try:
         if general_settings_section:
             # Extract the table rows, which contain the documented keys
             table_content = general_settings_section.group(1)
-            doc_key_pattern = re.compile(
-                r"\|\s*([^\|]+?)\s*\|"
-            )  # Capture the key from each row of the table
+            doc_key_pattern = re.compile(r"^\|\s*([^\|]+?)\s*\|", re.MULTILINE)
             documented_keys.update(doc_key_pattern.findall(table_content))
 except Exception as e:
     raise Exception(
-        f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}"
+        f"Error reading documentation: {e}, \n repo base - {os.listdir(_repo_root)}"
     )
 
 

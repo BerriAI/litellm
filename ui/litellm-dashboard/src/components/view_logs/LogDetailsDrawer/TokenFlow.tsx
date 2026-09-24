@@ -1,7 +1,3 @@
-import { Typography } from "antd";
-
-const { Text } = Typography;
-
 interface TokenFlowProps {
   prompt?: number;
   completion?: number;
@@ -14,9 +10,9 @@ interface TokenFlowProps {
  */
 export function TokenFlow({ prompt = 0, completion = 0, total = 0 }: TokenFlowProps) {
   return (
-    <Text>
+    <span>
       {total.toLocaleString()} ({prompt.toLocaleString()} prompt tokens + {completion.toLocaleString()} completion
       tokens)
-    </Text>
+    </span>
   );
 }

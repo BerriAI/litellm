@@ -28,7 +28,7 @@ def test_gemini_completion_no_api_key():
                 del os.environ[key]
 
         # Test without mock_response to ensure actual API key validation
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='in _complete_vertex_ai_beta') as exc_info:
             completion(
                 model="gemini/gemini-1.5-flash",
                 messages=[{"role": "user", "content": "Test message"}],
@@ -60,7 +60,7 @@ def test_gemini_completion_no_api_key_with_mock():
         with patch("litellm.get_secret") as mock_get_secret:
             mock_get_secret.return_value = None
 
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='in _complete_vertex_ai_beta') as exc_info:
                 completion(
                     model="gemini/gemini-1.5-flash",
                     messages=[{"role": "user", "content": "Test message"}],

@@ -1,11 +1,12 @@
 """Simple tests for lazy import functionality."""
 
 import os
+import subprocess
 import sys
+from typing import Final
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm._lazy_imports import (
@@ -38,6 +39,22 @@ from litellm._lazy_imports import (
     UTILS_MODULE_NAMES,
     _lazy_import_utils_module,
 )
+
+
+def test_import_litellm_does_not_load_fastapi_or_bpe_table():
+    result: Final = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, litellm; print(','.join(m for m in ('fastapi','starlette','litellm.litellm_core_utils.default_encoding') if m in sys.modules))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+    )
+
+    assert result.stdout.strip() == ""
 
 
 def _clear_names_from_globals(names: tuple):

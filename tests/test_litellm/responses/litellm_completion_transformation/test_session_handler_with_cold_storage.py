@@ -36,7 +36,6 @@ class TestColdStorageObjectKeyIntegration:
         This test verifies that the StandardLoggingMetadata TypedDict has the
         cold_storage_object_key field for storing S3/GCS object keys.
         """
-        from litellm.types.utils import StandardLoggingMetadata
 
         # Create a StandardLoggingMetadata instance with cold_storage_object_key
         metadata = StandardLoggingMetadata(

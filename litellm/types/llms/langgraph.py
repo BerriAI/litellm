@@ -4,9 +4,9 @@ Type definitions for LangGraph API.
 LangGraph provides a streaming and non-streaming API for running agents.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Literal
 
-from typing_extensions import Literal, TypedDict
+from typing_extensions import TypedDict
 
 
 # Request Types
@@ -20,7 +20,7 @@ class LangGraphMessage(TypedDict, total=False):
 class LangGraphInput(TypedDict, total=False):
     """Input structure for LangGraph request."""
 
-    messages: List[LangGraphMessage]
+    messages: list[LangGraphMessage]
 
 
 class LangGraphRequest(TypedDict, total=False):
@@ -28,9 +28,9 @@ class LangGraphRequest(TypedDict, total=False):
 
     assistant_id: str
     input: LangGraphInput
-    stream_mode: Optional[str]
-    config: Optional[Dict[str, Any]]
-    metadata: Optional[Dict[str, Any]]
+    stream_mode: str | None
+    config: dict[str, Any] | None
+    metadata: dict[str, Any] | None
 
 
 # Response Types - Streaming
@@ -47,15 +47,15 @@ class LangGraphResponseMessage(TypedDict, total=False):
 
     type: str
     content: str
-    id: Optional[str]
-    name: Optional[str]
+    id: str | None
+    name: str | None
 
 
 class LangGraphResponse(TypedDict, total=False):
     """Non-streaming response structure from LangGraph."""
 
-    messages: List[LangGraphResponseMessage]
-    values: Dict[str, Any]
+    messages: list[LangGraphResponseMessage]
+    values: dict[str, Any]
 
 
 # Parsed response for internal use
@@ -64,4 +64,4 @@ class LangGraphParsedResponse(TypedDict):
 
     content: str
     role: str
-    usage: Optional[Dict[str, int]]
+    usage: dict[str, int] | None

@@ -1,0 +1,684 @@
+import React from "react";
+import { render, waitFor, screen, act, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import MCPServers, { compareServers, type SortKey } from "./mcp_servers";
+import type { MCPServer } from "@/components/mcp_tools/types";
+import * as networking from "@/components/networking";
+
+// Mock the networking module
+vi.mock("@/components/networking", () => ({
+  fetchMCPServers: vi.fn(),
+  fetchMCPServerHealth: vi.fn(),
+  deleteMCPServer: vi.fn(),
+  getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
+  fetchMCPClientIp: vi.fn().mockResolvedValue(null),
+  getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
+  updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
+  deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
+  listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
+  fetchMCPGatewaySessions: vi.fn(),
+  terminateMCPGatewaySessions: vi.fn(),
+}));
+
+const createQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        gcTime: 0,
+      },
+    },
+  });
+
+describe("compareServers", () => {
+  const server = (server_id: string, name: string, created_at = ""): MCPServer => ({
+    server_id,
+    server_name: name,
+    created_at,
+    updated_at: created_at,
+    created_by: "user",
+    updated_by: "user",
+  });
+
+  const shuffled = [server("c", "github"), server("a", "slack"), server("b", "Jira")];
+
+  it("orders servers without timestamps by name so config.yaml servers render in a stable order", () => {
+    const byCreated = [...shuffled].sort((a, b) => compareServers(a, b, "created_desc")).map((s) => s.server_id);
+    const byUpdated = [...shuffled].sort((a, b) => compareServers(a, b, "updated_desc")).map((s) => s.server_id);
+    const byHealth = [...shuffled].sort((a, b) => compareServers(a, b, "health")).map((s) => s.server_id);
+
+    expect(byCreated).toEqual(["c", "b", "a"]);
+    expect(byUpdated).toEqual(["c", "b", "a"]);
+    expect(byHealth).toEqual(["c", "b", "a"]);
+  });
+
+  it("keeps newest-first when timestamps differ", () => {
+    const newest = server("new", "zzz", "2026-02-01T00:00:00Z");
+    const oldest = server("old", "aaa", "2026-01-01T00:00:00Z");
+    expect([oldest, newest].sort((a, b) => compareServers(a, b, "created_desc")).map((s) => s.server_id)).toEqual([
+      "new",
+      "old",
+    ]);
+  });
+
+  it.each<SortKey>(["created_desc", "updated_desc", "name_asc", "health"])(
+    "breaks equal timestamps and names by ID for %s regardless of input order",
+    (sort) => {
+      const servers = [
+        server("b", "GitHub", "2026-01-01T00:00:00Z"),
+        server("c", "Slack", "2026-01-01T00:00:00Z"),
+        server("a", "github", "2026-01-01T00:00:00Z"),
+      ];
+      for (const input of [servers, [...servers].reverse()]) {
+        expect([...input].sort((a, b) => compareServers(a, b, sort)).map((s) => s.server_id)).toEqual(["a", "b", "c"]);
+      }
+    },
+  );
+
+  it("uses the display name before alias, then falls back to alias and ID", () => {
+    const servers: MCPServer[] = [
+      { ...server("s-slack", "Slack"), alias: "aaa" },
+      { ...server("s-github", ""), server_name: null, alias: "GitHub" },
+      { ...server("confluence", ""), alias: "" },
+    ];
+    for (const input of [servers, [...servers].reverse()]) {
+      expect([...input].sort((a, b) => compareServers(a, b, "name_asc")).map((s) => s.server_id)).toEqual([
+        "confluence",
+        "s-github",
+        "s-slack",
+      ]);
+    }
+  });
+
+  it.each<SortKey>(["created_desc", "updated_desc", "health"])(
+    "keeps timestamped servers before missing timestamps for %s",
+    (sort) => {
+      const servers = [
+        server("config", "aaa"),
+        server("older", "bbb", "2026-01-01T00:00:00Z"),
+        server("newer", "zzz", "2026-02-01T00:00:00Z"),
+      ];
+      for (const input of [servers, [...servers].reverse()]) {
+        expect([...input].sort((a, b) => compareServers(a, b, sort)).map((s) => s.server_id)).toEqual([
+          "newer",
+          "older",
+          "config",
+        ]);
+      }
+    },
+  );
+
+  it("sorts health before recency and display name", () => {
+    const servers: MCPServer[] = [
+      { ...server("healthy", "aaa", "2026-03-01T00:00:00Z"), status: "healthy" },
+      { ...server("unknown", "bbb", "2026-02-01T00:00:00Z"), status: "unknown" },
+      { ...server("unhealthy", "zzz", "2026-01-01T00:00:00Z"), status: "unhealthy" },
+    ];
+    expect(servers.sort((a, b) => compareServers(a, b, "health")).map((s) => s.server_id)).toEqual([
+      "unhealthy",
+      "unknown",
+      "healthy",
+    ]);
+  });
+});
+
+describe("MCPServers", () => {
+  const defaultProps = {
+    accessToken: "123",
+    userRole: "Admin",
+    userID: "admin-user-id",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should render the MCPServers component with title", async () => {
+    // Mock empty response for simple render test
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    // Wait for the component to load and check if title renders
+    await waitFor(() => {
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+    });
+
+    // Verify the title is rendered
+    expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+  });
+
+  it.each(["Admin", "Internal User"])("links a %s to their MCP connections page", async (userRole) => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} userRole={userRole} />
+      </QueryClientProvider>,
+    );
+
+    const myConnections = await screen.findByRole("link", { name: "My Connections" });
+    expect(myConnections).toBeVisible();
+    expect(myConnections).toHaveAttribute("href", "/ui/connect");
+    for (const name of ["Semantic Filter", "Tool Search", "Network Settings", "Submitted MCPs"]) {
+      const tab = screen.queryByRole("tab", { name });
+      if (userRole === "Admin") {
+        expect(tab).toBeVisible();
+      } else {
+        expect(tab).not.toBeInTheDocument();
+      }
+    }
+    expect(
+      screen.getByRole("button", {
+        name: userRole === "Admin" ? "+ Add New MCP Server" : "+ Submit MCP Server",
+      }),
+    ).toBeVisible();
+  });
+
+  it.each(["cancel", "success", "failure", "unnamed"])("preserves delete confirmation on %s", async (outcome) => {
+    const server: MCPServer = {
+      created_at: "",
+      updated_at: "",
+      server_id: "delete-server",
+      server_name: outcome === "unnamed" ? null : "Delete fixture",
+      alias: "delete-alias",
+      url: outcome === "unnamed" ? null : "https://example.com/mcp",
+      created_by: "user",
+      updated_by: "user",
+    };
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([server]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+    let finishDelete: () => void = () => {};
+    vi.mocked(networking.deleteMCPServer).mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          finishDelete = () => (outcome === "failure" ? reject(new Error("Delete failed")) : resolve(undefined));
+        }),
+    );
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Server actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete MCP Server?" });
+    expect(within(dialog).getByText("delete-server")).toBeVisible();
+    if (outcome === "unnamed") {
+      expect(within(dialog).queryByText("Name")).not.toBeInTheDocument();
+      expect(within(dialog).queryByText("URL")).not.toBeInTheDocument();
+    } else {
+      expect(within(dialog).getByText("Delete fixture")).toBeVisible();
+      expect(within(dialog).getByText("https://example.com/mcp")).toBeVisible();
+    }
+    if (outcome === "cancel") {
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(networking.deleteMCPServer).not.toHaveBeenCalled();
+    } else {
+      await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+      expect(within(dialog).getByRole("button", { name: "Deleting..." })).toBeDisabled();
+      expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+      expect(networking.deleteMCPServer).toHaveBeenCalledWith("123", "delete-server");
+      await act(async () => finishDelete());
+    }
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+  });
+
+  it("filters servers by access group", async () => {
+    const server = { created_by: "user", updated_by: "user" };
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        ...server,
+        server_id: "string-group",
+        server_name: "String group",
+        alias: "string-alias",
+        mcp_access_groups: ["shared"],
+      },
+      {
+        ...server,
+        server_id: "legacy-group",
+        server_name: "Legacy group",
+        alias: "legacy-alias",
+        mcp_access_groups: ["shared"],
+      },
+      {
+        ...server,
+        server_id: "other-group",
+        server_name: "Other group",
+        alias: "other-alias",
+        mcp_access_groups: ["different"],
+      },
+    ]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("String group");
+    await userEvent.click(screen.getByRole("combobox", { name: "Access Group" }));
+    await userEvent.click(await screen.findByRole("option", { name: "shared" }));
+    expect(screen.getByText("String group")).toBeVisible();
+    expect(screen.getByText("Legacy group")).toBeVisible();
+    expect(screen.queryByText("Other group")).not.toBeInTheDocument();
+  });
+
+  it.each(["server_name", "alias", "url", "server_id"] as const)("searches by %s case-insensitively", async (field) => {
+    const server: MCPServer = {
+      created_at: "",
+      updated_at: "",
+      server_id: "search-server",
+      server_name: "Search fixture",
+      created_by: "user",
+      updated_by: "user",
+      [field]: "Needle",
+    };
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([server]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+    await screen.findByTestId("mcp-servers-grid");
+    const search = screen.getByPlaceholderText("Search by name, alias, URL, or ID");
+    await userEvent.type(search, "  NEEDLE  ");
+    expect(screen.getByTestId("mcp-servers-grid")).toBeVisible();
+    await userEvent.clear(search);
+    await userEvent.type(search, "no-match");
+    expect(screen.queryByTestId("mcp-servers-grid")).not.toBeInTheDocument();
+    expect(screen.getByText("No servers match the current filters or search.")).toBeVisible();
+  });
+
+  it("should render mocked MCP servers data in the table", async () => {
+    // Mock MCP servers data
+    const mockServers = [
+      {
+        server_id: "server-1",
+        server_name: "Test Server 1",
+        alias: "test-server-1",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+      },
+      {
+        server_id: "server-2",
+        server_name: "Test Server 2",
+        alias: "test-server-2",
+        url: "https://example2.com/mcp",
+        transport: "sse",
+        auth_type: "api_key",
+        created_at: "2024-01-02T00:00:00Z",
+        created_by: "user-2",
+        updated_at: "2024-01-02T00:00:00Z",
+        updated_by: "user-2",
+        teams: [],
+        mcp_access_groups: ["group-1"],
+      },
+    ];
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    // Wait for the component to load
+    await waitFor(() => {
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+    });
+
+    // Wait for the mocked data to render in the table
+    await waitFor(() => {
+      expect(screen.getByText("Test Server 1")).toBeInTheDocument();
+    });
+
+    // Verify the mocked server data is rendered in the table
+    expect(screen.getByText("Test Server 1")).toBeInTheDocument();
+    expect(screen.getByText("Test Server 2")).toBeInTheDocument();
+    expect(screen.getAllByText("test-server-1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("test-server-2").length).toBeGreaterThan(0);
+
+    // Verify the API was called
+    // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith("123", undefined);
+  });
+
+  it("should fetch and merge health status for servers", async () => {
+    // Mock MCP servers data without health status
+    const mockServers = [
+      {
+        server_id: "server-1",
+        server_name: "Test Server 1",
+        alias: "test-server-1",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+        status: undefined,
+      },
+      {
+        server_id: "server-2",
+        server_name: "Test Server 2",
+        alias: "test-server-2",
+        url: "https://example2.com/mcp",
+        transport: "sse",
+        auth_type: "api_key",
+        created_at: "2024-01-02T00:00:00Z",
+        created_by: "user-2",
+        updated_at: "2024-01-02T00:00:00Z",
+        updated_by: "user-2",
+        teams: [],
+        mcp_access_groups: ["group-1"],
+        status: undefined,
+      },
+    ];
+
+    // Mock health status data
+    const mockHealthStatuses = [
+      { server_id: "server-1", status: "healthy" },
+      { server_id: "server-2", status: "unhealthy" },
+    ];
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue(mockHealthStatuses);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    // Wait for the component to load
+    await waitFor(() => {
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+    });
+
+    // Verify the health check API was called (without a server ID filter — the hook always
+    // fetches health for all servers so the query key stays stable)
+    await waitFor(() => {
+      expect(networking.fetchMCPServerHealth).toHaveBeenCalledWith("123");
+    });
+  });
+
+  it("should display loading state while health check is in progress", async () => {
+    const mockServers = [
+      {
+        server_id: "server-1",
+        server_name: "Test Server 1",
+        alias: "test-server-1",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+      },
+    ];
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+    // Mock health check to never resolve (to test loading state)
+    vi.mocked(networking.fetchMCPServerHealth).mockImplementation(
+      () => new Promise(() => {}), // Never resolves
+    );
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    // Wait for the component to load
+    await waitFor(() => {
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+    });
+
+    // Verify that health check was initiated
+    await waitFor(() => {
+      expect(networking.fetchMCPServerHealth).toHaveBeenCalled();
+    });
+  });
+
+  it("should filter servers by team when a team is selected", async () => {
+    // Mock MCP servers with different teams
+    const mockServers = [
+      {
+        server_id: "server-1",
+        server_name: "Team A Server",
+        alias: "team-a-server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [{ team_id: "team-a", team_alias: "Team A" }],
+        mcp_access_groups: [],
+      },
+      {
+        server_id: "server-2",
+        server_name: "Team B Server",
+        alias: "team-b-server",
+        url: "https://example2.com/mcp",
+        transport: "sse",
+        auth_type: "api_key",
+        created_at: "2024-01-02T00:00:00Z",
+        created_by: "user-2",
+        updated_at: "2024-01-02T00:00:00Z",
+        updated_by: "user-2",
+        teams: [{ team_id: "team-b", team_alias: "Team B" }],
+        mcp_access_groups: [],
+      },
+      {
+        server_id: "server-3",
+        server_name: "Team A Server 2",
+        alias: "team-a-server-2",
+        url: "https://example3.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-03T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-03T00:00:00Z",
+        updated_by: "user-1",
+        teams: [{ team_id: "team-a", team_alias: "Team A" }],
+        mcp_access_groups: [],
+      },
+    ];
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    // Wait for the component to load
+    await waitFor(() => {
+      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+    });
+
+    // Wait for servers to be rendered
+    await waitFor(() => {
+      expect(screen.getByText("Team A Server")).toBeInTheDocument();
+    });
+
+    // Verify all servers are initially displayed
+    expect(screen.getByText("Team A Server")).toBeInTheDocument();
+    expect(screen.getByText("Team B Server")).toBeInTheDocument();
+    expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
+
+    const teamSelect = screen.getByRole("combobox", { name: "Team" });
+
+    await userEvent.click(teamSelect);
+
+    // Pick the "Team A" option once the listbox opens
+    const teamAOption = await screen.findByText("Team A");
+    await userEvent.click(teamAOption);
+
+    // Wait for filtering to complete
+    await waitFor(() => {
+      // Team A servers should still be visible
+      expect(screen.getByText("Team A Server")).toBeInTheDocument();
+      expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
+    });
+
+    // Team B server should not be visible
+    expect(screen.queryByText("Team B Server")).not.toBeInTheDocument();
+  });
+
+  it("should not trigger an extra health check when the server list changes after deletion", async () => {
+    // Regression test: previously useMCPServerHealth received serverIds derived from the
+    // server list. Deleting a server changed serverIds, which changed the React Query key,
+    // which caused a new health check request for every remaining server.
+    //
+    // Fix: useMCPServerHealth uses a stable, argument-free query key. The component
+    // re-rendering with a shorter server list must NOT produce a second health fetch.
+    const twoServers = [
+      {
+        server_id: "server-1",
+        server_name: "Test Server 1",
+        alias: "test-server-1",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+      },
+      {
+        server_id: "server-2",
+        server_name: "Test Server 2",
+        alias: "test-server-2",
+        url: "https://example2.com/mcp",
+        transport: "sse",
+        auth_type: "api_key",
+        created_at: "2024-01-02T00:00:00Z",
+        created_by: "user-2",
+        updated_at: "2024-01-02T00:00:00Z",
+        updated_by: "user-2",
+        teams: [],
+        mcp_access_groups: [],
+      },
+    ];
+    const oneServer = twoServers.slice(0, 1);
+
+    // First call returns two servers; second (after deletion) returns one
+    vi.mocked(networking.fetchMCPServers).mockResolvedValueOnce(twoServers).mockResolvedValueOnce(oneServer);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([
+      { server_id: "server-1", status: "healthy" },
+      { server_id: "server-2", status: "healthy" },
+    ]);
+
+    // Use a shared queryClient with a non-zero gcTime so cached health data survives
+    // the re-render triggered by the server list refresh
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 60_000 } },
+    });
+
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    // Wait for the initial health fetch to complete
+    await waitFor(() => {
+      expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
+    });
+
+    // Simulate what happens after a server is deleted: the server list query is
+    // refetched (returns oneServer), causing the component to re-render with the
+    // shorter list.
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["mcpServers"] });
+    });
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    // The server list refresh must NOT trigger a second health check
+    expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
+  });
+
+  const liveSessionsReport = {
+    worker_pid: 4242,
+    total_sessions: 1,
+    by_client: [{ label: "claude-code", count: 1 }],
+    by_user: [{ label: "alice", count: 1 }],
+    sessions: [
+      {
+        session_id_prefix: "aaaa1111",
+        client_name: "claude-code",
+        client_version: "1.0.0",
+        user_id: "alice",
+        user_email: "alice@example.com",
+        key_alias: "alice-key",
+        team_id: null,
+        team_alias: null,
+        client_ip: "10.0.0.1",
+        idle_seconds: 5,
+        in_flight_requests: 0,
+      },
+    ],
+  };
+
+  const openLiveConnections = async (props: { isViewOnly?: boolean }) => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPGatewaySessions).mockResolvedValue(liveSessionsReport);
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} {...props} />
+      </QueryClientProvider>,
+    );
+    await userEvent.click(await screen.findByRole("tab", { name: "Live Connections" }));
+    return within(await screen.findByRole("region", { name: "Live sessions" })).getByRole("row", { name: /aaaa1111/ });
+  };
+
+  it("lets a full admin disconnect a live session", async () => {
+    const row = await openLiveConnections({ isViewOnly: false });
+    expect(within(row).getByRole("button", { name: "Disconnect session aaaa1111" })).toBeInTheDocument();
+  });
+
+  it("shows live sessions to a view-only admin session without any disconnect control", async () => {
+    const row = await openLiveConnections({ isViewOnly: true });
+    expect(row).toHaveTextContent("alice@example.com");
+    expect(within(row).queryByRole("button", { name: /^Disconnect/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Disconnect all/ })).not.toBeInTheDocument();
+  });
+});
