@@ -3632,14 +3632,21 @@ def test_team_daily_activity_routes_reachable_by_non_admin(route, user_role):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    RouteChecks.non_proxy_admin_allowed_routes_check(
-        user_obj=user_obj,
-        _user_role=user_role,
-        route=route,
-        request=request,
-        valid_token=valid_token,
-        request_data={},
-    )
+    def outcome() -> str:
+        try:
+            RouteChecks.non_proxy_admin_allowed_routes_check(
+                user_obj=user_obj,
+                _user_role=user_role,
+                route=route,
+                request=request,
+                valid_token=valid_token,
+                request_data={},
+            )
+        except Exception as exc:
+            return f"denied: {exc}"
+        return "allowed"
+
+    assert outcome() == "allowed"
 
 
 @pytest.mark.parametrize(
