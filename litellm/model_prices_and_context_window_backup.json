@@ -812,6 +812,7 @@
         "prompt_cache_min_tokens": 2048
     },
     "anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -840,6 +841,7 @@
         "output_cost_per_token_batches": 2.5e-06
     },
     "anthropic.claude-haiku-4-5@20251001": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -2727,6 +2729,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -2762,6 +2765,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -2797,6 +2801,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2832,6 +2837,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2867,6 +2873,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2902,6 +2909,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-sonnet-4-6": {
+        "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -3191,6 +3199,7 @@
         "supports_tool_choice": true
     },
     "apac.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
@@ -22175,6 +22184,7 @@
         "prompt_cache_min_tokens": 2048
     },
     "eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -30976,6 +30986,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -36054,6 +36065,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -46000,6 +46012,7 @@
         "prompt_cache_min_tokens": 2048
     },
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -46468,6 +46481,7 @@
         "supports_vision": true
     },
     "au.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
