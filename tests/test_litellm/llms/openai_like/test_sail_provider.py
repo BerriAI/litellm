@@ -432,9 +432,7 @@ class TestSailServiceTierAsCompletionWindow:
         "service_tier,expected_window",
         [("flex", "flex"), ("balanced", "balanced"), ("priority", "asap")],
     )
-    def test_responses_api_service_tier_maps_to_completion_window(
-        self, service_tier: str, expected_window: str
-    ):
+    def test_responses_api_service_tier_maps_to_completion_window(self, service_tier: str, expected_window: str):
         body = _sail_responses_body({"service_tier": service_tier})
         assert "service_tier" not in body
         assert body["metadata"]["completion_window"] == expected_window
@@ -524,9 +522,9 @@ class TestSailTierPricing:
     def test_completion_window_in_optional_params_bills_at_tier_rates(self, optional_params: dict):
         rates = litellm.model_cost[MODEL]
         prompt_tokens, completion_tokens = 1000, 200
-        window = (
-            optional_params.get("extra_body", {}).get("metadata") or optional_params["metadata"]
-        )["completion_window"]
+        window = (optional_params.get("extra_body", {}).get("metadata") or optional_params["metadata"])[
+            "completion_window"
+        ]
 
         cost = litellm.completion_cost(
             completion_response=_sail_completion_response(prompt_tokens, completion_tokens),
@@ -541,6 +539,53 @@ class TestSailTierPricing:
         )
         assert cost == pytest.approx(expected)
 
+    @pytest.mark.parametrize(
+        "service_tier,window",
+        [("flex", "balanced"), ("balanced", "flex")],
+        ids=["flex_tier_balanced_window", "balanced_tier_flex_window"],
+    )
+    def test_completion_window_overrides_service_tier_on_sail(self, service_tier: str, window: str):
+        rates = litellm.model_cost[MODEL]
+        prompt_tokens, completion_tokens = 1000, 200
+
+        cost = litellm.completion_cost(
+            completion_response=_sail_completion_response(prompt_tokens, completion_tokens),
+            model=MODEL,
+            custom_llm_provider="sail",
+            optional_params={
+                "service_tier": service_tier,
+                "extra_body": {"metadata": {"completion_window": window}},
+            },
+        )
+
+        expected = (
+            prompt_tokens * rates[f"input_cost_per_token_{window}"]
+            + completion_tokens * rates[f"output_cost_per_token_{window}"]
+        )
+        assert cost == pytest.approx(expected)
+
+    @pytest.mark.parametrize(
+        "optional_params",
+        [
+            {"extra_body": {"metadata": {"completion_window": "flex"}}},
+            {"metadata": {"completion_window": "flex"}},
+        ],
+        ids=["extra_body_flex_window", "metadata_flex_window"],
+    )
+    def test_completion_window_ignored_for_non_sail_provider(self, optional_params: dict):
+        rates = litellm.model_cost["azure/gpt-5.4"]
+        prompt_tokens, completion_tokens = 1000, 200
+
+        cost = litellm.completion_cost(
+            completion_response=_sail_completion_response(prompt_tokens, completion_tokens),
+            model="azure/gpt-5.4",
+            custom_llm_provider="azure",
+            optional_params=optional_params,
+        )
+
+        expected = prompt_tokens * rates["input_cost_per_token"] + completion_tokens * rates["output_cost_per_token"]
+        assert cost == pytest.approx(expected)
+
     def test_completion_window_asap_bills_at_base_rates(self):
         rates = litellm.model_cost[MODEL]
         prompt_tokens, completion_tokens = 1000, 200
@@ -552,10 +597,7 @@ class TestSailTierPricing:
             optional_params={"extra_body": {"metadata": {"completion_window": "asap"}}},
         )
 
-        expected = (
-            prompt_tokens * rates["input_cost_per_token"]
-            + completion_tokens * rates["output_cost_per_token"]
-        )
+        expected = prompt_tokens * rates["input_cost_per_token"] + completion_tokens * rates["output_cost_per_token"]
         assert cost == pytest.approx(expected)
 
 

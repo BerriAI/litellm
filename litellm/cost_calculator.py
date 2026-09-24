@@ -77,6 +77,7 @@ from litellm.llms.openai.cost_calculation import (
 from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
 )
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -976,6 +977,15 @@ def _completion_window_value(metadata: object) -> str | None:
     return None
 
 
+def _provider_bills_by_completion_window(custom_llm_provider: str | None) -> bool:
+    """True only for JSON-configured providers that translate ``service_tier`` into a
+    provider ``metadata.completion_window`` on the wire (currently Sail)."""
+    if custom_llm_provider is None:
+        return False
+    provider: Final = JSONProviderRegistry.get(custom_llm_provider)
+    return provider is not None and provider.special_handling.get("service_tier_as_completion_window") is True
+
+
 def _service_tier_from_completion_window(optional_params: dict[str, object]) -> str | None:
     """Read ``metadata.completion_window`` from ``extra_body`` or a top-level ``metadata``
     param (the two shapes callers use to pick a provider completion window directly)."""
@@ -1393,11 +1403,16 @@ def completion_cost(
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
+        # Providers that bill by completion window: an explicit window on the request wins
+        # over service_tier, matching what the provider actually sees on the wire
+        if optional_params is not None and _provider_bills_by_completion_window(custom_llm_provider):
+            window_tier: Final = _service_tier_from_completion_window(optional_params)
+            if window_tier is not None:
+                service_tier = window_tier
+
         # Extract service_tier from optional_params if not provided directly
         if service_tier is None and optional_params is not None:
             service_tier = _normalize_service_tier(optional_params.get("service_tier"))
-            if service_tier is None:
-                service_tier = _service_tier_from_completion_window(optional_params)
 
         service_tier = _normalize_service_tier(service_tier)
 
