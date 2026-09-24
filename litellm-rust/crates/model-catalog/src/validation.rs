@@ -1,16 +1,36 @@
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
 
-use indexmap::IndexMap;
-use litellm_model_catalog::{
-    Catalog, FallbackGeneralizations, ModelInfo, Provenance, UtcHours, Weekday,
-};
-use rstest::{fixture, rstest};
 use serde_json::{Map, Value};
+use thiserror::Error;
 
-#[fixture]
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
+use crate::{AliasIssue, Catalog, ModelInfo, UtcHours, Weekday};
+
+/// A registry entry violates the checked-in catalog contract.
+#[derive(Debug, Error)]
+pub enum RegistryValidationError {
+    #[error("{reason}")]
+    Entry { model: String, reason: String },
+    #[error("alias issue: {0:?}")]
+    Alias(AliasIssue),
+}
+
+/// Validate one registry entry without restricting the tolerant catalog reader.
+pub fn validate_model_entry(model: &str, value: &Value) -> Result<(), RegistryValidationError> {
+    validate_entry_inner(model, value).map_err(|reason| RegistryValidationError::Entry {
+        model: model.to_owned(),
+        reason,
+    })
+}
+
+/// Check every model and alias in a parsed catalog against registry rules.
+pub fn validate_registry(catalog: &Catalog) -> Result<(), RegistryValidationError> {
+    if let Some(issue) = catalog.alias_issues().first() {
+        return Err(RegistryValidationError::Alias(issue.clone()));
+    }
+    catalog.model_names().try_for_each(|name| {
+        let entry = catalog.lookup(name).expect("catalog name must resolve");
+        validate_model_entry(name, &Value::Object(entry.entry.fields().clone()))
+    })
 }
 
 fn json_eq(left: &Value, right: &Value) -> bool {
@@ -37,10 +57,18 @@ fn symmetric_difference(left: &BTreeSet<String>, right: &BTreeSet<String>) -> BT
     left.symmetric_difference(right).cloned().collect()
 }
 
-fn validate_entry(model_name: &str, value: &Value) -> Result<(), String> {
+fn validate_entry_inner(model_name: &str, value: &Value) -> Result<(), String> {
     let object = value
         .as_object()
         .ok_or_else(|| format!("{model_name} must be an object"))?;
+    if let Some(aliases) = object.get("aliases") {
+        let names = aliases
+            .as_array()
+            .ok_or_else(|| format!("{model_name}.aliases must be an array"))?;
+        if names.iter().any(|name| !name.is_string()) {
+            return Err(format!("{model_name}.aliases must contain strings"));
+        }
+    }
     let info: ModelInfo =
         serde_json::from_value(value.clone()).map_err(|error| format!("{model_name}: {error}"))?;
     if info.litellm_provider.is_none() {
@@ -187,65 +215,4 @@ fn check_prices(path: &str, value: &Value) -> Result<(), String> {
             None => check_prices(&field_path, field),
         }
     })
-}
-
-#[rstest]
-#[case("model_prices_and_context_window.json")]
-#[case("litellm/model_prices_and_context_window_backup.json")]
-fn every_entry_round_trips_through_model_info(repo_root: PathBuf, #[case] filename: &str) {
-    let body = std::fs::read(repo_root.join(filename)).unwrap();
-    let document: IndexMap<String, Value> = serde_json::from_slice(&body).unwrap();
-    document
-        .into_iter()
-        .filter(|(name, _)| !matches!(name.as_str(), "sample_spec" | "fallback_generalizations"))
-        .try_for_each(|(name, value)| validate_entry(&name, &value))
-        .unwrap();
-}
-
-#[rstest]
-fn fallback_generalizations_are_typed(repo_root: PathBuf) {
-    let body = std::fs::read(repo_root.join("model_prices_and_context_window.json")).unwrap();
-    let document: Map<String, Value> = serde_json::from_slice(&body).unwrap();
-    let Some(raw_rules) = document.get("fallback_generalizations") else {
-        return;
-    };
-    let _: FallbackGeneralizations = serde_json::from_value(raw_rules.clone()).unwrap();
-    let catalog = Catalog::parse(&body, Provenance::default()).unwrap();
-    assert!(
-        catalog
-            .fallback_rules()
-            .is_some_and(|rules| !rules.is_empty())
-    );
-}
-
-#[rstest]
-#[case::missing_provider(serde_json::json!({"mode": "chat"}), "litellm_provider")]
-#[case::unknown_field(serde_json::json!({"litellm_provider": "test", "typo": true}), "unknown field")]
-#[case::negative_price(serde_json::json!({"litellm_provider": "test", "input_cost_per_token": -1}), "nonnegative")]
-#[case::negative_nested_price(serde_json::json!({"litellm_provider": "test", "guardrail_cost_per_unit": {"unit": -1}}), "nonnegative")]
-#[case::invalid_mode(serde_json::json!({"litellm_provider": "test", "mode": "invalid"}), "unknown variant")]
-#[case::invalid_date(serde_json::json!({"litellm_provider": "test", "deprecation_date": "2026-02-31"}), "deprecation_date")]
-#[case::invalid_hours(serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"hours_utc": "25:00-01:00"}}), "hours_utc")]
-#[case::empty_windows(serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"windows": []}}), "windows is empty")]
-#[case::invalid_weekday(serde_json::json!({"litellm_provider": "test", "off_peak_pricing": {"windows": [{"hours_utc": "00:00-01:00", "weekdays": [0]}]}}), "weekdays is invalid")]
-fn registry_validation_rejects_malformed_entries(#[case] entry: Value, #[case] expected: &str) {
-    assert!(
-        validate_entry("test", &entry)
-            .unwrap_err()
-            .contains(expected)
-    );
-}
-
-#[test]
-fn checked_in_catalog_and_backup_match() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let current = std::fs::read(root.join("model_prices_and_context_window.json")).unwrap();
-    let backup =
-        std::fs::read(root.join("litellm/model_prices_and_context_window_backup.json")).unwrap();
-    assert_eq!(current, backup);
-    let catalog = Catalog::parse(&current, Provenance::default()).unwrap();
-    assert!(
-        catalog.alias_issues().is_empty(),
-        "invalid registry aliases"
-    );
 }

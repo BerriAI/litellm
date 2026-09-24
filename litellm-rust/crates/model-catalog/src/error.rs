@@ -14,14 +14,14 @@ pub enum Error {
     /// Canonical entry count is under the configured minimum.
     #[error("catalog has {actual} models, below minimum {minimum}")]
     BelowMinimum { actual: usize, minimum: usize },
-    /// Canonical entry count is under the configured backup shrink ratio.
-    #[error("catalog has {actual} models, below {ratio} of backup count {backup}")]
+    /// Canonical entry count is under the configured reference ratio.
+    #[error("catalog has {actual} models, below {ratio} of reference count {reference}")]
     Shrunk {
         actual: usize,
-        backup: usize,
+        reference: usize,
         ratio: f64,
     },
-    /// The configured minimum backup ratio is not finite or outside `[0, 1]`.
-    #[error("minimum backup ratio must be finite and between zero and one")]
+    /// The configured minimum reference ratio is not finite or outside `[0, 1]`.
+    #[error("minimum reference ratio must be finite and between zero and one")]
     InvalidRatio,
 }

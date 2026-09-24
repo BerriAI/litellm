@@ -1,1 +1,2 @@
 - https://github.com/serde-rs/serde-rs.github.io/tree/master/_src
+- This crate replace https://github.com/BerriAI/litellm/blob/b2b0b6c/model_prices_and_context_window.schema.json

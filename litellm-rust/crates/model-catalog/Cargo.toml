@@ -14,7 +14,8 @@ schemars = { version = "1.0", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
 
 [dev-dependencies]
+jsonschema = { version = "0.55.1", default-features = false }
 rstest.workspace = true
-time.workspace = true
