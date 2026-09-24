@@ -181,7 +181,7 @@ class Rig:
             "model": self.anthropic,
             "max_tokens": 64,
             "stream": True,
-            "messages": [{"role": "user", "content": "who designed it"}],
+            "messages": [{"role": "user", "content": f"who designed it {uuid.uuid4().hex}"}],
             **({"guardrails": list(guardrails)} if guardrails is not None else {}),
         }
 
@@ -191,6 +191,13 @@ def anthropic_text(received: Received) -> str:
         json.loads(line.removeprefix("data: ")) for line in received.text.split("\n") if line.startswith("data: ")
     )
     return "".join(event["delta"]["text"] for event in events if event.get("type") == "content_block_delta")
+
+
+def anthropic_message_id(received: Received) -> str:
+    events: Final = tuple(
+        json.loads(line.removeprefix("data: ")) for line in received.text.split("\n") if line.startswith("data: ")
+    )
+    return "".join(event["message"]["id"] for event in events if event.get("type") == "message_start")
 
 
 @contextmanager
@@ -339,10 +346,10 @@ def test_native_gemini_unauthenticated_request_is_rejected_before_upstream(gatew
         assert rig.upstream.drain() == ()
 
 
-def anthropic_provider(chunks: tuple[bytes, ...]) -> Callable[[Request], Reply]:
+def anthropic_provider(chunks: tuple[bytes, ...], *, pause_between_chunks: float = 0) -> Callable[[Request], Reply]:
     def provider(request: Request) -> Reply:
         assert request.target == "/v1/messages", request.target
-        return Reply(content_type="text/event-stream", chunks=chunks)
+        return Reply(content_type="text/event-stream", chunks=chunks, pause_between_chunks=pause_between_chunks)
 
     return provider
 
@@ -374,6 +381,49 @@ def test_anthropic_messages_first_frame_split_across_transport_chunks_is_still_m
         assert received.status == 200, received.text
         assert anthropic_text(received) == f"{MASK} designed it."
         assert received.text.count("event: message_start") == 1
+
+
+def test_anthropic_messages_first_frame_split_inside_a_utf8_character_is_still_masked(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "msg_" + uuid.uuid4().hex
+    whole: Final = anthropic_stream(identity, f"{PERSON} designed the caf\u00e9.")
+    delta: Final = whole[2].replace("\\u00e9".encode(), "\u00e9".encode())
+    split_at: Final = delta.index("\u00e9".encode()) + 1
+    assert delta[split_at - 1 : split_at] == b"\xc3", delta
+    chunks: Final = (whole[0] + whole[1] + delta[:split_at], delta[split_at:], *whole[3:])
+    with presidio_rig(gateway, tmp_path, anthropic_provider(chunks, pause_between_chunks=0.5)) as rig:
+        received: Final = rig.stream("/v1/messages", rig.messages_body())
+        assert received.status == 200, received.text
+        assert anthropic_text(received) == f"{MASK} designed the caf\u00e9."
+        assert PERSON not in received.text, received.text
+        assert anthropic_message_id(received) == identity, received.text
+
+
+def test_anthropic_messages_stream_led_by_sse_comment_keepalive_is_still_masked(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "msg_" + uuid.uuid4().hex
+    chunks: Final = (b": keepalive\n\n", *anthropic_stream(identity, f"{PERSON} designed it."))
+    with presidio_rig(gateway, tmp_path, anthropic_provider(chunks, pause_between_chunks=0.5)) as rig:
+        received: Final = rig.stream("/v1/messages", rig.messages_body())
+        assert received.status == 200, received.text
+        assert anthropic_text(received) == f"{MASK} designed it."
+        assert PERSON not in received.text, received.text
+        assert identity in received.text
+
+
+def test_anthropic_messages_stream_led_by_data_less_ping_event_is_still_masked(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "msg_" + uuid.uuid4().hex
+    chunks: Final = (b"event: ping\n\n", *anthropic_stream(identity, f"{PERSON} designed it."))
+    with presidio_rig(gateway, tmp_path, anthropic_provider(chunks, pause_between_chunks=0.5)) as rig:
+        received: Final = rig.stream("/v1/messages", rig.messages_body())
+        assert received.status == 200, received.text
+        assert anthropic_text(received) == f"{MASK} designed it."
+        assert PERSON not in received.text, received.text
+        assert identity in received.text
 
 
 def test_anthropic_messages_stream_fails_closed_when_analyzer_is_down(gateway: Gateway, tmp_path: Path) -> None:
@@ -468,7 +518,7 @@ def test_mixed_burst_survives_anonymizer_outage_and_recovers(gateway: Gateway, t
         return Reply(
             content_type="text/event-stream",
             chunks=(gemini_frame(f"{PERSON} "), gemini_frame("designed it.")),
-            pause_between_chunks=0.05,
+            pause_between_chunks=0.5,
         )
 
     with presidio_rig(gateway, tmp_path, provider, anonymize=flaky_anonymizer) as rig:
@@ -514,7 +564,7 @@ def test_mixed_burst_survives_anonymizer_outage_and_recovers(gateway: Gateway, t
 
 def test_native_gemini_keeps_streaming_after_one_worker_is_killed(gateway: Gateway, tmp_path: Path) -> None:
     frames: Final = (gemini_frame("alive "), gemini_frame("still."))
-    provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames, pause_between_chunks=0.05))
+    provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames, pause_between_chunks=0.5))
     with presidio_rig(gateway, tmp_path, provider) as rig:
         workers: Final = eventually(
             lambda: tuple(

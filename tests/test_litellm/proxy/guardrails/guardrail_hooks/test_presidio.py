@@ -2599,6 +2599,162 @@ async def test_apply_to_output_streaming_anthropic_first_frame_split_across_tran
     assert joined.count("event: message_start") == 1
 
 
+def _anthropic_stream_tail() -> list[bytes]:
+    return [
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def _anthropic_stream_head() -> list[bytes]:
+    return [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_first_frame_split_inside_a_utf8_character_is_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    delta = (
+        "event: content_block_delta\n"
+        + "data: "
+        + json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "John Smith designed the café."},
+            },
+            ensure_ascii=False,
+        )
+        + "\n\n"
+    ).encode()
+    cut = delta.index("é".encode()) + 1
+    assert delta[cut - 1 : cut] == b"\xc3", delta
+    byte_chunks = [*_anthropic_stream_head(), delta[:cut], delta[cut:], *_anthropic_stream_tail()]
+
+    async def mock_stream():
+        yield b"".join(byte_chunks[:2]) + byte_chunks[2]
+        for b in byte_chunks[3:]:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_stream_led_by_sse_comment_keepalive_is_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    byte_chunks = [
+        b": keepalive\n\n",
+        *_anthropic_stream_head(),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+        ),
+        *_anthropic_stream_tail(),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_stream_led_by_data_less_ping_event_is_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    byte_chunks = [
+        b"event: ping\n\n",
+        *_anthropic_stream_head(),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+        ),
+        *_anthropic_stream_tail(),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_comment_only_stream_is_forwarded_unchanged():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+
+    async def mock_stream():
+        yield b": keepalive\n\n"
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected == [b": keepalive\n\n"]
+
+
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_gemini_first_frame_split_across_transport_chunks_streams_incrementally():
     guardrail = _OPTIONAL_PresidioPIIMasking(
