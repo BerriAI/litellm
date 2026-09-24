@@ -1471,9 +1471,9 @@ export const teamDailyActivityKeySearchCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  search: string,
-  teamIds: string[] | null = null,
+  ...options: [search: string, teamIds?: string[] | null]
 ) => {
+  const [search, teamIds = null] = options;
   try {
     return await apiClient.get(`/team/daily/activity/aggregated/search`, {
       accessToken,

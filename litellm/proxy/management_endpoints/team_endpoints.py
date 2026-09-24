@@ -6800,25 +6800,25 @@ def _team_key_search_where(*, search: str, scope: _TeamDailyActivityScope) -> Te
     """Caller scoping lives inside the same Prisma where as the search term so `take`
     never trims visible matches in favour of keys the caller is not allowed to see."""
     search_or: Final = (
-        {"token": search},
-        {"key_alias": {"contains": search, "mode": "insensitive"}},
-        {"user_id": {"contains": search, "mode": "insensitive"}},
+        {"token": search},  # mutable-ok: prisma where clause leaf
+        {"key_alias": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
+        {"user_id": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
     )
     own_keys: Final = tuple(scope.api_key_filter) if isinstance(scope.api_key_filter, list) else None
     if scope.team_ids is None and own_keys is None:
-        return {"OR": search_or}
+        return {"OR": search_or}  # mutable-ok: prisma where clause root
     if scope.team_ids is None and own_keys is not None:
-        return {"token": {"in": own_keys}, "OR": search_or}
+        return {"token": {"in": own_keys}, "OR": search_or}  # mutable-ok: prisma where clause root
     if scope.team_ids is not None and own_keys is None:
-        return {"team_id": {"in": tuple(scope.team_ids)}, "OR": search_or}
+        return {"team_id": {"in": tuple(scope.team_ids)}, "OR": search_or}  # mutable-ok: prisma where clause root
     assert scope.team_ids is not None and own_keys is not None
-    return {"team_id": {"in": tuple(scope.team_ids)}, "token": {"in": own_keys}, "OR": search_or}
+    return {"team_id": {"in": tuple(scope.team_ids)}, "token": {"in": own_keys}, "OR": search_or}  # mutable-ok: prisma where clause root
 
 
 @router.get(
     "/team/daily/activity/aggregated/search",
     response_model=SpendAnalyticsPaginatedResponse,
-    tags=["team management"],
+    tags=["team management"],  # mutable-ok: FastAPI route tags shape
 )
 async def search_team_daily_activity_keys(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
@@ -6876,12 +6876,12 @@ async def search_team_daily_activity_keys(
     matched_keys: Final = await _tokens_db(prisma_client).find_many(
         where=_team_key_search_where(search=search, scope=scope),
         take=USAGE_TOP_API_KEYS_LIMIT,
-        order={"spend": "desc"},
+        order={"spend": "desc"},  # mutable-ok: prisma serializes order, keep it a plain dict
     )
     tokens: Final = [key.token for key in matched_keys]  # mutable-ok: get_daily_activity_aggregated takes list[str]
     if not tokens:
         return SpendAnalyticsPaginatedResponse(
-            results=[],
+            results=[],  # mutable-ok: response model field shape
             metadata=DailySpendMetadata(api_key_limit=USAGE_TOP_API_KEYS_LIMIT, total_api_keys=0),
         )
 
