@@ -1504,8 +1504,11 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
-            if isinstance(getattr(chunk, "usage", None), Usage):
-                model_response.usage = chunk.usage
+            chunk_usage: Final = getattr(chunk, "usage", None)
+            if isinstance(chunk_usage, Usage):
+                model_response.usage = chunk_usage
+            elif isinstance(chunk_usage, BaseModel):
+                model_response.usage = Usage(**chunk_usage.model_dump())
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(

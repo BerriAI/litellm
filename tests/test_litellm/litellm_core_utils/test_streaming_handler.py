@@ -2859,30 +2859,45 @@ def test_dispatch_text_completion_openai_with_usage(
     assert model_response.usage.total_tokens == 8
 
 
-def test_text_completion_openai_usage_chunk_keeps_litellm_usage(
+@pytest.mark.parametrize("custom_llm_provider", ["text-completion-openai", "azure_text"])
+def test_text_completion_usage_chunk_keeps_provider_usage_as_litellm_usage(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
+    custom_llm_provider: str,
 ):
     from openai.types.completion import Completion
     from openai.types.completion_usage import CompletionUsage
 
-    initialized_custom_stream_wrapper.custom_llm_provider = "text-completion-openai"
+    initialized_custom_stream_wrapper.custom_llm_provider = custom_llm_provider
     initialized_custom_stream_wrapper.model = "gpt-3.5-turbo-instruct"
     initialized_custom_stream_wrapper.send_stream_usage = True
     initialized_custom_stream_wrapper.received_finish_reason = "length"
+    provider_usage: Final = CompletionUsage.model_validate(
+        {
+            "prompt_tokens": 7,
+            "completion_tokens": 4,
+            "total_tokens": 11,
+            "completion_tokens_details": {"reasoning_tokens": 3},
+            "prompt_tokens_details": {"cached_tokens": 2},
+            "cost": 0.0123,
+        }
+    )
     chunk: Final = Completion.model_construct(
         id="cmpl-usage",
         choices=[],
         created=1,
         model="gpt-3.5-turbo-instruct",
         object="text_completion",
-        usage=CompletionUsage.model_construct(prompt_tokens=7, completion_tokens=4, total_tokens=11),
+        usage=provider_usage,
     )
 
     returned: Final = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
 
     assert isinstance(returned.usage, Usage)
-    assert (returned.usage.prompt_tokens, returned.usage.completion_tokens, returned.usage.total_tokens) == (7, 4, 11)
-    assert returned.model_dump()["usage"]["total_tokens"] == 11
+    dumped: Final = returned.model_dump()["usage"]
+    assert (dumped["prompt_tokens"], dumped["completion_tokens"], dumped["total_tokens"]) == (7, 4, 11)
+    assert dumped["cost"] == provider_usage.model_dump()["cost"]
+    assert dumped["completion_tokens_details"]["reasoning_tokens"] == 3
+    assert dumped["prompt_tokens_details"]["cached_tokens"] == 2
 
 
 @pytest.mark.asyncio
