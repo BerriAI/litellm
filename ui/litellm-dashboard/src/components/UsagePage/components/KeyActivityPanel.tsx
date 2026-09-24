@@ -115,8 +115,8 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
         )}
         {apiKeyTruncation !== undefined && (
           <span className="text-sm text-muted-foreground" role="note">
-            Only the {totalKeys.toLocaleString()} highest-spend keys of{" "}
-            {apiKeyTruncation.total.toLocaleString()} are loaded
+            Only the {totalKeys.toLocaleString()} highest-spend keys of {apiKeyTruncation.total.toLocaleString()} are
+            loaded
           </span>
         )}
         {loadMoreKeys !== undefined && (

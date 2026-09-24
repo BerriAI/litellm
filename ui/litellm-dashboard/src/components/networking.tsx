@@ -2581,12 +2581,7 @@ export const userDailyActivityAggregatedCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  ...options: [
-    userId?: string | null,
-    includeCurrentUtcDay?: boolean,
-    apiKey?: string | null,
-    cursor?: string | null,
-  ]
+  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean, apiKey?: string | null, cursor?: string | null]
 ) => {
   /**
    * Get aggregated daily user activity (no pagination)

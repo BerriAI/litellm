@@ -170,8 +170,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const spendData = loadedPages?.base === spendDataBase ? loadedPages.merged : spendDataBase;
   const apiKeyTruncation = getApiKeyTruncation(spendData.metadata?.api_key_limit, spendData.metadata?.total_api_keys);
 
-  const keyPageWindow =
-    accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null;
+  const keyPageWindow = accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null;
   const loadMoreKeys =
     aggregatedFetchFn && keyPageWindow && spendData.metadata?.next_cursor
       ? () =>
