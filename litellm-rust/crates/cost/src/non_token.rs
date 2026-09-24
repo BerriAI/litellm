@@ -110,9 +110,6 @@ pub fn calculate(charges: &[Charge]) -> Result<Cost, CostError> {
 }
 
 pub fn calculate_image(tables: &[ImageRates], usage: ImageUsage) -> Result<Cost, CostError> {
-    if usage.width == 0 || usage.height == 0 {
-        return Err(CostError::InvalidQuantity);
-    }
     let selected = tables
         .iter()
         .find_map(|rates| {

@@ -18,8 +18,21 @@ fn at() -> Timestamp {
     "2026-09-22T12:00:00Z".parse().unwrap()
 }
 
-fn request<'a>(image_response: &'a Value, model_info: &'a Value) -> AzureAiImageRequest<'a> {
+fn catalog_with(model_info: &Value) -> ModelInfoCatalog {
+    ModelInfoCatalog::new(HashMap::from([(
+        "azure_ai/model".to_owned(),
+        model_info.clone(),
+    )]))
+}
+
+fn request<'a>(
+    catalog: &'a ModelInfoCatalog,
+    image_response: &'a Value,
+    model_info: &'a Value,
+) -> AzureAiImageRequest<'a> {
     AzureAiImageRequest {
+        catalog,
+        model: "azure_ai/model",
         image_response,
         model_info,
         supplied_model_info: None,
@@ -46,7 +59,8 @@ fn azure_image_cost_prefers_token_usage_over_image_and_pixel_rates() {
         "output_tokens": 4,
         "total_tokens": 9
     }});
-    let cost = cost_calculator(request(&response, &info)).unwrap();
+    let catalog = catalog_with(&info);
+    let cost = cost_calculator(request(&catalog, &response, &info)).unwrap();
     assert!((cost - (2.0 * 0.001 + 3.0 * 0.002 + 4.0 * 0.003)).abs() < 1e-12);
 }
 
@@ -54,9 +68,10 @@ fn azure_image_cost_prefers_token_usage_over_image_and_pixel_rates() {
 fn azure_image_cost_uses_explicit_n_for_flat_image_rate() {
     let info = json!({"output_cost_per_image": 0.25, "input_cost_per_pixel": 0.0001});
     let response = json!({"data": [{}]});
+    let catalog = catalog_with(&info);
     let cost = cost_calculator(AzureAiImageRequest {
         n: Some(3),
-        ..request(&response, &info)
+        ..request(&catalog, &response, &info)
     })
     .unwrap();
     assert_eq!(cost, 0.75);
@@ -73,10 +88,11 @@ fn azure_pixel_cost_selects_request_or_response_dimensions(
 ) {
     let info = json!({"input_cost_per_pixel": 0.01});
     let response = json!({"data": [{}, {}], "size": "3x4"});
+    let catalog = catalog_with(&info);
     let cost = cost_calculator(AzureAiImageRequest {
         size,
         optional_params: &optional_params,
-        ..request(&response, &info)
+        ..request(&catalog, &response, &info)
     })
     .unwrap();
     assert!((cost - pixels * 2.0 * 0.01).abs() < 1e-12);
@@ -88,7 +104,10 @@ fn azure_image_cost_prefers_supplied_image_rate_before_shared_pixel_rate() {
     let supplied = json!({"input_cost_per_image": 0.2});
     let resolved = json!({"input_cost_per_pixel": 0.01, "input_cost_per_image": 0.2});
     let response = json!({"data": [{}, {}], "size": "3x4"});
+    let catalog = catalog_with(&shared);
     let cost = cost_calculator(AzureAiImageRequest {
+        catalog: &catalog,
+        model: "azure_ai/model",
         image_response: &response,
         model_info: &resolved,
         supplied_model_info: Some(&supplied),
@@ -162,4 +181,46 @@ fn catalog_azure_image_cost_uses_shared_flat_rate_and_zero_when_unpriced() {
         .unwrap(),
         0.0
     );
+}
+
+#[rstest]
+fn azure_pixel_pricing_prefers_a_size_specific_row_like_default_image_cost_calculator() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "azure_ai/flux-zz".to_owned(),
+            json!({"input_cost_per_pixel": 1e-6}),
+        ),
+        (
+            "azure_ai/1024-x-1024/flux-zz".to_owned(),
+            json!({"input_cost_per_image": 0.3}),
+        ),
+    ]));
+    let response = json!({"data": [{}]});
+    let cost = litellm_cost::image_cost_router::azure_ai_image_generation_cost(
+        &catalog,
+        AzureAiImageCatalogRequest {
+            model: "flux-zz",
+            image_response: &response,
+            size: Some("1024x1024"),
+            n: None,
+            optional_params: &Value::Null,
+            supplied_model_info: None,
+            at: at(),
+        },
+    )
+    .unwrap();
+    assert!((cost - 0.3).abs() < 1e-12);
+}
+
+#[rstest]
+fn azure_pixel_pricing_bills_a_zero_dimension_as_zero_pixels() {
+    let info = json!({"input_cost_per_pixel": 0.01});
+    let catalog = catalog_with(&info);
+    let response = json!({"data": [{}]});
+    let cost = cost_calculator(AzureAiImageRequest {
+        size: Some("1024x0"),
+        ..request(&catalog, &response, &info)
+    })
+    .unwrap();
+    assert_eq!(cost, 0.0);
 }

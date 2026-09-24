@@ -395,6 +395,10 @@ pub fn azure_ai_image_generation_cost(
         .and_then(|key| catalog.entries().get(key))
         .or(shared);
     azure_ai_image_cost_calculator(AzureAiImageRequest {
+        catalog,
+        model: catalog
+            .select_model_key(request.model, Some("azure_ai"), None)
+            .unwrap_or(request.model),
         image_response: request.image_response,
         model_info: &model_info,
         supplied_model_info: request.supplied_model_info,
