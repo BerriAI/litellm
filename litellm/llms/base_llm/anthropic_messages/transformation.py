@@ -88,8 +88,8 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         optional_params: Mapping[str, object],
         request_kwargs: Mapping[str, object],
-    ) -> dict[str, object]:  # mutable-ok: handler passes optional params as a plain dict
-        return dict(optional_params)
+    ) -> dict[str, object]:
+        return dict(optional_params)  # mutable-ok: handler passes optional params as a plain dict
 
     def sign_request(
         self,

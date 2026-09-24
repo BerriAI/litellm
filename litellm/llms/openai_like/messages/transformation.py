@@ -184,16 +184,20 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         self,
         optional_params: Mapping[str, object],
         request_kwargs: Mapping[str, object],
-    ) -> dict[str, object]:  # mutable-ok: matches dict-typed base signature
+    ) -> dict[str, object]:
         if not _service_tier_as_completion_window_enabled(self._provider):
             return super().translate_passthrough_params(optional_params, request_kwargs)
-        merged: Final = {
+        merged: Final = {  # mutable-ok: matches dict-typed base signature
             **optional_params,
-            **{
+            **{  # mutable-ok: matches dict-typed base signature
                 key: request_kwargs[key]
                 for key in ("service_tier", "extra_body")
                 if key in request_kwargs
             },
         }
         translated: Final = _apply_service_tier_as_completion_window(merged)
-        return {key: value for key, value in translated.items() if key not in ("service_tier", "extra_body")}
+        return {  # mutable-ok: matches dict-typed base signature
+            key: value
+            for key, value in translated.items()
+            if key not in ("service_tier", "extra_body")
+        }
