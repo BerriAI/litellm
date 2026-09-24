@@ -4569,6 +4569,80 @@ async def test_pass_through_request_streaming_upstream_error_single_large_chunk_
     )
 
 
+class _GatedUpstreamErrorBodyStream(httpx.AsyncByteStream):
+    def __init__(self, first: bytes, second: bytes) -> None:
+        self._first: Final = first
+        self._second: Final = second
+        self.gate: Final = asyncio.Event()
+
+    async def __aiter__(self):
+        yield self._first
+        await self.gate.wait()
+        yield self._second
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_upstream_error_relays_first_chunk_before_preview_completes():
+    """
+    Regression: while the upstream holds a streaming error response open, the
+    client must receive the first chunk immediately; the log preview report
+    must fire exactly once, after the relay ends, with the full body.
+    """
+    first_chunk: Final = b'data: {"error":"rate limited"}\n\n'
+    second_chunk: Final = b"data: [DONE]\n\n"
+    body_stream: Final = _GatedUpstreamErrorBodyStream(first_chunk, second_chunk)
+    upstream_response: Final = httpx.Response(
+        status_code=429,
+        headers={"content-type": "text/event-stream"},
+        stream=body_stream,
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+            ) as mock_success_handler:
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                mock_success_handler.return_value = None
+
+                async_client: Final = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                response: Final = await pass_through_request(
+                    request=_upstream_error_request(),
+                    target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
+
+                assert isinstance(response, StreamingResponse)
+                assert response.status_code == 429
+                iterator: Final = response.body_iterator.__aiter__()
+                first: Final = await asyncio.wait_for(iterator.__anext__(), timeout=5)
+                assert not body_stream.gate.is_set()
+                body_stream.gate.set()
+                rest: Final = [chunk async for chunk in iterator]
+                relayed: Final = b"".join(
+                    chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in (first, *rest)
+                )
+                assert relayed == first_chunk + second_chunk
+                await upstream_response.aclose()
+
+    mock_proxy_logging.post_call_failure_hook.assert_called_once()
+    detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
+    assert (
+        detail == 'Upstream passthrough request failed with status 429: data: {"error":"rate limited"} data: [DONE]'
+    ), detail
+
+
 class _UpstreamErrorBodyStreamDropping(httpx.AsyncByteStream):
     async def __aiter__(self):
         yield b'{"error": "half'

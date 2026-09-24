@@ -177,6 +177,17 @@ def test_normalize_error_passthrough_prefix_wins_over_upstream_body_text() -> No
         assert normalize_error(exc, "400", message) == "500_UPSTREAM_PASSTHROUGH", message
 
 
+def test_normalize_error_passthrough_prefix_wins_over_quota_and_budget_wording() -> None:
+    from fastapi import HTTPException
+
+    detail = (
+        'Upstream passthrough request failed with status 429: {"error": {"message": '
+        '"You exceeded your current quota, please check your plan and billing details. Budget spent"}}'
+    )
+    exc = HTTPException(status_code=429, detail=detail)
+    assert normalize_error(exc, "429", f"429: {detail}") == "500_UPSTREAM_PASSTHROUGH"
+
+
 def test_router_no_healthy_deployment_wording_clusters_as_no_healthy_deployments() -> None:
     for message in (RouterErrors.no_healthy_deployments.value, "No healthy deployments found."):
         exc = litellm.BadRequestError(message, llm_provider="openai", model="gpt-4o")

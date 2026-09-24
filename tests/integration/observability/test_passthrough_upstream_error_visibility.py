@@ -1,5 +1,6 @@
 import gzip
 import json
+import threading
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
@@ -598,3 +599,75 @@ def test_budget_rejected_call_keeps_budget_normalized_error(gateway: Gateway, tm
                 )
             )
             assert len(budget_rows) == 1, budget_rows
+
+
+_LEAKED_UPSTREAM_KEY: Final = "sk-" + "leak0" * 8
+
+
+def test_gemini_passthrough_streaming_429_first_frame_reaches_client_while_upstream_holds(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    gate: Final = threading.Event()
+    frames: Final = (b'data: {"error":"rate limited"}\n\n', b"data: [DONE]\n\n")
+
+    def respond(request: Request) -> Reply:
+        return Reply(status=429, content_type="text/event-stream", chunks=frames, gate_after_first=gate)
+
+    path: Final = tmp_path / "gemini-stream-429.yaml"
+    with wire_server(respond) as wire:
+        _gemini_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            with candidate.client.stream(
+                "POST",
+                _GEMINI_STREAM_PATH,
+                params={"alt": "sse"},
+                json=_GENERATE_CONTENT,
+                headers=_gemini_headers(candidate),
+                timeout=httpx.Timeout(3, connect=5),
+            ) as response:
+                assert response.status_code == 429, response.text
+                iterator: Final = response.iter_bytes()
+                first: Final = next(iterator)
+                assert first.startswith(b'data: {"error":"rate limited"}'), first
+                gate.set()
+                rest: Final = b"".join(iterator)
+            assert first + rest == b"".join(frames), first + rest
+            warning: Final = _upstream_warning(owned.log)
+            assert "rate limited" in warning, warning
+            error_information: Final = _spend_error_information(response.headers["x-litellm-call-id"])
+            assert error_information["error_code"] == "429", error_information
+
+
+def test_gemini_passthrough_quota_wording_in_upstream_body_keeps_passthrough_normalized_error(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    body: Final[dict[str, JsonValue]] = {
+        "error": {
+            "message": "You exceeded your current quota, please check your plan and billing details. "
+            f"Budget for Key={_LEAKED_UPSTREAM_KEY} is spent",
+            "type": "insufficient_quota",
+        }
+    }
+
+    def respond(request: Request) -> Reply:
+        return Reply(status=429, body=json.dumps(body).encode())
+
+    path: Final = tmp_path / "gemini-quota-429.yaml"
+    with wire_server(respond) as wire:
+        _gemini_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            response: Final = candidate.request(
+                "POST", _GEMINI_MODEL_PATH, _GENERATE_CONTENT, headers=_gemini_headers(candidate)
+            )
+            assert response.status_code == 429, response.text
+            assert response.json() == body, response.text
+            error_information: Final = _spend_error_information(response.headers["x-litellm-call-id"])
+            assert error_information["normalized_error"] == "500_UPSTREAM_PASSTHROUGH", error_information
+            assert error_information["error_code"] == "429", error_information
+            assert "exceeded your current quota" in str(error_information["error_message"]), error_information
+            assert _LEAKED_UPSTREAM_KEY not in str(error_information["error_message"]), error_information
+            warning: Final = _upstream_warning(owned.log)
+            assert "exceeded your current quota" in warning, warning
+            assert _LEAKED_UPSTREAM_KEY not in warning, warning

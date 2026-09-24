@@ -5,7 +5,7 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import count, groupby
@@ -37,7 +37,7 @@ from websockets.exceptions import (
 from websockets.frames import Close, CloseCode
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import redact_secrets, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
@@ -128,6 +128,7 @@ from .upstream_usage_headers import (
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
 
 router: Final = APIRouter()
 
@@ -865,47 +866,50 @@ def _sanitize_upstream_error_body(body: str) -> str:
     return " ".join("".join(char if char.isprintable() else " " for char in body).split())
 
 
-class _PrefixReplayStream(httpx.AsyncByteStream):
-    def __init__(self, prefix: bytes, rest: AsyncIterator[bytes], upstream: httpx.Response) -> None:
-        self._prefix: Final = prefix
-        self._rest: Final = rest
+_ReportPreview = Callable[[bytes], Awaitable[None]]  # mutable-ok: Callable arg-list syntax, not a mutable collection
+
+
+class _PreviewReportingStream(httpx.AsyncByteStream):
+    def __init__(
+        self,
+        upstream: httpx.Response,
+        report: _ReportPreview,
+        log_warning: Callable[..., None],
+    ) -> None:
         self._upstream: Final = upstream
+        self._report: Final = report
+        self._log_warning: Final = log_warning
+        self._collected: Final[list[bytes]] = []  # mutable-ok: preview prefix accumulated while relaying
+        self._reported = False
+
+    async def _report_once(self) -> None:
+        if self._reported:
+            return
+        self._reported = True
+        await self._report(b"".join(self._collected))
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        if self._prefix:
-            yield self._prefix
-        async for chunk in self._rest:
-            yield chunk
+        total = 0  # rebind-ok: running byte count against the preview budget
+        try:
+            async for chunk in self._upstream.aiter_bytes():
+                if not self._reported:
+                    self._collected.append(chunk)
+                    total += len(chunk)
+                    if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
+                        await self._report_once()
+                yield chunk
+        except httpx.HTTPError as err:
+            self._log_warning(
+                "pass_through_endpoint: upstream error body read failed after %d bytes: %s",
+                sum(len(part) for part in self._collected),
+                type(err).__name__,
+            )
+        finally:
+            await self._report_once()
 
     async def aclose(self) -> None:
+        await self._report_once()
         await self._upstream.aclose()
-
-
-async def _no_more_chunks() -> AsyncIterator[bytes]:
-    return
-    yield b""
-
-
-async def _read_error_body_preview(
-    stream: AsyncIterator[bytes],
-) -> tuple[bytes, AsyncIterator[bytes]]:
-    collected: Final[list[bytes]] = []  # mutable-ok: accumulated until the preview byte budget, then joined once
-    total = 0  # rebind-ok: running byte count against the preview budget
-    try:
-        async for chunk in stream:
-            collected.append(chunk)
-            total += len(chunk)
-            if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
-                break
-    except httpx.HTTPError as err:
-        partial: Final = b"".join(collected)
-        verbose_proxy_logger.warning(
-            "pass_through_endpoint: upstream error body read failed after %d bytes: %s",
-            len(partial),
-            type(err).__name__,
-        )
-        return partial, _no_more_chunks()
-    return b"".join(collected), stream
 
 
 def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
@@ -914,19 +918,56 @@ def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
     )
 
 
-async def _error_body_preview_and_relay(response: httpx.Response) -> tuple[str, httpx.Response]:
-    if response.is_stream_consumed:
-        return response.text, response
-    body_iter: Final = response.aiter_bytes()
-    prefix, rest = await _read_error_body_preview(body_iter)
-    preview_text: Final = prefix.decode(response.encoding or "utf-8", errors="replace")
-    return preview_text, httpx.Response(
-        status_code=response.status_code,
-        headers=_headers_without_body_framing(response.headers),
-        stream=_PrefixReplayStream(prefix=prefix, rest=rest, upstream=response),
-        request=response.request,
-        extensions=response.extensions,
-    )
+def _passthrough_upstream_failure_reporter(
+    response: httpx.Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_payload: dict,
+    logging_obj: LiteLLMLoggingObj,
+    proxy_logging: "ProxyLogging",
+    log_warning: Callable[..., None],
+) -> _ReportPreview:
+    async def report(preview: bytes) -> None:
+        preview_text: Final = preview.decode(response.encoding or "utf-8", errors="replace")
+        upstream_error_body: Final = (
+            REDACTED_BY_LITELLM
+            if should_redact_message_logging(logging_obj.model_call_details)
+            else _truncate_upstream_error_body(_sanitize_upstream_error_body(redact_secrets(preview_text)))
+        )
+        log_warning(
+            "pass_through_endpoint: upstream %s %s returned %s: %s",
+            response.request.method,
+            response.url.copy_with(query=None, fragment=None),
+            response.status_code,
+            upstream_error_body,
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError:
+            # Reported as an HTTPException, not the raw httpx error: ProxyLogging's
+            # alerting path only excludes HTTPException/ProxyException from its
+            # "High" severity llm_exceptions alert, treating everything else as an
+            # operational LLM-API failure. An upstream 4xx/5xx returned unchanged
+            # to the client is a user-facing error like any other, not something
+            # ops needs paged for, so it must be excluded the same way auth and
+            # rate-limit errors already are.
+            synthetic_exception: Final = HTTPException(
+                status_code=response.status_code,
+                detail=f"Upstream passthrough request failed with status {response.status_code}: {upstream_error_body}",
+            )
+            try:
+                await proxy_logging.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=synthetic_exception,
+                    request_data=request_payload,
+                    traceback_str=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+                )
+            except Exception:  # noqa: BLE001 - a failing logging callback must never break the passthrough response
+                log_warning(
+                    "pass_through_endpoint: post_call_failure_hook raised for upstream error",
+                    exc_info=True,
+                )
+
+    return report
 
 
 async def _log_passthrough_upstream_failure(
@@ -939,46 +980,20 @@ async def _log_passthrough_upstream_failure(
         return response
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    preview_text, relay_response = await _error_body_preview_and_relay(response)
-    upstream_error_body: Final = (
-        REDACTED_BY_LITELLM
-        if should_redact_message_logging(logging_obj.model_call_details)
-        else _truncate_upstream_error_body(_sanitize_upstream_error_body(preview_text))
+    log_warning: Final = verbose_proxy_logger.warning
+    report: Final = _passthrough_upstream_failure_reporter(
+        response, user_api_key_dict, request_payload, logging_obj, proxy_logging_obj, log_warning
     )
-    verbose_proxy_logger.warning(
-        "pass_through_endpoint: upstream %s %s returned %s: %s",
-        response.request.method,
-        response.url.copy_with(query=None, fragment=None),
-        response.status_code,
-        upstream_error_body,
+    if response.is_stream_consumed:
+        await report(response.content)
+        return response
+    return httpx.Response(
+        status_code=response.status_code,
+        headers=_headers_without_body_framing(response.headers),
+        stream=_PreviewReportingStream(upstream=response, report=report, log_warning=log_warning),
+        request=response.request,
+        extensions=response.extensions,
     )
-    try:
-        response.raise_for_status()
-    except httpx.HTTPStatusError:
-        # Reported as an HTTPException, not the raw httpx error: ProxyLogging's
-        # alerting path only excludes HTTPException/ProxyException from its
-        # "High" severity llm_exceptions alert, treating everything else as an
-        # operational LLM-API failure. An upstream 4xx/5xx returned unchanged
-        # to the client is a user-facing error like any other, not something
-        # ops needs paged for, so it must be excluded the same way auth and
-        # rate-limit errors already are.
-        synthetic_exception: Final = HTTPException(
-            status_code=response.status_code,
-            detail=f"Upstream passthrough request failed with status {response.status_code}: {upstream_error_body}",
-        )
-        try:
-            await proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=user_api_key_dict,
-                original_exception=synthetic_exception,
-                request_data=request_payload,
-                traceback_str=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
-            )
-        except Exception:  # noqa: BLE001 - a failing logging callback must never break the passthrough response
-            verbose_proxy_logger.warning(
-                "pass_through_endpoint: post_call_failure_hook raised for upstream error",
-                exc_info=True,
-            )
-    return relay_response
 
 
 async def _relay_reporting_failures(
