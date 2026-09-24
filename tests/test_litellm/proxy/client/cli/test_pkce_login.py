@@ -714,3 +714,13 @@ def test_revoke_stored_credential_revokes_only_pkce_records():
         "token_type_hint": "refresh_token",
         "client_id": "llm_dcrc_abc",
     }
+
+
+def test_authorize_url_includes_the_team_only_when_one_is_given():
+    with_team = authorize_url(
+        CONTRACT, "llm_dcrc_abc", "http://127.0.0.1:5/callback", "state-1", "challenge-1", team="Team A"
+    )
+    assert parse_qs(urlparse(with_team).query)["team"] == ["Team A"]
+
+    without_team = authorize_url(CONTRACT, "llm_dcrc_abc", "http://127.0.0.1:5/callback", "state-1", "challenge-1")
+    assert "team" not in parse_qs(urlparse(without_team).query)
