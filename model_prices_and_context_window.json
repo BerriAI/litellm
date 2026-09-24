@@ -58039,7 +58039,6 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
-        "supports_vision": true,
         "source": "https://docs.sailresearch.com/models"
     },
     "sail/moonshotai/Kimi-K2.6": {
