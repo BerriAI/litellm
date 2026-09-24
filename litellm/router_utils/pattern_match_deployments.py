@@ -148,7 +148,7 @@ class PatternMatchRouter:
             for pattern, llm_deployments in self.patterns.items():
                 if filtered_model_names is not None and pattern not in regex_filtered_model_names:
                     continue
-                pattern_match = re.match(pattern, request)
+                pattern_match = re.fullmatch(pattern, request)
                 if pattern_match:
                     return self._return_pattern_matched_deployments(
                         matched_pattern=pattern_match, deployments=llm_deployments

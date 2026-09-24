@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Final
 from unittest.mock import Mock
+
+import pytest
 
 from litellm.router_utils import pattern_match_deployments
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
@@ -14,6 +17,25 @@ def _wildcard_deployment(model_name: str) -> dict:
 
 def _matched_models(matches: list[dict] | None) -> list[str]:
     return [deployment["litellm_params"]["model"] for deployment in matches or []]
+
+
+@pytest.mark.parametrize("extra_suffix", ["-extra", "\n"])
+def test_route_requires_the_entire_request_to_match(extra_suffix: str) -> None:
+    router: Final = PatternMatchRouter()
+    router.add_pattern(
+        "gateway/*-chat",
+        {"model_name": "gateway/*-chat", "litellm_params": {"model": "openai/*-chat"}},
+    )
+
+    assert _matched_models(router.route("gateway/demo-chat")) == ["openai/demo-chat"]
+    assert router.route(f"gateway/demo-chat{extra_suffix}") is None
+
+    router.add_pattern(
+        "gateway/*",
+        {"model_name": "gateway/*", "litellm_params": {"model": "openai/*"}},
+    )
+    assert _matched_models(router.route("gateway/demo-chat")) == ["openai/demo-chat"]
+    assert _matched_models(router.route("gateway/demo-chat-extra")) == ["openai/demo-chat-extra"]
 
 
 def test_get_pattern_never_resolves_declared_authenticating_providers(monkeypatch):
