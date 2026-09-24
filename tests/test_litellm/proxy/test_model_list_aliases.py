@@ -103,10 +103,10 @@ async def test_v1_models_resolves_a_team_alias_through_the_key_alias_like_chat_c
 
 
 @pytest.mark.asyncio
-async def test_v1_models_ignores_a_malformed_alias_map(router):
-    caller = _team_member(team_model_aliases={"claude-sonnet-4-5": 5})
+async def test_v1_models_skips_only_the_malformed_alias_entries(router):
+    caller = _team_member(team_model_aliases={"claude-sonnet-4-5": 5, "fast": "gpt-4.1-mini"})
 
-    assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat"]
+    assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat", "fast"]
 
 
 @pytest.mark.asyncio

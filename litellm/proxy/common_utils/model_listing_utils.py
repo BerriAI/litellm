@@ -31,7 +31,7 @@ CLAUDE_CODE_CLIENT: Final = "claude-code"
 _CLAUDE_CODE_ALIAS_PREFIX: Final = "claude-router-"
 _ONE_MILLION_SUFFIX: Final = "[1m]"
 _ONE_MILLION_TOKENS: Final = 1_000_000
-_ALIAS_MAP: Final = TypeAdapter(Mapping[str, str])
+_ALIAS_ENTRIES: Final = TypeAdapter(Mapping[object, object])
 _NO_ALIASES: Final[Mapping[str, str]] = MappingProxyType({})
 
 
@@ -165,19 +165,21 @@ def caller_alias_maps(
 ) -> tuple[object, ...]:
     """The alias maps `/chat/completions` rewrites this caller's model through, in the order
     it applies them: the team's first, only when listing the team the key authenticated as,
-    then the key's own."""
+    then the key's own twice, once in `add_litellm_data_to_request` and once more in
+    `common_processing_pre_call_logic`."""
     if listed_team_id is not None and listed_team_id != key_team_id:
-        return (key_aliases,)
-    return (team_aliases, key_aliases)
+        return (key_aliases, key_aliases)
+    return (team_aliases, key_aliases, key_aliases)
 
 
 def _alias_map(aliases: object) -> Mapping[str, str]:
-    if not isinstance(aliases, Mapping):
-        return _NO_ALIASES
     try:
-        return MappingProxyType(dict(_ALIAS_MAP.validate_python(aliases, strict=True)))
+        entries: Final = _ALIAS_ENTRIES.validate_python(aliases, strict=True)
     except ValidationError:
         return _NO_ALIASES
+    return MappingProxyType(
+        {alias: target for alias, target in entries.items() if isinstance(alias, str) and isinstance(target, str)}
+    )
 
 
 def _alias_names(alias_maps: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
