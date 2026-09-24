@@ -4,7 +4,7 @@ import struct
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from io import BytesIO
-from typing import IO, Final, cast
+from typing import IO, Final
 
 from httpx._types import (
     RequestFiles,  # pyright: ignore[reportPrivateImportUsage]  # same source the base transform classes use
@@ -21,7 +21,7 @@ _DATA_URI_PREFIX: Final = "data:"
 _EMBEDDED_IMAGE_MAX_DEPTH: Final = 4
 _IMAGE_SIGNATURES: Final = frozenset({"png", "jpeg", "webp", "gif"})
 
-_JPEG_SOF_MARKERS: Final = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+_JPEG_SOF_MARKERS: Final = frozenset(m for m in range(0xC0, 0xD0) if m not in (0xC4, 0xC8, 0xCC))
 _JPEG_MAX_SEGMENTS: Final = 1024
 _JPEG_MAX_HEADER_OFFSET: Final = 16 * 1024 * 1024
 _JPEG_FIRST_SEGMENT_OFFSET: Final = 2
@@ -74,7 +74,7 @@ def uploaded_reference_pixels(
     images out or adds parts of its own (masks, single-image providers). All-or-nothing, ``0`` when
     nothing image-bearing is sent.
     """
-    parts: Final = _file_parts(files) + tuple(_embedded_image_values(json_body or {}))
+    parts: Final = _file_parts(files) + tuple(_embedded_image_values(json_body))
     if not parts:
         return 0
     return total_reference_pixels(parts)
@@ -88,7 +88,7 @@ def _file_parts(files: RequestFiles | None) -> tuple[FileTypes, ...]:
     return tuple(files)
 
 
-def _file_content(part: FileTypes) -> object:
+def _file_content(part: FileTypes) -> IO[bytes] | bytes | str | os.PathLike[str] | None:
     """The payload bytes of an httpx file part: (field, (name, content, type, headers?)) unwraps twice."""
     unwrapped: Final = part[1] if isinstance(part, tuple) else part
     return unwrapped[1] if isinstance(unwrapped, tuple) else unwrapped
@@ -102,10 +102,7 @@ def read_image_dimensions(image: FileTypes) -> ImageDimensions | None:
     path does not decode to an image signature and still returns ``None``.
     """
     try:
-        content: Final = cast(
-            "IO[bytes] | bytes | str | os.PathLike[str] | None",
-            _file_content(image),
-        )
+        content: Final = _file_content(image)
         if content is None:
             return None
         if isinstance(content, (str, os.PathLike)):
@@ -177,9 +174,7 @@ def _is_image_signature(head: bytes) -> bool:
 
 def _header_dimensions(stream: IO[bytes], position: int) -> ImageDimensions | None:
     stream.seek(position)
-    head: Final = cast("bytes | None", stream.read(_HEADER_READ_SIZE))
-    if head is None:
-        return None
+    head: Final = stream.read(_HEADER_READ_SIZE)
     match get_image_type(head):  # pyright: ignore[reportMatchNotExhaustive]  # unmatched types fall through to the None below
         case "png":
             return _png_dimensions(head)
@@ -197,8 +192,8 @@ def _header_dimensions(stream: IO[bytes], position: int) -> ImageDimensions | No
 def _png_dimensions(head: bytes) -> ImageDimensions | None:
     if len(head) < 24 or head[12:16] != _PNG_IHDR:
         return None
-    width, height = cast(tuple[int, int], struct.unpack(">II", head[16:24]))
-    return ImageDimensions(width=width, height=height)
+    unpacked: Final[tuple[int, int]] = struct.unpack(">II", head[16:24])
+    return ImageDimensions(width=unpacked[0], height=unpacked[1])
 
 
 def _gif_dimensions(head: bytes) -> ImageDimensions | None:
@@ -236,8 +231,8 @@ def _webp_dimensions(head: bytes) -> ImageDimensions | None:
         case b"VP8 ":
             if head[23:26] != _WEBP_VP8_START_CODE:
                 return None
-            width, height = cast(tuple[int, int], struct.unpack("<HH", head[26:30]))
-            return ImageDimensions(width=width & 0x3FFF, height=height & 0x3FFF)
+            unpacked: Final[tuple[int, int]] = struct.unpack("<HH", head[26:30])
+            return ImageDimensions(width=unpacked[0] & 0x3FFF, height=unpacked[1] & 0x3FFF)
         case b"VP8L":
             if head[20] != _WEBP_VP8L_SIGNATURE:
                 return None
@@ -269,8 +264,8 @@ def _jpeg_sof_dimensions(stream: IO[bytes], start: int) -> ImageDimensions | Non
             sof = stream.read(_JPEG_SOF_PAYLOAD_SIZE)
             if len(sof) < _JPEG_SOF_PAYLOAD_SIZE:
                 return None
-            height, width = cast(tuple[int, int], struct.unpack(">HH", sof[1:5]))
-            return ImageDimensions(width=width, height=height)
+            unpacked: Final[tuple[int, int]] = struct.unpack(">HH", sof[1:5])
+            return ImageDimensions(width=unpacked[1], height=unpacked[0])
         segment_length = int.from_bytes(marker[2:4], "big")
         if segment_length < 2:
             return None

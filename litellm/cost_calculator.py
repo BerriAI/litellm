@@ -2021,17 +2021,19 @@ def _deployment_model_info(
     litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
     if litellm_params is None:
         return None
-    declared: Final = {key: value for key in _DEPLOYMENT_PRICING_KEYS if (value := litellm_params.get(key)) is not None}
+    declared: Final = MappingProxyType(
+        {key: value for key in _DEPLOYMENT_PRICING_KEYS if (value := litellm_params.get(key)) is not None}
+    )
     nested: Final = next(
         (
             model_info
             for metadata_key in ("metadata", "litellm_metadata")
             if (metadata := litellm_params.get(metadata_key)) and (model_info := metadata.get("model_info")) is not None
         ),
-        None,
+        MappingProxyType({}),
     )
-    merged: Final = {**(nested or {}), **declared}
-    return cast(ModelInfo, merged) if merged else None
+    merged: Final = MappingProxyType({**nested, **declared})
+    return cast(ModelInfo, merged) if merged else None  # cast-ok: declared pricing is a sparse ModelInfo subset
 
 
 def _ocr_model_info(
