@@ -100,6 +100,18 @@ def _spend_error_information(call_id: str) -> dict[str, JsonValue]:
     return object_value(parsed["error_information"])
 
 
+def _spend_error_information_or_none(call_id: str, seconds: float = 20) -> dict[str, JsonValue] | None:
+    rows: Final = eventually(
+        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)),
+        lambda values: len(values) == 1,
+        seconds=seconds,
+    )
+    metadata: Final = rows[0]["metadata"]
+    parsed: Final = json.loads(metadata) if isinstance(metadata, str) else object_value(metadata)
+    error_information: Final = parsed.get("error_information")
+    return None if error_information is None else object_value(error_information)
+
+
 def _spend_status(call_id: str) -> str:
     rows: Final = eventually(
         lambda: read_rows('SELECT status FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)),
@@ -671,3 +683,40 @@ def test_gemini_passthrough_quota_wording_in_upstream_body_keeps_passthrough_nor
             warning: Final = _upstream_warning(owned.log)
             assert "exceeded your current quota" in warning, warning
             assert _LEAKED_UPSTREAM_KEY not in warning, warning
+
+
+def test_gemini_passthrough_streaming_429_client_disconnect_still_logs_failure(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    gate: Final = threading.Event()
+    frames: Final = (b'data: {"error":"rate limited"}\n\n', b"data: [DONE]\n\n")
+
+    def respond(request: Request) -> Reply:
+        return Reply(status=429, content_type="text/event-stream", chunks=frames, gate_after_first=gate)
+
+    path: Final = tmp_path / "gemini-stream-429-disconnect.yaml"
+    with wire_server(respond) as wire:
+        _gemini_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            try:
+                with candidate.client.stream(
+                    "POST",
+                    _GEMINI_STREAM_PATH,
+                    params={"alt": "sse"},
+                    json=_GENERATE_CONTENT,
+                    headers=_gemini_headers(candidate),
+                    timeout=httpx.Timeout(3, connect=5),
+                ) as response:
+                    assert response.status_code == 429, response.text
+                    first: Final = next(response.iter_bytes())
+                    assert first.startswith(b'data: {"error":"rate limited"}'), first
+                    call_id: Final = response.headers["x-litellm-call-id"]
+            finally:
+                gate.set()
+            error_information: Final = _spend_error_information_or_none(call_id)
+            assert error_information is not None, f"no spend row for {call_id} after client disconnect"
+            assert error_information["error_code"] == "429", error_information
+            assert error_information["normalized_error"] == "500_UPSTREAM_PASSTHROUGH", error_information
+            warnings: Final = _upstream_warnings(owned.log, "returned 429")
+            assert len(warnings) == 1, warnings

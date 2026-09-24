@@ -1,11 +1,12 @@
 import asyncio
+import gc
 import gzip
 import json
 import logging
 import os
 import sys
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
@@ -4641,6 +4642,74 @@ async def test_pass_through_request_streaming_upstream_error_relays_first_chunk_
     assert (
         detail == 'Upstream passthrough request failed with status 429: data: {"error":"rate limited"} data: [DONE]'
     ), detail
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_upstream_error_client_disconnect_enqueues_failure_report():
+    """
+    Regression: when the client disconnects mid-relay the response task is
+    cancelled, so the preview report cannot be awaited inline; it must be
+    handed to the logging worker, which then fires the failure hook once
+    with the chunks already relayed.
+    """
+    first_chunk: Final = b'data: {"error":"rate limited"}\n\n'
+    second_chunk: Final = b"data: [DONE]\n\n"
+    body_stream: Final = _GatedUpstreamErrorBodyStream(first_chunk, second_chunk)
+    upstream_response: Final = httpx.Response(
+        status_code=429,
+        headers={"content-type": "text/event-stream"},
+        stream=body_stream,
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+
+    enqueued: list[Coroutine[None, None, None]] = []
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+            ) as mock_success_handler:
+                with patch(
+                    "litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue",
+                    side_effect=lambda coro: enqueued.append(coro),
+                ):
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                    mock_success_handler.return_value = None
+
+                    async_client: Final = MagicMock()
+                    async_client.build_request = MagicMock(return_value=MagicMock())
+                    async_client.send = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    response: Final = await pass_through_request(
+                        request=_upstream_error_request(),
+                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                        stream=True,
+                    )
+
+                    assert isinstance(response, StreamingResponse)
+                    iterator = response.body_iterator.__aiter__()
+                    first: Final = await asyncio.wait_for(iterator.__anext__(), timeout=5)
+                    assert first_chunk in (first if isinstance(first, bytes) else first.encode())
+                    await iterator.aclose()
+                    del iterator
+                    gc.collect()
+                    for _ in range(40):
+                        if enqueued:
+                            break
+                        await asyncio.sleep(0.05)
+
+    assert len(enqueued) == 1, enqueued
+    await enqueued[0]
+    mock_proxy_logging.post_call_failure_hook.assert_called_once()
+    detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
+    assert detail == 'Upstream passthrough request failed with status 429: data: {"error":"rate limited"}', detail
 
 
 class _UpstreamErrorBodyStreamDropping(httpx.AsyncByteStream):

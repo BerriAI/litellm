@@ -5,7 +5,7 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import count, groupby
@@ -875,18 +875,27 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         upstream: httpx.Response,
         report: _ReportPreview,
         log_warning: Callable[..., None],
+        enqueue: Callable[[Coroutine[None, None, None]], None],
     ) -> None:
         self._upstream: Final = upstream
         self._report: Final = report
         self._log_warning: Final = log_warning
+        self._enqueue: Final = enqueue
         self._collected: Final[list[bytes]] = []  # mutable-ok: preview prefix accumulated while relaying
         self._reported = False
+        self._enqueued = False
 
     async def _report_once(self) -> None:
         if self._reported:
             return
         self._reported = True
         await self._report(b"".join(self._collected))
+
+    def _enqueue_pending_report(self) -> None:
+        if self._reported or self._enqueued:
+            return
+        self._enqueued = True
+        self._enqueue(self._report_once())
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         total = 0  # rebind-ok: running byte count against the preview budget
@@ -898,17 +907,19 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
                     if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
                         await self._report_once()
                 yield chunk
+            await self._report_once()
         except httpx.HTTPError as err:
             self._log_warning(
                 "pass_through_endpoint: upstream error body read failed after %d bytes: %s",
                 sum(len(part) for part in self._collected),
                 type(err).__name__,
             )
-        finally:
             await self._report_once()
+        finally:
+            self._enqueue_pending_report()
 
     async def aclose(self) -> None:
-        await self._report_once()
+        self._enqueue_pending_report()
         await self._upstream.aclose()
 
 
@@ -990,7 +1001,12 @@ async def _log_passthrough_upstream_failure(
     return httpx.Response(
         status_code=response.status_code,
         headers=_headers_without_body_framing(response.headers),
-        stream=_PreviewReportingStream(upstream=response, report=report, log_warning=log_warning),
+        stream=_PreviewReportingStream(
+            upstream=response,
+            report=report,
+            log_warning=log_warning,
+            enqueue=GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue,
+        ),
         request=response.request,
         extensions=response.extensions,
     )
