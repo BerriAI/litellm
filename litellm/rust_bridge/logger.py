@@ -50,7 +50,7 @@ def emit(
             (),
             None,
             func=target,
-            extra={  # mutable-ok: LogRecord requires JSON dict extras
+            extra={
                 "rust_target": target,
                 "rust_fields": dict(fields),
             },
