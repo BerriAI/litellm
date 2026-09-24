@@ -276,7 +276,7 @@ async def test_openapi_local_tool_injects_resolved_oauth_token():
     fake_tool.name = "get_values"
     captured: dict = {}
 
-    async def handle_local(_name, _arguments):
+    async def handle_local(_name, _arguments, _wire_compat):
         captured["resolved"] = _request_resolved_auth_headers.get()
         return CallToolResult(content=[], is_error=False)
 
@@ -604,7 +604,7 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
         captured["resolver_credential"] = kwargs["mcp_auth_header"]
         return None, kwargs["forwarded_headers"]
 
-    async def capture_local(_name, _arguments):
+    async def capture_local(_name, _arguments, _wire_compat):
         captured["injected"] = _request_auth_header.get()
         return CallToolResult(content=[], is_error=False)
 
