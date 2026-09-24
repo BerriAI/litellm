@@ -1,11 +1,13 @@
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::call_type::CallTypes;
 use crate::catalog::{ModelCostRequest, ModelInfoCatalog};
 use crate::cost_calculator::cost_per_token as catalog_cost_per_token;
 use crate::error::CostError;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::per_second::per_second_pricing_cost;
+use crate::provider::LlmProviders;
 use crate::regional_uplift::get_vertex_regional_endpoint_uplift;
 use crate::responses_usage::ChatUsage;
 
@@ -27,7 +29,11 @@ pub fn cost_router(model: &str, provider: &str, call_type: &str) -> CostRoute {
     ]
     .iter()
     .any(|name| model.contains(name));
-    if provider == "vertex_ai" && (token_model || matches!(call_type, "embedding" | "aembedding")) {
+    let embedding = matches!(
+        call_type.parse::<CallTypes>(),
+        Ok(CallTypes::embedding | CallTypes::aembedding)
+    );
+    if LlmProviders::VERTEX_AI.matches(Some(provider)) && (token_model || embedding) {
         CostRoute::PerToken
     } else {
         CostRoute::PerCharacter

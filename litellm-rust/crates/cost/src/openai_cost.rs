@@ -1,13 +1,17 @@
 use crate::error::CostError;
 use serde_json::Value;
 
+use crate::call_type::CallTypes;
 use crate::non_token::{Charge, Unit, calculate};
 use crate::wire::py_float;
 
 pub use crate::non_token::video_resolution_to_cost_field_suffix;
 
 pub fn cost_router(call_type: &str) -> &'static str {
-    if matches!(call_type, "transcription" | "atranscription") {
+    if matches!(
+        call_type.parse::<CallTypes>(),
+        Ok(CallTypes::transcription | CallTypes::atranscription)
+    ) {
         "cost_per_second"
     } else {
         "cost_per_token"

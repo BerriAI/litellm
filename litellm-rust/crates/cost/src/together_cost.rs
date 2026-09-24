@@ -5,6 +5,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
+use crate::call_type::CallTypes;
 use crate::catalog::ModelInfoCatalog;
 use crate::provider::LlmProviders;
 
@@ -39,7 +40,10 @@ pub fn get_model_params_and_category(
     call_type: &str,
     thresholds: TogetherThresholds,
 ) -> String {
-    if matches!(call_type, "embedding" | "aembedding") {
+    if matches!(
+        call_type.parse::<CallTypes>(),
+        Ok(CallTypes::embedding | CallTypes::aembedding)
+    ) {
         return get_model_params_and_category_embeddings(model_name, thresholds);
     }
     let name = model_name.to_ascii_lowercase();
