@@ -1293,40 +1293,42 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           />
                         )}
                       </MountedFormField>
-                      <MountedFormField
-                        label={
-                          <span>
-                            Disable Global Guardrails{" "}
-                            <SimpleTooltip content="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
-                              <a
-                                href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
-                              >
-                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                              </a>
-                            </SimpleTooltip>
-                          </span>
-                        }
-                        name="disable_global_guardrails"
-                        className="mt-4"
-                        help={
-                          canEditGuardrails
-                            ? "Bypass global guardrails for this key"
-                            : "Premium feature - Upgrade to disable global guardrails by key"
-                        }
-                      >
-                        {(control) => (
-                          <Switch
-                            id={control.id}
-                            checked={control.value === true}
-                            onCheckedChange={control.onChange}
-                            disabled={!canEditGuardrails}
-                            aria-describedby={control["aria-describedby"]}
-                          />
-                        )}
-                      </MountedFormField>
+                      {userRole != null && isProxyAdminRole(userRole) && (
+                        <MountedFormField
+                          label={
+                            <span>
+                              Disable Global Guardrails{" "}
+                              <SimpleTooltip content="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
+                                <a
+                                  href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                                >
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                                </a>
+                              </SimpleTooltip>
+                            </span>
+                          }
+                          name="disable_global_guardrails"
+                          className="mt-4"
+                          help={
+                            canEditGuardrails
+                              ? "Bypass global guardrails for this key"
+                              : "Premium feature - Upgrade to disable global guardrails by key"
+                          }
+                        >
+                          {(control) => (
+                            <Switch
+                              id={control.id}
+                              checked={control.value === true}
+                              onCheckedChange={control.onChange}
+                              disabled={!canEditGuardrails}
+                              aria-describedby={control["aria-describedby"]}
+                            />
+                          )}
+                        </MountedFormField>
+                      )}
                       {canViewPolicies && (
                         <MountedFormField
                           label={

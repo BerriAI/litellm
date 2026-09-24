@@ -618,18 +618,20 @@ export function KeyEditView({
             }
           </FormField>
 
-          <FormField
-            control={form.control}
-            name="disable_global_guardrails"
-            label={labelWithHint(
-              "Disable Global Guardrails",
-              "When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)",
-            )}
-          >
-            {({ value, onChange, ref: _ref, ...field }) => (
-              <Switch {...field} checked={Boolean(value)} onCheckedChange={onChange} disabled={!canEditGuardrails} />
-            )}
-          </FormField>
+          {userRole != null && isProxyAdminRole(userRole) && (
+            <FormField
+              control={form.control}
+              name="disable_global_guardrails"
+              label={labelWithHint(
+                "Disable Global Guardrails",
+                "When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)",
+              )}
+            >
+              {({ value, onChange, ref: _ref, ...field }) => (
+                <Switch {...field} checked={Boolean(value)} onCheckedChange={onChange} disabled={!canEditGuardrails} />
+              )}
+            </FormField>
+          )}
 
           {canViewPolicies && (
             <FormField

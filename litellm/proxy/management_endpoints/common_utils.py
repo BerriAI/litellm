@@ -173,6 +173,34 @@ def _check_passthrough_routes_caller_permission(
         )
 
 
+def _check_disable_global_guardrails_caller_permission(
+    disable_global_guardrails: bool | None,
+    metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """
+    Only proxy admins may opt a key or team out of default-on guardrails, whether the
+    flag is top-level or under `metadata`. Re-sending a flag that is already stored is
+    not an opt-out, so non-admin edits of an already exempted object still go through.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    requested: Final = bool(disable_global_guardrails) or (
+        metadata is not None and bool(metadata.get("disable_global_guardrails"))
+    )
+    if not requested:
+        return
+    if existing_metadata is not None and existing_metadata.get("disable_global_guardrails") is True:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can set `disable_global_guardrails` on a {entity}."},
+    )
+
+
 def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
     for member in team_obj.members_with_roles:
         if (member.user_id is not None and member.user_id == user_api_key_dict.user_id) and member.role == "admin":
