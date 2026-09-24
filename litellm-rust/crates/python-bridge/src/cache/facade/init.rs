@@ -5,7 +5,7 @@ use std::sync::Arc;
 use litellm_host_python::json_loads;
 use pyo3::{
     PyTypeInfo,
-    exceptions::PyTypeError,
+    exceptions::{PyKeyError, PyTypeError},
     prelude::*,
     types::{PyBool, PyDict, PyList, PyString, PyTuple},
 };
@@ -13,55 +13,95 @@ use pyo3::{
 use super::{Cache, NativeStorage, Storage};
 use crate::cache::{binding::ResolvedCache, guard::FacadeGuard};
 
-const PARAMETERS: [&str; 45] = [
-    "type",
-    "mode",
-    "host",
-    "port",
-    "password",
-    "namespace",
-    "ttl",
-    "default_in_memory_ttl",
-    "default_in_redis_ttl",
-    "similarity_threshold",
-    "supported_call_types",
-    "azure_account_url",
-    "azure_blob_container",
-    "s3_bucket_name",
-    "s3_region_name",
-    "s3_api_version",
-    "s3_use_ssl",
-    "s3_verify",
-    "s3_endpoint_url",
-    "s3_aws_access_key_id",
-    "s3_aws_secret_access_key",
-    "s3_aws_session_token",
-    "s3_config",
-    "s3_path",
-    "gcs_bucket_name",
-    "gcs_path_service_account",
-    "gcs_path",
-    "redis_semantic_cache_embedding_model",
-    "redis_semantic_cache_index_name",
-    "valkey_semantic_cache_embedding_model",
-    "valkey_semantic_cache_index_name",
-    "redis_flush_size",
-    "redis_startup_nodes",
-    "disk_cache_dir",
-    "qdrant_api_base",
-    "qdrant_api_key",
-    "qdrant_collection_name",
-    "qdrant_quantization_config",
-    "qdrant_semantic_cache_embedding_model",
-    "qdrant_semantic_cache_vector_size",
-    "semantic_cache_embedding_max_input_tokens",
-    "semantic_cache_embedding_timeout",
-    "semantic_cache_scope",
-    "gcp_service_account",
-    "gcp_ssl_ca_certs",
-];
-
 const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-ada-002";
+
+#[derive(Clone, Copy)]
+enum Fallback {
+    None,
+    True,
+    Text(&'static str),
+    LocalCacheType,
+    DefaultOn,
+    DefaultCallTypes,
+}
+
+impl Fallback {
+    fn value(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        match self {
+            Self::None => Ok(py.None().into_bound(py)),
+            Self::True => Ok(PyBool::new(py, true).to_owned().into_any()),
+            Self::Text(text) => Ok(PyString::new(py, text).into_any()),
+            Self::LocalCacheType => py
+                .import("litellm.types.caching")?
+                .getattr("LiteLLMCacheType")?
+                .getattr("LOCAL"),
+            Self::DefaultOn => py
+                .import("litellm.caching.caching")?
+                .getattr("CacheMode")?
+                .getattr("default_on"),
+            Self::DefaultCallTypes => PyList::type_object(py).call1((py
+                .import("litellm.types.caching")?
+                .getattr("DEFAULT_CACHING_SUPPORTED_CALL_TYPES")?,)),
+        }
+    }
+}
+
+const PARAMETERS: [(&str, Fallback); 45] = [
+    ("type", Fallback::LocalCacheType),
+    ("mode", Fallback::DefaultOn),
+    ("host", Fallback::None),
+    ("port", Fallback::None),
+    ("password", Fallback::None),
+    ("namespace", Fallback::None),
+    ("ttl", Fallback::None),
+    ("default_in_memory_ttl", Fallback::None),
+    ("default_in_redis_ttl", Fallback::None),
+    ("similarity_threshold", Fallback::None),
+    ("supported_call_types", Fallback::DefaultCallTypes),
+    ("azure_account_url", Fallback::None),
+    ("azure_blob_container", Fallback::None),
+    ("s3_bucket_name", Fallback::None),
+    ("s3_region_name", Fallback::None),
+    ("s3_api_version", Fallback::None),
+    ("s3_use_ssl", Fallback::True),
+    ("s3_verify", Fallback::None),
+    ("s3_endpoint_url", Fallback::None),
+    ("s3_aws_access_key_id", Fallback::None),
+    ("s3_aws_secret_access_key", Fallback::None),
+    ("s3_aws_session_token", Fallback::None),
+    ("s3_config", Fallback::None),
+    ("s3_path", Fallback::None),
+    ("gcs_bucket_name", Fallback::None),
+    ("gcs_path_service_account", Fallback::None),
+    ("gcs_path", Fallback::None),
+    (
+        "redis_semantic_cache_embedding_model",
+        Fallback::Text(DEFAULT_EMBEDDING_MODEL),
+    ),
+    ("redis_semantic_cache_index_name", Fallback::None),
+    (
+        "valkey_semantic_cache_embedding_model",
+        Fallback::Text(DEFAULT_EMBEDDING_MODEL),
+    ),
+    ("valkey_semantic_cache_index_name", Fallback::None),
+    ("redis_flush_size", Fallback::None),
+    ("redis_startup_nodes", Fallback::None),
+    ("disk_cache_dir", Fallback::None),
+    ("qdrant_api_base", Fallback::None),
+    ("qdrant_api_key", Fallback::None),
+    ("qdrant_collection_name", Fallback::None),
+    ("qdrant_quantization_config", Fallback::None),
+    (
+        "qdrant_semantic_cache_embedding_model",
+        Fallback::Text(DEFAULT_EMBEDDING_MODEL),
+    ),
+    ("qdrant_semantic_cache_vector_size", Fallback::None),
+    ("semantic_cache_embedding_max_input_tokens", Fallback::None),
+    ("semantic_cache_embedding_timeout", Fallback::None),
+    ("semantic_cache_scope", Fallback::Text("key")),
+    ("gcp_service_account", Fallback::None),
+    ("gcp_ssl_ca_certs", Fallback::None),
+];
 
 struct Arguments<'py> {
     py: Python<'py>,
@@ -84,14 +124,14 @@ impl<'py> Arguments<'py> {
         }
         let named = PyDict::new(py);
         let extras = PyDict::new(py);
-        for (name, value) in PARAMETERS.iter().zip(args.iter()) {
+        for ((name, _), value) in PARAMETERS.iter().zip(args.iter()) {
             named.set_item(name, value)?;
         }
         if let Some(kwargs) = kwargs {
             for (key, value) in kwargs.iter() {
                 let key = key.cast_into::<PyString>()?;
                 let name = key.to_str()?;
-                if !PARAMETERS.contains(&name) {
+                if !PARAMETERS.iter().any(|(parameter, _)| *parameter == name) {
                     extras.set_item(&key, value)?;
                     continue;
                 }
@@ -103,25 +143,22 @@ impl<'py> Arguments<'py> {
                 named.set_item(&key, value)?;
             }
         }
+        for (name, fallback) in PARAMETERS {
+            if !named.contains(name)? {
+                named.set_item(name, fallback.value(py)?)?;
+            }
+        }
         Ok(Self { py, named, extras })
     }
 
     fn value(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        Ok(self
-            .named
+        self.named
             .get_item(name)?
-            .unwrap_or_else(|| self.py.None().into_bound(self.py)))
+            .ok_or_else(|| PyKeyError::new_err(name.to_owned()))
     }
 
-    fn given(&self, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
-        Ok(self.named.get_item(name)?.filter(|value| !value.is_none()))
-    }
-
-    fn string_or(&self, name: &str, default: &str) -> PyResult<Bound<'py, PyAny>> {
-        Ok(self
-            .named
-            .get_item(name)?
-            .unwrap_or_else(|| PyString::new(self.py, default).into_any()))
+    fn not_none(&self, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+        Ok(Some(self.value(name)?).filter(|value| !value.is_none()))
     }
 
     fn kwargs(&self, entries: &[(&str, Bound<'py, PyAny>)]) -> PyResult<Bound<'py, PyDict>> {
@@ -185,7 +222,7 @@ fn redis_backend<'py>(arguments: &Arguments<'py>) -> PyResult<Bound<'py, PyAny>>
         ("startup_nodes", startup_nodes),
     ])?;
     for name in ["gcp_service_account", "gcp_ssl_ca_certs"] {
-        if let Some(value) = arguments.given(name)? {
+        if let Some(value) = arguments.not_none(name)? {
             kwargs.set_item(name, value)?;
         }
     }
@@ -213,10 +250,7 @@ fn backend_for<'py>(
                 ),
                 (
                     "embedding_model",
-                    arguments.string_or(
-                        "redis_semantic_cache_embedding_model",
-                        DEFAULT_EMBEDDING_MODEL,
-                    )?,
+                    arguments.value("redis_semantic_cache_embedding_model")?,
                 ),
                 (
                     "index_name",
@@ -246,10 +280,7 @@ fn backend_for<'py>(
                 ),
                 (
                     "embedding_model",
-                    arguments.string_or(
-                        "valkey_semantic_cache_embedding_model",
-                        DEFAULT_EMBEDDING_MODEL,
-                    )?,
+                    arguments.value("valkey_semantic_cache_embedding_model")?,
                 ),
                 (
                     "index_name",
@@ -287,10 +318,7 @@ fn backend_for<'py>(
                 ),
                 (
                     "embedding_model",
-                    arguments.string_or(
-                        "qdrant_semantic_cache_embedding_model",
-                        DEFAULT_EMBEDDING_MODEL,
-                    )?,
+                    arguments.value("qdrant_semantic_cache_embedding_model")?,
                 ),
                 (
                     "vector_size",
@@ -315,13 +343,7 @@ fn backend_for<'py>(
                 ("s3_bucket_name", arguments.value("s3_bucket_name")?),
                 ("s3_region_name", arguments.value("s3_region_name")?),
                 ("s3_api_version", arguments.value("s3_api_version")?),
-                (
-                    "s3_use_ssl",
-                    arguments
-                        .named
-                        .get_item("s3_use_ssl")?
-                        .unwrap_or_else(|| PyBool::new(py, true).to_owned().into_any()),
-                ),
+                ("s3_use_ssl", arguments.value("s3_use_ssl")?),
                 ("s3_verify", arguments.value("s3_verify")?),
                 ("s3_endpoint_url", arguments.value("s3_endpoint_url")?),
                 (
@@ -399,39 +421,28 @@ pub(super) fn initialize(
 ) -> PyResult<()> {
     let py = slf.py();
     let arguments = Arguments::parse(py, args, kwargs)?;
-    let caching_types = py.import("litellm.types.caching")?;
-    let cache_type = match arguments.given("type")? {
-        Some(value) => value,
-        None => caching_types
-            .getattr("LiteLLMCacheType")?
-            .getattr("LOCAL")?,
-    };
+    let cache_type = arguments.value("type")?;
     let type_name = cache_type.extract::<String>().ok();
     let published = backend_for(&arguments, type_name.as_deref())?
         .map(|backend| slf.get().set_backend(backend.unbind()));
     register_cache_callbacks(py)?;
 
-    let supported_call_types = match arguments.given("supported_call_types")? {
-        Some(value) => value,
-        None => PyList::type_object(py)
-            .call1((caching_types.getattr("DEFAULT_CACHING_SUPPORTED_CALL_TYPES")?,))?,
+    let mode = arguments.value("mode")?;
+    let mode = if mode.is_truthy()? {
+        mode
+    } else {
+        Fallback::DefaultOn.value(py)?
     };
-    let mode = match arguments
-        .given("mode")?
-        .filter(|mode| mode.is_truthy().unwrap_or(false))
-    {
-        Some(mode) => mode,
-        None => py
-            .import("litellm.caching.caching")?
-            .getattr("CacheMode")?
-            .getattr("default_on")?,
-    };
-    let scope = caching_types
+    let scope = py
+        .import("litellm.types.caching")?
         .getattr("SemanticCacheScope")?
-        .call1((arguments.string_or("semantic_cache_scope", "key")?,))?
+        .call1((arguments.value("semantic_cache_scope")?,))?
         .getattr("value")?;
     let namespace = arguments.value("namespace")?;
-    slf.setattr("supported_call_types", supported_call_types)?;
+    slf.setattr(
+        "supported_call_types",
+        arguments.value("supported_call_types")?,
+    )?;
     slf.setattr("type", &cache_type)?;
     slf.setattr("namespace", &namespace)?;
     slf.setattr("redis_flush_size", arguments.value("redis_flush_size")?)?;
@@ -439,8 +450,8 @@ pub(super) fn initialize(
     slf.setattr("mode", mode)?;
     slf.setattr("semantic_cache_scope", scope)?;
 
-    let in_memory_ttl = arguments.given("default_in_memory_ttl")?;
-    let redis_ttl = arguments.given("default_in_redis_ttl")?;
+    let in_memory_ttl = arguments.not_none("default_in_memory_ttl")?;
+    let redis_ttl = arguments.not_none("default_in_redis_ttl")?;
     match type_name.as_deref() {
         Some("local") => {
             if let Some(ttl) = in_memory_ttl {

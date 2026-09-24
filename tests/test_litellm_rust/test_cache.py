@@ -2330,3 +2330,38 @@ async def test_both_facades_run_async_methods_only_when_awaited(
     await pending
 
     assert (first.calls, second.calls) == ([], [backend_method])
+
+
+def constructed_with_none(facade_class: type[Cache], parameter: str) -> object:
+    try:
+        facade: Final = facade_class(**{parameter: None})
+    except ValueError as error:
+        return type(error)
+    return facade.type, facade.supported_call_types, facade.mode, type(getattr(facade, "cache", None))
+
+
+@pytest.mark.parametrize("parameter", ["type", "supported_call_types", "mode", "semantic_cache_scope"])
+def test_native_facade_binds_an_explicit_none_like_the_python_facade(parameter: str) -> None:
+    assert constructed_with_none(NativeCache, parameter) == constructed_with_none(Cache, parameter)
+
+
+def completion_id(prompt: str) -> str:
+    response: Final = litellm.completion(
+        model="gpt-4o", messages=[{"role": "user", "content": prompt}], mock_response="cached"
+    )
+    assert isinstance(response, litellm.ModelResponse)
+    return response.id
+
+
+@pytest.mark.parametrize("facade_class", [Cache, NativeCache], ids=["python", "native"])
+@pytest.mark.parametrize(
+    ("settings", "cache_hit"), [({}, True), ({"supported_call_types": None}, False)], ids=["default", "none"]
+)
+def test_both_facades_skip_completion_caching_when_supported_call_types_is_none(
+    facade_class: type[Cache], settings: dict[str, None], cache_hit: bool
+) -> None:
+    prompt: Final = f"supported call types {uuid4().hex}"
+    with rebound(litellm, "cache", facade_class(type=LiteLLMCacheType.LOCAL, **settings)):
+        first: Final = completion_id(prompt)
+        second: Final = completion_id(prompt)
+    assert (first == second) is cache_hit
