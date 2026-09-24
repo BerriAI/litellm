@@ -6850,24 +6850,8 @@ async def search_team_daily_activity_keys(
     exclude_team_ids: str | None = None,
     timezone: int | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
-    """
-    Aggregated daily team activity for the keys matching a search term.
-
-    `/team/daily/activity/aggregated` only returns the top USAGE_TOP_API_KEYS_LIMIT keys by spend, so
-    a key outside that subset cannot be found by filtering the loaded page. This endpoint resolves
-    the term against every verification token the caller may see (same team and key scoping as the
-    aggregated endpoint) and aggregates litellm_dailyteamspend for just those hashes.
-
-    Args:
-        search (str): Exact token hash, or case-insensitive substring of key_alias or user_id.
-        team_ids (Optional[str]): Comma-separated list of team IDs to filter by.
-        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
-        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
-        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
-        timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset().
-    Returns:
-        SpendAnalyticsPaginatedResponse: Aggregated activity restricted to the matching keys.
-    """
+    """Aggregated daily team activity for the keys matching `search`, across every key the caller may
+    see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend."""
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
