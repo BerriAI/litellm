@@ -3115,7 +3115,6 @@ dependencies = [
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
- "criterion",
  "indexmap 2.14.0",
  "rstest",
  "schemars 1.2.2",

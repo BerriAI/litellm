@@ -16,10 +16,5 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 rstest.workspace = true
 time.workspace = true
-
-[[bench]]
-name = "catalog"
-harness = false

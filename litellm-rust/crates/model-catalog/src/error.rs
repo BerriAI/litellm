@@ -1,6 +1,5 @@
 use thiserror::Error;
 
-/// Failures from parsing or validating a catalog snapshot.
 #[derive(Debug, Error)]
 pub enum Error {
     /// The body is not valid JSON, or a model entry fails typed deserialization.
