@@ -35,6 +35,10 @@ concurrency:
 # already a matrix and carries a shard-coverage guard that reads that file by
 # name. Folding it in here is a follow-up, together with generalising that guard
 # into assert_ci_coverage.py.
+#
+# `fork-flag` names the `.circleci/tests.yml` job that now runs part of the
+# shard under the same Codecov flag. CircleCI does not build pull requests from
+# forks, so the shard still runs those files there and skips them elsewhere.
 jobs:
   unit:
     name: ${{ matrix.shard }}
@@ -65,10 +69,10 @@ jobs:
           - shard: enterprise-routing
             artifact-name: enterprise-routing
             test-path: >-
-              tests/test_litellm/enterprise
               tests/test_litellm/google_genai
               tests/test_litellm/router_utils
               tests/test_litellm/router_strategy
+            fork-flag: enterprise-routing
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -200,7 +204,7 @@ jobs:
               tests/test_litellm/proxy/types_utils
               tests/test_litellm/proxy/logging_endpoints
               tests/test_litellm/proxy/test_*.py
-              tests/test_gateway
+            fork-flag: proxy-infra
             workers: 4
             reruns: 2
             timeout-minutes: 20
@@ -208,11 +212,8 @@ jobs:
 
           - shard: caching-local
             artifact-name: caching-local
-            test-path: >-
-              tests/local_testing/test_cache_preset_key.py
-              tests/local_testing/test_caching_handler.py
-              tests/local_testing/test_responses_stream_cache_keys.py
-              tests/local_testing/test_unit_test_caching.py
+            test-path: ""
+            fork-flag: caching-local
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -220,7 +221,8 @@ jobs:
 
           - shard: proxy-extras
             artifact-name: proxy-extras
-            test-path: "tests/litellm-proxy-extras"
+            test-path: ""
+            fork-flag: proxy-extras
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -228,7 +230,8 @@ jobs:
 
           - shard: enterprise-package
             artifact-name: enterprise-package
-            test-path: "tests/enterprise"
+            test-path: ""
+            fork-flag: enterprise-package
             workers: 4
             reruns: 2
             timeout-minutes: 20
@@ -247,6 +250,7 @@ jobs:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: ${{ matrix.test-path }}
+      fork-flag: ${{ matrix.fork-flag || '' }}
       workers: ${{ matrix.workers }}
       reruns: ${{ matrix.reruns }}
       timeout-minutes: ${{ matrix.timeout-minutes }}

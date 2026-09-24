@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(
     0,
     os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../litellm-proxy-extras")
+        os.path.join(os.path.dirname(__file__), "../../../litellm-proxy-extras")
     ),
 )
 
@@ -23,7 +23,7 @@ from litellm_proxy_extras.utils import (
 _MIGRATIONS_DIR = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
-        "../../litellm-proxy-extras/litellm_proxy_extras/migrations",
+        "../../../litellm-proxy-extras/litellm_proxy_extras/migrations",
     )
 )
 
@@ -999,7 +999,7 @@ class TestJWTKeyMappingCascade:
         schema_paths = glob.glob(
             os.path.abspath(
                 os.path.join(
-                    os.path.dirname(__file__), "../../**/schema.prisma"
+                    os.path.dirname(__file__), "../../../**/schema.prisma"
                 )
             ),
             recursive=True,
