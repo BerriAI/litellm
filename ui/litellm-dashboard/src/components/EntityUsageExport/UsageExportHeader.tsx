@@ -16,7 +16,7 @@ import {
   useComboboxAnchor,
 } from "@/components/ui/combobox";
 import EntityUsageExportModal from "./EntityUsageExportModal";
-import type { EntitySpendData, EntityType } from "./types";
+import type { EntitySpendData, EntityType, ServerExport } from "./types";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 interface UsageExportHeaderProps {
@@ -35,6 +35,7 @@ interface UsageExportHeaderProps {
   compactLayout?: boolean;
   teams?: Team[];
   exportBlockedReason?: string;
+  serverExport?: ServerExport;
 }
 
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
@@ -52,6 +53,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   compactLayout = false,
   teams = [],
   exportBlockedReason,
+  serverExport,
 }) => {
   const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -142,6 +144,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
         selectedFilters={selectedFilters}
         customTitle={customTitle}
         teams={teams}
+        serverExport={serverExport}
       />
     </>
   );
