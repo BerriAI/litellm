@@ -7,11 +7,36 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.google_endpoints.caller_credentials import (
+    DEFAULT_PROVIDER,
+    enforce_caller_key_for_overrides,
+    query_template,
+)
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 router: Final = APIRouter(
     tags=["google genai endpoints"],
 )
+
+
+def _lifecycle_data(
+    request: Request, interaction_id: str, user_api_key_dict: UserAPIKeyAuth
+) -> dict[str, object]:  # mutable-ok: ProxyBaseLLMRequestProcessing owns and mutates the request data
+    """
+    GET, DELETE and cancel keep Gemini as the default. Another provider, key or
+    ``api_base`` is selected with ``litellm_params_template`` (header or JSON query
+    parameter); a non-admin caller supplies the provider key alongside any such
+    override, otherwise the proxy's shared credential would follow the override.
+    ``api_base`` is a banned request param like everywhere else on the proxy, so it
+    also needs ``general_settings.allow_client_side_credentials``.
+    """
+    data: Final[dict[str, object]] = {  # mutable-ok: ProxyBaseLLMRequestProcessing owns and mutates the request data
+        "custom_llm_provider": DEFAULT_PROVIDER,
+        **query_template(request),
+        "interaction_id": interaction_id,
+    }
+    enforce_caller_key_for_overrides(data, user_api_key_dict)
+    return data
 
 
 @router.post(
@@ -273,6 +298,7 @@ async def create_interaction(
     # Default to gemini provider for interactions
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = "gemini"
+    enforce_caller_key_for_overrides(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -340,7 +366,7 @@ async def get_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    data: Final = _lifecycle_data(request, interaction_id, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -408,7 +434,7 @@ async def delete_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    data: Final = _lifecycle_data(request, interaction_id, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -476,7 +502,7 @@ async def cancel_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
+    data: Final = _lifecycle_data(request, interaction_id, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:

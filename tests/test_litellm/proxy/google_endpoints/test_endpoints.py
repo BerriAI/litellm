@@ -14,7 +14,6 @@ from starlette.requests import Request
 load_dotenv()
 
 
-
 @pytest.mark.asyncio
 async def test_proxy_gemini_to_openai_like_model_token_counting():
     """
@@ -34,3 +33,315 @@ async def test_proxy_gemini_to_openai_like_model_token_counting():
     )
 
     assert response.get("totalTokens") > 0
+
+
+SESSION_ID = "sesn_011CZkZAtmR3yMPDzynEDxu7"
+ANTHROPIC_SESSION = f"https://api.anthropic.com/v1/sessions/{SESSION_ID}"
+GEMINI_INTERACTION = f"https://generativelanguage.googleapis.com/v1beta/interactions/{SESSION_ID}"
+
+
+def _template(**fields) -> str:
+    import json
+    from urllib.parse import quote
+
+    return quote(json.dumps(fields), safe="")
+
+
+ANTHROPIC = _template(custom_llm_provider="anthropic")
+ANTHROPIC_WITH_KEY = _template(custom_llm_provider="anthropic", api_key="sk-ant-caller")
+
+
+class _NoopProxyLogging:
+    async def pre_call_hook(self, user_api_key_dict, data, call_type):
+        return data
+
+    async def during_call_hook(self, *args, **kwargs):
+        return None
+
+    async def post_call_success_hook(self, data, user_api_key_dict, response):
+        return response
+
+    async def post_call_response_headers_hook(self, *args, **kwargs):
+        return {}
+
+    async def post_call_failure_hook(self, *args, **kwargs):
+        return kwargs.get("original_exception")
+
+    async def update_request_status(self, *args, **kwargs):
+        return None
+
+    async def _arelease_max_parallel_requests_on_disconnect(self, *args, **kwargs):
+        return None
+
+
+def _client(monkeypatch: pytest.MonkeyPatch, role):
+    import litellm
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm import Router
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.google_endpoints import endpoints as google_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-proxy")
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[]))
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", _NoopProxyLogging())
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    app = FastAPI()
+    app.include_router(google_endpoints.router)
+
+    async def _caller():
+        return UserAPIKeyAuth(api_key="sk-test", user_role=role)
+
+    app.dependency_overrides[user_api_key_auth] = _caller
+    return TestClient(app)
+
+
+@pytest.fixture
+def interactions_client(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy._types import LitellmUserRoles
+
+    return _client(monkeypatch, LitellmUserRoles.PROXY_ADMIN)
+
+
+@pytest.fixture
+def user_client(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy._types import LitellmUserRoles
+
+    return _client(monkeypatch, LitellmUserRoles.INTERNAL_USER)
+
+
+def _anthropic_session(status: str = "idle") -> dict:
+    return {"id": SESSION_ID, "status": status, "agent": {"id": "agent_1", "model": {"id": "claude-haiku-4-5"}}}
+
+
+def _idle_events(stop_reason: str = "end_turn") -> dict:
+    return {
+        "data": [{"id": "sevt_idle", "type": "session.status_idle", "stop_reason": {"type": stop_reason}}],
+        "next_page": None,
+    }
+
+
+def test_get_interaction_reaches_the_provider_named_in_the_template(interactions_client):
+    import respx
+    from httpx import Response
+
+    with respx.mock:
+        session = respx.get(ANTHROPIC_SESSION).mock(return_value=Response(200, json=_anthropic_session()))
+        respx.get(f"{ANTHROPIC_SESSION}/events").mock(return_value=Response(200, json=_idle_events("requires_action")))
+
+        response = interactions_client.get(f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={ANTHROPIC}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "requires_action"
+    assert response.json()["model"] == "claude-haiku-4-5"
+    assert session.calls.last.request.headers["anthropic-beta"] == "managed-agents-2026-04-01"
+    assert session.calls.last.request.headers["x-api-key"] == "sk-ant-proxy"
+
+
+def test_get_interaction_still_defaults_to_gemini(interactions_client):
+    import respx
+    from httpx import Response
+
+    with respx.mock:
+        gemini = respx.get(GEMINI_INTERACTION).mock(
+            return_value=Response(200, json={"id": SESSION_ID, "status": "completed", "steps": []})
+        )
+        response = interactions_client.get(f"/v1beta/interactions/{SESSION_ID}")
+
+    assert response.status_code == 200
+    assert gemini.calls.last.request.headers["x-goog-api-key"] == "AIza-test"
+
+
+def test_cancel_interaction_reaches_the_provider_named_in_the_template(interactions_client):
+    import respx
+    from httpx import Response
+
+    with respx.mock:
+        events = respx.post(f"{ANTHROPIC_SESSION}/events").mock(return_value=Response(200, json={"data": []}))
+        response = interactions_client.post(
+            f"/v1beta/interactions/{SESSION_ID}/cancel?litellm_params_template={ANTHROPIC}"
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"id": SESSION_ID, "status": "in_progress"}
+    assert events.calls.last.request.content == b'{"events":[{"type":"user.interrupt"}]}'
+
+
+def test_delete_interaction_reaches_the_provider_named_in_the_template(interactions_client):
+    import respx
+    from httpx import Response
+
+    with respx.mock:
+        delete = respx.delete(ANTHROPIC_SESSION).mock(
+            return_value=Response(200, json={"id": SESSION_ID, "type": "session_deleted"})
+        )
+        response = interactions_client.delete(f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={ANTHROPIC}")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert delete.called
+
+
+@pytest.mark.parametrize("method", ["get", "delete"])
+def test_non_admin_cannot_reach_another_provider_with_the_proxy_key(user_client, method: str):
+    import respx
+
+    with respx.mock:
+        upstream = respx.route(host="api.anthropic.com")
+        response = getattr(user_client, method)(
+            f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={ANTHROPIC}"
+        )
+
+    assert response.status_code == 401
+    assert "caller-supplied provider api_key" in response.json()["detail"]
+    assert not upstream.called
+
+
+def test_non_admin_cannot_cancel_with_the_proxy_key(user_client):
+    import respx
+
+    with respx.mock:
+        upstream = respx.route(host="api.anthropic.com")
+        response = user_client.post(f"/v1beta/interactions/{SESSION_ID}/cancel?litellm_params_template={ANTHROPIC}")
+
+    assert response.status_code == 401
+    assert not upstream.called
+
+
+def test_non_admin_cannot_create_on_another_provider_with_the_proxy_key(user_client):
+    import respx
+
+    with respx.mock:
+        upstream = respx.route(host="api.anthropic.com")
+        response = user_client.post(
+            "/v1beta/interactions",
+            json={"custom_llm_provider": "anthropic", "agent": "agent_1", "environment": "env_1", "input": "hi"},
+        )
+
+    assert response.status_code == 401
+    assert not upstream.called
+
+
+def test_non_admin_reads_a_session_with_their_own_key(user_client):
+    import respx
+    from httpx import Response
+
+    with respx.mock:
+        session = respx.get(ANTHROPIC_SESSION).mock(return_value=Response(200, json=_anthropic_session()))
+        respx.get(f"{ANTHROPIC_SESSION}/events").mock(return_value=Response(200, json=_idle_events()))
+        response = user_client.get(f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={ANTHROPIC_WITH_KEY}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert session.calls.last.request.headers["x-api-key"] == "sk-ant-caller"
+
+
+EVIL_API_BASE = "https://attacker.example"
+
+
+@pytest.mark.parametrize("client_fixture", ["interactions_client", "user_client"])
+def test_api_base_in_the_template_is_refused_without_the_admin_opt_in(request, client_fixture: str):
+    import respx
+
+    client = request.getfixturevalue(client_fixture)
+    template = _template(api_key="k", api_base=EVIL_API_BASE)
+    with respx.mock:
+        evil = respx.route(host="attacker.example")
+        response = client.get(f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={template}")
+
+    assert response.status_code == 400
+    assert "allow_client_side_credentials" in response.json()["detail"]["error"]
+    assert not evil.called
+
+
+def test_admin_opt_in_lets_a_caller_key_follow_its_own_api_base(user_client, monkeypatch: pytest.MonkeyPatch):
+    import respx
+    from httpx import Response
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_client_side_credentials": True})
+    own_base = "https://claude.internal.example"
+    template = _template(custom_llm_provider="anthropic", api_key="sk-ant-caller", api_base=own_base)
+    with respx.mock:
+        session = respx.get(f"{own_base}/v1/sessions/{SESSION_ID}").mock(
+            return_value=Response(200, json=_anthropic_session())
+        )
+        respx.get(f"{own_base}/v1/sessions/{SESSION_ID}/events").mock(return_value=Response(200, json=_idle_events()))
+        response = user_client.get(f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={template}")
+
+    assert response.status_code == 200
+    assert session.calls.last.request.headers["x-api-key"] == "sk-ant-caller"
+
+
+def test_admin_opt_in_still_keeps_the_proxy_key_off_a_non_admin_api_base(user_client, monkeypatch: pytest.MonkeyPatch):
+    import respx
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_client_side_credentials": True})
+    with respx.mock:
+        evil = respx.route(host="attacker.example")
+        response = user_client.get(
+            f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={_template(api_base=EVIL_API_BASE)}"
+        )
+
+    assert response.status_code == 401
+    assert not evil.called
+
+
+def test_non_admin_cannot_create_with_another_api_base_and_the_proxy_key(user_client):
+    import respx
+
+    with respx.mock:
+        evil = respx.route(host="attacker.example")
+        response = user_client.post(
+            "/v1beta/interactions",
+            json={"agent": "agent_1", "input": "hi", "api_base": "https://attacker.example"},
+        )
+
+    assert response.status_code == 401
+    assert not evil.called
+
+
+def test_template_header_selects_the_provider_and_carries_the_key(user_client):
+    import json
+
+    import respx
+    from httpx import Response
+
+    with respx.mock:
+        session = respx.get(ANTHROPIC_SESSION).mock(return_value=Response(200, json=_anthropic_session()))
+        respx.get(f"{ANTHROPIC_SESSION}/events").mock(return_value=Response(200, json=_idle_events()))
+        response = user_client.get(
+            f"/v1beta/interactions/{SESSION_ID}",
+            headers={
+                "x-litellm-params-template": json.dumps(
+                    {"custom_llm_provider": "anthropic", "api_key": "sk-ant-header"}
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    assert session.calls.last.request.headers["x-api-key"] == "sk-ant-header"
+    assert "sk-ant-header" not in str(session.calls.last.request.url)
+
+
+def test_non_admin_keeps_the_gemini_default_without_a_key(user_client):
+    import respx
+    from httpx import Response
+
+    with respx.mock:
+        gemini = respx.get(GEMINI_INTERACTION).mock(
+            return_value=Response(200, json={"id": SESSION_ID, "status": "completed", "steps": []})
+        )
+        response = user_client.get(f"/v1beta/interactions/{SESSION_ID}")
+
+    assert response.status_code == 200
+    assert gemini.called

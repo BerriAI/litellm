@@ -3093,6 +3093,24 @@ class TestIsRequestBodySafeNestedConfig:
                 model="milvus-store",
             )
 
+    def test_nested_api_base_in_litellm_params_template_blocked(self):
+        """The managed-agent routes spread ``litellm_params_template`` into
+        the outbound call, so ``api_base`` smuggled there is the same shape
+        as the ``litellm_embedding_config`` bypass."""
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={
+                    "name": "my-agent",
+                    "litellm_params_template": {
+                        "api_key": "caller-key",
+                        "api_base": "http://169.254.169.254",
+                    },
+                },
+                general_settings={},
+                llm_router=None,
+                model="",
+            )
+
     def test_nested_nvcf_function_id_in_metadata_blocked(self):
         """Smuggling ``nvcf_function_id`` via ``metadata`` / ``extra_body``
         is the same shape as the VERIA-6 ``api_base`` bypass — must be

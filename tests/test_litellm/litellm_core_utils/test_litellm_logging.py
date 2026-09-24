@@ -5793,6 +5793,92 @@ async def test_background_interaction_completion_rebills_after_in_progress_succe
 
 
 @pytest.mark.asyncio
+async def test_background_interaction_completion_adopts_the_model_of_an_agent_create():
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = LitellmLogging(
+        model="",
+        messages=[],
+        stream=False,
+        call_type="acreate",
+        start_time=time.time(),
+        litellm_call_id="interactions-call-id",
+        function_id="interactions-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="", custom_llm_provider="gemini", input="hi"
+    )
+    in_progress = InteractionsAPIResponse(id="interactions/abc", agent="deep-research", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress, start_time=dt.datetime.now(), end_time=dt.datetime.now()
+    )
+    assert not logging_obj.model_call_details.get("model")
+
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        agent="deep-research",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert logging_obj.model_call_details["model"] == "gemini-2.5-flash"
+    assert logging_obj.model_call_details["standard_logging_object"]["model"] == "gemini-2.5-flash"
+    assert logging_obj.model_call_details["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_background_interaction_completion_bills_a_provider_reported_price_as_is():
+    """A settled body that carries the provider's own price (an Anthropic managed agent session's
+    list cost) is billed at that price, not repriced from its token counts."""
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    in_progress = InteractionsAPIResponse(id="sesn_1", model="claude-haiku-4-5", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress, start_time=dt.datetime.now(), end_time=dt.datetime.now()
+    )
+
+    completed = InteractionsAPIResponse(
+        id="sesn_1",
+        model="claude-haiku-4-5",
+        status="completed",
+        steps=[],
+        usage={"total_input_tokens": 100, "total_cached_tokens": 0, "total_output_tokens": 50, "total_tokens": 150},
+    )
+    completed._hidden_params = {"additional_headers": {"llm_provider-x-litellm-response-cost": 1.87}}
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert logging_obj.model_call_details["response_cost"] == 1.87
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == 1.87
+
+
+@pytest.mark.asyncio
+async def test_background_interaction_completion_keeps_the_model_the_create_named():
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.0-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert logging_obj.model_call_details["model"] == "gemini-2.5-flash"
+
+
+@pytest.mark.asyncio
 async def test_background_interaction_completion_prices_the_settled_body_itself():
     """
     The poll fetches the settled body through its own client call, which
