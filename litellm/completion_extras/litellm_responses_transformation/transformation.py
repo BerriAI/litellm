@@ -2,6 +2,7 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
+import hashlib
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
@@ -357,19 +358,42 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Unknown or unsupported type
         return None, index
 
+    @staticmethod
+    def _normalize_tool_call_id(tool_call_id: object) -> str | None:
+        """Normalize tool call ID to ensure it does not exceed 64 characters.
+
+        Responses API downstream providers (e.g. OpenAI Responses API, AWS Bedrock)
+        enforce a 64-character limit on ``call_id``. IDs within the limit are preserved
+        verbatim. Overlong IDs are deterministically mapped to the first 31 characters
+        of the ID followed by '_' and a 32-character SHA-256 digest of the full ID
+        (31 + 1 + 32 = 64 characters), preserving readability and guaranteeing collision resistance.
+        """
+        if tool_call_id is None:
+            return None
+        tool_call_id_str: Final = str(tool_call_id)
+        if len(tool_call_id_str) <= 64:
+            return tool_call_id_str
+        prefix: Final = tool_call_id_str[:31]
+        digest: Final = hashlib.sha256(tool_call_id_str.encode("utf-8")).hexdigest()[:32]
+        return f"{prefix}_{digest}"
+
     def convert_chat_completion_messages_to_responses_api(
         self, messages: list["AllMessageValues"]
     ) -> tuple[list[object], str | None]:
         input_items: Final[list[object]] = []
         instructions: str | None = None
         custom_tool_call_ids: Final = frozenset(
-            tool_call["id"]
+            ident
             for msg in messages
             if msg.get("role") == "assistant" and isinstance(msg.get("tool_calls"), list)
             for tool_call in msg.get("tool_calls") or ()
             if isinstance(tool_call, dict)
             and not tool_call.get("function")
             and isinstance(tool_call.get("custom"), dict)
+            for raw_id in (tool_call.get("id"),)
+            if raw_id is not None
+            for ident in (raw_id, self._normalize_tool_call_id(raw_id))
+            if ident is not None
         )
 
         leading_system_count: Final = next(
@@ -421,11 +445,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 else:
                     # Fallback: convert unexpected types to input_text
                     tool_output = [{"type": "input_text", "text": str(content)}]
-                if tool_call_id in custom_tool_call_ids:
+                normalized_tool_call_id: Final = self._normalize_tool_call_id(tool_call_id)
+                if tool_call_id in custom_tool_call_ids or normalized_tool_call_id in custom_tool_call_ids:
                     input_items.append(
                         ResponseCustomToolCallOutputParam(
                             type="custom_tool_call_output",
-                            call_id=tool_call_id,
+                            call_id=normalized_tool_call_id or "",
                             output=content if isinstance(content, str) else tool_output,
                         )
                     )
@@ -433,7 +458,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     input_items.append(
                         FunctionCallOutput(
                             type="function_call_output",
-                            call_id=tool_call_id,
+                            call_id=normalized_tool_call_id,
                             output=tool_output,
                         )
                     )
@@ -450,10 +475,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     custom = tool_call.get("custom")
+                    raw_id: Final = tool_call.get("id")
+                    normalized_call_id: Final = self._normalize_tool_call_id(raw_id)
                     if function:
                         input_tool_call: dict[str, object] = {
                             "type": "function_call",
-                            "call_id": tool_call["id"],
+                            "call_id": normalized_call_id,
                         }
                         if "name" in function:
                             input_tool_call["name"] = function["name"]
@@ -464,7 +491,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         input_items.append(
                             ResponseCustomToolCallParam(
                                 type="custom_tool_call",
-                                call_id=tool_call["id"],
+                                call_id=normalized_call_id or "",
                                 name=custom.get("name", ""),
                                 input=custom.get("input", ""),
                             )

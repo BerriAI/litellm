@@ -4352,3 +4352,142 @@ def test_map_optional_params_verbosity_merges_into_text():
         verbosity_only_request,
     )
     assert verbosity_only_request["text"] == {"verbosity": "low"}
+
+
+@pytest.mark.parametrize(
+    "tool_call_id,is_custom",
+    [
+        # Short tool call ID: stays unchanged
+        ("call_short_123", False),
+        # Exactly 64 characters: boundary case, stays unchanged
+        ("call_" + "a" * 59, False),
+        # Overlong tool call ID (65 characters): normalized to <= 64 chars
+        ("call_" + "a" * 60, False),
+        # Overlong tool call ID from issue #42765 (85 characters): normalized to 64 chars
+        (
+            "call_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            False,
+        ),
+        # Custom tool call with overlong ID: normalized to <= 64 chars
+        (
+            "custom_tool_call_id_exceeding_the_standard_responses_api_sixty_four_character_length_limit",
+            True,
+        ),
+    ],
+)
+def test_convert_chat_completion_messages_to_responses_api_normalizes_overlong_tool_call_ids(
+    tool_call_id: str,
+    is_custom: bool,
+):
+    """
+    Overlong tool call IDs (> 64 chars) must be deterministically normalized to <= 64 characters
+    consistently across assistant tool_calls and matching tool result messages,
+    while IDs <= 64 chars must be preserved unchanged.
+    """
+    import hashlib
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    expected_id: Final = (
+        tool_call_id
+        if len(tool_call_id) <= 64
+        else f"{tool_call_id[:31]}_{hashlib.sha256(tool_call_id.encode('utf-8')).hexdigest()[:32]}"
+    )
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    assistant_tool_call: Final[dict[str, object]] = (
+        {
+            "id": tool_call_id,
+            "type": "custom",
+            "custom": {"name": "example_custom_tool", "input": "{}"},
+        }
+        if is_custom
+        else {
+            "id": tool_call_id,
+            "type": "function",
+            "function": {"name": "example_tool", "arguments": "{}"},
+        }
+    )
+
+    messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "Run tool"},
+        {
+            "role": "assistant",
+            "tool_calls": [assistant_tool_call],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": "tool execution result",
+        },
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Validate tool call item
+    if is_custom:
+        tool_call_item: Final = next(
+            item for item in input_items if isinstance(item, dict) and item.get("type") == "custom_tool_call"
+        )
+        call_id: Final = tool_call_item.get("call_id")
+    else:
+        func_tool_call_item: Final = next(
+            item for item in input_items if isinstance(item, dict) and item.get("type") == "function_call"
+        )
+        call_id = func_tool_call_item.get("call_id")
+
+    assert call_id == expected_id
+    assert len(str(call_id)) <= 64
+
+    # Validate matching tool output item
+    if is_custom:
+        custom_output_item: Final = next(
+            item for item in input_items if isinstance(item, dict) and item.get("type") == "custom_tool_call_output"
+        )
+        output_call_id: Final = custom_output_item.get("call_id")
+    else:
+        func_output_item: Final = next(
+            item for item in input_items if isinstance(item, dict) and item.get("type") == "function_call_output"
+        )
+        output_call_id = func_output_item.get("call_id")
+
+    assert output_call_id == expected_id
+    assert output_call_id == call_id
+
+
+def test_convert_chat_completion_messages_to_responses_api_overlong_collision_resistance():
+    """Two distinct overlong IDs with the same prefix must not produce collision."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    id_1: Final = "call_" + "x" * 60 + "_1"
+    id_2: Final = "call_" + "x" * 60 + "_2"
+
+    messages: Final[list[dict[str, object]]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": id_1, "type": "function", "function": {"name": "f1", "arguments": "{}"}},
+                {"id": id_2, "type": "function", "function": {"name": "f2", "arguments": "{}"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": id_1, "content": "res1"},
+        {"role": "tool", "tool_call_id": id_2, "content": "res2"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+    calls: Final = [item for item in input_items if isinstance(item, dict) and item.get("type") == "function_call"]
+    outputs: Final = [
+        item for item in input_items if isinstance(item, dict) and item.get("type") == "function_call_output"
+    ]
+
+    assert len(calls) == 2
+    assert len(outputs) == 2
+    assert calls[0]["call_id"] != calls[1]["call_id"]
+    assert calls[0]["call_id"] == outputs[0].get("call_id")
+    assert calls[1]["call_id"] == outputs[1].get("call_id")
+    assert len(str(calls[0]["call_id"])) <= 64
+    assert len(str(calls[1]["call_id"])) <= 64
