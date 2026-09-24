@@ -59,9 +59,27 @@ def test_claude_stays_on_converse(local_cost_map):
     assert BedrockModelInfo.get_bedrock_route("us.anthropic.claude-3-sonnet-20240229-v1:0") == "converse"
 
 
-def test_flag_absent_means_no_chat_completions_route(monkeypatch):
-    monkeypatch.setattr(litellm, "model_cost", {"us.xai.grok-4.6": {"litellm_provider": "bedrock_converse"}})
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"litellm_provider": "bedrock_converse"},
+        {"litellm_provider": "bedrock_converse", "supported_endpoints": ["/v1/responses"]},
+        {"litellm_provider": "bedrock_converse", "supports_bedrock_runtime_chat_completions": True},
+        {"litellm_provider": "bedrock_mantle", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]},
+        {"litellm_provider": "openai", "supported_endpoints": ["/v1/chat/completions"]},
+    ],
+)
+def test_chat_completions_missing_from_supported_endpoints_means_no_chat_completions_route(monkeypatch, entry):
+    monkeypatch.setattr(litellm, "model_cost", {"us.xai.grok-4.6": entry})
     assert uses_bedrock_runtime_chat_completions("us.xai.grok-4.6") is False
+    assert BedrockModelInfo.get_bedrock_route("us.xai.grok-4.6") == "converse"
+
+
+def test_chat_completions_in_supported_endpoints_opts_into_the_native_route(monkeypatch):
+    entry = {"litellm_provider": "bedrock_converse", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]}
+    monkeypatch.setattr(litellm, "model_cost", {"us.xai.grok-4.6": entry})
+    assert uses_bedrock_runtime_chat_completions("us.xai.grok-4.6") is True
+    assert BedrockModelInfo.get_bedrock_route("bedrock/us.xai.grok-4.6") == "chat_completions"
 
 
 def test_complete_url_is_runtime_openai_chat_completions(monkeypatch):
@@ -860,7 +878,7 @@ SYNTHETIC_NATIVE_MODEL = "vendor.native-model-v1:0"
 def test_capability_flags_are_read_from_the_cost_map(monkeypatch, capability_flags, request_params, needs_converse):
     entry = {
         "litellm_provider": "bedrock_converse",
-        "supports_bedrock_runtime_chat_completions": True,
+        "supported_endpoints": ["/v1/chat/completions"],
         **capability_flags,
     }
     monkeypatch.setattr(litellm, "model_cost", {SYNTHETIC_NATIVE_MODEL: entry})

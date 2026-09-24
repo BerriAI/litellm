@@ -829,24 +829,44 @@ def split_bedrock_region_path(model: str) -> tuple[str | None, str]:
     return None, stripped
 
 
-def _bedrock_price_map_flag(model: str, flag: str) -> bool:
-    entries: Final = (
+BEDROCK_RUNTIME_PRICE_MAP_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse"))
+
+
+def _bedrock_price_map_entries(model: str) -> tuple[Mapping[str, object] | None, ...]:
+    return tuple(
         litellm.model_cost.get(key)
         for key in (model, strip_bedrock_routing_prefix(model), split_bedrock_region_path(model)[1])
     )
-    return any(entry is not None and entry.get(flag) is True for entry in entries)
+
+
+def _bedrock_price_map_flag(model: str, flag: str) -> bool:
+    return any(entry is not None and entry.get(flag) is True for entry in _bedrock_price_map_entries(model))
+
+
+def _bedrock_runtime_row_lists_chat_completions(entry: Mapping[str, object]) -> bool:
+    endpoints: Final = entry.get("supported_endpoints")
+    return (
+        entry.get("litellm_provider") in BEDROCK_RUNTIME_PRICE_MAP_PROVIDERS
+        and isinstance(endpoints, (list, tuple))
+        and "/v1/chat/completions" in endpoints
+    )
 
 
 def uses_bedrock_runtime_chat_completions(model: str) -> bool:
     """Whether this Bedrock model should use runtime native Chat Completions.
 
-    Data-driven from the price-map ``supports_bedrock_runtime_chat_completions`` flag
+    Data-driven from ``/v1/chat/completions`` in the price-map row's ``supported_endpoints``,
+    the same per-model signal ``bedrock_supports_openai_responses`` reads for ``/v1/responses``,
     so onboarding a model is a JSON change. Explicit ``converse/`` still wins in
     ``get_bedrock_route`` because prefix routes are checked first, and a request
     that needs a Converse-only feature (``bedrock_request_needs_converse``) is
-    served by Converse even on a flagged model.
+    served by Converse even on a listed model. Only a bedrock-runtime row counts: a
+    ``bedrock_mantle`` row lists the endpoints of the Mantle host, not this one.
     """
-    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions")
+    return any(
+        entry is not None and _bedrock_runtime_row_lists_chat_completions(entry)
+        for entry in _bedrock_price_map_entries(model)
+    )
 
 
 def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> bool:

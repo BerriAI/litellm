@@ -902,9 +902,6 @@
         "supports_audio_output": {
           "type": "boolean"
         },
-        "supports_bedrock_runtime_chat_completions": {
-          "type": "boolean"
-        },
         "supports_bedrock_runtime_chat_completions_response_format": {
           "type": "boolean"
         },
