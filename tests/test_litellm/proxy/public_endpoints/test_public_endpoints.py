@@ -1,3 +1,4 @@
+import json
 import re
 from datetime import datetime, timezone
 from typing import Final
@@ -337,6 +338,25 @@ def test_cognition_provider_fields():
 
     assert fields_by_key["api_base"]["field_type"] == "text"
     assert fields_by_key["api_base"]["required"] is False
+
+
+def test_qwen_mainland_provider_fields_carry_the_qianwen_brand():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    providers = test_client.get("/public/providers/fields").json()
+
+    mainland = next(p for p in providers if p["litellm_provider"] == "qwen_ai_platform")
+    international = next(p for p in providers if p["litellm_provider"] == "qwencloud")
+
+    assert mainland["provider_display_name"] == "Qianwen AI Platform"
+    assert international["provider_display_name"] == "QwenCloud"
+
+    mainland_fields = {f["key"]: f for f in mainland["credential_fields"]}
+    assert mainland_fields["api_key"]["label"] == "Qianwen AI Platform API Key"
+    assert "Qianwen AI Platform" in mainland_fields["api_base"]["tooltip"]
+    assert "Qwen AI Platform" not in json.dumps(mainland)
 
 
 def test_chatgpt_provider_fields():
@@ -1198,13 +1218,13 @@ def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
     assert "anthropic_family" in payload
     assert payload["1m_context"]["complexity_router_config"]["classifier_type"] == "heuristic_v2"
     assert payload["1m_context"]["complexity_router_config"]["tiers"] == {
-        "SIMPLE": ["gpt-5.6-luna"],
+        "SIMPLE": ["gpt-6-luna"],
         "MEDIUM": ["gpt-5.6-terra"],
-        "COMPLEX": ["gpt-5.6-sol"],
-        "REASONING": ["claude-opus-5"],
+        "COMPLEX": ["gpt-6-sol"],
+        "REASONING": ["claude-opus-5-5"],
     }
     assert payload["1m_context"]["complexity_router_config"]["tier_model_configs"] == {
-        "REASONING": [{"model_name": "claude-opus-5", "litellm_params": {"reasoning_effort": "high"}}]
+        "REASONING": [{"model_name": "claude-opus-5-5", "litellm_params": {"reasoning_effort": "high"}}]
     }
     for preset in payload.values():
         assert isinstance(preset["label"], str)

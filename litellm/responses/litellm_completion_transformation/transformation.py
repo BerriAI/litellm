@@ -454,6 +454,7 @@ class LiteLLMCompletionResponsesConfig:
             "stream": stream,
             "metadata": kwargs.get("metadata"),
             "service_tier": kwargs.get("service_tier"),
+            "safety_identifier": responses_api_request.get("safety_identifier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning.effort,
@@ -865,14 +866,14 @@ class LiteLLMCompletionResponsesConfig:
             elif pending:
                 # Not followed by an assistant message — keep the reasoning
                 # standalone instead of dropping it.
-                merged.extend(  # mutable-ok: append reasoning messages
+                merged.extend(
                     [_standalone(text, blocks) for text, blocks in pending]  # mutable-ok: append reasoning messages
                 )
                 pending = []  # mutable-ok: reset accumulator
 
             merged.append(msg)
 
-        merged.extend(  # mutable-ok: append trailing reasoning
+        merged.extend(
             [_standalone(text, blocks) for text, blocks in pending]  # mutable-ok: append trailing reasoning
         )
 

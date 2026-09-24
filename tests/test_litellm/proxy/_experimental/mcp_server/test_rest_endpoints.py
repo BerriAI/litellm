@@ -1,3 +1,4 @@
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 import asyncio
 import inspect
 import json
@@ -1253,6 +1254,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             captured["called"] = True
             captured["server"] = server
@@ -1338,6 +1340,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             captured["user_api_key_auth"] = user_api_key_auth
             return ["tool-1"]
@@ -1891,6 +1894,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             captured["called"] = True
             captured["server_arg"] = server
@@ -2027,6 +2031,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             captured["called"] = True
             captured["server_arg"] = server
@@ -2112,6 +2117,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             return ["scoped-tool"]
 
@@ -2319,6 +2325,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             captured["server"] = server
             captured["auth_header"] = server_auth_header
@@ -2527,7 +2534,82 @@ class TestCallToolRestAPI:
         assert captured["name"] == "demo-tool"
         assert captured["arguments"] == {"foo": "bar"}
         assert captured["allowed_mcp_servers"] == [stub_server]
+        assert captured["oauth2_headers"] is None
         fire_logging.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("auth_type", "per_user_oauth", "expected"),
+        [
+            ("oauth_delegate", None, {"Authorization": "Bearer user-subject-token"}),
+            (
+                "oauth_delegate",
+                {"Authorization": "Bearer per-user-oauth-token"},
+                {"Authorization": "Bearer per-user-oauth-token"},
+            ),
+            ("oauth2", None, None),
+        ],
+    )
+    async def test_forwards_callers_bearer_as_oauth2_headers(self, monkeypatch, auth_type, per_user_oauth, expected):
+        """A distinct caller Authorization rides oauth2_headers to execute_mcp_tool only for
+        client-forwarded-token servers, with a per-user OAuth token still taking precedence.
+        A gateway-managed oauth2 server never sees the caller's bearer."""
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        stub_server.auth_type = auth_type
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def fake_get_user_oauth_extra_headers(server, user_api_key_dict, prefetched_creds=None):
+            return per_user_oauth
+
+        captured = {}
+
+        async def fake_execute_mcp_tool(**kwargs):
+            captured.update(kwargs)
+            return {"result": "ok"}
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_allowed_mcp_servers", fake_get_allowed_mcp_servers
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request)
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {}, raising=False)
+        monkeypatch.setattr(rest_endpoints, "_get_user_oauth_extra_headers", fake_get_user_oauth_extra_headers)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", fake_execute_mcp_tool)
+        monkeypatch.setattr(
+            rest_endpoints, "_fire_mcp_tool_call_logging", AsyncMock(side_effect=RuntimeError("logging failed"))
+        )
+
+        request = _build_request(
+            {"x-litellm-api-key": "sk-admission-key", "authorization": "Bearer user-subject-token"},
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
+        )
+
+        result = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+
+        assert result == {"result": "ok"}
+        assert captured["oauth2_headers"] == expected
+        assert captured["raw_headers"]["authorization"] == "Bearer user-subject-token"
 
     async def test_returns_guardrail_rewritten_tool_result(self, monkeypatch):
         """A post_mcp_call guardrail rewrite of the tool result must reach the REST caller,
@@ -2623,7 +2705,7 @@ class TestCallToolRestAPI:
 
         pre_call_finished_at = {}
 
-        async def slow_pre_call_hook(user_api_key_dict, data, call_type):
+        async def slow_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             await asyncio.sleep(0.05)
             pre_call_finished_at["value"] = datetime.now()
             return data
@@ -2840,7 +2922,9 @@ class TestCallToolRestAPI:
 
     @pytest.mark.parametrize("raise_site", ["pre_call_hook", "execute_mcp_tool"])
     @pytest.mark.parametrize("custom_code", [False, True])
-    async def test_guardrail_block_runs_failure_logging_before_http_translation(self, monkeypatch, raise_site, custom_code):
+    async def test_guardrail_block_runs_failure_logging_before_http_translation(
+        self, monkeypatch, raise_site, custom_code
+    ):
         """A pre_mcp_call guardrail block, whether raised by the pre-call hook or from inside
         execute_mcp_tool, must reach proxy_logging_obj.post_call_failure_hook (the only path that
         writes the failure spend-log row) with the logging object's failure payload already built,
@@ -2876,10 +2960,10 @@ class TestCallToolRestAPI:
                 message="Content blocked", model="mcp-tool-call", request_data={}, guardrail_name="block-all"
             )
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return data
 
-        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             raise guardrail_error
 
         async def fake_execute_mcp_tool(**kwargs):
@@ -2933,7 +3017,9 @@ class TestCallToolRestAPI:
         assert exc_info.value.status_code == 400
         if custom_code:
             assert exc_info.value.detail == {
-                "error": "guardrail_violation", "message": "Content blocked", "guardrail_name": "block-all"
+                "error": "guardrail_violation",
+                "message": "Content blocked",
+                "guardrail_name": "block-all",
             }
         else:
             assert exc_info.value is guardrail_error
@@ -2958,7 +3044,7 @@ class TestCallToolRestAPI:
         async def fake_add_litellm_data_to_request(**kwargs):
             return kwargs.get("data", {})
 
-        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             raise guardrail_error
 
         failure_logging = AsyncMock(side_effect=RuntimeError("spend log db down"))
@@ -3067,7 +3153,7 @@ class TestCallToolRestAPI:
         async def fake_add_litellm_data_to_request(**kwargs):
             return kwargs.get("data", {})
 
-        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             raise guardrail_error
 
         failure_logging = AsyncMock()
@@ -3111,7 +3197,10 @@ class TestCallToolRestAPI:
 @pytest.mark.parametrize("selected", [False, True])
 @pytest.mark.parametrize("action", ["block", "modify"])
 async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execution(
-    monkeypatch: pytest.MonkeyPatch, virtual: bool, selected: bool, action: str,
+    monkeypatch: pytest.MonkeyPatch,
+    virtual: bool,
+    selected: bool,
+    action: str,
 ) -> None:
     import litellm
     from litellm.caching.caching import DualCache
@@ -3122,16 +3211,23 @@ async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execu
     from litellm.proxy.utils import ProxyLogging
 
     guardrail: Final = CustomCodeGuardrail(
-        guardrail_name="block-resolved-tool", event_hook="pre_mcp_call", default_on=False,
-        custom_code='def apply_guardrail(inputs, request_data, input_type):\n'
+        guardrail_name="block-resolved-tool",
+        event_hook="pre_mcp_call",
+        default_on=False,
+        custom_code="def apply_guardrail(inputs, request_data, input_type):\n"
         '    if inputs.get("tools", [{}])[0].get("function", {}).get("name") == "execute":\n'
         f'        return {{"action": "{action}", "reason": "resolved tool blocked", "texts": ["redacted"]}}\n'
-        '    return allow()\n',
+        "    return allow()\n",
     )
     manager: Final = mcp_server_manager.MCPServerManager()
     managed_server: Final = MCPServer(
-        server_id="observer", name="observer", server_name="observer", transport="http",
-        url="https://observer.example/mcp", spec_path="observer.json", auth_type="none",
+        server_id="observer",
+        name="observer",
+        server_name="observer",
+        transport="http",
+        url="https://observer.example/mcp",
+        spec_path="observer.json",
+        auth_type="none",
     )
     manager.registry = {"observer": managed_server}
     manager.tool_name_to_mcp_server_name_mapping = {"observer-execute": "observer"}
@@ -3145,27 +3241,32 @@ async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execu
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
-    monkeypatch.setattr(server, "global_mcp_tool_registry", registry)
-    monkeypatch.setattr(server, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "global_mcp_tool_registry", registry)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
-    monkeypatch.setattr(server, "_get_allowed_mcp_servers", AsyncMock(return_value=[managed_server]))
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[managed_server]))
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", passthrough_request_data)
     monkeypatch.setattr(proxy_server, "proxy_config", {})
     monkeypatch.setattr(proxy_server, "general_settings", {})
     caller: Final = UserAPIKeyAuth(
-        api_key="hashed-key", request_route="/mcp-rest/tools/call",
+        api_key="hashed-key",
+        request_route="/mcp-rest/tools/call",
         object_permission=LiteLLM_ObjectPermissionTable(
-            object_permission_id="virtual-test", mcp_servers=["observer"], mcp_tool_search_enabled=True,
+            object_permission_id="virtual-test",
+            mcp_servers=["observer"],
+            mcp_tool_search_enabled=True,
         ),
     )
     request: Final = _build_request(
-        path="/mcp-rest/tools/call", method="POST",
+        path="/mcp-rest/tools/call",
+        method="POST",
         json_body={
             "name": "mcp_tool_call" if virtual else "observer-execute",
             "server_id": "observer",
             "arguments": {"tool_name": "observer-execute", "arguments": {"q": "confidential"}}
-            if virtual else {"q": "confidential"},
+            if virtual
+            else {"q": "confidential"},
             "guardrails": ["block-resolved-tool"] if selected else [],
         },
     )

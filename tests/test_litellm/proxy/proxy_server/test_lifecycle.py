@@ -43,6 +43,7 @@ from litellm.proxy.proxy_server import (
     cost_tracking,
     get_litellm_model_info,
     initialize,
+    initialize_from_worker_config,
     load_from_azure_key_vault,
     proxy_shutdown_event,
     proxy_startup_event,
@@ -376,7 +377,7 @@ def _lit4152_worker_config_dict():
         "master_key": _LIT4152_SECRETS[0],
         "database_url": _LIT4152_SECRETS[3],
         "api_key": _LIT4152_SECRETS[2],
-        "telemetry": True,
+        "drop_params": True,
     }
 
 
@@ -394,7 +395,7 @@ def test__redact_worker_config_for_logging_dict_masks_all_secret_shapes():
         assert secret not in rendered, f"leak: {secret} in {rendered!r}"
     assert isinstance(redacted, dict)
     assert redacted["model"] == "openai/gpt-4o-mini"
-    assert redacted["telemetry"] is True
+    assert redacted["drop_params"] is True
 
 
 def test__redact_worker_config_for_logging_json_string_round_trips_masked():
@@ -501,7 +502,7 @@ def test__redact_worker_config_for_logging_masks_nested_secret_fields():
 def test_initialize_signature_is_async_with_expected_params():
     sig = inspect.signature(initialize)
     # Hard-coded so a signature change (param added/removed) trips the gate.
-    expected_param_count = 17
+    expected_param_count = 16
     observed = {
         "is_async": inspect.iscoroutinefunction(initialize),
         "param_count": len(sig.parameters),
@@ -520,6 +521,16 @@ def test_initialize_signature_is_async_with_expected_params():
 async def test_initialize_invalid_unexpected_kwarg_raises_type_error():
     with pytest.raises(TypeError):
         await initialize(this_is_not_a_real_kwarg=True)
+
+
+@pytest.mark.asyncio
+async def test_initialize_from_worker_config_drops_legacy_telemetry_key():
+    with pytest.raises(TypeError):
+        await initialize(telemetry=True)
+    await initialize_from_worker_config({"telemetry": True, "request_timeout": 77})
+    assert ps.user_request_timeout == 77
+    with pytest.raises(TypeError):
+        await initialize_from_worker_config({"this_is_not_a_real_kwarg": True})
 
 
 # ---------------------------------------------------------------------------
@@ -807,6 +818,35 @@ async def test_proxy_startup_event_prunes_dead_workers_live_gauges(tmp_path):
     assert counter.exists()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("disable_model_info_refresh", "job_scheduled"), [(True, False), (False, True)])
+async def test_proxy_startup_event_honors_disable_model_info_refresh(
+    disable_model_info_refresh: bool, job_scheduled: bool
+) -> None:
+    """``general_settings.disable_model_info_refresh: true`` keeps the proxy from polling every
+    OpenAI-compatible deployment's ``/v1/models`` in the background, so a proxy fronting a replay
+    fixture (or a metered upstream) makes only the calls its clients asked for."""
+    scheduler = AsyncIOScheduler()
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.dict(ps.general_settings, {"disable_model_info_refresh": disable_model_info_refresh}),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                job = scheduler.get_job("refresh_model_info")
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert (job is not None) is job_scheduled, (
+        f"disable_model_info_refresh={disable_model_info_refresh} but refresh_model_info job is {job}"
+    )
+
+
 def test_otel_global_provider_published_after_callback_init():
     """The OTel V2 global-provider publish must run after callback
     initialization in ``proxy_startup_event``.
@@ -880,7 +920,7 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
 
 
 @pytest.mark.asyncio
-async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
+async def test_tuning_baseline_v3_is_created_alongside_the_legacy_row():
     from litellm.router_utils.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
 
     prisma_client = MagicMock()
@@ -895,9 +935,59 @@ async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
 
     assert result == {'yaml:["a",[]]': DEFAULT_TUNING_FINGERPRINT}
     assert prisma_client.db.litellm_config.create.await_args.kwargs["data"] == {
-        "param_name": "auto_router_tuning_baseline_v2",
+        "param_name": "auto_router_tuning_baseline_v3",
         "param_value": json.dumps(dict(result)),
     }
+
+
+@pytest.mark.asyncio
+async def test_scorer_baseline_upgrade_preserves_existing_routers_and_is_not_refreshed_on_restart():
+    from litellm.router_utils.auto_router_tuning_baseline import mutable_tuned_identities, snapshot_tuning_baselines
+
+    deployments = [
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": name}, "code_keywords": [name]},
+            },
+        }
+        for name in ("a", "b")
+    ]
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_unique = AsyncMock(
+        side_effect=lambda where: (
+            MagicMock(param_value='{"legacy-router":"old-combined-hash"}')
+            if where["param_name"] == "auto_router_tuning_baseline_v2"
+            else None
+        )
+    )
+    prisma_client.db.litellm_config.create = AsyncMock()
+
+    baseline = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, deployments)
+
+    assert baseline == snapshot_tuning_baselines(deployments)
+    assert mutable_tuned_identities(deployments, baseline) == frozenset()
+    prisma_client.db.litellm_config.create.assert_awaited_once_with(
+        data={"param_name": "auto_router_tuning_baseline_v3", "param_value": json.dumps(dict(baseline))}
+    )
+    prisma_client.db.litellm_config.find_unique.side_effect = None
+    prisma_client.db.litellm_config.find_unique.return_value = MagicMock(param_value=json.dumps(dict(baseline)))
+    changed = [
+        {
+            "model_name": "a",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "different-model"}, "code_keywords": ["new-rule"]},
+            },
+        }
+    ]
+
+    reloaded = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, changed)
+
+    assert reloaded == baseline
+    assert mutable_tuned_identities(changed, reloaded) == frozenset({'yaml:["a",[]]'})
+    prisma_client.db.litellm_config.create.assert_awaited_once()
 
 
 @pytest.mark.asyncio

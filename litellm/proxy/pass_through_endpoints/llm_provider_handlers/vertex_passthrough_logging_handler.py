@@ -33,6 +33,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     optional_str,
     request_tags_from_metadata,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import (
     Choices,
     EmbeddingResponse,
@@ -51,8 +52,6 @@ if TYPE_CHECKING:
 else:
     PassThroughEndpointLogging = Any
     LiteLLMBatch = Any
-
-EndpointType = Any
 
 _VERTEX_INTERACTIONS_PATH: Final = re.compile(r"/projects/[^/]+/locations/[^/]+/interactions/?$")
 _INTERACTIONS_RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
@@ -448,9 +447,7 @@ class VertexPassthroughLoggingHandler:
         kwargs["model"] = model  # rebind-ok: callback metadata records the resolved model
         kwargs["custom_llm_provider"] = "vertex_ai"  # rebind-ok: callback metadata records the resolved provider
 
-        standard_pass_through_response_object: Final[
-            StandardPassThroughResponseObject
-        ] = {  # mutable-ok: callback contract requires a concrete response dictionary
+        standard_pass_through_response_object: Final[StandardPassThroughResponseObject] = {
             "response": json_response,
         }
         return {  # mutable-ok: passthrough logging contract requires a concrete result dictionary

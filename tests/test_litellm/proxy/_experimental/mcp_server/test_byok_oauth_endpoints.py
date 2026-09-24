@@ -1,3 +1,4 @@
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 """
 Unit tests for the BYOK OAuth 2.1 authorization server endpoints.
 
@@ -592,7 +593,7 @@ async def test_check_byok_credential_missing_credential(monkeypatch):
 
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
-    server_module.byok_credential_cache.flush_cache()
+    mcp_operations.byok_credential_cache.flush_cache()
     mock_prisma = MagicMock()
 
     with (
@@ -628,13 +629,13 @@ async def test_execute_byok_tool_missing_credential_advertises_api_key_flow(monk
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com/proxy")
-    mcp_module.byok_credential_cache.flush_cache()
+    mcp_operations.byok_credential_cache.flush_cache()
     server = MCPServer(server_id="byok-discovery", name="byok-discovery", transport=MCPTransport.http, is_byok=True)
     prisma = MagicMock()
     prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     with pytest.raises(HTTPException) as exc_info:
-        await mcp_module.execute_mcp_tool(
+        await mcp_operations.execute_mcp_tool(
             name="list_regions",
             arguments={},
             allowed_mcp_servers=[server],
@@ -687,7 +688,7 @@ async def test_invalidate_byok_cred_cache_evicts_locally_and_broadcasts_the_same
 
     server = MCPServer(server_id="byok-revoke", name="byok-server", transport=MCPTransport.http, is_byok=True)
     user_auth = UserAPIKeyAuth(user_id="mallory", api_key="sk-test")
-    server_module.byok_credential_cache.flush_cache()
+    mcp_operations.byok_credential_cache.flush_cache()
     db_lookup = AsyncMock(side_effect=["sk-before-revoke", None])
     publish = AsyncMock()
 
@@ -699,13 +700,13 @@ async def test_invalidate_byok_cred_cache_evicts_locally_and_broadcasts_the_same
             "litellm.proxy.proxy_server.prisma_client", MagicMock()
         ),
         patch.object(  # test-quality-ok: the redis publisher is module-level; asserting the broadcast without a redis
-            server_module, "publish_auth_cache_invalidation", new=publish
+            mcp_operations, "publish_auth_cache_invalidation", new=publish
         ),
     ):
-        assert await server_module._get_byok_credential(server, user_auth) == "sk-before-revoke"
-        assert await server_module._get_byok_credential(server, user_auth) == "sk-before-revoke"
-        await server_module._invalidate_byok_cred_cache("mallory", "byok-revoke")
-        assert await server_module._get_byok_credential(server, user_auth) is None
+        assert await mcp_operations._get_byok_credential(server, user_auth) == "sk-before-revoke"
+        assert await mcp_operations._get_byok_credential(server, user_auth) == "sk-before-revoke"
+        await mcp_operations._invalidate_byok_cred_cache("mallory", "byok-revoke")
+        assert await mcp_operations._get_byok_credential(server, user_auth) is None
 
     assert db_lookup.await_count == 2
     publish.assert_awaited_once_with(cache_key=byok_credential_cache_key("mallory", "byok-revoke"))
@@ -900,6 +901,61 @@ def test_authorize_post_accepts_ui_session_cookie(unauthenticated_client):
     qs = parse_qs(urlparse(resp.headers["location"]).query)
     code = qs["code"][0]
     assert _byok_auth_codes[code]["user_id"] == "browser-user-42"
+
+
+def test_authorize_post_rejects_cookie_with_revoked_session_key(unauthenticated_client):
+    """The cookie JWT stays signature-valid until ``exp``, but logout /
+    password-change revocation deletes the DB-backed session key sealed
+    inside it. A cookie whose embedded key no longer resolves must not
+    authorize BYOK writes."""
+    import jwt as _jwt
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_key_object",
+            new=AsyncMock(side_effect=Exception("key not found")),
+        ),
+    ):
+        cookie_jwt = _jwt.encode(
+            {
+                "user_id": "browser-user-42",
+                "key": "sk-revoked-session-key",
+                "login_method": "sso",
+                "exp": int(time.time()) + 3600,
+            },
+            "test-master-key",
+            algorithm="HS256",
+        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, cookie_jwt)
+    assert resp.status_code == 401
+
+
+def test_authorize_post_accepts_cookie_with_live_session_key(unauthenticated_client):
+    """A cookie whose embedded session key still resolves keeps working."""
+    import jwt as _jwt
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_key_object",
+            new=AsyncMock(return_value=UserAPIKeyAuth(user_id="browser-user-42")),
+        ),
+    ):
+        cookie_jwt = _jwt.encode(
+            {
+                "user_id": "browser-user-42",
+                "key": "sk-live-session-key",
+                "login_method": "sso",
+                "exp": int(time.time()) + 3600,
+            },
+            "test-master-key",
+            algorithm="HS256",
+        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, cookie_jwt)
+    assert resp.status_code == 302
 
 
 def test_authorize_post_rejects_cookie_signed_with_wrong_key(unauthenticated_client):

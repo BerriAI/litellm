@@ -12,10 +12,11 @@ import os
 import random
 import time
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, overload
 from urllib.parse import quote, unquote
 
 from pydantic import TypeAdapter
@@ -136,6 +137,25 @@ class _SpendBatch(Protocol):
     litellm_modelaccessgroupbudgettable: BatchTable
 
 
+_EntitySpendTable: TypeAlias = Literal[
+    "litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable", "litellm_projecttable"
+]
+
+
+_ENTITY_SPEND_TABLES: Final[Mapping[_EntitySpendTable, Callable[[_SpendBatch], BatchTable]]] = MappingProxyType(
+    {
+        "litellm_tagtable": lambda batcher: batcher.litellm_tagtable,
+        "litellm_agentstable": lambda batcher: batcher.litellm_agentstable,
+        "litellm_modelaccessgroupbudgettable": lambda batcher: batcher.litellm_modelaccessgroupbudgettable,
+        "litellm_projecttable": lambda batcher: batcher.litellm_projecttable,
+    }
+)
+
+
+def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable) -> BatchTable:
+    return _ENTITY_SPEND_TABLES[table_accessor](batcher)
+
+
 class _SpendBatchManager(Protocol):
     async def __aenter__(self) -> _SpendBatch: ...
 
@@ -171,11 +191,65 @@ class _DailySpendCommit(Protocol[_DailySpendTransactionT]):
 _DATA_REJECTED_SQLSTATE_CLASSES: Final = frozenset({"22", "23"})
 
 
-def _daily_spend_commit_failure_is_requeue_safe(e: Exception) -> bool:
+def _spend_commit_failure_is_requeue_safe(e: Exception) -> bool:
     if isinstance(e, DB_CONNECTION_ERROR_TYPES):
         return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
     sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
     return sqlstate is None or sqlstate[:2] not in _DATA_REJECTED_SQLSTATE_CLASSES
+
+
+_SpendTableName = Literal[
+    "user_list_transactions",
+    "end_user_list_transactions",
+    "key_list_transactions",
+    "team_list_transactions",
+    "team_member_list_transactions",
+    "org_list_transactions",
+    "org_member_list_transactions",
+    "project_list_transactions",
+    "tag_list_transactions",
+    "model_access_group_list_transactions",
+    "agent_list_transactions",
+]
+_SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
+    "user_list_transactions",
+    "end_user_list_transactions",
+    "key_list_transactions",
+    "team_list_transactions",
+    "team_member_list_transactions",
+    "org_list_transactions",
+    "org_member_list_transactions",
+    "project_list_transactions",
+    "tag_list_transactions",
+    "model_access_group_list_transactions",
+    "agent_list_transactions",
+)
+
+
+def _spend_tables_left_to_send(
+    transactions: DBSpendUpdateTransactions,
+    committed: Sequence[_SpendTableName],
+    failure: Exception,
+) -> DBSpendUpdateTransactions | None:
+    in_flight: Final[_SpendTableName | None] = (
+        _SPEND_TABLE_COMMIT_ORDER[len(committed)] if len(committed) < len(_SPEND_TABLE_COMMIT_ORDER) else None
+    )
+    dropped: Final[frozenset[_SpendTableName]] = (
+        frozenset() if in_flight is None or _spend_commit_failure_is_requeue_safe(failure) else frozenset({in_flight})
+    )
+    if dropped and in_flight is not None:
+        spend_log_error(
+            "Spend tracking - dropped %d %s increments: the failed statement may have applied or the "
+            "database refused the data, so re-sending it is not safe. Error: %s",
+            len(cast(dict[str, dict[str, float] | None], transactions).get(in_flight) or ()),
+            in_flight,
+            str(failure),
+            exc=failure,
+        )
+    remaining: Final = {
+        name: (None if name in committed or name in dropped else txns) for name, txns in transactions.items()
+    }
+    return cast(DBSpendUpdateTransactions, remaining) if any(remaining.values()) else None
 
 
 def _timed_request_duration_ms(
@@ -194,6 +268,80 @@ def _timed_request_duration_ms(
 def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
     tx: Final[_SpendTransactionManager] = prisma_client.db.tx(timeout=timedelta(seconds=60))
     return tx
+
+
+_daily_spend_commit_started: Final[ContextVar[asyncio.Event | None]] = ContextVar(
+    "_daily_spend_commit_started", default=None
+)
+
+
+def _mark_daily_spend_commit_started() -> None:
+    started: Final = _daily_spend_commit_started.get()
+    if started is not None:
+        started.set()
+
+
+def _mark_daily_spend_commit_finished() -> None:
+    started: Final = _daily_spend_commit_started.get()
+    if started is not None:
+        started.clear()
+
+
+def _start_daily_spend_commit(
+    commit_started: asyncio.Event, commit: Callable[[], Coroutine[object, object, None]]
+) -> "asyncio.Task[None]":
+    token: Final = _daily_spend_commit_started.set(commit_started)
+    try:
+        return asyncio.ensure_future(commit())
+    finally:
+        _daily_spend_commit_started.reset(token)
+
+
+def _track_interrupted_commit(commits: set[asyncio.Task[None]], settle: Coroutine[object, object, None]) -> None:
+    task: Final = asyncio.ensure_future(settle)
+    commits.add(task)
+    task.add_done_callback(commits.discard)
+
+
+async def _settle_interrupted_commits(commits: set[asyncio.Task[None]]) -> None:
+    while commits:
+        await asyncio.wait(tuple(commits))
+
+
+async def _restore_tag_spend_the_commit_left_behind(
+    commit_task: "asyncio.Task[None]",
+    redis_update_buffer: RedisUpdateBuffer,
+    transactions: dict[str, DailyTagSpendTransaction],
+) -> None:
+    await asyncio.wait({commit_task})
+    if commit_task.cancelled() or commit_task.exception() is None:
+        return
+    await redis_update_buffer.restore_transactions_to_redis(
+        daily_tag_spend_update_transactions=transactions,
+    )
+
+
+async def _requeue_daily_spend_the_commit_left_behind(
+    commit_task: "asyncio.Task[None]",
+    queue: DailySpendUpdateQueue,
+    entity_type: str,
+    transactions: dict[str, BaseDailySpendTransaction],
+) -> None:
+    await asyncio.wait({commit_task})
+    if commit_task.cancelled() or not transactions:
+        return
+    failure: Final = commit_task.exception()
+    if failure is None:
+        return
+    spend_log_error(
+        "Spend tracking - daily %s spend commit interrupted by shutdown failed. Re-queued %d rows for the "
+        "shutdown flush. Error: %s",
+        entity_type,
+        len(transactions),
+        str(failure),
+        exc=failure,
+    )
+    await queue.add_update(transactions)
 
 
 # The per-team advisory lock the team endpoints hold while changing a roster (TEAM_ADVISORY_LOCK_SQL),
@@ -318,6 +466,9 @@ class DBSpendUpdateWriter:
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
         self.window_spend_update_queue = WindowSpendUpdateQueue()
+        self.interrupted_tag_commits: set[asyncio.Task[None]] = (
+            set()
+        )  # mutable-ok: same registry as DailySpendUpdateQueue.interrupted_commits
 
     async def update_database(
         # LiteLLM management object fields
@@ -1389,6 +1540,7 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug("acquired lock for spend updates")
 
             uncommitted: dict[str, Any] = {}  # mutable-ok: tracks popped categories still needing commit
+            committed_spend_tables: Final[list[_SpendTableName]] = []  # mutable-ok: filled as each table lands
 
             try:
                 (
@@ -1428,12 +1580,19 @@ class DBSpendUpdateWriter:
                         len(db_spend_update_transactions.get("agent_list_transactions") or ()),
                         len(db_spend_update_transactions.get("model_access_group_list_transactions") or ()),
                     )
-                    await self._commit_spend_updates_to_db(
-                        prisma_client=prisma_client,
-                        n_retry_times=n_retry_times,
-                        proxy_logging_obj=proxy_logging_obj,
-                        db_spend_update_transactions=db_spend_update_transactions,
-                    )
+                    try:
+                        await self._commit_spend_updates_to_db(
+                            prisma_client=prisma_client,
+                            n_retry_times=n_retry_times,
+                            proxy_logging_obj=proxy_logging_obj,
+                            db_spend_update_transactions=db_spend_update_transactions,
+                            on_table_committed=committed_spend_tables.append,
+                        )
+                    except Exception as e:
+                        uncommitted["db_spend_update_transactions"] = _spend_tables_left_to_send(
+                            db_spend_update_transactions, committed_spend_tables, e
+                        )
+                        raise
                 uncommitted.pop("db_spend_update_transactions", None)
 
                 if daily_spend_update_transactions is not None:
@@ -1481,10 +1640,22 @@ class DBSpendUpdateWriter:
                     )
                 uncommitted.pop("daily_agent_spend_update_transactions", None)
                 if window_spend_update_transactions is not None:
-                    await DBSpendUpdateWriter._commit_window_spend_updates(
-                        prisma_client=prisma_client,
-                        window_spend_transactions=window_spend_update_transactions,
-                    )
+                    try:
+                        await DBSpendUpdateWriter._commit_window_spend_updates(
+                            prisma_client=prisma_client,
+                            window_spend_transactions=window_spend_update_transactions,
+                        )
+                    except Exception as e:
+                        if not _spend_commit_failure_is_requeue_safe(e):
+                            uncommitted.pop("window_spend_update_transactions", None)
+                            spend_log_error(
+                                "Spend tracking - dropped %d budget window increments: the failed statement may have "
+                                "applied or the database refused the data, so re-sending it is not safe. Error: %s",
+                                len(window_spend_update_transactions),
+                                str(e),
+                                exc=e,
+                            )
+                        raise
                 uncommitted.pop("window_spend_update_transactions", None)
             except Exception as e:
                 spend_log_error(
@@ -1513,13 +1684,28 @@ class DBSpendUpdateWriter:
         proxy_logging_obj: ProxyLogging,
     ) -> None:
         transactions: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        try:
-            await commit(
+        commit_started: Final = asyncio.Event()
+        commit_task: Final = _start_daily_spend_commit(
+            commit_started,
+            lambda: commit(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
-            )
+            ),
+        )
+        try:
+            await asyncio.shield(commit_task)
+        except asyncio.CancelledError:
+            if commit_started.is_set():
+                queue.track_interrupted_commit(
+                    _requeue_daily_spend_the_commit_left_behind(commit_task, queue, entity_type, transactions)
+                )
+                raise
+            commit_task.cancel()
+            if transactions:
+                await queue.add_update(transactions)
+            raise
         except Exception as e:  # noqa: BLE001  # whatever failed here, the other tables must still flush
             if not transactions:
                 return
@@ -1628,14 +1814,23 @@ class DBSpendUpdateWriter:
                 window_spend_transactions=window_spend_update_transactions,
             )
         except Exception as e:  # noqa: BLE001  # the increments go back on the queue; the rest of the flush must run
-            spend_log_error(
-                "Spend tracking - failed to commit budget window spend updates. "
-                "Re-queued %d window increments for retry on next tick. Error: %s",
-                len(window_spend_update_transactions),
-                str(e),
-                exc=e,
-            )
-            await self.window_spend_update_queue.update_queue.put(window_spend_update_transactions)
+            if _spend_commit_failure_is_requeue_safe(e):
+                spend_log_error(
+                    "Spend tracking - failed to commit budget window spend updates. "
+                    "Re-queued %d window increments for retry on next tick. Error: %s",
+                    len(window_spend_update_transactions),
+                    str(e),
+                    exc=e,
+                )
+                await self.window_spend_update_queue.update_queue.put(window_spend_update_transactions)
+            else:
+                spend_log_error(
+                    "Spend tracking - dropped %d budget window increments: the failed statement may have "
+                    "applied or the database refused the data, so re-sending it is not safe. Error: %s",
+                    len(window_spend_update_transactions),
+                    str(e),
+                    exc=e,
+                )
 
         ################## Tool Registry Upserts ##################
         await self._flush_tool_discovery_queue(prisma_client=prisma_client)
@@ -1731,20 +1926,37 @@ class DBSpendUpdateWriter:
         The drain is destructive, so a failed commit must push the transactions back for the next tick
         or their spend is lost permanently.
         """
+        await _settle_interrupted_commits(self.interrupted_tag_commits)
         daily_tag_spend_update_transactions: Final = (
             await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
         )
         if not daily_tag_spend_update_transactions:
             return
 
-        try:
-            await DBSpendUpdateWriter.update_daily_tag_spend(
+        commit_started: Final = asyncio.Event()
+        commit_task: Final = _start_daily_spend_commit(
+            commit_started,
+            lambda: DBSpendUpdateWriter.update_daily_tag_spend(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=daily_tag_spend_update_transactions,
-            )
-        except Exception:
+            ),
+        )
+        try:
+            await asyncio.shield(commit_task)
+        except BaseException:  # noqa: BLE001  # a cancel must restore the drained rows before its rollback returns
+            if commit_started.is_set():
+                _track_interrupted_commit(
+                    self.interrupted_tag_commits,
+                    _restore_tag_spend_the_commit_left_behind(
+                        commit_task,
+                        self.redis_update_buffer,
+                        daily_tag_spend_update_transactions,
+                    ),
+                )
+                raise
+            commit_task.cancel()
             await self.redis_update_buffer.restore_transactions_to_redis(
                 daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
             )
@@ -1793,6 +2005,7 @@ class DBSpendUpdateWriter:
         n_retry_times: int,
         proxy_logging_obj: ProxyLogging,
         db_spend_update_transactions: DBSpendUpdateTransactions,
+        on_table_committed: Callable[[_SpendTableName], None] | None = None,
     ):
         """
         Commits all the spend `UPDATE` transactions to the Database
@@ -1826,6 +2039,8 @@ class DBSpendUpdateWriter:
                         start_time=start_time,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+        if on_table_committed is not None:
+            on_table_committed("user_list_transactions")
 
         ### UPDATE END-USER TABLE ###
         end_user_list_transactions: Final = db_spend_update_transactions["end_user_list_transactions"]
@@ -1837,6 +2052,8 @@ class DBSpendUpdateWriter:
                 proxy_logging_obj=proxy_logging_obj,
                 end_user_list_transactions=end_user_list_transactions,
             )
+        if on_table_committed is not None:
+            on_table_committed("end_user_list_transactions")
         ### UPDATE KEY TABLE ###
         key_list_transactions: Final = db_spend_update_transactions["key_list_transactions"]
         verbose_proxy_logger.debug("KEY Spend transactions: %s", key_list_transactions)
@@ -1866,6 +2083,8 @@ class DBSpendUpdateWriter:
                         start_time=start_time,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+        if on_table_committed is not None:
+            on_table_committed("key_list_transactions")
 
         ### UPDATE TEAM TABLE ###
         team_list_transactions: Final = db_spend_update_transactions["team_list_transactions"]
@@ -1894,6 +2113,8 @@ class DBSpendUpdateWriter:
                         start_time=start_time,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+        if on_table_committed is not None:
+            on_table_committed("team_list_transactions")
 
         ### UPDATE TEAM Membership TABLE with spend ###
         team_member_list_transactions: Final = db_spend_update_transactions["team_member_list_transactions"]
@@ -1922,6 +2143,8 @@ class DBSpendUpdateWriter:
                         start_time=start_time,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+            if on_table_committed is not None:
+                on_table_committed("team_member_list_transactions")
 
             # Invalidate cache for updated team memberships
             # This ensures budget checks read fresh spend data from the database
@@ -1934,6 +2157,8 @@ class DBSpendUpdateWriter:
                         verbose_proxy_logger.debug(
                             "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
                         )
+        elif on_table_committed is not None:
+            on_table_committed("team_member_list_transactions")
 
         ### UPDATE ORG TABLE ###
         org_list_transactions: Final = db_spend_update_transactions["org_list_transactions"]
@@ -1959,6 +2184,8 @@ class DBSpendUpdateWriter:
                         start_time=start_time,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+        if on_table_committed is not None:
+            on_table_committed("org_list_transactions")
 
         org_member_list_transactions: Final = db_spend_update_transactions.get("org_member_list_transactions")
         verbose_proxy_logger.debug("Org Membership Spend transactions: %s", org_member_list_transactions)
@@ -1982,6 +2209,8 @@ class DBSpendUpdateWriter:
                         start_time=start_time,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+        if on_table_committed is not None:
+            on_table_committed("org_member_list_transactions")
 
         ### UPDATE PROJECT TABLE ###
         project_list_transactions: Final = db_spend_update_transactions.get("project_list_transactions")
@@ -1994,6 +2223,8 @@ class DBSpendUpdateWriter:
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if on_table_committed is not None:
+            on_table_committed("project_list_transactions")
         await DBSpendUpdateWriter._invalidate_project_caches(
             project_ids=tuple(project_list_transactions or ()),
             proxy_logging_obj=proxy_logging_obj,
@@ -2010,6 +2241,8 @@ class DBSpendUpdateWriter:
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if on_table_committed is not None:
+            on_table_committed("tag_list_transactions")
 
         ### UPDATE MODEL ACCESS GROUP TABLE ###
         model_access_group_list_transactions: Final = db_spend_update_transactions.get(
@@ -2024,6 +2257,8 @@ class DBSpendUpdateWriter:
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if on_table_committed is not None:
+            on_table_committed("model_access_group_list_transactions")
 
         ### UPDATE AGENT TABLE ###
         agent_list_transactions: Final = db_spend_update_transactions["agent_list_transactions"]
@@ -2036,6 +2271,8 @@ class DBSpendUpdateWriter:
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if on_table_committed is not None:
+            on_table_committed("agent_list_transactions")
 
     @staticmethod
     async def _invalidate_project_caches(project_ids: Sequence[str], proxy_logging_obj: ProxyLogging | None) -> None:
@@ -2051,9 +2288,7 @@ class DBSpendUpdateWriter:
     async def _update_entity_spend_in_db(
         entity_name: str,
         transactions: dict[str, float] | None,
-        table_accessor: Literal[
-            "litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable", "litellm_projecttable"
-        ],
+        table_accessor: _EntitySpendTable,
         where_field: str,
         n_retry_times: int,
         prisma_client: PrismaClient,
@@ -2087,7 +2322,7 @@ class DBSpendUpdateWriter:
                                     entity_id,
                                     response_cost,
                                 )
-                                getattr(batcher, table_accessor).update_many(
+                                _entity_spend_table(batcher, table_accessor).update_many(
                                     where={where_field: entity_id},
                                     data={"spend": {"increment": response_cost}},
                                 )
@@ -2243,9 +2478,12 @@ class DBSpendUpdateWriter:
                                 table=table, transactions=tuple(transactions_to_process.values())
                             )
                             sql, params = build_bulk_upsert(table=table, batch=merged_batch)
-                            await prisma_client.db.execute_raw(sql, *params)
+                            async with _spend_update_tx(prisma_client) as transaction:
+                                await transaction.execute_raw(sql, *params)
+                                _mark_daily_spend_commit_started()
+                            _mark_daily_spend_commit_finished()
                         except Exception as batch_error:
-                            if _daily_spend_commit_failure_is_requeue_safe(batch_error):
+                            if _spend_commit_failure_is_requeue_safe(batch_error):
                                 spend_log_error(
                                     "Daily %s spend batch upsert failed. Table: %s, Rows: %d, Error: %s",
                                     entity_type,

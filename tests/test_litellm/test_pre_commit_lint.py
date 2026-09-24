@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._process_helpers import process_is_gone
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "pre_commit_lint.sh"
 WHOLE_TREE_RUFF = "run --no-sync ruff check --config ruff-tests.toml tests"
@@ -159,7 +161,7 @@ def _commit_all(repo: Path, message: str) -> None:
     )
 
 
-def _set_base_ref(repo: Path, branch: str = "litellm_internal_staging") -> None:
+def _set_base_ref(repo: Path, branch: str = "release_branch") -> None:
     remote = repo.parent / "remote.git"
     subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(remote)], check=True)
     subprocess.run(["git", "update-ref", f"refs/heads/{branch}", "HEAD"], cwd=remote, check=True)
@@ -174,7 +176,7 @@ def _stage_file(repo: Path, relative: str, body: str) -> None:
     subprocess.run(["git", "add", relative], cwd=repo, check=True)
 
 
-@pytest.mark.parametrize("branch", ["litellm_internal_staging", "main"])
+@pytest.mark.parametrize("branch", ["release_branch", "main"])
 def test_nothing_staged_scopes_to_working_tree_diff_and_runs_checks(tmp_path: Path, branch: str) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")
@@ -343,14 +345,6 @@ def _wait_until(predicate: Callable[[], bool], timeout_seconds: float) -> bool:
     return predicate()
 
 
-def _pid_gone(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    return False
-
-
 def test_interrupt_kills_background_jobs_and_removes_logs(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     hang_dir = tmp_path / "hang"
@@ -372,7 +366,7 @@ def test_interrupt_kills_background_jobs_and_removes_logs(tmp_path: Path) -> Non
         os.killpg(proc.pid, signal.SIGINT)
         assert proc.wait(timeout=10) != 0
         make_pid = int((hang_dir / "make.pid").read_text())
-        assert _wait_until(lambda: _pid_gone(make_pid), 5)
+        assert process_is_gone(make_pid, within_seconds=5)
         assert _wait_until(lambda: not any(tmp_dir.iterdir()), 5), list(tmp_dir.iterdir())
     finally:
         with suppress(ProcessLookupError, PermissionError):

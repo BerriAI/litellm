@@ -59,9 +59,7 @@ def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> 
     terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks=all_chunks)
     if terminal_event is None:
         return None
-    logging_obj.call_type = (
-        RESPONSES_RELAY_SHAPE.call_type.value
-    )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
+    logging_obj.call_type = RESPONSES_RELAY_SHAPE.call_type.value
     return terminal_event
 
 
@@ -143,7 +141,7 @@ class AzurePassthroughConfig(BasePassthroughConfig):
     ) -> dict:
         return BaseAzureLLM._base_validate_azure_environment(
             headers=headers,
-            litellm_params=GenericLiteLLMParams(**{**litellm_params, "api_key": api_key}),
+            litellm_params=GenericLiteLLMParams.model_validate({**litellm_params, "api_key": api_key}),
         )
 
     @staticmethod

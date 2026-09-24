@@ -103,7 +103,7 @@ def _tool_result(tool: Tool) -> ToolSearchResult:
         "name": tool.name,
         "description": tool.description or "",
         "inputSchema": tool.input_schema,
-    }  # mutable-ok: wire schema payload
+    }
 
 
 def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
@@ -112,7 +112,7 @@ def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
         "description": tool.description or "",
         "inputSchema": tool.input_schema,
         "score": score,
-    }  # mutable-ok: wire schema payload
+    }
 
 
 _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
@@ -120,7 +120,7 @@ _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
 
 def with_mcp_proxy_identity(tool: Tool, server_id: str) -> Tool:
     identity: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool.name}
-    return tool.model_copy(  # mutable-ok: Pydantic requires mutable update and metadata mappings
+    return tool.model_copy(
         update={  # mutable-ok: Pydantic update payload
             "meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}  # mutable-ok: metadata mapping
         }
@@ -463,8 +463,8 @@ async def handle_mcp_tool_search(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
 ) -> CallToolResult:
-    from litellm.proxy._experimental.mcp_server.server import (
-        _list_mcp_tools,  # pyright: ignore[reportPrivateUsage]  # shared catalog owner
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _list_mcp_tools,
     )
     from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
@@ -519,8 +519,8 @@ async def handle_mcp_proxy_tool(
     from jsonschema import validate
 
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server.server import (  # pyright: ignore[reportPrivateUsage]  # shared catalog owner
-        _list_mcp_tools,  # pyright: ignore[reportPrivateUsage]  # shared catalog owner
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _list_mcp_tools,
     )
 
     listing: Final = await _list_mcp_tools(
@@ -607,7 +607,7 @@ async def handle_mcp_tool_call(
     requested_server_id: str | None = None,
     guardrail_context: Mapping[str, object] | None = None,
 ) -> CallToolResult:
-    from litellm.proxy._experimental.mcp_server.server import (
+    from litellm.proxy._experimental.mcp_server.operations import (
         _get_allowed_mcp_servers,
         execute_mcp_tool,
         raise_denied_scoped_mcp_access,
@@ -643,6 +643,7 @@ async def handle_mcp_tool_call(
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
+        client_ip=client_ip,
         litellm_logging_obj=litellm_logging_obj,
         requested_server_id=requested_server_id,
         guardrail_context=guardrail_context,
