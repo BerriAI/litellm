@@ -161,9 +161,12 @@ async def test_async_post_call_failure_hook_does_not_clobber_guardrail_info_in_m
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("used_client_oauth_token", [True, False])
+@pytest.mark.parametrize(
+    "used_client_oauth_token, custom_llm_provider, expected",
+    [(True, "anthropic", True), (True, "bedrock", False), (False, "anthropic", False)],
+)
 async def test_async_post_call_failure_hook_carries_used_client_oauth_token_from_litellm_metadata(
-    used_client_oauth_token: bool,
+    used_client_oauth_token: bool, custom_llm_provider: str, expected: bool
 ):
     """
     /v1/messages and /v1/responses stamp the proxy's own fields into request_data["litellm_metadata"]
@@ -173,6 +176,7 @@ async def test_async_post_call_failure_hook_carries_used_client_oauth_token_from
     logger = _ProxyDBLogger()
     request_data = {
         "model": "claude-sonnet-5",
+        "custom_llm_provider": custom_llm_provider,
         "messages": [{"role": "user", "content": "Hello"}],
         "metadata": {"user_id": "anthropic-native-metadata"},
         "litellm_metadata": {"used_client_oauth_token": used_client_oauth_token},
@@ -194,7 +198,7 @@ async def test_async_post_call_failure_hook_carries_used_client_oauth_token_from
     payload = get_logging_payload(
         kwargs=call_kwargs, response_obj={}, start_time=datetime.now(), end_time=datetime.now()
     )
-    assert json.loads(payload["metadata"])["used_client_oauth_token"] is used_client_oauth_token
+    assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
 
 
 @pytest.mark.asyncio

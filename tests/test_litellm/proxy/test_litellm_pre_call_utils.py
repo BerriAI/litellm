@@ -38,8 +38,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     move_guardrails_to_metadata,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
-from litellm.litellm_core_utils.litellm_logging import get_standard_logging_metadata
-from litellm.proxy.spend_tracking.spend_tracking_utils import _get_spend_logs_metadata
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_logging_from_dynamic_params
 from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -6794,7 +6793,17 @@ async def test_add_litellm_data_to_request_stamps_used_client_oauth_token(path, 
         return updated[metadata_variable_name]
 
     def spend_log_row_metadata(request_metadata: dict) -> dict:
-        return dict(_get_spend_logs_metadata(dict(get_standard_logging_metadata(metadata=request_metadata))))
+        row = get_logging_payload(
+            kwargs={
+                "model": "claude-sonnet-5",
+                "custom_llm_provider": "anthropic",
+                "litellm_params": {"metadata": request_metadata},
+            },
+            response_obj={},
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+        )
+        return json.loads(row["metadata"])
 
     seat_row = spend_log_row_metadata(
         await metadata_for({"Authorization": _OAUTH_TOKEN, "x-litellm-api-key": "Bearer sk-virtual-key"})

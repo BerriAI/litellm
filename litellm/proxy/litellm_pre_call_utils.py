@@ -34,6 +34,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.get_provider_specific_headers import ANTHROPIC_OAUTH_FORWARD_PROVIDERS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
     _request_blocked_callback_params,
@@ -3456,7 +3457,7 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
         LlmProviders.VERTEX_AI.value,
     )
 )
-_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.ANTHROPIC.value
+_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 
 
 def add_provider_specific_headers_to_request(

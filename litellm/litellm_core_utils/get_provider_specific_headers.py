@@ -1,7 +1,15 @@
 from collections.abc import Sequence
 from typing import Final
 
-from litellm.types.utils import ProviderSpecificHeader
+from litellm.types.utils import LlmProviders, ProviderSpecificHeader
+
+ANTHROPIC_OAUTH_FORWARD_PROVIDERS: Final[frozenset[str]] = frozenset((LlmProviders.ANTHROPIC.value,))
+
+
+def resolve_used_client_oauth_token(client_sent_oauth_token: object, custom_llm_provider: str | None) -> bool | None:
+    if not isinstance(client_sent_oauth_token, bool):
+        return None
+    return client_sent_oauth_token and custom_llm_provider in ANTHROPIC_OAUTH_FORWARD_PROVIDERS
 
 
 class ProviderSpecificHeaderUtils:
