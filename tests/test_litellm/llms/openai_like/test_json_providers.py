@@ -19,6 +19,52 @@ sys.path.insert(0, workspace_path)
 import litellm
 
 
+def _providers_json() -> dict:
+    import json
+    from pathlib import Path
+
+    return json.loads(
+        (Path(litellm.__file__).parent / "llms" / "openai_like" / "providers.json").read_text()
+    )
+
+
+class TestProvidersJsonConsistency:
+    def test_every_slug_is_an_llm_provider_enum_member(self):
+        from litellm import LlmProviders
+
+        known_non_enum_slugs = {
+            "abliteration",
+            "aihubmix",
+            "crusoe",
+            "empiriolabs",
+            "gmi",
+            "llamagate",
+            "sarvam",
+            "veniceai",
+        }
+        enum_slugs = {provider.value for provider in LlmProviders}
+        unknown = sorted(set(_providers_json()) - enum_slugs - known_non_enum_slugs)
+        assert unknown == [], f"providers.json slugs missing from LlmProviders: {unknown}"
+        assert known_non_enum_slugs - enum_slugs == known_non_enum_slugs
+
+    def test_every_chat_completions_slug_resolves_via_get_llm_provider(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        unresolved = []
+        for slug, config in _providers_json().items():
+            if "/v1/chat/completions" not in config.get("supported_endpoints", []):
+                continue
+            try:
+                _, provider, _, _ = get_llm_provider(
+                    model=f"{slug}/x", custom_llm_provider=None, api_base=None, api_key=None
+                )
+                if provider != slug:
+                    unresolved.append(f"{slug}: resolved to {provider}")
+            except Exception as exc:
+                unresolved.append(f"{slug}: {exc}")
+        assert unresolved == []
+
+
 class TestJSONProviderLoader:
     """Test JSON provider loading and configuration"""
 

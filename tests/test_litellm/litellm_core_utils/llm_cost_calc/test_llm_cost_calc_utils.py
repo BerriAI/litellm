@@ -3789,3 +3789,21 @@ def test_azure_gpt_6_foundry_price_sheet(_local_model_cost_map, model_base):
         assert azure_ai_info[field] == base
         assert azure_us_info[field] == pytest.approx(1.1 * base)
         assert azure_eu_info[field] == pytest.approx(1.2 * base)
+
+
+@pytest.mark.parametrize(
+    "base_key,tier,expected",
+    [
+        ("input_cost_per_token", "balanced", "input_cost_per_token_balanced"),
+        ("output_cost_per_token", "balanced", "output_cost_per_token_balanced"),
+        ("cache_read_input_token_cost", "balanced", "cache_read_input_token_cost_balanced"),
+        ("input_cost_per_token", "flex", "input_cost_per_token_flex"),
+        ("input_cost_per_token", "BALANCED", "input_cost_per_token_balanced"),
+        ("input_cost_per_token", None, "input_cost_per_token"),
+        ("input_cost_per_token", "auto", "input_cost_per_token"),
+    ],
+)
+def test_get_service_tier_cost_key_balanced(base_key, tier, expected):
+    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_service_tier_cost_key
+
+    assert _get_service_tier_cost_key(base_key, tier) == expected
