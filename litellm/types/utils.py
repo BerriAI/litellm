@@ -2586,6 +2586,13 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
     _reference_pixels: int | None = None
 
+    @property
+    def reference_pixels(self) -> int | None:
+        return self._reference_pixels
+
+    def set_reference_pixels(self, pixels: int) -> None:
+        self._reference_pixels = pixels
+
     usage: ImageUsage | None = None
     """
     Users might use litellm with older python versions, we don't want this to break for them.

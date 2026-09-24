@@ -105,7 +105,7 @@ def _jpeg_sof_dimensions(stream: IO[bytes], start: int, offset: int, segments_le
             sof = stream.read(_JPEG_SOF_PAYLOAD_SIZE)
             if len(sof) < _JPEG_SOF_PAYLOAD_SIZE:
                 return None
-            _precision, height, width = cast(tuple[int, int, int], struct.unpack(">BHH", sof))
+            height, width = cast(tuple[int, int], struct.unpack(">HH", sof[1:5]))
             return ImageDimensions(width=width, height=height)
         segment_length = int.from_bytes(marker[2:4], "big")
         if segment_length < 2:

@@ -3927,7 +3927,8 @@ def test_image_edit_handler_stamps_measured_reference_pixels():
         client=client,
     )
 
-    assert response._reference_pixels == 4 * 2 + 1 * 1
+    assert response.reference_pixels == 4 * 2 + 1 * 1
+    assert "reference_pixels" not in response.model_dump()
 
 
 async def test_async_image_edit_handler_stamps_measured_reference_pixels():
@@ -3947,7 +3948,7 @@ async def test_async_image_edit_handler_stamps_measured_reference_pixels():
         client=client,
     )
 
-    assert response._reference_pixels == 8
+    assert response.reference_pixels == 8
 
 
 def test_image_edit_handler_leaves_reference_pixels_unset_when_unmeasurable():
@@ -3967,7 +3968,7 @@ def test_image_edit_handler_leaves_reference_pixels_unset_when_unmeasurable():
         client=client,
     )
 
-    assert response._reference_pixels is None
+    assert response.reference_pixels is None
 
 
 class _ScriptedClientWebSocket(_FakeClientWebSocket):

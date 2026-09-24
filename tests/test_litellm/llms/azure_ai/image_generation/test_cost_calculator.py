@@ -24,16 +24,17 @@ def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
 
 def _edit_response(reference_pixels: int | None = REFERENCE_PIXELS, **kwargs: object) -> ImageResponse:
     response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n")], size="1024x1024", **kwargs)
-    response._reference_pixels = reference_pixels
+    if reference_pixels is not None:
+        response.set_reference_pixels(reference_pixels)
     return response
 
 
-def _edit_cost(response: ImageResponse, **kwargs: object) -> float:
+def _edit_cost(response: ImageResponse, size: str = "1024x1024", **kwargs: object) -> float:
     return CostCalculatorUtils.route_image_generation_cost_calculator(
         model="FLUX.2-flex",
         completion_response=response,
         custom_llm_provider="azure_ai",
-        size="1024x1024",
+        size=size,
         call_type="image_edit",
         **kwargs,
     )
@@ -134,6 +135,26 @@ def test_edit_without_measurement_bills_generated_pixels_only() -> None:
     cost: Final = _edit_cost(_edit_response(reference_pixels=None))
 
     assert cost == pytest.approx(catalog_rate * 1024 * 1024)
+
+
+@pytest.mark.parametrize(
+    ("size", "expected_generated"),
+    [
+        ("1024-x-1024", "computed"),
+        ("auto", "reference-only"),
+        ("garbage", "reference-only"),
+    ],
+    ids=["dashed-size", "auto-size-unparsed", "garbage-size-unparsed"],
+)
+def test_size_string_parsing(size: str, expected_generated: str) -> None:
+    catalog_rate: Final = litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"]
+    expected: Final = (
+        catalog_rate * 1024 * 1024 if expected_generated == "computed" else 0.0
+    ) + catalog_rate * REFERENCE_PIXELS
+
+    cost: Final = _edit_cost(_edit_response(), size=size)
+
+    assert cost == pytest.approx(expected)
 
 
 def test_optional_params_dimensions_beat_response_size() -> None:

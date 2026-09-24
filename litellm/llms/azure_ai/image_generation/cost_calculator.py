@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping
 from typing import Any, Final
 
@@ -14,23 +15,16 @@ def _rate(table: ModelInfo, key: str) -> float | None:
     return _get_cost_per_unit(table, key, default_value=None)
 
 
+_SIZE_PATTERN: Final = re.compile(r"(\d+)(?:x|-x-)(\d+)")
+
+
 def _size_pixels(size: str | None) -> int:
     if size is None:
         return 0
-    for separator in ("x", "-x-"):
-        if separator in size:
-            parts = size.split(separator)
-            if len(parts) != 2:
-                continue
-            try:
-                width = int(parts[0])
-                height = int(parts[1])
-            except ValueError:
-                continue
-            if width > 0 and height > 0:
-                return width * height
-            continue
-    return 0
+    match: Final = _SIZE_PATTERN.fullmatch(size)
+    if match is None or int(match[1]) <= 0 or int(match[2]) <= 0:
+        return 0
+    return int(match[1]) * int(match[2])
 
 
 def _generated_pixels(
@@ -73,8 +67,7 @@ def cost_calculator(
     if usage_cost is not None:
         return usage_cost
 
-    data: Final = image_response.data
-    num_images: Final = n if n is not None else (len(data) if isinstance(data, list) else 0)
+    num_images: Final = n if n is not None else len(image_response.data or ())
     generated_meters: Final = (
         ("output_cost_per_image", num_images),
         ("input_cost_per_pixel", _generated_pixels(optional_params, size, image_response) * num_images),
@@ -83,8 +76,7 @@ def cost_calculator(
         (rate * units for key, units in generated_meters if (rate := _rate(resolved, key)) is not None),
         0.0,
     )
-    reference_pixels: Final = getattr(image_response, "_reference_pixels", None)
     reference: Final = (_rate(resolved, "input_cost_per_reference_pixel") or 0.0) * (
-        reference_pixels if isinstance(reference_pixels, int) and not isinstance(reference_pixels, bool) else 0
+        image_response.reference_pixels or 0
     )
     return generated + reference
