@@ -6408,9 +6408,9 @@ def test_no_sampling_model_still_forwards_temperature_one():
     assert optional_params.get("temperature") == 1
 
     # A non-default temperature still raises for these models.
-    import pytest
+    import litellm
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
         AnthropicConfig._apply_sampling_param(
             optional_params={},
             model="claude-opus-4-7-20250101",
