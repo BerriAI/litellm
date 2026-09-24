@@ -3414,6 +3414,7 @@ dependencies = [
 name = "litellm-types"
 version = "0.1.0"
 dependencies = [
+ "rstest",
  "serde",
  "serde_json",
 ]
