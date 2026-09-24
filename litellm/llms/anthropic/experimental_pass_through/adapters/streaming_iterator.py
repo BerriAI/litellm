@@ -1037,7 +1037,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             refusal_stop_details,
         )
 
-        refusal_delta: Final[MessageDelta] = {  # mutable-ok: fresh message_delta payload
+        refusal_delta: Final[MessageDelta] = {
             **delta,
             "stop_reason": "refusal",
             "stop_details": refusal_stop_details(self._refusal_text),
