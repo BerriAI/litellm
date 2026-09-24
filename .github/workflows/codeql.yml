@@ -74,7 +74,7 @@ jobs:
       # It also fires on the MCP advisory-lock derivations in
       # litellm/proxy/_experimental/mcp_server/db.py, which hash identifier
       # strings (user_id, server_id, server names) into Postgres advisory lock
-      # keys — neither password nor secret hashing.
+      # keys, so neither a password nor a secret is hashed.
       - name: Filter SARIF (OCI sha256, HIBP sha1, MCP lock ids)
         if: matrix.language == 'python'
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
