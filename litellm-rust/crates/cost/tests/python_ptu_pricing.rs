@@ -553,3 +553,64 @@ fn the_zeroed_pricing_map_carries_exactly_the_python_fields() {
         ]
     );
 }
+
+#[rstest]
+#[case::string(json!("team-alpha"), "team-alpha")]
+#[case::integer(json!(7), "7")]
+#[case::integral_float(json!(7.0), "7.0")]
+#[case::fractional_float(json!(7.5), "7.5")]
+#[case::boolean(json!(true), "True")]
+fn a_team_id_is_rendered_like_python_str(#[case] team_id: Value, #[case] expected: &str) {
+    let model_info = merge(&valid_model_info(), &json!({"team_id": team_id}));
+
+    assert_eq!(ptu_terms(&model_info).expect("terms").team_id, expected);
+}
+
+#[rstest]
+#[case::padded_string(json!(" 12 "), Some(12))]
+#[case::float_truncates(json!(3.9), Some(3))]
+#[case::boolean_true(json!(true), Some(1))]
+#[case::decimal_string_is_not_an_int(json!("3.5"), None)]
+#[case::list_is_not_a_count(json!([3]), None)]
+fn a_ptu_count_is_coerced_like_python_int(#[case] count: Value, #[case] expected: Option<i64>) {
+    let model_info = merge(&valid_model_info(), &json!({"ptu_count": count}));
+
+    assert_eq!(
+        ptu_terms(&model_info).map(|terms| terms.ptu_count),
+        expected
+    );
+}
+
+#[rstest]
+#[case::padded_string(json!(" 0.5 "), Some(0.5))]
+#[case::boolean_false(json!(false), Some(0.0))]
+#[case::integer(json!(2), Some(2.0))]
+#[case::not_a_number(json!("NaN"), None)]
+#[case::object_is_not_a_rate(json!({"rate": 1}), None)]
+fn a_ptu_rate_is_coerced_like_python_float(#[case] rate: Value, #[case] expected: Option<f64>) {
+    let model_info = merge(&valid_model_info(), &json!({"cost_per_ptu_per_hour": rate}));
+
+    assert_eq!(
+        ptu_terms(&model_info).map(|terms| terms.cost_per_ptu_per_hour),
+        expected
+    );
+}
+
+#[rstest]
+#[case::date_only("2026-05-01", jiff::civil::date(2026, 5, 1).at(0, 0, 0, 0))]
+#[case::space_separated("2026-05-01 06:30:00", jiff::civil::date(2026, 5, 1).at(6, 30, 0, 0))]
+fn a_start_without_a_time_or_t_separator_is_read_as_utc(
+    #[case] start: &str,
+    #[case] expected: jiff::civil::DateTime,
+) {
+    let model_info = merge(&valid_model_info(), &json!({"ptu_effective_from": start}));
+
+    let terms = ptu_terms(&model_info).expect("terms");
+    assert_eq!(
+        terms
+            .effective_from
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .datetime(),
+        expected
+    );
+}
