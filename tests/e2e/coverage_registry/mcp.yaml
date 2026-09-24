@@ -136,92 +136,92 @@
   source: "user_api_key_auth_mcp.py:2137"
   rationale: "A key granted a toolset lists exactly the toolset's tools: the rest of the server's catalog stays hidden and every stored name resolves"
 
-- id: mcp.list_tools.bearer.jwt_valid_scoped
+- id: mcp.list_tools.bearer.scoped
   module: mcp
   tier: P0
   operation: list_tools
   auth_family: bearer
-  assertions: [valid_scoped]
-  source: "test_mcp_jwt_auth_e2e.py"
+  assertions: [scoped]
+  source: "user_api_key_auth.py"
   rationale: "LIT-4506 preserves scoped gateway JWT admission independently of upstream credentials"
 
-- id: mcp.call_tool.bearer.jwt_valid_scoped
+- id: mcp.call_tool.bearer.scoped
   module: mcp
   tier: P0
   operation: call_tool
   auth_family: bearer
-  assertions: [valid_scoped]
-  source: "test_mcp_jwt_auth_e2e.py"
+  assertions: [scoped]
+  source: "user_api_key_auth.py"
   rationale: "LIT-4506 preserves scoped gateway JWT admission independently of upstream credentials"
 
-- id: mcp.list_tools.bearer.jwt_invalid_signature_denied
+- id: mcp.list_tools.bearer.denied_invalid_signature
   module: mcp
   tier: P0
   operation: list_tools
   auth_family: bearer
-  assertions: [invalid_signature_denied]
-  source: "test_mcp_jwt_auth_e2e.py"
+  assertions: [denied_invalid_signature]
+  source: "user_api_key_auth.py"
   rationale: "LIT-4506 preserves scoped gateway JWT admission independently of upstream credentials"
 
-- id: mcp.call_tool.bearer.jwt_invalid_signature_denied
+- id: mcp.call_tool.bearer.denied_invalid_signature
   module: mcp
   tier: P0
   operation: call_tool
   auth_family: bearer
-  assertions: [invalid_signature_denied]
-  source: "test_mcp_jwt_auth_e2e.py"
+  assertions: [denied_invalid_signature]
+  source: "user_api_key_auth.py"
   rationale: "LIT-4506 preserves scoped gateway JWT admission independently of upstream credentials"
 
-- id: mcp.list_tools.bearer.jwt_expired_denied
+- id: mcp.list_tools.bearer.denied_expired
   module: mcp
   tier: P0
   operation: list_tools
   auth_family: bearer
-  assertions: [expired_denied]
-  source: "test_mcp_jwt_auth_e2e.py"
+  assertions: [denied_expired]
+  source: "user_api_key_auth.py"
   rationale: "LIT-4506 preserves scoped gateway JWT admission independently of upstream credentials"
 
-- id: mcp.call_tool.bearer.jwt_expired_denied
+- id: mcp.call_tool.bearer.denied_expired
   module: mcp
   tier: P0
   operation: call_tool
   auth_family: bearer
-  assertions: [expired_denied]
-  source: "test_mcp_jwt_auth_e2e.py"
+  assertions: [denied_expired]
+  source: "user_api_key_auth.py"
   rationale: "LIT-4506 preserves scoped gateway JWT admission independently of upstream credentials"
 
-- id: mcp.list_tools.bearer.jwt_inactive_user_denied
+- id: mcp.list_tools.bearer.denied_inactive_user
   module: mcp
   tier: P0
   operation: list_tools
   auth_family: bearer
-  assertions: [inactive_user_denied]
-  source: "test_mcp_jwt_auth_e2e.py"
+  assertions: [denied_inactive_user]
+  source: "user_api_key_auth.py:1722"
   rationale: "LIT-4506 preserves scoped gateway JWT admission independently of upstream credentials"
 
-- id: mcp.call_tool.bearer.jwt_inactive_user_denied
+- id: mcp.call_tool.bearer.denied_inactive_user
   module: mcp
   tier: P0
   operation: call_tool
   auth_family: bearer
-  assertions: [inactive_user_denied]
-  source: "test_mcp_jwt_auth_e2e.py"
+  assertions: [denied_inactive_user]
+  source: "user_api_key_auth.py:1722"
   rationale: "LIT-4506 preserves scoped gateway JWT admission independently of upstream credentials"
 
-- id: mcp.list_tools.bearer.jwt_header_precedence
+- id: mcp.list_tools.bearer.explicit_header_precedence
   module: mcp
   tier: P0
   operation: list_tools
   auth_family: bearer
-  assertions: [header_precedence]
-  source: "test_mcp_jwt_auth_e2e.py"
+  assertions: [explicit_header_precedence]
+  source: "user_api_key_auth.py"
   rationale: "LIT-4506 preserves scoped gateway JWT admission independently of upstream credentials"
 
-- id: mcp.call_tool.bearer.jwt_header_precedence
+- id: mcp.call_tool.bearer.explicit_header_precedence
   module: mcp
   tier: P0
   operation: call_tool
   auth_family: bearer
-  assertions: [header_precedence]
-  source: "test_mcp_jwt_auth_e2e.py"
+  assertions: [explicit_header_precedence]
+  source: "user_api_key_auth.py"
   rationale: "LIT-4506 preserves scoped gateway JWT admission independently of upstream credentials"

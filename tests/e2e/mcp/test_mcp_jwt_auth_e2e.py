@@ -86,7 +86,7 @@ def granted_mcp(client: McpClient, resources: ResourceManager, jwt_identity: Ide
 
 
 class TestMcpGatewayJwt:
-    @pytest.mark.covers("mcp.list_tools.bearer.jwt_valid_scoped", "mcp.call_tool.bearer.jwt_valid_scoped")
+    @pytest.mark.covers("mcp.list_tools.bearer.scoped", "mcp.call_tool.bearer.scoped")
     @pytest.mark.parametrize("header", ("authorization", "x_litellm_api_key"))
     def test_valid_scoped_jwt_lists_and_calls(
         self, client: McpClient, granted_mcp: GrantedMcp, header: Literal["authorization", "x_litellm_api_key"]
@@ -99,7 +99,7 @@ class TestMcpGatewayJwt:
         _allowed(client, granted_mcp, headers)
 
     @pytest.mark.covers(
-        "mcp.list_tools.bearer.jwt_invalid_signature_denied", "mcp.call_tool.bearer.jwt_invalid_signature_denied"
+        "mcp.list_tools.bearer.denied_invalid_signature", "mcp.call_tool.bearer.denied_invalid_signature"
     )
     def test_tampered_signature_denies_both_operations(self, client: McpClient, granted_mcp: GrantedMcp) -> None:
         valid: Final = AuthHeaders(authorization=f"Bearer {granted_mcp.token}")
@@ -110,7 +110,7 @@ class TestMcpGatewayJwt:
         _denied(client, granted_mcp, AuthHeaders(authorization=f"Bearer {tampered}"), "signature")
         _allowed(client, granted_mcp, valid)
 
-    @pytest.mark.covers("mcp.list_tools.bearer.jwt_expired_denied", "mcp.call_tool.bearer.jwt_expired_denied")
+    @pytest.mark.covers("mcp.list_tools.bearer.denied_expired", "mcp.call_tool.bearer.denied_expired")
     def test_expired_signed_jwt_denies_both_operations(
         self, client: McpClient, granted_mcp: GrantedMcp, jwt_identity: Identity, idp: Keycloak
     ) -> None:
@@ -125,9 +125,7 @@ class TestMcpGatewayJwt:
         _denied(client, granted_mcp, AuthHeaders(authorization=f"Bearer {expiring}"), "expired")
         _allowed(client, granted_mcp, valid)
 
-    @pytest.mark.covers(
-        "mcp.list_tools.bearer.jwt_inactive_user_denied", "mcp.call_tool.bearer.jwt_inactive_user_denied"
-    )
+    @pytest.mark.covers("mcp.list_tools.bearer.denied_inactive_user", "mcp.call_tool.bearer.denied_inactive_user")
     def test_deactivated_user_cannot_reuse_warm_jwt(
         self, client: McpClient, granted_mcp: GrantedMcp, jwt_identity: Identity
     ) -> None:
@@ -149,7 +147,30 @@ class TestMcpGatewayJwt:
         )
         _allowed(client, granted_mcp, headers)
 
-    @pytest.mark.covers("mcp.list_tools.bearer.jwt_header_precedence", "mcp.call_tool.bearer.jwt_header_precedence")
+    @pytest.mark.covers("mcp.list_tools.bearer.denied_inactive_user", "mcp.call_tool.bearer.denied_inactive_user")
+    def test_deactivated_user_is_denied_on_a_cold_jwt(
+        self, client: McpClient, granted_mcp: GrantedMcp, jwt_identity: Identity, idp: Keycloak
+    ) -> None:
+        management: Final = build_management_client(client.proxy)
+        management.update_user(
+            UserUpdateBody(
+                user_id=jwt_identity.user_id, user_role="internal_user", metadata=UserScimMetadata(scim_active=False)
+            )
+        )
+        cold: Final = idp.access_token(jwt_identity)
+        assert cold != granted_mcp.token
+        access: Final = GrantedMcp(granted_mcp.server_id, granted_mcp.other_server_id, granted_mcp.tool, cold)
+        _denied(client, access, AuthHeaders(authorization=f"Bearer {cold}"), "deactivated")
+        management.update_user(
+            UserUpdateBody(
+                user_id=jwt_identity.user_id, user_role="internal_user", metadata=UserScimMetadata(scim_active=True)
+            )
+        )
+        _allowed(client, access, AuthHeaders(authorization=f"Bearer {cold}"))
+
+    @pytest.mark.covers(
+        "mcp.list_tools.bearer.explicit_header_precedence", "mcp.call_tool.bearer.explicit_header_precedence"
+    )
     def test_explicit_gateway_header_wins_without_fallback(
         self, client: McpClient, granted_mcp: GrantedMcp, resources: ResourceManager
     ) -> None:
