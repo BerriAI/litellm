@@ -629,10 +629,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls
                 if len(thinking_blocks) > 0 and (
-                    model is None
-                    or LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(
-                        model
-                    )
+                    model is None or LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(model)
                 ):
                     assistant_message["thinking_blocks"] = thinking_blocks
                 elif len(thinking_blocks) == 0:
