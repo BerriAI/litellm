@@ -702,12 +702,8 @@ export default function KeyInfoView({
                           <Info className="size-3 text-muted-foreground" />
                         </HoverCardTrigger>
                         <HoverCardContent className="w-80">
-                          Lifetime tracking started with LiteLLM v1.103.0 and was not backfilled, so this key&apos;s
-                          lifetime spend only counts usage since the upgrade. Run
-                          db_scripts/backfill_key_total_spend.sql from the LiteLLM repo against your database to count
-                          current spend. If this key&apos;s budget resets, also run
-                          db_scripts/backfill_key_total_spend_from_spend_logs.sql to recover earlier periods from
-                          retained spend logs.
+                          Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026 and was not backfilled,
+                          so this key&apos;s lifetime spend only counts usage since that upgrade.
                         </HoverCardContent>
                       </HoverCard>
                     )}
