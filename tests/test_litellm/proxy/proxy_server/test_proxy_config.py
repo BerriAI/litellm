@@ -3947,19 +3947,16 @@ async def test_ProxyConfig__update_general_settings_reschedules_when_only_the_cr
     monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", fake_scheduler)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     pc = ProxyConfig()
-    hourly = {"maximum_daily_tag_spend_retention_period": "90d", "maximum_spend_logs_cleanup_cron": "0 * * * *"}
-    pc.settings.apply_db_row("general_settings", hourly)
+    pc.settings.load_yaml({"maximum_daily_tag_spend_retention_period": "90d"})
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
-    await pc._update_general_settings(hourly)
-    await pc._update_general_settings(hourly)
-    assert fake_scheduler.add_job.call_count == 0
 
-    daily = {**hourly, "maximum_spend_logs_cleanup_cron": "0 3 * * *"}
-    pc.settings.apply_db_row("general_settings", daily)
-    await pc._update_general_settings(daily)
+    await pc._update_general_settings({"maximum_spend_logs_cleanup_cron": "0 3 * * *"})
     assert fake_scheduler.add_job.call_count == 1
     assert fake_scheduler.add_job.call_args.kwargs["id"] == "spend_log_cleanup_job"
     assert "hour='3'" in str(fake_scheduler.add_job.call_args.args[1])
+
+    await pc._update_general_settings({"maximum_spend_logs_cleanup_cron": "0 3 * * *"})
+    assert fake_scheduler.add_job.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -4143,7 +4140,7 @@ async def test_ProxyConfig__update_general_settings_dispatches_every_side_effect
         if name == "_apply_cache_size_setting":
             handler.assert_awaited_once_with({}, cache_size_was_db=False)
         elif name == "_apply_retention_settings":
-            handler.assert_awaited_once_with({}, previous_retention_values=())
+            handler.assert_awaited_once_with({}, previous_cleanup_schedule=())
         elif name == "_apply_pass_through_settings":
             handler.assert_awaited_once_with({}, previous_endpoints=None)
         else:

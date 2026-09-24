@@ -7509,18 +7509,18 @@ class ProxyConfig:
         if not isinstance(general_settings, SettingsStore):
             self.settings.load_yaml(_as_settings_mapping(general_settings))
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
-        previous_retention_values: Final = self._resolved_retention_values()
+        previous_cleanup_schedule: Final = self._resolved_cleanup_schedule()
         previous_pass_through_endpoints: Final = self.settings.get("pass_through_endpoints")
         self.settings.apply_db_row("general_settings", db_general_settings)
         _bind_general_settings_store(self.settings)
         await self._apply_general_settings_side_effects(
             db_general_settings,
             cache_size_was_db,
-            previous_retention_values,
+            previous_cleanup_schedule,
             previous_pass_through_endpoints,
         )
 
-    def _resolved_retention_values(self) -> tuple[SettingsJsonValue | None, ...]:
+    def _resolved_cleanup_schedule(self) -> tuple[SettingsJsonValue | None, ...]:
         return tuple(
             self.settings.get(key)
             for key in (
@@ -7528,6 +7528,8 @@ class ProxyConfig:
                 "maximum_autorouter_session_retention_period",
                 "maximum_health_check_retention_period",
                 "maximum_daily_tag_spend_retention_period",
+                "maximum_spend_logs_cleanup_cron",
+                "maximum_spend_logs_retention_interval",
             )
         )
 
@@ -7535,7 +7537,7 @@ class ProxyConfig:
         self,
         db_values: Mapping[str, SettingsJsonValue],
         cache_size_was_db: bool,
-        previous_retention_values: tuple[SettingsJsonValue | None, ...],
+        previous_cleanup_schedule: tuple[SettingsJsonValue | None, ...],
         previous_pass_through_endpoints: SettingsJsonValue | None,
     ) -> None:
         effects: Final = (
@@ -7544,7 +7546,7 @@ class ProxyConfig:
             self._apply_boolean_settings,
             partial(self._apply_cache_size_setting, cache_size_was_db=cache_size_was_db),
             self._apply_store_model_in_db_setting,
-            partial(self._apply_retention_settings, previous_retention_values=previous_retention_values),
+            partial(self._apply_retention_settings, previous_cleanup_schedule=previous_cleanup_schedule),
             self._apply_ssrf_settings,
         )
         for effect in effects:
@@ -7639,24 +7641,15 @@ class ProxyConfig:
     async def _apply_retention_settings(
         self,
         db_values: Mapping[str, SettingsJsonValue],
-        previous_retention_values: tuple[SettingsJsonValue | None, ...],
+        previous_cleanup_schedule: tuple[SettingsJsonValue | None, ...],
     ) -> None:
-        resolved: Final = self._resolved_retention_values()
-        wants_job: Final = any(value is not None for value in resolved)
+        schedule: Final = self._resolved_cleanup_schedule()
+        wants_job: Final = any(value is not None for value in schedule[:4])
         has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
-        attempt: Final = (
-            *resolved,
-            self.settings.get("maximum_spend_logs_cleanup_cron"),
-            self.settings.get("maximum_spend_logs_retention_interval"),
-        )
-        last_attempt: Final = self._last_cleanup_schedule_attempt
-        schedule_changed: Final = last_attempt is not None and attempt != last_attempt
-        job_missing: Final = wants_job and not has_job and attempt != last_attempt
-        if previous_retention_values != resolved or schedule_changed or job_missing or (has_job and not wants_job):
-            self._last_cleanup_schedule_attempt = attempt
+        job_missing: Final = wants_job and not has_job and schedule != self._last_cleanup_schedule_attempt
+        if previous_cleanup_schedule != schedule or job_missing or (has_job and not wants_job):
+            self._last_cleanup_schedule_attempt = schedule
             await self._reschedule_spend_log_cleanup_job()
-        elif last_attempt is None:
-            self._last_cleanup_schedule_attempt = attempt
 
     async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         _apply_ssrf_general_settings(db_values)
