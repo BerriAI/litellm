@@ -665,3 +665,35 @@ async def test_audit_matching_login_without_nonce_does_not_report_failure(caplog
     )
     assert result is None
     assert "oauth_identity_binding audit" not in caplog.text
+
+
+def test_select_signing_key_rejects_kid_matching_key_with_non_approved_alg() -> None:
+    import json
+
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    from litellm.proxy._experimental.mcp_server.oauth_identity_binding import _BindingRejection
+
+    okp_jwk: Final = {
+        **json.loads(jwt.algorithms.OKPAlgorithm.to_jwk(ed25519.Ed25519PrivateKey.generate().public_key())),
+        "kid": KID,
+        "alg": "EdDSA",
+    }
+    result: Final = _select_signing_key(_sign_id_token({}), [okp_jwk])
+    assert isinstance(result, _BindingRejection)
+
+
+def test_select_signing_key_picks_approved_key_when_kid_is_shared() -> None:
+    import json
+
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    okp_jwk: Final = {
+        **json.loads(jwt.algorithms.OKPAlgorithm.to_jwk(ed25519.Ed25519PrivateKey.generate().public_key())),
+        "kid": KID,
+        "alg": "EdDSA",
+    }
+    hs_jwk: Final = {"kty": "oct", "kid": KID, "alg": "HS256", "k": "c2VjcmV0"}
+    result: Final = _select_signing_key(_sign_id_token({}), [okp_jwk, hs_jwk, _PUBLIC_JWK])
+    assert isinstance(result, jwt.PyJWK)
+    assert result.key_id == KID

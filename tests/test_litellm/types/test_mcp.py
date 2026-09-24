@@ -53,12 +53,12 @@ def test_has_header_matches_any_casing() -> None:
 @pytest.mark.parametrize(
     "target,expected",
     [
-        ("https://upstream.example.com/other", False),      # same origin
+        ("https://upstream.example.com/other", False),  # same origin
         ("https://upstream.example.com:443/other", False),  # explicit default port
-        ("https://attacker.example.com/collect", True),     # different host
-        ("http://upstream.example.com/collect", True),      # scheme downgrade, same host
+        ("https://attacker.example.com/collect", True),  # different host
+        ("http://upstream.example.com/collect", True),  # scheme downgrade, same host
         ("https://upstream.example.com:8443/other", True),  # different port, same host
-        ("https://sub.upstream.example.com/x", True),       # different host
+        ("https://sub.upstream.example.com/x", True),  # different host
     ],
 )
 def test_origin_is_scheme_host_and_port_not_host_alone(target: str, expected: bool) -> None:
@@ -85,3 +85,29 @@ async def test_the_hook_drops_the_slot_only_once_the_origin_changes() -> None:
     foreign = httpx.Request("GET", "https://attacker.example.com/x", headers={"esb-oauth": "Bearer x"})
     await hook(foreign)
     assert "esb-oauth" not in foreign.headers
+
+
+def test_new_mcp_server_request_rejects_non_approved_client_assertion_signing_alg() -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import NewMCPServerRequest
+
+    with pytest.raises(ValidationError) as exc:
+        NewMCPServerRequest(
+            transport="http",
+            url="https://mcp.example.com",
+            credentials={"client_assertion_signing_alg": "HS256"},
+        )
+    assert "client_assertion_signing_alg" in str(exc.value)
+
+
+def test_new_mcp_server_request_accepts_approved_client_assertion_signing_alg() -> None:
+    from litellm.proxy._types import NewMCPServerRequest
+
+    request = NewMCPServerRequest(
+        transport="http",
+        url="https://mcp.example.com",
+        credentials={"client_assertion_signing_alg": "ES256"},
+    )
+    assert request.credentials is not None
+    assert request.credentials["client_assertion_signing_alg"] == "ES256"

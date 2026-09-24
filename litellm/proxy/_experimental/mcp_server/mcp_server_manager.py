@@ -169,6 +169,7 @@ from litellm.proxy._types import (
     is_per_server_oauth_discovery_eligible,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, ApprovedJwtAlgorithm
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
@@ -386,7 +387,7 @@ class MCPServerConfig(TypedDict, total=False):
     id_jag_resource: str
     client_private_key: str
     client_private_key_id: str
-    client_assertion_signing_alg: str
+    client_assertion_signing_alg: ApprovedJwtAlgorithm
     timeout: float
     max_concurrent_requests: int
 
@@ -1480,6 +1481,18 @@ def _warn_on_shared_identifier_prefixes(servers: Iterable[MCPServer]) -> None:
                 sorted(server_ids),
                 identifier,
             )
+
+
+def _stored_client_assertion_signing_alg(value: object, server_name: str) -> ApprovedJwtAlgorithm:
+    if value in APPROVED_JWT_ALGORITHMS:
+        return cast(ApprovedJwtAlgorithm, value)
+    if value is not None:
+        verbose_logger.warning(
+            "MCP server %s: client_assertion_signing_alg %r is not an approved algorithm, using RS256",
+            server_name,
+            value,
+        )
+    return "RS256"
 
 
 def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
@@ -2604,7 +2617,10 @@ class MCPServerManager:
                 id_jag_resource=server_config.get("id_jag_resource", None),
                 client_private_key=server_config.get("client_private_key", None),
                 client_private_key_id=server_config.get("client_private_key_id", None),
-                client_assertion_signing_alg=server_config.get("client_assertion_signing_alg", "RS256"),
+                client_assertion_signing_alg=_stored_client_assertion_signing_alg(
+                    server_config.get("client_assertion_signing_alg"),
+                    str(server_config.get("alias") or server_config.get("server_name") or server_id),
+                ),
                 token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
@@ -3178,10 +3194,10 @@ class MCPServerManager:
                 credentials_are_encrypted,
             ),
             client_private_key_id=(credentials_dict.get("client_private_key_id") if credentials_dict else None),
-            client_assertion_signing_alg=(
-                credentials_dict.get("client_assertion_signing_alg") if credentials_dict else None
-            )
-            or "RS256",
+            client_assertion_signing_alg=_stored_client_assertion_signing_alg(
+                credentials_dict.get("client_assertion_signing_alg") if credentials_dict else None,
+                name_for_prefix,
+            ),
             token_exchange_profile=mcp_server.token_exchange_profile
             or (credentials_dict.get("token_exchange_profile") if credentials_dict else None)
             or "rfc8693",
