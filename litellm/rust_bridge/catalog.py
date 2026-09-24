@@ -17,6 +17,7 @@ from litellm.types.secret_managers.main import KeyManagementSystem
 
 
 class Route(str, Enum):
+    BATCHES = "batches"
     CHAT_COMPLETIONS = "chat_completions"
     EMBEDDINGS = "embeddings"
     MESSAGES = "messages"
@@ -106,6 +107,8 @@ Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
     LoggerRule(Rollout.RUST_OPT_IN),
+    RouteRule(Route.BATCHES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
+    RouteRule(Route.BATCHES, Rollout.PYTHON_ONLY),
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),

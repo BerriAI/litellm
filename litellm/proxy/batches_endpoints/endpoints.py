@@ -16,7 +16,9 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.batches.dispatch import ANTHROPIC_BATCH_INPUT_CONTENT_KWARG
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
@@ -25,9 +27,9 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     LiteLLMExecutedBatchRunner,
     ManagedBatchStore,
     batch_error,
+    deployment_provider_of,
     executed_batch_runner_lost,
     litellm_executed_provider_for,
-    resolve_litellm_executed_provider,
 )
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -73,7 +75,7 @@ from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
-    from prisma.models import LiteLLM_ManagedObjectTable
+    from prisma.models import LiteLLM_ManagedFileTable, LiteLLM_ManagedObjectTable
 
 router: Final = APIRouter()
 _METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
@@ -183,18 +185,39 @@ async def _resolve_managed_input_file_storage_url(input_file_id: str) -> "str | 
     which the managed-files deployment hook still maps. This adds resolution
     without changing behavior on any path that did not resolve before.
     """
+    db_file: Final = await _managed_input_file_row(input_file_id)
+    return None if db_file is None else db_file.storage_url or None
+
+
+async def _managed_input_file_row(input_file_id: str) -> "LiteLLM_ManagedFileTable | None":
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         return None
     try:
-        db_file = await ManagedFileRepository(prisma_client).table.find_first(where={"unified_file_id": input_file_id})
+        return await ManagedFileRepository(prisma_client).table.find_first(where={"unified_file_id": input_file_id})
     except Exception as e:
         verbose_proxy_logger.warning("create_batch: managed file lookup failed for %s: %s", input_file_id, e)
         return None
-    if db_file is None:
+
+
+async def _anthropic_batch_input_content(
+    deployment_credentials: Mapping[str, object] | None, input_file_id: str
+) -> str | None:
+    """Anthropic takes batch requests inline and cannot return an uploaded file, so the proxy reads its own copy."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if deployment_credentials is None or deployment_provider_of(deployment_credentials) != "anthropic":
         return None
-    return db_file.storage_url or None
+    db_file: Final = await _managed_input_file_row(input_file_id)
+    if db_file is None or not db_file.storage_backend or not db_file.storage_url:
+        return None
+    try:
+        backend: Final = get_storage_backend(db_file.storage_backend, prisma_client=prisma_client)
+        content: Final = await backend.download_file(db_file.storage_url)
+    except ValueError as e:
+        raise batch_error(400, str(e))
+    return content.decode("utf-8")
 
 
 async def _create_provider_batch_for_managed_file(
@@ -202,6 +225,7 @@ async def _create_provider_batch_for_managed_file(
     create_batch_data: LiteLLMBatchCreateRequest,
     input_file_id: str,
     unified_file_id: str,
+    input_content: str | None = None,
 ) -> LiteLLMBatch:
     resolved_storage_url: Final = await _resolve_managed_input_file_storage_url(input_file_id)
     request: Final[LiteLLMBatchCreateRequest] = {
@@ -209,7 +233,10 @@ async def _create_provider_batch_for_managed_file(
         "input_file_id": resolved_storage_url or input_file_id,
         "disable_fallbacks": True,
     }
-    response: Final = await llm_router.acreate_batch(**request)
+    response: Final = await llm_router.acreate_batch(
+        **request,
+        **({} if input_content is None else {ANTHROPIC_BATCH_INPUT_CONTENT_KWARG: input_content}),
+    )
     response.input_file_id = input_file_id
     response._hidden_params["unified_file_id"] = unified_file_id
     return response
@@ -416,8 +443,11 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
-            executed_provider: Final = await resolve_litellm_executed_provider(
-                llm_router, model, user_api_key_dict.team_id
+            deployment_credentials: Final = llm_router.get_deployment_credentials_with_provider(
+                model_id=model, team_id=user_api_key_dict.team_id
+            )
+            executed_provider: Final = (
+                None if deployment_credentials is None else await litellm_executed_provider_for(deployment_credentials)
             )
             response = (
                 await _litellm_executed_batch_runner(llm_router, proxy_logging_obj).create(
@@ -430,7 +460,11 @@ async def create_batch(
                 )
                 if executed_provider is not None
                 else await _create_provider_batch_for_managed_file(
-                    llm_router, _create_batch_data, input_file_id, unified_file_id
+                    llm_router,
+                    _create_batch_data,
+                    input_file_id,
+                    unified_file_id,
+                    input_content=await _anthropic_batch_input_content(deployment_credentials, input_file_id),
                 )
             )
         else:

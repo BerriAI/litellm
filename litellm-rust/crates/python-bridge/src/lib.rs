@@ -26,6 +26,8 @@ mod _native {
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
+    use crate::routes::batches::{acreate_batch, aretrieve_batch, create_batch, retrieve_batch};
+    #[pymodule_export]
     use crate::routes::chat_completions::{
         achat_completions, acompletion, chat_completions, chat_completions_decline, completion,
     };
@@ -85,6 +87,10 @@ mod tests {
                 "ProcessReservedForForking",
                 "ocr",
                 "aocr",
+                "retrieve_batch",
+                "aretrieve_batch",
+                "create_batch",
+                "acreate_batch",
                 "embedding",
                 "aembedding",
                 "transcription",

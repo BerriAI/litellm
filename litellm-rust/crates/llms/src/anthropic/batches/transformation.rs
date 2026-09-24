@@ -1,15 +1,20 @@
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use litellm_types::llms::openai::ChatMessage;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use url::Url;
 
 use crate::{
     anthropic::{
+        chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
         common_utils::is_anthropic_oauth_key,
         experimental_pass_through::messages::transformation::resolve_anthropic_api_base,
     },
-    base_llm::{anthropic_messages::transformation::Headers, chat::transformation::Error},
+    base_llm::{
+        anthropic_messages::transformation::Headers,
+        chat::transformation::{BaseConfig, Error},
+    },
 };
 
 const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
@@ -17,6 +22,16 @@ const BATCHES_BETA: &str = "message-batches-2024-09-24";
 const BETA_HEADER: &str = "anthropic-beta";
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_AUTH_TOKEN_ENV: &str = "ANTHROPIC_AUTH_TOKEN";
+const CHAT_COMPLETIONS_URL: &str = "/v1/chat/completions";
+const MODEL_PREFIX: &str = "anthropic/";
+
+#[derive(Deserialize)]
+struct BatchInputLine {
+    custom_id: String,
+    method: String,
+    url: String,
+    body: Map<String, Value>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicBatchRequestCounts {
@@ -95,13 +110,17 @@ pub trait AnthropicBatchesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
-    fn transform_create_batch_request(&self) -> Result<Value, Error>;
+    fn transform_create_batch_request(
+        &self,
+        model: Option<&str>,
+        input_jsonl: &str,
+    ) -> Result<Value, Error>;
 
     fn transform_create_batch_response(
         &self,
         response: AnthropicMessageBatch,
         now: i64,
-    ) -> Result<LiteLlmMessageBatch, Error>;
+    ) -> LiteLlmMessageBatch;
 
     fn retrieve_batch_url(
         &self,
@@ -170,6 +189,55 @@ fn batches_base_url(
         .map_err(|error| Error::InvalidRequest(format!("invalid Anthropic API base: {error}")))
 }
 
+fn batch_request(model: Option<&str>, line: &str) -> Result<Value, Error> {
+    let line: BatchInputLine = serde_json::from_str(line)
+        .map_err(|error| Error::InvalidRequest(format!("invalid batch input line: {error}")))?;
+    let invalid = |reason: &str| {
+        Error::InvalidRequest(format!("batch request {}: {reason}", line.custom_id))
+    };
+    if line.method != "POST" || line.url != CHAT_COMPLETIONS_URL {
+        return Err(invalid(&format!(
+            "{} {} is not supported, only POST {CHAT_COMPLETIONS_URL}",
+            line.method, line.url
+        )));
+    }
+    let model = model
+        .or_else(|| line.body.get("model").and_then(Value::as_str))
+        .ok_or_else(|| invalid("model is required"))?;
+    let model = model.strip_prefix(MODEL_PREFIX).unwrap_or(model);
+    let messages: Vec<ChatMessage> = line
+        .body
+        .get("messages")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| invalid(&format!("invalid messages: {error}")))?
+        .filter(|messages: &Vec<ChatMessage>| !messages.is_empty())
+        .ok_or_else(|| invalid("messages is required"))?;
+    let config = &ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
+    let params = line
+        .body
+        .iter()
+        .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
+        .map(|(name, value)| {
+            config
+                .supported_openai_param_mappings()
+                .iter()
+                .find(|(openai, _)| openai == name)
+                .map(|(_, anthropic)| ((*anthropic).to_string(), value.clone()))
+                .ok_or_else(|| invalid(&format!("parameter {name} is not supported")))
+        })
+        .collect::<Result<Map<_, _>, _>>()?;
+    if !params.contains_key("max_tokens") {
+        return Err(invalid("max_tokens is required"));
+    }
+    if let Some(reason) = config.unsupported_reason(&messages, &params) {
+        return Err(invalid(reason.0));
+    }
+    let params = config.transform_request(model, messages, params)?.body;
+    Ok(json!({ "custom_id": line.custom_id, "params": params }))
+}
+
 impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
     fn validate_environment(
         &self,
@@ -217,16 +285,31 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         Ok(batches_base_url(api_base, env_lookup)?.into())
     }
 
-    fn transform_create_batch_request(&self) -> Result<Value, Error> {
-        Err(Error::Unsupported("Anthropic message batch creation"))
+    fn transform_create_batch_request(
+        &self,
+        model: Option<&str>,
+        input_jsonl: &str,
+    ) -> Result<Value, Error> {
+        let requests = input_jsonl
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| batch_request(model, line))
+            .collect::<Result<Vec<_>, _>>()?;
+        if requests.is_empty() {
+            return Err(Error::InvalidRequest(
+                "batch input file has no requests".into(),
+            ));
+        }
+        Ok(json!({ "requests": requests }))
     }
 
     fn transform_create_batch_response(
         &self,
-        _response: AnthropicMessageBatch,
-        _now: i64,
-    ) -> Result<LiteLlmMessageBatch, Error> {
-        Err(Error::Unsupported("Anthropic message batch creation"))
+        response: AnthropicMessageBatch,
+        now: i64,
+    ) -> LiteLlmMessageBatch {
+        self.transform_retrieve_batch_response(response, now)
     }
 
     fn retrieve_batch_url(
@@ -580,17 +663,156 @@ mod tests {
         );
     }
 
+    fn line(custom_id: &str, body: Value) -> String {
+        json!({"custom_id": custom_id, "method": "POST", "url": "/v1/chat/completions", "body": body})
+            .to_string()
+    }
+
+    fn user_turn(text: &str) -> Value {
+        json!({"role": "user", "content": [{"type": "text", "text": text}]})
+    }
+
+    #[rstest]
+    #[case::maps_openai_params_and_folds_system(
+        None,
+        line("r1", json!({
+            "model": "anthropic/claude-sonnet",
+            "messages": [
+                {"role": "system", "content": "be brief"},
+                {"role": "user", "content": "hi"},
+            ],
+            "max_tokens": 16,
+            "stop": ["END"],
+            "temperature": 0.5,
+            "top_p": 0.9,
+        })),
+        json!({"requests": [{"custom_id": "r1", "params": {
+            "model": "claude-sonnet",
+            "messages": [user_turn("hi")],
+            "system": [{"type": "text", "text": "be brief"}],
+            "max_tokens": 16,
+            "stop_sequences": ["END"],
+            "temperature": 0.5,
+            "top_p": 0.9,
+        }}]}),
+    )]
+    #[case::deployment_model_overrides_the_line_model(
+        Some("claude-deployed"),
+        line("r1", json!({"model": "alias", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8})),
+        json!({"requests": [{"custom_id": "r1", "params": {
+            "model": "claude-deployed", "messages": [user_turn("hi")], "max_tokens": 8,
+        }}]}),
+    )]
+    #[case::keeps_line_order_and_skips_blank_lines(
+        None,
+        format!(
+            "\n{}\r\n   \n{}\n",
+            line("b", json!({"model": "m", "messages": [{"role": "user", "content": "two"}], "max_tokens": 2})),
+            line("a", json!({"model": "m", "messages": [{"role": "user", "content": "one"}], "max_tokens": 1})),
+        ),
+        json!({"requests": [
+            {"custom_id": "b", "params": {"model": "m", "messages": [user_turn("two")], "max_tokens": 2}},
+            {"custom_id": "a", "params": {"model": "m", "messages": [user_turn("one")], "max_tokens": 1}},
+        ]}),
+    )]
+    fn create_batch_request_translates_each_chat_line(
+        #[case] model: Option<&str>,
+        #[case] input: String,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            ANTHROPIC_BATCHES_TRANSFORMATION
+                .transform_create_batch_request(model, &input)
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::empty_input(String::new(), "invalid request: batch input file has no requests")]
+    #[case::blank_input("\n  \n".to_string(), "invalid request: batch input file has no requests")]
+    #[case::not_json(
+        "not-json".to_string(),
+        "invalid request: invalid batch input line: expected ident at line 1 column 2",
+    )]
+    #[case::other_endpoint(
+        json!({"custom_id": "r1", "method": "POST", "url": "/v1/embeddings", "body": {}}).to_string(),
+        "invalid request: batch request r1: POST /v1/embeddings is not supported, only POST /v1/chat/completions",
+    )]
+    #[case::other_method(
+        json!({"custom_id": "r1", "method": "GET", "url": "/v1/chat/completions", "body": {}}).to_string(),
+        "invalid request: batch request r1: GET /v1/chat/completions is not supported, only POST /v1/chat/completions",
+    )]
+    #[case::no_model(
+        line("r1", json!({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 1})),
+        "invalid request: batch request r1: model is required",
+    )]
+    #[case::no_messages(
+        line("r1", json!({"model": "m", "max_tokens": 1})),
+        "invalid request: batch request r1: messages is required",
+    )]
+    #[case::empty_messages(
+        line("r1", json!({"model": "m", "messages": [], "max_tokens": 1})),
+        "invalid request: batch request r1: messages is required",
+    )]
+    #[case::malformed_messages(
+        line("r1", json!({"model": "m", "messages": "hi", "max_tokens": 1})),
+        "invalid request: batch request r1: invalid messages: invalid type: string \"hi\", expected a sequence",
+    )]
+    #[case::unsupported_param(
+        line("r1", json!({"model": "m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1, "tools": []})),
+        "invalid request: batch request r1: parameter tools is not supported",
+    )]
+    #[case::no_max_tokens(
+        line("r1", json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]})),
+        "invalid request: batch request r1: max_tokens is required",
+    )]
+    #[case::streaming(
+        line("r1", json!({"model": "m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1, "stream": true})),
+        "invalid request: batch request r1: parameter stream is not supported",
+    )]
+    #[case::tool_turn(
+        line("r1", json!({"model": "m", "messages": [{"role": "tool", "content": "x", "tool_call_id": "t"}], "max_tokens": 1})),
+        "invalid request: batch request r1: unrecognized message field",
+    )]
+    #[case::opens_on_assistant_turn(
+        line("r1", json!({"model": "m", "messages": [{"role": "assistant", "content": "hi"}], "max_tokens": 1})),
+        "invalid request: batch request r1: conversation does not open on a user turn",
+    )]
+    #[case::one_bad_line_fails_the_batch(
+        format!(
+            "{}\n{}",
+            line("ok", json!({"model": "m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1})),
+            line("bad", json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]})),
+        ),
+        "invalid request: batch request bad: max_tokens is required",
+    )]
+    fn create_batch_request_rejects_lines_it_cannot_translate(
+        #[case] input: String,
+        #[case] message: &str,
+    ) {
+        assert_eq!(
+            ANTHROPIC_BATCHES_TRANSFORMATION
+                .transform_create_batch_request(None, &input)
+                .unwrap_err()
+                .to_string(),
+            message
+        );
+    }
+
     #[test]
-    fn batch_creation_is_unsupported() {
-        assert!(matches!(
-            ANTHROPIC_BATCHES_TRANSFORMATION.transform_create_batch_request(),
-            Err(Error::Unsupported("Anthropic message batch creation"))
-        ));
-        let response: AnthropicMessageBatch = serde_json::from_value(json!({})).unwrap();
-        assert!(matches!(
-            ANTHROPIC_BATCHES_TRANSFORMATION.transform_create_batch_response(response, 0),
-            Err(Error::Unsupported("Anthropic message batch creation"))
-        ));
+    fn create_batch_response_is_the_retrieved_batch() {
+        let body = json!({
+            "id": "msgbatch_new",
+            "processing_status": "in_progress",
+            "created_at": "2024-09-24T10:00:00Z",
+            "request_counts": {"processing": 2},
+        });
+        let response: AnthropicMessageBatch = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(
+            ANTHROPIC_BATCHES_TRANSFORMATION.transform_create_batch_response(response, NOW),
+            retrieve(body)
+        );
     }
 
     #[rstest]

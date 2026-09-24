@@ -1,4 +1,5 @@
 pub(crate) mod audio_transcription;
+pub(crate) mod batches;
 pub(crate) mod chat_completions;
 pub(crate) mod embeddings;
 pub(crate) mod messages;

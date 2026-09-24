@@ -83,6 +83,11 @@ CREDS: Dict[str, Dict[str, str]] = {
         "api_base": "http://vllm.test/v1",
         "model": "hosted_vllm/qwen",
     },
+    "claude-batch": {
+        "custom_llm_provider": "anthropic",
+        "api_key": "sk-ant",
+        "model": "anthropic/claude-batch",
+    },
 }
 
 # A real model-encoded file id: decodes to "azure/gpt-4o", strips to "file-original123".
@@ -673,6 +678,42 @@ async def test_create__unified_file_id_resolves_real_storage_url(harness):
     find_first.assert_awaited_once_with(where={"unified_file_id": "litellm_proxy_unified_id"})
     assert resp.input_file_id == "litellm_proxy_unified_id"
     assert resp._hidden_params["unified_file_id"] == "unified-xyz"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "expected_content"),
+    (("claude-batch", '{"custom_id": "r1"}\n'), ("vertex-model", None)),
+)
+async def test_create__managed_file_content_is_read_only_for_anthropic_deployments(harness, model, expected_content):
+    set_body(
+        harness,
+        {"input_file_id": "litellm_proxy_unified_id", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+    fake_repo_instance = MagicMock()
+    fake_repo_instance.table.find_first = AsyncMock(
+        return_value=MagicMock(storage_backend="litellm_db", storage_url="litellm-db://file-1")
+    )
+    backend = MagicMock()
+    backend.download_file = AsyncMock(return_value=b'{"custom_id": "r1"}\n')
+    get_backend = MagicMock(return_value=backend)
+    prisma_client = MagicMock()
+
+    with (
+        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "get_models_from_unified_file_id", return_value=[model]),
+        patch.object(proxy_server, "prisma_client", prisma_client),
+        patch.object(endpoints, "ManagedFileRepository", MagicMock(return_value=fake_repo_instance)),
+        patch.object(endpoints, "get_storage_backend", get_backend),
+    ):
+        await call_create(harness)
+
+    assert harness.router_kwargs().get("litellm_batch_input_content") == expected_content
+    if expected_content is None:
+        get_backend.assert_not_called()
+    else:
+        get_backend.assert_called_once_with("litellm_db", prisma_client=prisma_client)
+        backend.download_file.assert_awaited_once_with("litellm-db://file-1")
 
 
 @pytest.mark.asyncio
