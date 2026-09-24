@@ -50,7 +50,7 @@ from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
-from litellm.scheduler import FlowItem
+from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
 
@@ -17921,3 +17921,30 @@ async def test_prioritized_request_leaves_queue_when_it_stops_waiting(stop_waiti
         await waiting
 
     assert await router.scheduler.get_queue("sched-model") == [(0, "head-of-queue")]
+
+
+class _PausesAfterEnqueueScheduler(Scheduler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.enqueued: Final = asyncio.Event()
+
+    async def add_request(self, request: FlowItem) -> None:
+        await super().add_request(request)
+        self.enqueued.set()
+        await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_prioritized_request_cancelled_while_enqueueing_leaves_queue():
+    router: Final = _scheduled_router(timeout=5)
+    scheduler: Final = _PausesAfterEnqueueScheduler()
+    router.scheduler = scheduler
+    waiting: Final = asyncio.create_task(_send_scheduled_chat(router, 1))
+    await scheduler.enqueued.wait()
+    assert len(await scheduler.get_queue("sched-model")) == 1
+
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+
+    assert await scheduler.get_queue("sched-model") == []

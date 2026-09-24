@@ -4348,8 +4348,8 @@ class Router:
 
     async def _wait_for_scheduler_turn(self, model: str, priority: int, parent_otel_span: Span | None) -> None:
         item: Final = FlowItem(priority=priority, request_id=str(uuid.uuid4()), model_name=model)
-        await self.scheduler.add_request(request=item)
         try:
+            await self.scheduler.add_request(request=item)
             end_time: Final = time.monotonic() + self.timeout
             while time.monotonic() < end_time:
                 healthy_deployments, _ = await self._async_get_healthy_deployments(

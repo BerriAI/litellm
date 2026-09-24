@@ -61,27 +61,21 @@ class Scheduler:
             * If no healthy deployments available
             * AND request not at the top of queue
         """
+        print_verbose(f"len(health_deployments): {len(health_deployments)}")
+        if len(health_deployments) > 0:
+            return True
+
         queue: Final = await self.get_queue(model_name=model_name)
         if not queue:
             raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
 
-        # ------------
-        # Setup values
-        # ------------
+        print_verbose(f"queue: {queue}, seeking id={id}")
+        if queue[0][1] != id:
+            return False
 
-        print_verbose(f"len(health_deployments): {len(health_deployments)}")
-        if len(health_deployments) == 0:
-            print_verbose(f"queue: {queue}, seeking id={id}")
-            # Check if the id is at the top of the heap
-            if queue[0][1] == id:
-                # Remove the item from the queue
-                heapq.heappop(queue)
-                await self.save_queue(queue=queue, model_name=model_name)
-                print_verbose(f"Popped id: {id}")
-                return True
-            else:
-                return False
-
+        heapq.heappop(queue)
+        await self.save_queue(queue=queue, model_name=model_name)
+        print_verbose(f"Popped id: {id}")
         return True
 
     async def remove_request(self, request_id: str, model_name: str) -> None:
