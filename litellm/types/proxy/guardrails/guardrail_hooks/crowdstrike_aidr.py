@@ -14,9 +14,9 @@ class CrowdStrikeAIDRGuardrailConfigModelOptionalParams(BaseModel):
     )
     streaming_end_of_stream_only: bool | None = Field(
         default=None,
-        description="If False (default when unset), post_call scans the accumulated streamed response every "
-        "streaming_sampling_rate chunks and an in-flight block stops the stream. If True, the guard runs once "
-        "over the assembled response at end of stream, so flagged content may already have reached the client.",
+        description="If True (default when unset), the guard runs once over the assembled response at end of "
+        "stream, so flagged content may already have reached the client. If False, post_call scans the "
+        "accumulated streamed response every streaming_sampling_rate chunks and an in-flight block stops the stream.",
     )
     streaming_sampling_rate: int | None = Field(
         default=None,
