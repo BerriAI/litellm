@@ -61,6 +61,7 @@ from e2e_http import (
     StreamingResponse,
     Success,
     UnknownApiError,
+    proxy_error,
     require_successful_call,
     unwrap,
 )
@@ -1752,3 +1753,114 @@ class TestBatchTerminalState:
         assert (cost_row.total_tokens or 0) > 0, (
             f"batch cost row has no token usage: {cost_row.total_tokens!r}"
         )
+
+
+NATIVE_VERTEX_BATCH_ROWS: Final = b"".join(
+    json.dumps(
+        {
+            "request": {
+                "contents": [{"role": "user", "parts": [{"text": text}]}],
+                "tools": [{"googleSearch": {"excludeDomains": ["example.com"]}}],
+            }
+        }
+    ).encode()
+    + b"\n"
+    for text in ("What is the tallest building in the world?", "Who won the last FIFA World Cup?")
+)
+VERTEX_BATCH_PROVIDER: Final = next(p for p in PROVIDERS if p.name == "vertex_ai")
+
+
+class TestVertexNativePassthrough:
+    """`passthrough=true` on POST /v1/files uploads native Vertex batch JSONL byte for
+    byte (no OpenAI-to-Vertex translation, so `googleSearch` tools and the grounding
+    metadata they produce survive), and a batch created from that file is accepted.
+
+    Terminal-state assertions (native output rows with groundingMetadata, the spend
+    row) are deliberately not here: retrieving a non-terminal batch books a $0 spend
+    row that blocks the real-cost row, the same reason TestBatchTerminalState polls
+    the list endpoint only. Those are proven by the PR's live curl proof instead.
+    """
+
+    @pytest.mark.covers(
+        "llm.files.vertex.native_passthrough.nonstream.works",
+        "llm.batches.vertex.native_passthrough.nonstream.works",
+        exercised_on=["files", "batches"],
+    )
+    def test_native_jsonl_round_trips_untouched_and_starts_a_batch(
+        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
+    ) -> None:
+        key = resources.key()
+        file = unwrap(
+            client.upload_file(
+                content=NATIVE_VERTEX_BATCH_ROWS,
+                form=FileUploadForm(
+                    purpose="batch", target_model_names=VERTEX_BATCH_PROVIDER.model, passthrough=True
+                ),
+                key=key,
+            )
+        )
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
+        assert_file_object(file, provider="vertex_ai")
+        assert is_managed_id(file.id), f"passthrough upload must return a managed file id, got {file.id!r}"
+        assert file.bytes == len(NATIVE_VERTEX_BATCH_ROWS), (
+            f"passthrough upload must report the caller's byte count, got {file.bytes}"
+        )
+
+        downloaded = client.proxy.transport.download(
+            f"/v1/files/{file.id}/content", headers=client.proxy.transport.bearer(key)
+        )
+        assert downloaded.status_code == 200, (
+            f"file content must be 200, got {downloaded.status_code}: {downloaded.body[:300]}"
+        )
+        assert downloaded.body.encode() == NATIVE_VERTEX_BATCH_ROWS, (
+            "passthrough file content must be the uploaded native rows byte for byte"
+        )
+
+        created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+        require_successful_call(created)
+        batch = BatchObject.model_validate_json(created.body)
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key, delete_output_files=True))
+        assert is_managed_id(batch.id), f"passthrough batch must be LiteLLM-managed, got {batch.id!r}"
+        assert batch.status in CREATED_BATCH_STATUSES, f"passthrough batch has non-transitional status {batch.status!r}"
+        assert batch.input_file_id == file.id
+
+    @pytest.mark.covers("llm.files.vertex.native_passthrough_validation.nonstream.works", exercised_on=["files"])
+    @pytest.mark.parametrize(
+        "content, form, expected_param",
+        [
+            pytest.param(
+                NATIVE_VERTEX_BATCH_ROWS,
+                FileUploadForm(purpose="batch", passthrough=True),
+                "target_model_names",
+                id="no-target-model",
+            ),
+            pytest.param(
+                NATIVE_VERTEX_BATCH_ROWS,
+                FileUploadForm(purpose="batch", target_model_names=OPENAI_BATCH_MODEL, passthrough=True),
+                "target_model_names",
+                id="non-vertex-target-model",
+            ),
+            pytest.param(
+                render_jsonl(VERTEX_BATCH_PROVIDER.raw_model),
+                FileUploadForm(purpose="batch", target_model_names=VERTEX_BATCH_PROVIDER.model, passthrough=True),
+                "request",
+                id="openai-shaped-rows",
+            ),
+        ],
+    )
+    def test_passthrough_upload_is_rejected_outside_a_native_vertex_batch(
+        self,
+        content: bytes,
+        form: FileUploadForm,
+        expected_param: str,
+        client: BatchClient,
+        resources: ResourceManager,
+        batch_deployments: None,
+    ) -> None:
+        key = resources.key()
+        result = client.upload_file(content=content, form=form, key=key)
+        assert isinstance(result, UnknownApiError), f"expected a 400, got {result!r}"
+        assert result.status_code == 400, f"expected 400, got {result.status_code}: {result.body[:300]}"
+        error = proxy_error(result.body)
+        assert error.param == expected_param, f"unexpected error param in {error!r}"
+        assert "passthrough" in error.message

@@ -25526,6 +25526,11 @@ export interface components {
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
+            /**
+             * Passthrough
+             * @default false
+             */
+            passthrough: boolean;
             /** Purpose */
             purpose: string;
             /**
@@ -25550,6 +25555,11 @@ export interface components {
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
+            /**
+             * Passthrough
+             * @default false
+             */
+            passthrough: boolean;
             /** Purpose */
             purpose: string;
             /**
@@ -25574,6 +25584,11 @@ export interface components {
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
+            /**
+             * Passthrough
+             * @default false
+             */
+            passthrough: boolean;
             /** Purpose */
             purpose: string;
             /**

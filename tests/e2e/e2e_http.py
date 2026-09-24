@@ -69,6 +69,7 @@ class FileUploadForm(BaseModel):
     purpose: str = "batch"
     target_model_names: str | None = None
     custom_llm_provider: str | None = None
+    passthrough: bool | None = None
 
 
 # ---------- Result types ----------
@@ -376,10 +377,16 @@ class ProxyErrorDetail(BaseModel):
     message: str
     type: str
     code: str
+    param: str | None = None
 
 
 class _ProxyErrorBody(BaseModel):
     error: ProxyErrorDetail
+
+
+def proxy_error(body: str) -> ProxyErrorDetail:
+    """The proxy's own error envelope (`{"error": {message, type, param, code}}`) parsed off a rejected call."""
+    return _ProxyErrorBody.model_validate_json(body).error
 
 
 def relayed_provider_rate_limit(outcome: RateLimitedError) -> ProxyErrorDetail | None:
