@@ -88,6 +88,9 @@ def _frozen_mapping(items: Iterable[tuple[str, object]]) -> Mapping[str, object]
     return MappingProxyType(dict(items))
 
 
+_LITELLM_PARAMS_THE_MAPPER_TAKES: Final = frozenset({"allowed_openai_params"})
+
+
 def _invoke_route_model(model: str) -> str:
     return f"invoke/{_strip_llm_routing_prefix(model).removeprefix('invoke/')}"
 
@@ -899,7 +902,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 model=_invoke_route_model(model),
                 custom_llm_provider="bedrock",
                 messages=messages,
-                **{k: v for k, v in optional_params.items() if k not in all_litellm_params},
+                **{
+                    k: v
+                    for k, v in optional_params.items()
+                    if k not in all_litellm_params or k in _LITELLM_PARAMS_THE_MAPPER_TAKES
+                },
             )
             return config.transform_request(
                 model=model,

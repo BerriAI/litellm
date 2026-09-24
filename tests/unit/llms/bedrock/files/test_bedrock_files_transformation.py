@@ -1989,6 +1989,15 @@ class TestBedrockBatchAnthropicRowParams:
         assert "logprobs" not in model_input
         assert "drop_params" not in model_input
 
+    def test_row_level_allowed_openai_params_keeps_the_param(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "logprobs": True, "allowed_openai_params": ["logprobs"]},
+        )
+
+        assert model_input["logprobs"] is True
+        assert "allowed_openai_params" not in model_input
+
     def test_chat_record_metadata_stays_out_of_the_body(self):
         model_input = self._transform(
             "/v1/chat/completions",
