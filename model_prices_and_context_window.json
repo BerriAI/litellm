@@ -5442,7 +5442,7 @@
         "supports_web_search": false
     },
     "azure/gpt-4.1-nano": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -5476,7 +5476,7 @@
         "supports_vision": true
     },
     "azure/gpt-4.1-nano-2025-04-14": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -5734,7 +5734,7 @@
         "supports_vision": false
     },
     "azure/gpt-audio-mini": {
-        "deprecation_date": "2027-04-06",
+        "deprecation_date": "2027-06-15",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure",
@@ -6057,7 +6057,7 @@
         "cache_creation_input_audio_token_cost": 4e-07,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
-        "deprecation_date": "2027-06-25",
+        "deprecation_date": "2027-07-31",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -6269,7 +6269,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-4o-transcribe": {
-        "deprecation_date": "2026-10-15",
+        "deprecation_date": "2026-12-31",
         "input_cost_per_audio_token": 2.5e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -6768,7 +6768,7 @@
     },
     "azure/gpt-5-chat": {
         "cache_read_input_token_cost": 1.25e-07,
-        "deprecation_date": "2026-05-13",
+        "deprecation_date": "2026-06-29",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
@@ -10796,7 +10796,7 @@
         "supports_web_search": false
     },
     "azure/us/gpt-4.1-nano-2025-04-14": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -26312,7 +26312,11 @@
     },
     "gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 4e-07,
+        "cache_read_input_token_cost_batches": 1e-07,
         "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 65536,
@@ -26322,6 +26326,7 @@
         "output_cost_per_image": 0.134,
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "output_cost_per_token_batches": 6e-06,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
@@ -26398,7 +26403,10 @@
     },
     "gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
+        "cache_read_input_token_cost": 5e-08,
+        "cache_read_input_token_cost_batches": 2.5e-08,
         "input_cost_per_token": 5e-07,
+        "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
@@ -26407,6 +26415,7 @@
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
         "output_cost_per_token": 3e-06,
+        "output_cost_per_token_batches": 1.5e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -41382,7 +41391,6 @@
     },
     "openrouter/deepseek/deepseek-v4-pro": {
         "input_cost_per_token": 9.1263e-07,
-        "input_cost_per_token_cache_hit": 7.60525e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
@@ -49485,7 +49493,11 @@
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 4e-07,
+        "cache_read_input_token_cost_batches": 1e-07,
         "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 65536,
@@ -49495,6 +49507,7 @@
         "output_cost_per_image": 0.134,
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "output_cost_per_token_batches": 6e-06,
         "supports_reasoning": false,
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
@@ -49523,7 +49536,10 @@
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
+        "cache_read_input_token_cost": 5e-08,
+        "cache_read_input_token_cost_batches": 2.5e-08,
         "input_cost_per_token": 5e-07,
+        "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
@@ -49532,6 +49548,7 @@
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
         "output_cost_per_token": 3e-06,
+        "output_cost_per_token_batches": 1.5e-06,
         "supports_reasoning": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
     },
@@ -68548,6 +68565,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "vertex_ai/gemini-2.5-flash-native-audio": {
+        "deprecation_date": "2026-12-13",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "vertex_ai",
@@ -69100,7 +69118,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-4.1-nano": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -69288,7 +69306,8 @@
         "mode": "chat",
         "output_cost_per_token": 5.5e-05,
         "output_cost_per_token_above_272k_tokens": 8.25e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_reasoning": true
     },
     "azure/eu/gpt-6-luna": {
         "deprecation_date": "2028-03-11",
@@ -69535,7 +69554,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-4.1-nano": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,

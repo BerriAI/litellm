@@ -1313,6 +1313,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
         alt_model: Final = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
         if base_model in litellm.bedrock_converse_models or alt_model in litellm.bedrock_converse_models:
             return "converse"
+        if _OPENAI_FAMILY_MODEL_RE.search(base_model):
+            return "converse"
         return "invoke"
 
     @staticmethod

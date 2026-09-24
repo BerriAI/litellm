@@ -346,7 +346,7 @@ def test_route_prefix_matched_as_path_segment_not_substring():
         BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
     )
     assert (
-        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "invoke"
+        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "converse"
     )
     assert (
         BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5")
@@ -996,3 +996,20 @@ def test_s3_static_key_pair_is_none_without_a_full_pair(partial_s3_pair):
     from litellm.llms.bedrock.common_utils import s3_static_key_pair
 
     assert s3_static_key_pair({"aws_access_key_id": "bedrock-key", **partial_s3_pair}) is None
+
+
+def test_unmapped_openai_family_model_routes_to_converse():
+    """A Bedrock-native OpenAI model that is not in the cost map yet must not fall to the invoke route.
+
+    The invoke ``openai`` provider is the imported-model path and sends ``max_tokens``, which Bedrock
+    rejects for these models; Converse maps it to ``inferenceConfig.maxTokens``.
+    """
+    from typing import Final
+
+    import litellm
+
+    unmapped: Final = "bedrock/global.openai.gpt-99-unmapped"
+    assert unmapped.removeprefix("bedrock/") not in litellm.bedrock_converse_models
+    assert BedrockModelInfo.get_bedrock_route(unmapped) == "converse"
+    imported: Final = "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123"
+    assert BedrockModelInfo.get_bedrock_route(imported) == "openai"
