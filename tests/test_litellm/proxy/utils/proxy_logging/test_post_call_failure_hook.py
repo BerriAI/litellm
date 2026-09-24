@@ -304,6 +304,9 @@ async def test_post_call_failure_hook_keeps_deployment_attribution_for_cache_hit
     kwargs = recorded[0]
     assert PROXY_REJECTED_BEFORE_ROUTING_KEY not in kwargs["litellm_params"], kwargs["litellm_params"]
     assert kwargs["standard_logging_object"]["model_id"] == "routed-deployment"
+    assert kwargs["standard_logging_object"]["custom_llm_provider"] == "openai"
+    assert kwargs["model"] == "internal-model"
+    assert kwargs["litellm_params"]["custom_llm_provider"] == "openai"
 
 
 @pytest.mark.asyncio
