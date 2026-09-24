@@ -241,6 +241,13 @@ def _webp_dimensions(head: bytes) -> ImageDimensions | None:
     return None
 
 
+def _sof_dimensions(sof: bytes) -> ImageDimensions | None:
+    if len(sof) < _JPEG_SOF_PAYLOAD_SIZE:
+        return None
+    unpacked: Final[tuple[int, int]] = struct.unpack(">HH", sof[1:5])
+    return ImageDimensions(width=unpacked[1], height=unpacked[0])
+
+
 def _jpeg_fill_run(stream: IO[bytes], start: int, offset: int) -> int:
     stream.seek(start + offset)
     fill: Final = stream.read(_JPEG_FILL_CHUNK)
@@ -261,11 +268,7 @@ def _jpeg_sof_dimensions(stream: IO[bytes], start: int) -> ImageDimensions | Non
             offset += _jpeg_fill_run(stream, start, offset)
             continue
         if marker[1] in _JPEG_SOF_MARKERS:
-            sof = stream.read(_JPEG_SOF_PAYLOAD_SIZE)
-            if len(sof) < _JPEG_SOF_PAYLOAD_SIZE:
-                return None
-            unpacked: Final[tuple[int, int]] = struct.unpack(">HH", sof[1:5])
-            return ImageDimensions(width=unpacked[1], height=unpacked[0])
+            return _sof_dimensions(stream.read(_JPEG_SOF_PAYLOAD_SIZE))
         segment_length = int.from_bytes(marker[2:4], "big")
         if segment_length < 2:
             return None
