@@ -197,7 +197,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             **headers,
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-        }  # mutable-ok: writable HTTP headers
+        }
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         if not api_base:

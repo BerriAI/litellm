@@ -497,6 +497,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           isModalVisible={isModalVisible}
           setModalVisible={setModalVisible}
           availableAccessGroups={uniqueMcpAccessGroups}
+          existingServers={mcpServers}
           prefillData={prefillData}
           onBackToDiscovery={() => {
             setModalVisible(false);
@@ -610,6 +611,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 userRole={userRole}
                 isViewOnly={isViewOnly}
                 availableAccessGroups={uniqueMcpAccessGroups}
+                existingServers={mcpServers}
                 initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
               />
             ) : (

@@ -655,7 +655,7 @@ async def run_async_fallback(
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
-            kwargs.pop("_target_order", None)  # rebind-ok: next hop must not inherit the previous order target
+            kwargs.pop("_target_order", None)
             if isinstance(mg, str):
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
