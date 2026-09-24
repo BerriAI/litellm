@@ -1471,6 +1471,9 @@ async def new_team(
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - allow_team_member_budget_overflow: Optional[bool] - Let positive member budgets use remaining total team budget
+      Defaults to false. Requires a finite positive team max_budget. Other limits still apply
+      Unused member allowances are not reserved
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -2236,6 +2239,9 @@ async def update_team(
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - allow_team_member_budget_overflow: Optional[bool] - Let positive member budgets use remaining total team budget
+      Omit to preserve the current setting. Requires a finite positive team max_budget while enabled
+      Other limits still apply. Unused member allowances are not reserved
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
