@@ -19,6 +19,7 @@ import pytest
 
 from litellm import Router
 from litellm.types.llms.openai import (
+    ImageGenerationPartialImageEvent,
     ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
@@ -346,20 +347,31 @@ def _scripted_responses_stream(events: list, error: Exception | None = None):
 
 
 @pytest.mark.asyncio
-async def test_aresponses_delivered_function_call_does_not_start_fallback():
-    """A completed tool call cannot be replayed in a second response lifecycle."""
+@pytest.mark.parametrize(
+    "delivered_output",
+    [
+        SimpleNamespace(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=SimpleNamespace(type="function_call", status="completed", call_id="call_primary"),
+        ),
+        ImageGenerationPartialImageEvent(
+            type=ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE,
+            partial_image_index=0,
+            b64_json="image-data",
+        ),
+    ],
+    ids=["completed-function-call", "partial-image-without-output-index"],
+)
+async def test_aresponses_delivered_output_does_not_start_fallback(delivered_output):
+    """Delivered tool calls and partial images cannot start a second lifecycle."""
     import litellm
     from litellm.exceptions import MidStreamFallbackError
 
     router = _make_router()
     primary_error = litellm.InternalServerError(message="primary failed", llm_provider="openai", model="gpt-5")
-    delivered_call = SimpleNamespace(
-        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-        output_index=0,
-        item=SimpleNamespace(type="function_call", status="completed", call_id="call_primary"),
-    )
     source = _scripted_responses_stream(
-        [delivered_call],
+        [delivered_output],
         MidStreamFallbackError(
             message="primary failed",
             model="gpt-5",
@@ -375,7 +387,7 @@ async def test_aresponses_delivered_function_call_does_not_start_fallback():
     )
 
     with patch.object(router, "async_function_with_fallbacks_common_utils", new=AsyncMock()) as mock_fallback:
-        assert await anext(wrapped) is delivered_call
+        assert await anext(wrapped) is delivered_output
         with pytest.raises(litellm.InternalServerError):
             await anext(wrapped)
 

@@ -3335,10 +3335,13 @@ class Router:
 
         async def stream_with_fallbacks():
             fallback_response = None
-            has_forwarded_output = False
+            has_forwarded_output = False  # rebind-ok: updated as output events reach the client
             try:
                 async for item in source_iterator:
-                    if isinstance(getattr(item, "output_index", None), int):
+                    if isinstance(getattr(item, "output_index", None), int) or (
+                        getattr(item, "type", None)
+                        == _openai_types.ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+                    ):
                         has_forwarded_output = True
                     yield item
             except MidStreamFallbackError as e:
