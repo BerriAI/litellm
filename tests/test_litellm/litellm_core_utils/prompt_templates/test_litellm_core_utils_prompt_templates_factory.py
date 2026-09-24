@@ -430,6 +430,8 @@ def test_bedrock_converse_preserves_reasoning_for_application_inference_profile(
         assert partial_blocks[1]["reasoningContent"]["redactedContent"] == "opaque_profile_data"
         assert partial_blocks[2] == {"text": "profile response"}
 
+    assert BedrockConverseMessagesProcessor._is_bedrock_converse_reasoning_model(None) is True
+
 
 def test_bedrock_converse_unsigned_thinking_converted_to_text():
     messages = [
