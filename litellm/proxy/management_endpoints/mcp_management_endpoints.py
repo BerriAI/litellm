@@ -22,6 +22,7 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -3025,7 +3026,8 @@ if MCP_AVAILABLE:
                 )
 
             proxy_config.reject_config_owned_writes(
-                section_name="litellm_settings", changed_keys={"public_mcp_servers": request.mcp_server_ids}
+                section_name="litellm_settings",
+                changed_keys=MappingProxyType({"public_mcp_servers": request.mcp_server_ids}),
             )
 
             for server_id in request.mcp_server_ids:
