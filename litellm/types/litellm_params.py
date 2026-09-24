@@ -1,203 +1,387 @@
-import enum
-from dataclasses import dataclass
-from typing import Final
+"""The LiteLLM-owned half of a request, declared as typed objects.
+
+Every keyword argument that LiteLLM consumes itself, and therefore must never reach a
+provider request body, is a field on exactly one of the dataclasses below. The fields are
+the registry: `all_litellm_params` in `litellm.types.utils` is derived from them, so
+declaring a field is what registers a name.
+
+Three roots partition the names by the object a value lives on. `ConnectionSettings` is
+how the SDK reaches the provider, `LiteLLMOptions` is what the caller or the deployment
+asks LiteLLM to do around the call, and `InternalState` is what LiteLLM stamps on a call
+in flight and must never accept from an untrusted client. Inside each root the leaf
+objects are cut by the subsystem that reads the field. The fourth object of a request,
+the model request itself, is provider-owned and already typed per endpoint, so it is not
+declared here.
+
+A field's kwarg name is its field name unless the field carries `wire(...)` metadata,
+which is reserved for names that are not clean identifiers or that carry a leading
+underscore to mark them internal. Nothing constructs these objects yet; they are the
+declaration the request-boundary parser will target.
+
+Three names in `all_litellm_params` are not settings at all and so get no field: `self`
+and `model_config` arrive when a caller forwards `locals()` or a model's attributes as
+kwargs, and `use_client` is a module-level flag that stopped being a kwarg. They stay
+registered so they keep falling out of provider params, and `KWARG_ARTIFACTS` names them.
+"""
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, fields, is_dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal
+
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
+    from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.router_strategy.complexity_router.context_compaction import CompactionState
+    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+    from litellm.types.caching import DynamicCacheControl
+    from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+    from litellm.types.proxy.litellm_pre_call_utils import SecretFields
+    from litellm.types.router import ConfigurableClientsideParamsCustomAuth, DeploymentTypedDict, RetryPolicy
+    from litellm.types.router_weights import RouterWeights
+    from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderSpecificHeader
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
 
-
-class ParamGroup(enum.Enum):
-    AGENTIC_LOOP_STATE = enum.auto()
-    BEDROCK_BATCH_CONFIG = enum.auto()
-    PROXY_STAMPED = enum.auto()
-    ENTRYPOINT_DISPATCH = enum.auto()
-    CREDENTIALS_AND_ENDPOINT = enum.auto()
-    TRANSPORT = enum.auto()
-    ROUTING_AND_RELIABILITY = enum.auto()
-    CACHING = enum.auto()
-    COST_AND_BUDGET = enum.auto()
-    OBSERVABILITY = enum.auto()
-    POLICY = enum.auto()
-    PROMPT_AND_RESPONSE_SHAPING = enum.auto()
-    MOCKING = enum.auto()
+WIRE_NAME: Final = "wire_name"
 
 
-@dataclass(frozen=True, slots=True)
-class LiteLLMParam:
-    name: str
-    group: ParamGroup
+def wire(name: str) -> Mapping[str, str]:
+    return MappingProxyType({WIRE_NAME: name})
 
 
-LITELLM_PARAMS: Final[tuple[LiteLLMParam, ...]] = (
-    LiteLLMParam("_agentic_loop_depth", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam("_agentic_loop_fingerprints", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam("_agentic_loop_api_surface", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam("max_agentic_loops", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam("_code_interpreter_interception_active", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam("_code_interpreter_interception_sandbox_key", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam("_code_interpreter_interception_session_scoped", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam("_code_interpreter_interception_converted_stream", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam("_websearch_interception_emit_native_blocks", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam("_websearch_interception_converted_stream", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam("_headroom_interception_converted_stream", ParamGroup.AGENTIC_LOOP_STATE),
-    LiteLLMParam(TRUSTED_CALLBACK_VARS_FIELD, ParamGroup.PROXY_STAMPED),
-    LiteLLMParam(ADDRESSED_RESPONSE_ID_FIELD, ParamGroup.PROXY_STAMPED),
-    LiteLLMParam("aws_batch_role_arn", ParamGroup.BEDROCK_BATCH_CONFIG),
-    LiteLLMParam("s3_bucket_name", ParamGroup.BEDROCK_BATCH_CONFIG),
-    LiteLLMParam("s3_region_name", ParamGroup.BEDROCK_BATCH_CONFIG),
-    LiteLLMParam("s3_endpoint_url", ParamGroup.BEDROCK_BATCH_CONFIG),
-    LiteLLMParam("s3_output_bucket_name", ParamGroup.BEDROCK_BATCH_CONFIG),
-    LiteLLMParam("s3_bucket_owner", ParamGroup.BEDROCK_BATCH_CONFIG),
-    LiteLLMParam("s3_access_key_id", ParamGroup.BEDROCK_BATCH_CONFIG),
-    LiteLLMParam("s3_secret_access_key", ParamGroup.BEDROCK_BATCH_CONFIG),
-    LiteLLMParam("s3_encryption_key_id", ParamGroup.BEDROCK_BATCH_CONFIG),
-    LiteLLMParam("bedrock_tags", ParamGroup.BEDROCK_BATCH_CONFIG),
-    LiteLLMParam("_context_compaction_state", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("metadata", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("litellm_metadata", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("keepalive_seconds", ParamGroup.TRANSPORT),
-    LiteLLMParam("allow_client_keepalive_override", ParamGroup.TRANSPORT),
-    LiteLLMParam("litellm_trace_id", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("litellm_request_debug", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("guardrails", ParamGroup.POLICY),
-    LiteLLMParam("tags", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("acompletion", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("aimg_generation", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("atext_completion", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("text_completion", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("caching", ParamGroup.CACHING),
-    LiteLLMParam("mock_response", ParamGroup.MOCKING),
-    LiteLLMParam("mock_timeout", ParamGroup.MOCKING),
-    LiteLLMParam("disable_add_transform_inline_image_block", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("api_key", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("api_version", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("prompt_id", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("prompt_variables", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("litellm_system_prompt", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("provider_specific_header", ParamGroup.TRANSPORT),
-    LiteLLMParam("prompt_version", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("prompt_environment", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("api_base", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("force_timeout", ParamGroup.TRANSPORT),
-    LiteLLMParam("logger_fn", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("verbose", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("custom_llm_provider", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("model_file_id_mapping", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("litellm_logging_obj", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("litellm_call_id", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("completion_call_id", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("model_alias_map", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("custom_prompt_dict", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("stream_response", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("cost_per_query", ParamGroup.COST_AND_BUDGET),
-    LiteLLMParam("ssl_verify", ParamGroup.TRANSPORT),
-    LiteLLMParam("data_residency", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("async_call", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("aembedding", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("allm_passthrough_route", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("_litellm_strip_stream_usage", ParamGroup.PROXY_STAMPED),
-    LiteLLMParam("use_client", ParamGroup.TRANSPORT),
-    LiteLLMParam("id", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("fallbacks", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("routing_strategy", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("_router_weights", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("azure", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("headers", ParamGroup.TRANSPORT),
-    LiteLLMParam("model_list", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("num_retries", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("context_window_fallback_dict", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("retry_policy", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("retry_strategy", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("roles", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("final_prompt_value", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("bos_token", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("eos_token", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("request_timeout", ParamGroup.TRANSPORT),
-    LiteLLMParam("client_side_timeout", ParamGroup.TRANSPORT),
-    LiteLLMParam("complete_response", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("self", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("client", ParamGroup.TRANSPORT),
-    LiteLLMParam("rpm", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("tpm", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("default_api_key_rpm_limit", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("default_api_key_tpm_limit", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("itpm", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("otpm", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("max_parallel_requests", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("input_cost_per_token", ParamGroup.COST_AND_BUDGET),
-    LiteLLMParam("output_cost_per_token", ParamGroup.COST_AND_BUDGET),
-    LiteLLMParam("input_cost_per_second", ParamGroup.COST_AND_BUDGET),
-    LiteLLMParam("output_cost_per_second", ParamGroup.COST_AND_BUDGET),
-    LiteLLMParam("hf_model_name", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("model_info", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("proxy_server_request", ParamGroup.PROXY_STAMPED),
-    LiteLLMParam("secret_fields", ParamGroup.PROXY_STAMPED),
-    LiteLLMParam("preset_cache_key", ParamGroup.CACHING),
-    LiteLLMParam("caching_groups", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("ttl", ParamGroup.CACHING),
-    LiteLLMParam("cache", ParamGroup.CACHING),
-    LiteLLMParam("enable_prompt_caching", ParamGroup.CACHING),
-    LiteLLMParam("no-log", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("base_model", ParamGroup.COST_AND_BUDGET),
-    LiteLLMParam("stream_timeout", ParamGroup.TRANSPORT),
-    LiteLLMParam("stream_chunk_size", ParamGroup.TRANSPORT),
-    LiteLLMParam("supports_system_message", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("region_name", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("allowed_model_region", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("model_config", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("fastest_response", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("cooldown_time", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("cache_key", ParamGroup.CACHING),
-    LiteLLMParam("max_retries", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("azure_ad_token_provider", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("tenant_id", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("client_id", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("azure_username", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("azure_password", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("azure_scope", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("client_secret", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("user_continue_message", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("configurable_clientside_auth_params", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("weight", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("ensure_alternating_roles", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("assistant_continue_message", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("user_continue_message", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("fallback_depth", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("max_fallbacks", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("attempted_targets", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("max_budget", ParamGroup.COST_AND_BUDGET),
-    LiteLLMParam("budget_duration", ParamGroup.COST_AND_BUDGET),
-    LiteLLMParam("use_in_pass_through", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("merge_reasoning_content_in_choices", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("litellm_credential_name", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("allowed_openai_params", ParamGroup.POLICY),
-    LiteLLMParam("litellm_session_id", ParamGroup.OBSERVABILITY),
-    LiteLLMParam("provider_affinity_header", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("use_litellm_proxy", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("use_chat_completions_api", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("rust", ParamGroup.ENTRYPOINT_DISPATCH),
-    LiteLLMParam("prompt_label", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("shared_session", ParamGroup.TRANSPORT),
-    LiteLLMParam("search_tool_name", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("order", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("enable_tag_filtering", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("enable_json_schema_validation", ParamGroup.PROMPT_AND_RESPONSE_SHAPING),
-    LiteLLMParam("use_xai_oauth", ParamGroup.CREDENTIALS_AND_ENDPOINT),
-    LiteLLMParam("auto_router_config_path", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("auto_router_config", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("auto_router_default_model", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("auto_router_embedding_model", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("auto_router_max_input_chars", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("auto_router_routing_compression", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("auto_router_model_compression", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("complexity_router_config", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("complexity_router_default_model", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("adaptive_router_config", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("adaptive_router_default_model", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("quality_router_config", ParamGroup.ROUTING_AND_RELIABILITY),
-    LiteLLMParam("quality_router_default_model", ParamGroup.ROUTING_AND_RELIABILITY),
-)
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProviderConnection:
+    """How the SDK reaches the provider. Read by the HTTP and SDK client layers, never in the body."""
+
+    api_key: str | None = None
+    api_base: str | None = None
+    api_version: str | None = None
+    region_name: str | None = None
+    headers: Mapping[str, str] | None = None
+    provider_specific_header: "ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None" = None
+    client: "OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | HTTPHandler | AsyncHTTPHandler | None" = None
+    shared_session: "ClientSession | None" = None
+    ssl_verify: bool | str | None = None
+    request_timeout: float | None = None
+    force_timeout: float | None = None
+    stream_timeout: float | str | None = None
+    max_retries: int | None = None
+    tenant_id: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
+    azure_username: str | None = None
+    azure_password: str | None = None
+    azure_scope: str | None = None
+    azure_ad_token_provider: Callable[[], str] | None = None
+    litellm_credential_name: str | None = None
+    configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
+    use_xai_oauth: bool | None = None
 
 
-def names_in(group: ParamGroup) -> tuple[str, ...]:
-    return tuple(param.name for param in LITELLM_PARAMS if param.group is group)
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BedrockBatchConnection:
+    """S3 and IAM settings a Bedrock batch deployment needs. Read by the Bedrock batch handlers."""
+
+    aws_batch_role_arn: str | None = None
+    s3_bucket_name: str | None = None
+    s3_region_name: str | None = None
+    s3_endpoint_url: str | None = None
+    s3_output_bucket_name: str | None = None
+    s3_bucket_owner: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    s3_encryption_key_id: str | None = None
+    bedrock_tags: Sequence[Mapping[str, str]] | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConnectionSettings:
+    provider: ProviderConnection
+    bedrock_batch: BedrockBatchConnection
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DispatchOptions:
+    """Which provider API surface the call goes to and which request params may pass through."""
+
+    custom_llm_provider: str | None = None
+    azure: bool | None = None
+    use_litellm_proxy: bool | None = None
+    use_chat_completions_api: bool | None = None
+    use_in_pass_through: bool | None = None
+    rust: bool | None = None
+    allowed_openai_params: Sequence[str] | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RoutingOptions:
+    """Retries, fallbacks and deployment selection. Read by the Router and the retry wrappers."""
+
+    fallbacks: Sequence[str | Mapping[str, Sequence[str]]] | None = None
+    context_window_fallback_dict: Mapping[str, str] | None = None
+    num_retries: int | None = None
+    retry_policy: "RetryPolicy | None" = None
+    retry_strategy: Literal["constant_retry", "exponential_backoff_retry"] | None = None
+    routing_strategy: str | None = None
+    cooldown_time: float | None = None
+    allowed_model_region: str | None = None
+    enable_tag_filtering: bool | None = None
+    fastest_response: bool | None = None
+    provider_affinity_header: str | None = None
+    search_tool_name: str | None = None
+    model_list: "Sequence[DeploymentTypedDict] | None" = None
+    model_alias_map: Mapping[str, str] | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DeploymentOptions:
+    """Per-deployment limits and metadata the Router copies onto the call from the model list."""
+
+    model_info: Mapping[str, object] | None = None
+    rpm: int | None = None
+    tpm: int | None = None
+    itpm: int | None = None
+    otpm: int | None = None
+    default_api_key_rpm_limit: int | None = None
+    default_api_key_tpm_limit: int | None = None
+    max_parallel_requests: int | None = None
+    weight: int | None = None
+    order: int | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SpecializedRouterOptions:
+    """Configuration for the auto, complexity, adaptive and quality routers."""
+
+    auto_router_config_path: str | None = None
+    auto_router_config: str | None = None
+    auto_router_default_model: str | None = None
+    auto_router_embedding_model: str | None = None
+    auto_router_max_input_chars: int | None = None
+    auto_router_routing_compression: str | None = None
+    auto_router_model_compression: str | None = None
+    complexity_router_config: Mapping[str, object] | None = None
+    complexity_router_default_model: str | None = None
+    adaptive_router_config: Mapping[str, object] | None = None
+    adaptive_router_default_model: str | None = None
+    quality_router_config: Mapping[str, object] | None = None
+    quality_router_default_model: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CachingOptions:
+    """Response and prompt caching controls. Read by the caching handler."""
+
+    caching: bool | None = None
+    cache: "DynamicCacheControl | None" = None
+    ttl: int | None = None
+    enable_prompt_caching: bool | None = None
+    caching_groups: Sequence[tuple[str, ...]] | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CostOptions:
+    """Cost attribution and budget controls. Read by the cost calculator and spend tracking.
+
+    Per-token and per-second prices are owned by `CustomPricingLiteLLMParams` and are not
+    repeated here.
+    """
+
+    cost_per_query: float | None = None
+    base_model: str | None = None
+    max_budget: float | None = None
+    budget_duration: str | None = None
+    data_residency: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ObservabilityOptions:
+    """Identifiers, metadata and logging switches. Read by the logging object and callbacks."""
+
+    id: str | None = None
+    metadata: Mapping[str, object] | None = None
+    litellm_metadata: Mapping[str, object] | None = None
+    tags: Sequence[str] | None = None
+    litellm_trace_id: str | None = None
+    litellm_session_id: str | None = None
+    litellm_request_debug: bool | None = None
+    logger_fn: Callable[[Mapping[str, object]], None] | None = None
+    verbose: bool | None = None
+    no_log: bool | None = field(default=None, metadata=wire("no-log"))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GuardrailOptions:
+    """Guardrails the caller or the key applies to the call."""
+
+    guardrails: Sequence[str] | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PromptOptions:
+    """Prompt management and message shaping applied before the request is built."""
+
+    prompt_id: str | None = None
+    prompt_variables: Mapping[str, object] | None = None
+    prompt_version: str | None = None
+    prompt_environment: str | None = None
+    prompt_label: str | None = None
+    litellm_system_prompt: str | None = None
+    custom_prompt_dict: Mapping[str, object] | None = None
+    roles: Mapping[str, object] | None = None
+    final_prompt_value: str | None = None
+    bos_token: str | None = None
+    eos_token: str | None = None
+    hf_model_name: str | None = None
+    supports_system_message: bool | None = None
+    ensure_alternating_roles: bool | None = None
+    user_continue_message: "ChatCompletionUserMessage | None" = None
+    assistant_continue_message: "ChatCompletionAssistantMessage | None" = None
+    disable_add_transform_inline_image_block: bool | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ResponseOptions:
+    """How the response is shaped and streamed back to the caller."""
+
+    merge_reasoning_content_in_choices: bool | None = None
+    enable_json_schema_validation: bool | None = None
+    complete_response: bool | None = None
+    stream_chunk_size: int | None = None
+    keepalive_seconds: float | None = None
+    allow_client_keepalive_override: bool | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MockOptions:
+    """Test doubles for the provider call."""
+
+    mock_response: "str | Exception | Mapping[str, object] | ModelResponse | ModelResponseStream | None" = None
+    mock_timeout: bool | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LiteLLMOptions:
+    dispatch: DispatchOptions
+    routing: RoutingOptions
+    deployment: DeploymentOptions
+    specialized_routers: SpecializedRouterOptions
+    caching: CachingOptions
+    cost: CostOptions
+    observability: ObservabilityOptions
+    guardrails: GuardrailOptions
+    prompt: PromptOptions
+    response: ResponseOptions
+    mock: MockOptions
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CallState:
+    """Identity and bookkeeping LiteLLM attaches to one call."""
+
+    litellm_call_id: str | None = None
+    completion_call_id: str | None = None
+    litellm_logging_obj: "Logging | None" = None
+    preset_cache_key: str | None = None
+    cache_key: str | None = None
+    stream_response: "Mapping[str, ModelResponse] | None" = None
+    context_compaction_state: "CompactionState | None" = field(default=None, metadata=wire("_context_compaction_state"))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgenticLoopState:
+    """Carried between the hops of a server-side tool loop and its interception handlers."""
+
+    depth: int | None = field(default=None, metadata=wire("_agentic_loop_depth"))
+    fingerprints: Sequence[str] | None = field(default=None, metadata=wire("_agentic_loop_fingerprints"))
+    api_surface: Literal["chat_completions", "responses"] | None = field(
+        default=None, metadata=wire("_agentic_loop_api_surface")
+    )
+    max_agentic_loops: int | None = None
+    code_interpreter_active: bool | None = field(default=None, metadata=wire("_code_interpreter_interception_active"))
+    code_interpreter_sandbox_key: str | None = field(
+        default=None, metadata=wire("_code_interpreter_interception_sandbox_key")
+    )
+    code_interpreter_session_scoped: bool | None = field(
+        default=None, metadata=wire("_code_interpreter_interception_session_scoped")
+    )
+    code_interpreter_converted_stream: bool | None = field(
+        default=None, metadata=wire("_code_interpreter_interception_converted_stream")
+    )
+    websearch_emit_native_blocks: bool | None = field(
+        default=None, metadata=wire("_websearch_interception_emit_native_blocks")
+    )
+    websearch_converted_stream: bool | None = field(
+        default=None, metadata=wire("_websearch_interception_converted_stream")
+    )
+    headroom_converted_stream: bool | None = field(
+        default=None, metadata=wire("_headroom_interception_converted_stream")
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RouterState:
+    """Set by the Router while it walks fallbacks and applies request-scoped weights."""
+
+    weights: "RouterWeights | None" = field(default=None, metadata=wire("_router_weights"))
+    fallback_depth: int | None = None
+    max_fallbacks: int | None = None
+    attempted_targets: "AttemptedFallbackTargets | None" = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProxyState:
+    """Stamped by the proxy from the authenticated key, team and request; stripped from client bodies."""
+
+    proxy_server_request: Mapping[str, object] | None = None
+    secret_fields: "SecretFields | None" = None
+    trusted_callback_vars: Mapping[str, str] | None = field(default=None, metadata=wire(TRUSTED_CALLBACK_VARS_FIELD))
+    addressed_response_id: str | None = field(default=None, metadata=wire(ADDRESSED_RESPONSE_ID_FIELD))
+    strip_stream_usage: bool | None = field(default=None, metadata=wire("_litellm_strip_stream_usage"))
+    client_side_timeout: bool | None = None
+    model_file_id_mapping: Mapping[str, str] | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class EntrypointState:
+    """Which public entrypoint a call came through. Set by the SDK wrappers, read by the core."""
+
+    acompletion: bool | None = None
+    aembedding: bool | None = None
+    aimg_generation: bool | None = None
+    atext_completion: bool | None = None
+    text_completion: bool | None = None
+    allm_passthrough_route: bool | None = None
+    async_call: bool | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InternalState:
+    call: CallState
+    agentic_loop: AgenticLoopState
+    router: RouterState
+    proxy: ProxyState
+    entrypoint: EntrypointState
+
+
+KWARG_ARTIFACTS: Final[tuple[str, ...]] = ("self", "use_client", "model_config")
+
+LITELLM_OWNED_ROOTS: Final = (ConnectionSettings, LiteLLMOptions, InternalState)
+
+
+def wire_names(owner: type) -> tuple[str, ...]:
+    """Kwarg names owned by `owner`, walking into nested dataclass fields in declaration order."""
+    return tuple(
+        name
+        for owned in fields(owner)
+        for name in (
+            wire_names(owned.type)
+            if isinstance(owned.type, type) and is_dataclass(owned.type)
+            else (owned.metadata.get(WIRE_NAME, owned.name),)
+        )
+    )
