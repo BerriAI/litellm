@@ -791,4 +791,99 @@ describe("ChatUI", () => {
       expect(screen.getByPlaceholderText("Select a Model")).toBeEnabled();
     });
   });
+
+  describe("scroll pinning during streaming", () => {
+    const sendChatMessage = async () => {
+      await selectComboboxOption("Select an endpoint", "/v1/chat/completions");
+      await selectComboboxOption("Select a Model", "Model 1");
+      const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+      await act(async () => {
+        fireEvent.change(messageInput, { target: { value: "hello" } });
+      });
+      await act(async () => {
+        fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+      });
+      await waitFor(() => {
+        expect(makeOpenAIChatCompletionRequest).toHaveBeenCalledTimes(1);
+      });
+    };
+
+    const setScrollMetrics = (el: HTMLElement, scrollTop: number) => {
+      Object.defineProperty(el, "scrollTop", { value: scrollTop, configurable: true });
+      Object.defineProperty(el, "scrollHeight", { value: 1000, configurable: true });
+      Object.defineProperty(el, "clientHeight", { value: 100, configurable: true });
+    };
+
+    const settleEffects = async () => {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      });
+    };
+
+    const renderAndSendStreamingChat = async () => {
+      let streamChunk: ((chunk: string, model?: string) => void) | undefined;
+      vi.mocked(makeOpenAIChatCompletionRequest).mockImplementation(async (...args) => {
+        streamChunk = args[1] as (chunk: string, model?: string) => void;
+      });
+
+      render(
+        <ChatUI
+          accessToken="1234567890"
+          token="1234567890"
+          userRole="user"
+          userID="1234567890"
+          disabledPersonalKeyCreation={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Test Key")).toBeInTheDocument();
+      });
+
+      await sendChatMessage();
+      await settleEffects();
+
+      return {
+        streamChunk: (chunk: string) => streamChunk?.(chunk, "Model 1"),
+      };
+    };
+
+    it("does not auto-scroll on streamed tokens after the user scrolled up", async () => {
+      const scrollIntoViewMock = vi.mocked(Element.prototype.scrollIntoView);
+      const { streamChunk } = await renderAndSendStreamingChat();
+
+      const scrollContainer = screen.getByTestId("chat-messages-scroll");
+      setScrollMetrics(scrollContainer, 0);
+      fireEvent.scroll(scrollContainer);
+
+      const callsBeforeTokens = scrollIntoViewMock.mock.calls.length;
+
+      for (const token of ["Hello", " there", "!"]) {
+        await act(async () => {
+          streamChunk(token);
+        });
+      }
+      await settleEffects();
+
+      expect(scrollIntoViewMock.mock.calls.length).toBe(callsBeforeTokens);
+    });
+
+    it("auto-scrolls on streamed tokens while pinned to the bottom", async () => {
+      const scrollIntoViewMock = vi.mocked(Element.prototype.scrollIntoView);
+      const { streamChunk } = await renderAndSendStreamingChat();
+
+      const scrollContainer = screen.getByTestId("chat-messages-scroll");
+      setScrollMetrics(scrollContainer, 900);
+      fireEvent.scroll(scrollContainer);
+
+      const callsBeforeTokens = scrollIntoViewMock.mock.calls.length;
+
+      await act(async () => {
+        streamChunk("Hello");
+      });
+      await settleEffects();
+
+      expect(scrollIntoViewMock.mock.calls.length).toBeGreaterThan(callsBeforeTokens);
+    });
+  });
 });

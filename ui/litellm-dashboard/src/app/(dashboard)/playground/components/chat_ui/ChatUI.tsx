@@ -67,6 +67,7 @@ import ResponsesImageUpload from "./ResponsesImageUpload";
 import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
 import SessionManagement from "./SessionManagement";
 import RealtimePlayground from "./RealtimePlayground";
+import { isPinnedToBottom } from "./scrollPinning";
 import { MessageType } from "@/components/chat_ui/types";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { useChatHistory } from "../../hooks/useChatHistory";
@@ -288,6 +289,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const codeInterpreter = useCodeInterpreter();
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const pinnedToBottomRef = useRef(true);
 
   // Fetch MCP servers and toolsets
   const loadMCPServers = async () => {
@@ -516,7 +519,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [accessToken, apiKeySource, apiKey, endpointType, customProxyBaseUrl, selectedAgent]);
 
   useEffect(() => {
-    // Scroll to the bottom of the chat whenever chatHistory updates
+    // Scroll to the bottom of the chat whenever chatHistory updates, unless the user scrolled up
+    if (!pinnedToBottomRef.current) return;
     if (chatEndRef.current) {
       // Add a small delay to ensure content is rendered
       setTimeout(() => {
@@ -881,6 +885,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       displayMessage = createDisplayMessage(inputMessage, false);
     }
 
+    pinnedToBottomRef.current = true;
     setChatHistory([...chatHistory, displayMessage]);
     clearMCPEvents(); // Clear previous MCP events for new conversation turn
     codeInterpreter.clearResult(); // Clear previous code interpreter results
@@ -1170,6 +1175,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const clearChatHistory = () => {
+    pinnedToBottomRef.current = true;
     clearChatHistoryHook();
     handleRemoveAllImages();
     handleRemoveResponsesImage();
@@ -1801,7 +1807,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     )}
                   </div>
                 </div>
-                <div className="min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0">
+                <div
+                  ref={chatScrollRef}
+                  data-testid="chat-messages-scroll"
+                  onScroll={() => {
+                    const el = chatScrollRef.current;
+                    if (el) pinnedToBottomRef.current = isPinnedToBottom(el);
+                  }}
+                  className="min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0"
+                >
                   {chatHistory.length === 0 && (
                     <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
                       <Bot className="mb-4 size-12" aria-hidden="true" />
