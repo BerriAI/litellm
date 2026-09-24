@@ -453,7 +453,7 @@ def _regenerate_request_as_update_request(key: str, data: RegenerateKeyRequest) 
     )
     if not changed_fields:
         return None
-    return UpdateKeyRequest(key=key, **changed_fields)
+    return UpdateKeyRequest.model_validate(MappingProxyType({"key": key, **changed_fields}))
 
 
 class _LegacyDumpable(Protocol):
