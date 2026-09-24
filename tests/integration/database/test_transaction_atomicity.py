@@ -43,6 +43,7 @@ def test_access_group_second_key_constraint_failure_rolls_back_all_writes(gatewa
         )
         with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection, ExitStack() as cleanup:
             connection.execute(sql.SQL("CREATE SEQUENCE {}").format(sql.Identifier(witness)))
+            connection.execute(sql.SQL("GRANT USAGE ON SEQUENCE {} TO PUBLIC").format(sql.Identifier(witness)))
             cleanup.callback(connection.execute, sql.SQL("DROP SEQUENCE {}").format(sql.Identifier(witness)))
             connection.execute(
                 sql.SQL(
