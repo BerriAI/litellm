@@ -259,14 +259,21 @@ class TestGoogleAIStudioTokenCounter:
         assert result.error_message is not None
 
     @pytest.mark.asyncio
-    async def test_count_tokens_translation_error_falls_back(self):
+    @pytest.mark.parametrize(
+        "bad_messages",
+        [
+            [{"role": "tool", "content": "orphaned result", "tool_call_id": "missing-call"}],
+            [{"role": "user", "content": [{"type": "text", "text": 123}]}],
+        ],
+    )
+    async def test_count_tokens_translation_error_falls_back(self, bad_messages):
         """Malformed message shapes surface as a 400 error TokenCountResponse so
         the proxy falls back instead of 500ing."""
         token_counter = GoogleAIStudioTokenCounter()
 
         result = await token_counter.count_tokens(
             model_to_use="gemini-2.5-flash",
-            messages=[{"role": "user", "content": [{"type": "text", "text": 123}]}],
+            messages=bad_messages,
             contents=None,
             deployment={"litellm_params": {"api_key": "test-key"}},
             request_model="gemini/gemini-2.5-flash",

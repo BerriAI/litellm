@@ -442,7 +442,7 @@ def build_count_tokens_payload(
         if _has_anthropic_shape(system=system, tools=tools, messages=messages):
             return _build_anthropic_payload(model=model, messages=messages, system=system, tools=tools)
         return _build_openai_payload(model=model, messages=messages, system=system, tools=tools)
-    except (KeyError, TypeError, ValueError) as e:
+    except Exception as e:  # noqa: BLE001  # translation is pure; any failure is untranslatable input
         return InvalidCountTokensRequest(message=f"Invalid token count request: {e!r}")
 
 
