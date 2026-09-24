@@ -936,6 +936,45 @@ fn search_response_uses_query_list_and_skips_tool_and_additional_charges() {
 }
 
 #[rstest]
+#[case::empty_query_list_bills_nothing("exa_ai", "search", json!({"query": []}), 0.0)]
+#[case::single_query_string("exa_ai", "search", json!({"query": "a"}), 0.5)]
+#[case::bare_model_reads_the_provider_search_row("tavily", "tavily-search", json!({"query": ["a", "b"]}), 1.0)]
+#[case::prefixed_model_keeps_its_own_row("exa_ai", "exa_ai/search", json!({}), 0.5)]
+fn search_response_counts_queries_and_resolves_the_search_row_like_python(
+    #[case] provider: &str,
+    #[case] model: &str,
+    #[case] optional_params: Value,
+    #[case] expected: f64,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "exa_ai/search".to_owned(),
+            json!({"input_cost_per_query": 0.5}),
+        ),
+        (
+            "tavily/search".to_owned(),
+            json!({"input_cost_per_query": 0.5}),
+        ),
+    ]));
+    let response = json!({"model": model});
+    let empty = json!({});
+    let base = request(Some(&response), Some(model), Some(provider), &empty, &empty);
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some("search"),
+                optional_params: Some(&optional_params),
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - expected).abs() < 1e-12);
+}
+
+#[rstest]
 #[case("vector_store_search", "vertex_ai/search_api", json!({}), 0.25)]
 #[case("avector_store_search", "vertex_ai/search_api", json!({}), 0.25)]
 #[case("vector_store_search", "vertex_ai/other", json!({"api_type": "search_api"}), 0.0)]

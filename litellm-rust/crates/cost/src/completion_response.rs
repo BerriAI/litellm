@@ -30,6 +30,7 @@ use crate::realtime_cost::{
     partition_results_by_service_tier,
 };
 use crate::responses_usage::ChatUsage;
+use crate::search_cost::search_provider_cost_per_query;
 use crate::speech_cost::count_characters;
 use crate::together_cost::together_pricing_model;
 use crate::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
@@ -811,6 +812,25 @@ pub fn completion_cost_from_response(
                     request.response_time_ms,
                 ),
             };
+            if let CostCall::Search {
+                number_of_queries,
+                optional_params,
+            } = call
+            {
+                let search_model = match provider {
+                    Some(provider) if !provider.is_empty() && !model.contains('/') => {
+                        format!("{provider}/search")
+                    }
+                    _ => model.to_owned(),
+                };
+                return search_provider_cost_per_query(
+                    catalog,
+                    &search_model,
+                    provider,
+                    number_of_queries.unwrap_or(1),
+                    optional_params,
+                );
+            }
             cost_per_token_for_call(catalog, cost_request, call)
         },
     )?;
