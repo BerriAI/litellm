@@ -5648,16 +5648,12 @@ async def _check_team_member_budget(
             )
 
             if team_member_spend >= team_member_budget:
-                entity_id: Final = f"{valid_token.user_id}:{team_object.team_id}"
                 raise litellm.BudgetExceededError(
                     current_cost=team_member_spend,
                     max_budget=team_member_budget,
-                    message=(
-                        f"Budget has been exceeded! TeamMember={entity_id} "
-                        f"Current cost: {team_member_spend}, Max budget: {team_member_budget}"
-                    ),
+                    message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
                     entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                    entity_id=entity_id,
+                    entity_id=f"{valid_token.user_id}:{team_object.team_id}",
                 )
 
 

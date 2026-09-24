@@ -46,11 +46,11 @@ from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _can_object_call_model,
     _check_end_user_budget,
-    _check_team_member_budget,
     _delete_cache_key_object,
     _get_user_role,
     _is_model_cost_zero,
     _is_user_proxy_admin,
+    _team_member_max_budget_alert_check,
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
@@ -119,6 +119,7 @@ from litellm.proxy.common_utils.model_listing_utils import claude_code_requested
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    team_membership_auth_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -133,6 +134,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
+from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
@@ -2237,6 +2239,76 @@ async def _user_api_key_auth_builder(
                 if skip_budget_checks:
                     verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
 
+            # Check 3. Check if user is in their team budget
+            if not skip_budget_checks and valid_token.team_member_spend is not None:
+                _user_id: Final = valid_token.user_id
+                _team_id: Final = valid_token.team_id
+                if prisma_client is not None and _user_id is not None and _team_id is not None:
+                    _cache_key: Final = team_membership_auth_cache_key(team_id=_team_id, user_id=_user_id)
+
+                    team_member_info = await user_api_key_cache.async_get_cache(
+                        key=_cache_key,
+                        model_type=LiteLLM_TeamMembership,
+                    )
+                    if team_member_info is None:
+                        # read from DB
+                        _db_member: Final = await TeamMembershipRepository(prisma_client).table.find_first(
+                            where={
+                                "user_id": _user_id,
+                                "team_id": _team_id,
+                            },
+                            include={"litellm_budget_table": True},
+                        )
+                        if _db_member is not None:
+                            team_member_info = LiteLLM_TeamMembership(**_db_member.model_dump())
+                            await user_api_key_cache.async_set_cache(
+                                key=_cache_key,
+                                value=team_member_info,
+                                model_type=LiteLLM_TeamMembership,
+                                ttl=5,
+                            )
+
+                    if team_member_info is not None and team_member_info.litellm_budget_table is not None:
+                        team_member_budget: Final = team_member_info.litellm_budget_table.effective_max_budget(
+                            now=datetime.now(timezone.utc),
+                        )
+                        if team_member_budget is not None and team_member_budget > 0:
+                            # Read from cross-pod counter (Redis-first) if available
+                            from litellm.proxy.proxy_server import get_current_spend
+
+                            team_member_spend = valid_token.team_member_spend
+                            if valid_token.user_id is not None and valid_token.team_id is not None:
+                                team_member_spend = await get_current_spend(
+                                    counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
+                                    fallback_spend=team_member_spend,
+                                    max_budget=team_member_budget,
+                                )
+                            if team_member_spend >= team_member_budget:
+                                # common_checks sends this alert on requests that get past here, so only the
+                                # request rejected here sends it from the builder.
+                                _team_member_max_budget_alert_check(
+                                    team_id=_team_id,
+                                    team_alias=valid_token.team_alias,
+                                    team_metadata=valid_token.team_metadata,
+                                    organization_id=valid_token.org_id,
+                                    user_id=_user_id,
+                                    user_email=user_obj.user_email if user_obj is not None else None,
+                                    proxy_logging_obj=proxy_logging_obj,
+                                    spend=team_member_spend,
+                                    max_budget=team_member_budget,
+                                )
+                                _entity_id: Final = f"{valid_token.user_id}:{valid_token.team_id}"
+                                raise litellm.BudgetExceededError(
+                                    current_cost=team_member_spend,
+                                    max_budget=team_member_budget,
+                                    message=(
+                                        f"Budget has been exceeded! TeamMember={_entity_id} "
+                                        f"Current cost: {team_member_spend}, Max budget: {team_member_budget}"
+                                    ),
+                                    entity_type=Litellm_EntityType.TEAM_MEMBER.value,
+                                    entity_id=_entity_id,
+                                )
+
             # Check 3. If token is expired
             if valid_token.expires is not None:
                 current_time = datetime.now(timezone.utc)
@@ -3096,66 +3168,6 @@ def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) ->
         subject_fallback=valid_token.token,
         credential_ref=CredentialRef(token_id=valid_token.token),
     )
-
-
-async def enforce_team_member_budget_without_common_checks(
-    user_api_key_auth_obj: UserAPIKeyAuth,
-    request: Request,
-    request_data: dict,
-    route: str,
-    api_key: str,
-) -> None:
-    """Team member budget gate for callers that stop at ``_user_api_key_auth_builder`` and never reach
-    ``common_checks`` (the MCP OAuth dependency), so an over-budget member stays blocked there as before.
-    Failures go through the builder's exception handler so the caller still gets the 422.
-    """
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
-
-    team_id: Final = user_api_key_auth_obj.team_id
-    user_id: Final = user_api_key_auth_obj.user_id
-    if prisma_client is None or team_id is None or team_id == UI_TEAM_ID or user_id is None:
-        return
-    parent_otel_span: Final = user_api_key_auth_obj.parent_otel_span
-    try:
-        team_object: Final = await get_team_object(
-            team_id=team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except HTTPException:  # no team row means no member budget to enforce
-        return
-    try:
-        user_object = await get_user_object(
-            user_id=user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except Exception:  # noqa: BLE001  # the user row only supplies the alert email; enforcement does not need it
-        user_object = None
-    try:
-        await _check_team_member_budget(
-            team_object=team_object,
-            user_object=user_object,
-            valid_token=user_api_key_auth_obj,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except litellm.BudgetExceededError as e:
-        await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
-            e=e,
-            request=request,
-            request_data=request_data,
-            route=route,
-            parent_otel_span=parent_otel_span,
-            api_key=api_key,
-            resolved_identity=user_api_key_auth_obj,
-        )
 
 
 async def _authorize_authenticated_request(
