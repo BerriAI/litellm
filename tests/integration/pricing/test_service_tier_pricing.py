@@ -69,3 +69,37 @@ def test_ultrafast_service_tier_bills_ultrafast_rates_and_keeps_pricing_off_the_
         )
         assert_chat_bills_rates(gateway, model, "ultrafast", ULTRAFAST_INPUT_RATE, ULTRAFAST_OUTPUT_RATE)
         assert_chat_bills_rates(gateway, model, None, STANDARD_INPUT_RATE, STANDARD_OUTPUT_RATE)
+
+
+BALANCED_INPUT_RATE: Final = 0.003
+BALANCED_OUTPUT_RATE: Final = 0.004
+
+
+def test_balanced_service_tier_bills_base_rates_on_a_model_without_balanced_rates(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            input_cost_per_token=STANDARD_INPUT_RATE,
+            output_cost_per_token=STANDARD_OUTPUT_RATE,
+        )
+        assert_chat_bills_rates(gateway, model, "balanced", STANDARD_INPUT_RATE, STANDARD_OUTPUT_RATE)
+
+
+def test_balanced_service_tier_bills_balanced_rates_when_configured(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            input_cost_per_token=STANDARD_INPUT_RATE,
+            output_cost_per_token=STANDARD_OUTPUT_RATE,
+            input_cost_per_token_balanced=BALANCED_INPUT_RATE,
+            output_cost_per_token_balanced=BALANCED_OUTPUT_RATE,
+        )
+        assert_chat_bills_rates(gateway, model, "balanced", BALANCED_INPUT_RATE, BALANCED_OUTPUT_RATE)
+        assert_chat_bills_rates(gateway, model, None, STANDARD_INPUT_RATE, STANDARD_OUTPUT_RATE)
+
+
+def test_flex_service_tier_bills_base_rates_on_a_model_without_flex_rates(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            input_cost_per_token=STANDARD_INPUT_RATE,
+            output_cost_per_token=STANDARD_OUTPUT_RATE,
+        )
+        assert_chat_bills_rates(gateway, model, "flex", STANDARD_INPUT_RATE, STANDARD_OUTPUT_RATE)
