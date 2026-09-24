@@ -5,6 +5,7 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 
 import json
 import urllib.parse
+from collections.abc import Mapping
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlparse
 
@@ -1447,7 +1448,11 @@ class TestVertexEmbeddingsBatchInputTranslation:
         assert "content" in embeddings_row["request"]
 
 
-def _responses_entry(body=None, custom_id="resp-1", url="/v1/responses"):
+def _responses_entry(
+    body: Mapping[str, object] | None = None,
+    custom_id: str = "resp-1",
+    url: str = "/v1/responses",
+) -> dict[str, object]:
     return {
         "custom_id": custom_id,
         "method": "POST",
