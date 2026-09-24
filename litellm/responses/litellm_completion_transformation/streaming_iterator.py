@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Any, Final, cast
 
 import litellm
+from litellm.llms.compaction import get_responses_compaction_codec
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
@@ -134,6 +135,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_active = False
         self._reasoning_done_emitted = False
         self._reasoning_item_id: str | None = None
+        self._compaction_present: bool = False
+        self._cached_compaction_item_id: str | None = None
         self._accumulated_reasoning_content_parts: list[str] = []
         self._accumulated_provider_specific_fields: dict[str, object] = {}
         self._custom_tool_names: set[str] = extract_custom_tool_names(self.responses_api_request.get("tools"))
@@ -602,7 +605,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._message_output_index = self._next_tool_output_index
             self._next_tool_output_index += 1
         else:
-            self._message_output_index = 0
+            self._message_output_index = self._leading_reasoning_index()
         self._sequence_number += 1
         event: Final = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -620,6 +623,64 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         event.__dict__["sequence_number"] = self._sequence_number
         self._pending_response_events.append(event)
         self._pending_response_events.append(self.create_content_part_added_event())
+
+    def _leading_reasoning_index(self) -> int:
+        return 1 if self._compaction_present else 0
+
+    def _chunk_is_compaction_only(self, chunk: ModelResponseStream) -> bool:
+        if not chunk.choices:
+            return False
+        delta: Final = chunk.choices[0].delta
+        if (
+            getattr(delta, "content", None)
+            or getattr(delta, "reasoning_content", None)
+            or getattr(delta, "tool_calls", None)
+        ):
+            return False
+        for src in (
+            getattr(chunk, "provider_specific_fields", None),
+            getattr(delta, "provider_specific_fields", None),
+        ):
+            if get_responses_compaction_codec().is_streaming_compaction(src):
+                return True
+        return False
+
+    def _maybe_queue_compaction_events(self) -> None:
+        if self._compaction_present:
+            return
+        encoded: Final = get_responses_compaction_codec().encode(self._accumulated_provider_specific_fields)
+        if encoded is None:
+            return
+        self._compaction_present = True
+        self._cached_compaction_item_id = f"cmp_{uuid.uuid4()}"
+        # reserve index 0 for compaction and 1 for the message or reasoning item
+        self._next_tool_output_index = max(self._next_tool_output_index, 2)
+        item_id: Final = self._cached_compaction_item_id
+        added_item: Final = {  # mutable-ok: dynamic compaction item payload
+            "id": item_id,
+            "type": "compaction",
+            "status": "in_progress",
+        }
+        added: Final = OutputItemAddedEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(**added_item),
+        )
+        self._sequence_number += 1
+        done_item: Final = {  # mutable-ok: dynamic compaction item payload
+            "id": item_id,
+            "type": "compaction",
+            "status": "completed",
+            "encrypted_content": encoded,
+        }
+        done: Final = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=self._sequence_number,
+            item=BaseLiteLLMOpenAIResponseObject(**done_item),
+        )
+        self._pending_response_events.append(added)
+        self._pending_response_events.append(done)
 
     def _merge_provider_specific_fields(self, src: dict) -> None:
         """Merge provider_specific_fields using last-value-wins for lists.
@@ -691,7 +752,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return ReasoningSummaryTextDoneEvent(
             type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
             item_id=reasoning_item_id,
-            output_index=0,
+            output_index=self._leading_reasoning_index(),
             sequence_number=sequence_number,
             summary_index=0,
             text=reasoning_content,
@@ -722,7 +783,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return ReasoningSummaryPartDoneEvent(
             type=ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
             item_id=reasoning_item_id,
-            output_index=0,
+            output_index=self._leading_reasoning_index(),
             sequence_number=sequence_number,
             summary_index=0,
             part=BaseLiteLLMOpenAIResponseObject(
@@ -833,7 +894,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         """
         return OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-            output_index=0,
+            output_index=self._leading_reasoning_index(),
             sequence_number=sequence_number,
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
@@ -932,6 +993,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
         delta: Final = chunk.choices[0].delta
 
+        if self._chunk_is_compaction_only(chunk):
+            return
+
+        self._maybe_queue_compaction_events()
         self._sequence_number += 1
         self.sent_output_item_added_event = True
 
@@ -944,7 +1009,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
             event = OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-                output_index=0,
+                output_index=self._leading_reasoning_index(),
                 item=BaseLiteLLMOpenAIResponseObject(
                     **{
                         "id": self._cached_reasoning_item_id,
@@ -1186,7 +1251,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
                 item_id=self._cached_reasoning_item_id,
-                output_index=0,
+                output_index=self._leading_reasoning_index(),
                 delta=reasoning_content,
             )
 

@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.compaction import get_responses_compaction_codec
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -529,7 +530,8 @@ class LiteLLMCompletionResponsesConfig:
             )
         )
 
-        return messages
+        superseded: Final = get_responses_compaction_codec().superseded_replay_indices(messages)
+        return [message for index, message in enumerate(messages) if index not in superseded]  # mutable-ok: caller list
 
     @staticmethod
     async def async_responses_api_session_handler(
@@ -1415,6 +1417,19 @@ class LiteLLMCompletionResponsesConfig:
                     thinking_blocks=thinking_blocks,
                 )
             ]
+        elif input_item.get("type") == "compaction":
+            encrypted_content: Final[object] = input_item.get("encrypted_content")
+            if not isinstance(encrypted_content, str):
+                return []  # mutable-ok: empty drop result
+            codec: Final = get_responses_compaction_codec()
+            if not replay_reasoning:
+                # inspection callers (guardrails, DLP, token counting) must see the summary, not the opaque token
+                summary: Final = codec.inspectable_text(encrypted_content)
+                if not summary:
+                    return []  # mutable-ok: nothing scannable to surface
+                return [GenericChatCompletionMessage(role="assistant", content=summary)]  # mutable-ok: single message
+            replayed: Final = codec.replay_message(encrypted_content)
+            return [replayed] if replayed is not None else []  # mutable-ok: single message result
         else:
             content: Final[object] = input_item.get("content")
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
@@ -2506,6 +2521,9 @@ class LiteLLMCompletionResponsesConfig:
         ] = []
 
         responses_output.extend(
+            LiteLLMCompletionResponsesConfig._extract_compaction_output_items(chat_completion_response, choices)
+        )
+        responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
         )
         responses_output.extend(
@@ -2575,6 +2593,35 @@ class LiteLLMCompletionResponsesConfig:
         thinking_blocks: Final[Sequence[Mapping[str, object]]] = getattr(message, "thinking_blocks", None) or ()
         preserved: Final = tuple(block for block in thinking_blocks if block.get("signature") or block.get("data"))
         return json.dumps(preserved, separators=(",", ":")) if preserved else None
+
+    @staticmethod
+    def _extract_compaction_output_items(
+        chat_completion_response: ModelResponse,
+        choices: Sequence[Choices],
+    ) -> tuple[GenericResponseOutputItem, ...]:
+        for choice in choices:
+            try:
+                provider_fields = _STR_KEY_DICT_ADAPTER.validate_python(
+                    getattr(getattr(choice, "message", None), "provider_specific_fields", None)
+                )
+            except ValidationError:
+                continue
+            encoded = get_responses_compaction_codec().encode(provider_fields)
+            if encoded is None:
+                continue
+            return (
+                GenericResponseOutputItem(
+                    type="compaction",
+                    id=f"cmp_{uuid.uuid4()}",
+                    status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                        choice.finish_reason
+                    ),
+                    role="assistant",
+                    content=[],  # mutable-ok: GenericResponseOutputItem.content is a required list field
+                    encrypted_content=encoded,  # pyright: ignore[reportCallIssue]  # extra field on this extra="allow" model, same as reasoning items
+                ),
+            )
+        return ()
 
     @staticmethod
     def _extract_reasoning_output_items(

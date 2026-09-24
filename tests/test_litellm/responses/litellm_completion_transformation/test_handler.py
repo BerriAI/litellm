@@ -223,3 +223,66 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
     )
     assert isinstance(response, ResponsesAPIResponse)
     assert [item.type for item in response.output] == ["message"]
+
+
+class _CompactionRecordingHandler:
+    def __init__(self, reply: Mapping[str, object]) -> None:
+        self.reply: Final = reply
+        self.requests: list[Mapping[str, object]] = []  # mutable-ok: records each bridged request body
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(json.loads(request.content))
+        return httpx.Response(200, json=dict(self.reply), request=request)
+
+
+_ANTHROPIC_COMPACTION_REPLY: Final = {
+    "id": "msg_compact",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-6",
+    "content": [
+        {"type": "compaction", "content": "Summary of prior turns.", "encrypted_content": "OPAQUE-tok"},
+        {"type": "text", "text": "Continuing."},
+    ],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 55000, "output_tokens": 5},
+}
+
+
+@pytest.mark.asyncio
+async def test_bridged_threshold_compaction_replays_block_to_anthropic():
+    """#41456 end to end through the real bridge: /v1/responses -> Anthropic threshold
+    compaction returns a Responses compaction item, and replaying that item reaches the
+    next Anthropic request as the signed block (content + encrypted_content preserved)."""
+    expected_block: Final = {
+        "type": "compaction",
+        "content": "Summary of prior turns.",
+        "encrypted_content": "OPAQUE-tok",
+    }
+    provider: Final = _CompactionRecordingHandler(_ANTHROPIC_COMPACTION_REPLY)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    first: Final = await litellm.aresponses(
+        model="anthropic/claude-sonnet-5",
+        api_key="fake",
+        input="Describe transformers",
+        context_management=[{"type": "compaction", "compact_threshold": 50000}],
+        client=client,
+    )
+    compaction_items: Final = [item for item in first.output if item.type == "compaction"]
+    assert len(compaction_items) == 1, [item.type for item in first.output]
+    assert json.loads(compaction_items[0].encrypted_content) == expected_block
+
+    replay_input: Final = [json.loads(item.model_dump_json(exclude_none=True)) for item in first.output]
+    replay_input.append({"role": "user", "content": "continue"})
+    await litellm.aresponses(model="anthropic/claude-sonnet-5", api_key="fake", input=replay_input, client=client)
+
+    replayed_blocks: Final = [
+        block
+        for message in provider.requests[-1].get("messages", [])
+        for block in (message.get("content") if isinstance(message.get("content"), list) else [])
+        if isinstance(block, dict) and block.get("type") == "compaction"
+    ]
+    assert replayed_blocks == [expected_block], provider.requests[-1].get("messages")

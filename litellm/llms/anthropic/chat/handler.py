@@ -717,11 +717,17 @@ class ModelResponseIterator:
                 if reasoning_content is None:
                     reasoning_content = ""
         elif "content" in content_block["delta"] and content_block["delta"].get("type") == "compaction_delta":
-            # Handle compaction delta
+            delta_content: Final = content_block["delta"]["content"]
             provider_specific_fields["compaction_delta"] = {
                 "type": "compaction_delta",
-                "content": content_block["delta"]["content"],
+                "content": delta_content,
             }
+            if self.compaction_blocks:
+                open_block: Final = self.compaction_blocks[-1]
+                merged_content: Final = f"{open_block.get('content') or ''}{delta_content}"
+                folded_block: Final = {**open_block, "content": merged_content}  # mutable-ok: folded block
+                self.compaction_blocks = [*self.compaction_blocks[:-1], folded_block]  # mutable-ok: rebuilt list
+                provider_specific_fields["compaction_blocks"] = self.compaction_blocks
 
         return (
             text,
