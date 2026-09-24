@@ -504,6 +504,7 @@ if MCP_AVAILABLE:
         _invalidate_byok_cred_cache,
         _mcp_session_id_from_headers,
     )
+    from litellm.proxy._experimental.mcp_server.result_conversion import wire_compat_for
 
     try:
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -516,6 +517,7 @@ if MCP_AVAILABLE:
         GetPromptRequestParams,
         Implementation,
         InitializeRequest,
+        InputRequiredResult,
         ListPromptsResult,
         ListResourcesResult,
         ListResourceTemplatesResult,
@@ -818,7 +820,15 @@ if MCP_AVAILABLE:
                 client_ip,
             ) = await get_or_extract_auth_context()
             yield operations.prepare_context(
-                auth, token, servers, server_headers, oauth_headers, headers, client_ip, _mcp_proxy_mode.get()
+                auth,
+                token,
+                servers,
+                server_headers,
+                oauth_headers,
+                headers,
+                client_ip,
+                _mcp_proxy_mode.get(),
+                wire_compat_for(ctx.protocol_version),
             )
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:
@@ -875,7 +885,9 @@ if MCP_AVAILABLE:
         _dispatch_virtual_mcp_tool,
     )
 
-    async def mcp_server_tool_call(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    async def mcp_server_tool_call(
+        ctx: ServerRequestContext, params: CallToolRequestParams
+    ) -> CallToolResult | InputRequiredResult:
         async with _legacy_operation_context(ctx, trace=True) as context:
             return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
                 CallToolRequest(params=params), context

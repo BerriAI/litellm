@@ -39,6 +39,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, TypeAdapter
 
 from litellm.constants import MCP_METADATA_TIMEOUT
+from litellm.proxy._experimental.mcp_server.tool_outcome import TextResult
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
@@ -6730,7 +6731,7 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params, host_progress_callback=None):
+        async def mock_call_tool(params, host_progress_callback=None, allow_input_required=False):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]
@@ -10032,7 +10033,7 @@ class _RetryFakeClient:
         self._MCPClient = MCPClient
         self.attempts = 0
 
-    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False):
         self.attempts += 1
         if self._raises is not None:
             if raise_on_error:
@@ -10244,7 +10245,7 @@ class TestOBOConcurrencyLimit:
         inflight = {"current": 0, "peak": 0}
 
         class _ConcurrencyRecordingClient:
-            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False):
                 inflight["current"] += 1
                 inflight["peak"] = max(inflight["peak"], inflight["current"])
                 try:
@@ -12220,6 +12221,38 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
 
         assert result.is_error is True
         assert "upstream returned HTTP 503" in result.content[0].text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("body", "compat", "expected_structured"),
+        [
+            ('{"total": 1.10, "items": [ ]}', "legacy", {"total": 1.1, "items": []}),
+            ('{"total": 1.10, "items": [ ]}', "modern", {"total": 1.1, "items": []}),
+            ("[1, 2]", "legacy", None),
+            ("[1, 2]", "modern", [1, 2]),
+            ("plain text", "legacy", None),
+            ("plain text", "modern", None),
+        ],
+    )
+    async def test_json_bodies_keep_verbatim_text_and_gain_structured_content(self, body, compat, expected_structured):
+        """The OpenAPI arm used to stringify the response; now the text block is the upstream body
+        byte for byte, exactly once, and JSON bodies carry structuredContent when the caller's revision admits it."""
+        from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat, parse_http_body
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        manager = MCPServerManager()
+
+        async def handler(**_kwargs):
+            return parse_http_body(body)
+
+        tool = MagicMock()
+        tool.handler = handler
+        with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
+            result = await manager._call_openapi_tool_handler(self._server(), "list_reports", {}, WireCompat(compat))
+
+        assert result.is_error is False
+        assert [block.text for block in result.content] == [body]
+        assert result.structured_content == expected_structured
 
 
 class TestConfigServerIdPinning:
@@ -14225,7 +14258,7 @@ class TestProtectedCredentialPreparation:
         caller_token: Final = _request_auth_header.set(caller)
         extra_token: Final = _request_extra_headers.set(forwarded)
         try:
-            assert await tool() == "authenticated"
+            assert await tool() == TextResult("authenticated")
             sent: Final = destination.calls.last.request.headers
             assert sent.get("x-api-key") == static.get("X-API-Key", (forwarded or {}).get("X-API-Key"))
             if caller:

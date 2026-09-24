@@ -8021,7 +8021,7 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.operations._handle_local_mcp_tool",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=CallToolResult(content=[], is_error=False)),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
@@ -9253,6 +9253,152 @@ async def test_call_mcp_tool_skips_failure_hook_for_upstream_auth_error():
             )
 
     proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
+
+
+def _interim_input_required_result():
+    from mcp.types import InputRequiredResult
+
+    return InputRequiredResult.model_validate(
+        {
+            "resultType": "input_required",
+            "inputRequests": {
+                "req-1": {
+                    "method": "elicitation/create",
+                    "params": {"message": "Pick one", "requestedSchema": {"type": "object", "properties": {}}},
+                }
+            },
+            "requestState": "state-1",
+        }
+    )
+
+
+@contextlib.contextmanager
+def _managed_tool_returning(server, upstream_result, proxy_logging_mock):
+    from litellm.proxy._experimental.mcp_server.server import global_mcp_server_manager
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[server.server_id],
+        ),
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=server),
+        patch.object(global_mcp_server_manager, "_get_mcp_server_from_tool_name", return_value=server),
+        patch.object(global_mcp_server_manager, "server_owning_tool_name_prefix", return_value=server),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers_from_mcp_server_names",
+            new_callable=AsyncMock,
+            return_value=[server],
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations._list_tools_before_first_call",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations._handle_managed_mcp_tool",
+            new_callable=AsyncMock,
+            return_value=upstream_result,
+        ) as managed_call,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock),
+    ):
+        yield managed_call
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_legacy_interim_result_is_rejected_into_failure_accounting():
+    """An upstream input_required interim on a legacy connection cannot be carried on the wire, so it
+    must come back as isError and go through the same failure accounting as any other errored call."""
+    from mcp.types import CallToolResult
+
+    from litellm.proxy._experimental.mcp_server.result_conversion import (
+        INPUT_REQUIRED_UNSUPPORTED_MESSAGE,
+        WireCompat,
+    )
+    from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+    from litellm.proxy._types import MCPTransport, UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="server-interim",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+    proxy_logging_mock = _mock_mcp_proxy_logging()
+    logging_obj = _mock_mcp_logging_obj()
+
+    with _managed_tool_returning(server, _interim_input_required_result(), proxy_logging_mock) as managed_call:
+        result = await call_mcp_tool(
+            name="test_server-any_tool",
+            arguments={"x": 1},
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            litellm_logging_obj=logging_obj,
+            wire_compat=WireCompat.LEGACY,
+        )
+
+    assert managed_call.await_args.kwargs["wire_compat"] is WireCompat.LEGACY
+    assert isinstance(result, CallToolResult) and result.is_error is True
+    assert result.content[0].text == INPUT_REQUIRED_UNSUPPORTED_MESSAGE
+    logging_obj.async_success_handler.assert_not_awaited()
+    logging_obj.async_failure_handler.assert_awaited_once()
+    assert str(logging_obj.async_failure_handler.await_args.args[0]) == INPUT_REQUIRED_UNSUPPORTED_MESSAGE
+    proxy_logging_mock.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_modern_interim_result_passes_through_without_completed_accounting():
+    """On a modern connection the interim result is returned with its fields intact and is neither
+    logged as a completed success nor run through the post-call guardrail and success hooks."""
+    from mcp.types import InputRequiredResult
+
+    from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat
+    from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+    from litellm.proxy._types import MCPTransport, UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="server-interim",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+    proxy_logging_mock = _mock_mcp_proxy_logging()
+    logging_obj = _mock_mcp_logging_obj()
+    interim = _interim_input_required_result()
+
+    with _managed_tool_returning(server, interim, proxy_logging_mock) as managed_call:
+        result = await call_mcp_tool(
+            name="test_server-any_tool",
+            arguments={"x": 1},
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            litellm_logging_obj=logging_obj,
+            wire_compat=WireCompat.MODERN,
+        )
+
+    assert managed_call.await_args.kwargs["wire_compat"] is WireCompat.MODERN
+    assert isinstance(result, InputRequiredResult)
+    assert result.request_state == "state-1"
+    assert result.input_requests is not None and set(result.input_requests) == {"req-1"}
+    logging_obj.async_success_handler.assert_not_awaited()
+    logging_obj.async_failure_handler.assert_not_awaited()
+    logging_obj.async_post_mcp_tool_call_hook.assert_not_awaited()
+    proxy_logging_mock.post_mcp_call_hook.assert_not_awaited()
+    proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
+    assert sorted(c.kwargs["event_type"] for c in logging_obj.has_run_logging.call_args_list) == [
+        "async_success",
+        "sync_success",
+    ], "the @client wrapper would otherwise log the interim result as a completed success on return"
 
 
 @pytest.mark.asyncio
