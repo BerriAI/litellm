@@ -12,7 +12,7 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import quote
 
 import httpx
@@ -40,6 +40,9 @@ from litellm.llms.base_llm.ocr.transformation import (
     parse_ocr_request_format,
 )
 from litellm.secret_managers.main import get_secret_str
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR: Final = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
 
@@ -89,6 +92,18 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def get_api_key_env_var(self) -> str | None:
         return AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR
 
+    def resolve_connection_params(
+        self,
+        *,
+        api_key: str | None,
+        api_base: str | None,
+        dynamic_api_key: str | None,
+        dynamic_api_base: str | None,
+    ) -> tuple[str | None, str | None]:
+        explicit_api_key: Final = None if api_key is None else dynamic_api_key or api_key
+        explicit_api_base: Final = None if api_base is None else dynamic_api_base or api_base
+        return explicit_api_key, explicit_api_base
+
     def get_supported_ocr_params(self, model: str) -> list:
         """
         Get supported OCR parameters for Azure Document Intelligence.
@@ -112,7 +127,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     def map_ocr_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
     ) -> dict:
@@ -149,7 +164,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             raise UnsupportedParamsError(message=f"{e}", model=model, llm_provider="azure_ai") from e
 
     @staticmethod
-    def _normalize_pages_param(pages: Any) -> str:
+    def _normalize_pages_param(pages: object) -> str:
         """
         Convert a caller-provided `pages` value to Azure DI's query-string
         form. Azure expects 1-based page numbers, grammar: `^(\\d+(-\\d+)?)(,\\s*(\\d+(-\\d+)?))*$`.
@@ -397,7 +412,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             raise ValueError("Document URL is required")
 
         # Build Azure DI request
-        data: Final[dict[str, Any]] = {}
+        data: Final[dict[str, str]] = {}
 
         # Check if it's a data URI (base64)
         if document_url.startswith("data:"):
@@ -615,7 +630,11 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         except SSRFError as ssrf_err:
             raise ValueError(f"Azure Document Intelligence: rejected polling URL ({ssrf_err})")
 
-        poll_headers = {"Ocp-Apim-Subscription-Key": raw_response.request.headers.get("Ocp-Apim-Subscription-Key", "")}
+        poll_headers: Final = {
+            header: raw_response.request.headers[header]
+            for header in ("Ocp-Apim-Subscription-Key", "Authorization")
+            if header in raw_response.request.headers
+        }
         return operation_url, poll_headers
 
     @staticmethod
@@ -676,7 +695,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         **kwargs,
     ) -> OCRResponse:
         """
@@ -751,7 +770,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         **kwargs,
     ) -> OCRResponse:
         """

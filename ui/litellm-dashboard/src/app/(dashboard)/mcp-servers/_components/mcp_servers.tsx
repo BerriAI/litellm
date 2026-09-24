@@ -1,7 +1,8 @@
-import { isAdminRole } from "@/utils/roles";
-import { CircleHelp, Search } from "lucide-react";
+import { isAdminRole, isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
+import { CircleHelp, Plug, Search } from "lucide-react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -22,8 +23,10 @@ import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPSer
 import { toast } from "@/lib/toast";
 import { deleteMCPServer } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
+import { MCPGatewaySessionsTab } from "./MCPGatewaySessionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import CreateMCPServer from "./CreateMCPServer";
+import ImportMCPServers from "./ImportMCPServers";
 import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
 import { MCPServerView } from "./mcp_server_view";
@@ -35,15 +38,18 @@ import type {
   Team,
 } from "@/components/mcp_tools/types";
 import MCPSemanticFilterSettings from "@/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
+import MCPToolSearchSettings from "@/components/Settings/AdminSettings/MCPToolSearchSettings/MCPToolSearchSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "@/components/mcp_tools/ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
 import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
+import { uiHref } from "@/utils/uiHref";
+import { cn } from "@/lib/cva.config";
 import UserEnvVarsModal from "./UserEnvVarsModal";
 import { listMCPUserEnvVarStatus } from "@/components/networking";
 
-type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
+export type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "created_desc", label: "Recently created" },
@@ -58,32 +64,33 @@ const HEALTH_RANK: Record<string, number> = {
   healthy: 2,
 };
 
-const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): number => {
+const compareByName = (a: MCPServer, b: MCPServer): number => {
+  const nameA = (a.server_name || a.alias || a.server_id).toLowerCase();
+  const nameB = (b.server_name || b.alias || b.server_id).toLowerCase();
+  return nameA.localeCompare(nameB) || a.server_id.localeCompare(b.server_id);
+};
+
+const compareByTimestampDesc = (a: string | null | undefined, b: string | null | undefined): number => {
+  const ta = a ? new Date(a).getTime() : 0;
+  const tb = b ? new Date(b).getTime() : 0;
+  return tb - ta;
+};
+
+export const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): number => {
   switch (sort) {
-    case "name_asc": {
-      const nameA = (a.server_name || a.alias || a.server_id).toLowerCase();
-      const nameB = (b.server_name || b.alias || b.server_id).toLowerCase();
-      return nameA.localeCompare(nameB);
-    }
-    case "updated_desc": {
-      const ta = a.updated_at ? new Date(a.updated_at).getTime() : 0;
-      const tb = b.updated_at ? new Date(b.updated_at).getTime() : 0;
-      return tb - ta;
-    }
+    case "name_asc":
+      return compareByName(a, b);
+    case "updated_desc":
+      return compareByTimestampDesc(a.updated_at, b.updated_at) || compareByName(a, b);
     case "health": {
       const ra = HEALTH_RANK[a.status ?? "unknown"] ?? 1;
       const rb = HEALTH_RANK[b.status ?? "unknown"] ?? 1;
       if (ra !== rb) return ra - rb;
-      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return tb - ta;
+      return compareByTimestampDesc(a.created_at, b.created_at) || compareByName(a, b);
     }
     case "created_desc":
-    default: {
-      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return tb - ta;
-    }
+    default:
+      return compareByTimestampDesc(a.created_at, b.created_at) || compareByName(a, b);
   }
 };
 
@@ -106,7 +113,63 @@ const readToolsOAuthServerId = (): string | null => {
   }
 };
 
-const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
+function DeleteServerDialog({
+  open,
+  onOpenChange,
+  server,
+  isDeleting,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  server: MCPServer | undefined;
+  isDeleting: boolean;
+  onConfirm: () => Promise<void>;
+}) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete MCP Server?</AlertDialogTitle>
+        </AlertDialogHeader>
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            This action is permanent and cannot be undone. All associated configurations will be removed.
+          </p>
+
+          {server && (
+            <dl className="mt-3 space-y-1 rounded-lg border border-border bg-muted p-4">
+              {server.server_name && (
+                <div className="flex gap-2">
+                  <dt className="text-sm text-muted-foreground">Name</dt>
+                  <dd className="text-sm font-semibold">{server.server_name}</dd>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <dt className="text-sm text-muted-foreground">ID</dt>
+                <dd className="font-mono text-xs">{server.server_id}</dd>
+              </div>
+              {server.url && (
+                <div className="flex gap-2">
+                  <dt className="text-sm text-muted-foreground">URL</dt>
+                  <dd className="font-mono text-xs break-all">{server.url}</dd>
+                </div>
+              )}
+            </dl>
+          )}
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+          <Button variant="destructive" disabled={isDeleting} onClick={onConfirm}>
+            {isDeleting ? "Deleting..." : "Delete"}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
@@ -148,6 +211,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
+  const [isImportVisible, setImportVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
@@ -176,6 +240,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     }
     return map;
   }, [envVarStatuses]);
+
+  const serversWithUserFields = useMemo(
+    () =>
+      new Set((envVarStatuses ?? []).filter((status) => (status.required ?? []).length > 0).map((s) => s.server_id)),
+    [envVarStatuses],
+  );
 
   // Deep-link via ?fill_env_vars=<server_id> — the link users follow from the
   // friendly error the proxy returns when a per-user var is missing. The id is
@@ -291,16 +361,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       }
       if (group !== "all") {
         filtered = filtered.filter((server) =>
-          server.mcp_access_groups?.some((g: any) => (typeof g === "string" ? g === group : g && g.name === group)),
+          server.mcp_access_groups?.some((g: string | { name?: string } | null) =>
+            typeof g === "string" ? g === group : g?.name === group,
+          ),
         );
       }
-      const sorted = [...filtered].sort((a, b) => {
-        if (!a.created_at && !b.created_at) return 0;
-        if (!a.created_at) return 1;
-        if (!b.created_at) return -1;
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      });
-      setFilteredServers(sorted);
+      setFilteredServers(filtered);
     },
     [serversWithHealth],
   );
@@ -331,7 +397,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           const alias = (s.alias || "").toLowerCase();
           const url = (s.url || "").toLowerCase();
           const id = s.server_id.toLowerCase();
-          return name.includes(q) || alias.includes(q) || url.includes(q) || id.includes(q);
+          return [name, alias, url, id].some((value) => value.includes(q));
         })
       : filteredServers;
     return [...matches].sort((a, b) => compareServers(a, b, sortKey));
@@ -374,9 +440,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   };
 
   // Find the server to delete from the servers list
-  const serverToDelete = serverIdToDelete
-    ? (mcpServers || []).find((server) => server.server_id === serverIdToDelete)
-    : null;
+  const serverToDelete = mcpServers?.find((server) => server.server_id === serverIdToDelete);
 
   const handleCreateSuccess = (newMcpServer: MCPServer) => {
     setFilteredServers((prev) => [...prev, newMcpServer]);
@@ -418,45 +482,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   return (
     <TooltipProvider>
       <div className="h-full w-full p-6">
-        <AlertDialog open={isDeleteModalOpen} onOpenChange={(open) => !open && cancelDelete()}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete MCP Server?</AlertDialogTitle>
-            </AlertDialogHeader>
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                This action is permanent and cannot be undone. All associated configurations will be removed.
-              </p>
-
-              {serverToDelete && (
-                <dl className="mt-3 space-y-1 rounded-lg border border-border bg-muted p-4">
-                  {serverToDelete.server_name && (
-                    <div className="flex gap-2">
-                      <dt className="text-sm text-muted-foreground">Name</dt>
-                      <dd className="text-sm font-semibold">{serverToDelete.server_name}</dd>
-                    </div>
-                  )}
-                  <div className="flex gap-2">
-                    <dt className="text-sm text-muted-foreground">ID</dt>
-                    <dd className="font-mono text-xs">{serverToDelete.server_id}</dd>
-                  </div>
-                  {serverToDelete.url && (
-                    <div className="flex gap-2">
-                      <dt className="text-sm text-muted-foreground">URL</dt>
-                      <dd className="font-mono text-xs break-all">{serverToDelete.url}</dd>
-                    </div>
-                  )}
-                </dl>
-              )}
-            </div>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={isDeletingServer}>Cancel</AlertDialogCancel>
-              <Button variant="destructive" disabled={isDeletingServer} onClick={confirmDelete}>
-                {isDeletingServer ? "Deleting..." : "Delete"}
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <DeleteServerDialog
+          open={isDeleteModalOpen}
+          onOpenChange={(open) => !open && cancelDelete()}
+          server={serverToDelete}
+          isDeleting={isDeletingServer}
+          onConfirm={confirmDelete}
+        />
         <CreateMCPServer
           userRole={userRole}
           userID={userID}
@@ -465,6 +497,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           isModalVisible={isModalVisible}
           setModalVisible={setModalVisible}
           availableAccessGroups={uniqueMcpAccessGroups}
+          existingServers={mcpServers}
           prefillData={prefillData}
           onBackToDiscovery={() => {
             setModalVisible(false);
@@ -480,13 +513,21 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             </div>
             <p className="mt-1 text-sm text-muted-foreground">Configure and manage your MCP servers</p>
           </div>
-          <div className="flex items-center gap-2">
-            {isAdminRole(userRole) && (
-              <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
-                + Add New MCP Server
-              </Button>
-            )}
-            {!isAdminRole(userRole) && (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
+              <Plug />
+              My Connections
+            </Link>
+            {isAdminRole(userRole) ? (
+              <>
+                <Button className="shrink-0" variant="secondary" onClick={() => setImportVisible(true)}>
+                  Import from JSON
+                </Button>
+                <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
+                  + Add New MCP Server
+                </Button>
+              </>
+            ) : (
               <Button
                 className="shrink-0"
                 onClick={() => {
@@ -500,6 +541,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             )}
           </div>
         </div>
+        <ImportMCPServers
+          accessToken={accessToken}
+          open={isImportVisible}
+          onClose={() => setImportVisible(false)}
+          onImported={() => refetch()}
+        />
         <MCPDiscovery
           isVisible={isDiscoveryVisible}
           onClose={() => setDiscoveryVisible(false)}
@@ -527,18 +574,27 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               Connect
             </TabsTrigger>
             {isAdminRole(userRole) && (
-              <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
-                Semantic Filter
-              </TabsTrigger>
+              <>
+                <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
+                  Semantic Filter
+                </TabsTrigger>
+
+                <TabsTrigger value="tool-search" className="flex-none rounded-none px-4 py-2">
+                  Tool Search
+                </TabsTrigger>
+
+                <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
+                  Network Settings
+                </TabsTrigger>
+
+                <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
+                  Submitted MCPs
+                </TabsTrigger>
+              </>
             )}
-            {isAdminRole(userRole) && (
-              <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
-                Network Settings
-              </TabsTrigger>
-            )}
-            {isAdminRole(userRole) && (
-              <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
-                Submitted MCPs
+            {isProxyAdminTierRole(userRole) && (
+              <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
+                Live Connections
               </TabsTrigger>
             )}
           </TabsList>
@@ -553,7 +609,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 accessToken={accessToken}
                 userID={userID}
                 userRole={userRole}
+                isViewOnly={isViewOnly}
                 availableAccessGroups={uniqueMcpAccessGroups}
+                existingServers={mcpServers}
                 initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
               />
             ) : (
@@ -568,13 +626,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                           value={selectedTeam}
                           onValueChange={(v: string | null) => handleTeamChange(v ?? "all")}
                         >
-                          <SelectTrigger className="w-55">
+                          <SelectTrigger className="w-55" aria-label="Team">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="all">
-                              {isInternalUser ? "All Available Servers" : "All Servers"}
-                            </SelectItem>
+                            <SelectItem value="all">{teamSelectItems.all}</SelectItem>
                             <SelectItem value="personal">Personal</SelectItem>
                             {uniqueTeams.map((team) => (
                               <SelectItem key={team.team_id} value={team.team_id}>
@@ -608,7 +664,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                           value={selectedMcpAccessGroup}
                           onValueChange={(v: string | null) => handleMcpAccessGroupChange(v ?? "all")}
                         >
-                          <SelectTrigger className="w-55">
+                          <SelectTrigger className="w-55" aria-label="Access Group">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -682,6 +738,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                           key={server.server_id}
                           server={server}
                           missingUserFields={missingFieldsByServer[server.server_id]}
+                          hasUserFields={serversWithUserFields.has(server.server_id)}
                           isLoadingHealth={isLoadingHealth}
                           isRechecking={recheckingServerIds?.has(server.server_id)}
                           onClick={() => {
@@ -709,18 +766,30 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <MCPConnect />
           </TabsContent>
           {isAdminRole(userRole) && (
-            <TabsContent value="semantic-filter" keepMounted>
-              <MCPSemanticFilterSettings accessToken={accessToken} />
-            </TabsContent>
+            <>
+              <TabsContent value="semantic-filter" keepMounted>
+                <MCPSemanticFilterSettings accessToken={accessToken} />
+              </TabsContent>
+
+              <TabsContent value="tool-search" keepMounted>
+                <MCPToolSearchSettings accessToken={accessToken} />
+              </TabsContent>
+
+              <TabsContent value="network-settings" keepMounted>
+                <MCPNetworkSettings accessToken={accessToken} />
+              </TabsContent>
+
+              <TabsContent value="submitted" keepMounted>
+                <MCPSubmissionsTab accessToken={accessToken} />
+              </TabsContent>
+            </>
           )}
-          {isAdminRole(userRole) && (
-            <TabsContent value="network-settings" keepMounted>
-              <MCPNetworkSettings accessToken={accessToken} />
-            </TabsContent>
-          )}
-          {isAdminRole(userRole) && (
-            <TabsContent value="submitted" keepMounted>
-              <MCPSubmissionsTab accessToken={accessToken} />
+          {isProxyAdminTierRole(userRole) && (
+            <TabsContent value="connections">
+              <MCPGatewaySessionsTab
+                accessToken={accessToken}
+                canTerminate={isProxyAdminRole(userRole) && !isViewOnly}
+              />
             </TabsContent>
           )}
         </Tabs>

@@ -16,14 +16,52 @@ longer signal it.
 
 ### Added
 
+- **key**: Computed `server_metadata` attribute on `litellm_key` exposing every metadata entry the proxy stores, so metadata created outside Terraform is visible in state and drift on it shows on refresh, while `metadata` keeps tracking only the declared entries and updates keep preserving undeclared ones
+- **team_member_add**: `tpm_limit`, `rpm_limit`, `budget_duration`, and `allowed_models` attributes on `litellm_team_member_add`, applied to every member of the resource; `budget_duration` and `allowed_models` ride on `/team/member_add`, while the limits are sent through `/team/member_update`, which is where the proxy accepts them
+- **team**: Optional `team_id` argument on `litellm_team`, so teams can be created with a stable, human-readable ID instead of a provider-generated UUID; changing it forces replacement
+- `litellm_jwt_key_mapping` accepts `token_id` as an alternative to `key`, so a
+  mapping can name its virtual key by the SHA-256 hash the proxy stores instead
+  of by the plaintext. Exactly one of the two is required. This is what lets a
+  mapping reference a key managed in the same configuration
+  (`token_id = litellm_key.foo.token_id`), which `key` cannot do, because
+  `litellm_key` marks its generated key write-only and referencing it fails at
+  plan time. `POST /jwt/key/mapping/new` and `/jwt/key/mapping/update` gained a
+  matching `token` field, validated as 64 lowercase hex characters so a
+  plaintext key sent by mistake is rejected instead of hashed twice
+- **jwt_key_mapping**: New `litellm_jwt_key_mapping` resource for the proxy's JWT to virtual key mappings, so JWT clients identified by a claim (`client_id`, `azp`, `sub`) map to virtual keys and inherit their models, budgets and rate limits. Supports `description` and `is_active`, rotating the mapped key in place, and forces replacement when the claim name or value changes
 - **team**: `soft_budget`, `tags`, and `soft_budget_alerting_emails` attributes on `litellm_team`, matching what `/team/new` and `/team/update` already accept; `soft_budget_alerting_emails` is sent under `metadata`, where the proxy reads it
+- **user**: New `litellm_user` resource and `litellm_user` / `litellm_users` data sources for managing internal users
+- **budget**: New `litellm_budget` resource and `litellm_budget` / `litellm_budgets` data sources for reusable budget objects
+- **tag**: New `litellm_tag` resource and `litellm_tag` / `litellm_tags` data sources for spend and routing tags
+- **project**: New `litellm_project` resource and `litellm_project` / `litellm_projects` data sources
+- **guardrail**: New `litellm_guardrail` resource and `litellm_guardrail` / `litellm_guardrails` data sources; `litellm_params` is sensitive and never read back into state
+- **prompt**: New `litellm_prompt` resource and `litellm_prompt` / `litellm_prompts` data sources for prompt templates
+- **agent**: New `litellm_agent` resource and `litellm_agent` / `litellm_agents` data sources for A2A agents
+- **search_tool**: New `litellm_search_tool` resource and `litellm_search_tool` / `litellm_search_tools` data sources
+- **access groups**: New `litellm_access_group` and `litellm_unified_access_group` resources with matching singular and plural data sources
+- **fallback**: New `litellm_fallback` resource and data source for per-model fallbacks (general, context window and content policy)
+- **block resources**: New `litellm_key_block` and `litellm_team_block` resources to manage the blocked state of existing keys and teams
+- **data sources for existing resources**: New `litellm_key` / `litellm_keys`, `litellm_team` / `litellm_teams`, `litellm_model` / `litellm_models`, `litellm_organization` / `litellm_organizations` and `litellm_mcp_server` / `litellm_mcp_servers` data sources
+- **key**: New arguments `budget_id`, `enforced_params`, `allowed_routes`, `allowed_passthrough_routes`, `rpm_limit_type`, `tpm_limit_type`, `prompts`, `organization_id` and `project_id`
+- **team**: New arguments `model_aliases`, `guardrails`, `prompts`, `team_member_budget`, `team_member_budget_duration`, `team_member_rpm_limit`, `team_member_tpm_limit`, `team_member_key_duration`, `model_rpm_limit`, `model_tpm_limit`, `allowed_passthrough_routes`, `rpm_limit_type` and `tpm_limit_type`
+- **import**: `terraform import` support for `litellm_team`, `litellm_model`, `litellm_organization`, `litellm_mcp_server`, `litellm_vector_store` and every new resource
 
 ### Fixed
 
+- **key**: An update that changes `team_id` and fails because the key was already cascade-deleted along with its previous team now recovers by recreating the key under the new team, instead of aborting the apply. The key's absence is confirmed against the proxy first, so an unrelated failure still errors out, and a `team_id` change between two teams that both still exist stays a plain in-place update
+- **credential**: create now reports a `credential_name` collision as a clear error naming the `terraform import` command that adopts the existing credential, instead of surfacing the proxy's raw 500 with a Prisma `Unique constraint failed` message. New `adopt_existing` argument (default `false`) opts into taking the existing credential over during create, which makes `apply` idempotent again once state loses track of a credential that still exists on the proxy. Requires a proxy that answers 409 on the collision; older proxies are still detected by their 500 message
+- **credential**: credential names and `model_id` are now percent-encoded in request URLs, so a name containing `/`, `?`, `#` or spaces reaches the proxy intact instead of being cut at the first reserved character and read, updated or deleted as a different credential
+- **credential**: update now sends `model_id`, so a `model_id`-scoped credential keeps resolving its values from that deployment on update and on adoption instead of being overwritten with the literal `credential_values`; needs a proxy from 1.102.0, older proxies ignore the field
 - **team**: Read now decodes the `team_info` envelope `/team/info` actually returns, so team attributes refresh from the proxy instead of always falling back to the prior state
+- **key**: Read now unwraps the `info` envelope `/key/info` actually returns; previously reads mapped nothing back into state, so drift on a key was never detected
+- **key**: Read now picks up `model_rpm_limit`, `model_tpm_limit`, `guardrails`, `tags`, `enforced_params`, `allowed_passthrough_routes`, `rpm_limit_type`, `tpm_limit_type` and `prompts` from `info.metadata`, where the proxy actually stores them; previously they stayed empty in state, so a matching config showed a permanent phantom diff on them and out-of-band changes to them were never detected
+- **key**: Updates no longer send an empty `budget_duration`, which the proxy rejects with a 400; any update to a key without a configured `budget_duration` previously failed outright
+- **key**: A config-supplied `key` value (write-only) is now forwarded to `/key/generate`; previously it was silently dropped and the proxy generated a random key instead
+- **security**: The `litellm_key` data source and `litellm_key_block` resource normalize raw `sk-` keys to their SHA-256 token hash before building request URLs and resource IDs, so plaintext keys no longer land in reverse-proxy access logs, Terraform plan output, or state IDs
 
 ### Changed
 
+- **key** (breaking): `model_max_budget` on `litellm_key` is now a JSON string of per-model budget objects (`jsonencode({"gpt-4o-mini" = {budget_limit = 50, time_period = "30d"}})`), matching `litellm_user`, `litellm_budget` and `litellm_tag`. The old `map(number)` form sent bare numbers to `/key/generate`, which the proxy rejects with a 500 (`'int' object is not iterable`), so every key with a non-empty `model_max_budget` failed to apply. Existing state upgrades automatically (schema version 1) and the attribute is refilled from the proxy on the next read; configurations still using the map form must be rewritten
 - **Versioning**: the provider is now published at the LiteLLM version, from the same commit as the proxy, on every LiteLLM release (dev, rc, stable). The `0.x` line ends at `0.4.0`; a `~> 0.4` constraint will not receive further releases, so re-pin to the LiteLLM version your proxy runs (for example `~> 1.99.0`). Existing `0.x` versions remain in the registry and keep verifying
 
 ## [0.4.0] - 2026-08-06

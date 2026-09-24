@@ -2,6 +2,7 @@
 
 import struct
 import zlib
+from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -453,3 +454,48 @@ async def test_realtime_health_check_uses_model_level_vertex_params():
         "Authorization": "Bearer model-level-token",
         "x-goog-user-project": "model-level-project",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, expected_document_type, expected_uri_prefix",
+    [
+        ("mistral/mistral-ocr-latest", "mistral", "document_url", "data:application/pdf;base64,"),
+        ("azure_ai/mistral-document-ai-2512", "azure_ai", "document_url", "data:application/pdf;base64,"),
+        ("cohere/parse-v5.0", "cohere", "image_url", "data:image/png;base64,"),
+        ("azure_ai/Cohere-parse-v5", "azure_ai", "image_url", "data:image/png;base64,"),
+    ],
+)
+async def test_ocr_health_check_sends_the_document_kind_the_provider_config_accepts(
+    model, custom_llm_provider, expected_document_type, expected_uri_prefix
+):
+    handlers = HealthCheckHelpers.get_mode_handlers(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        model_params={"model": model, "api_key": "sk-test"},
+    )
+
+    with patch(  # test-quality-ok: the public health-check path has no dependency injection seam
+        "litellm.aocr", new_callable=AsyncMock, return_value={}
+    ) as mock_aocr:
+        await handlers["ocr"]()
+
+    document = mock_aocr.call_args.kwargs["document"]
+    assert document["type"] == expected_document_type
+    assert document[expected_document_type].startswith(expected_uri_prefix)
+
+
+def test_realtime_health_check_azure_ad_params_drop_reserved_keys():
+    from litellm.realtime_api import main as realtime_main
+
+    seen = []
+    with patch.object(realtime_main, "get_azure_ad_token", lambda params: seen.append(params) or "ad-token"):
+        headers = realtime_main._realtime_health_check_auth_headers(
+            "azure",
+            None,
+            MappingProxyType({"api_base": "https://x.openai.azure.com", "self": 1, "params": 2, "__class__": 3}),
+        )
+
+    assert dict(headers) == {"Authorization": "Bearer ad-token"}
+    assert seen[0].api_base == "https://x.openai.azure.com"
+    assert seen[0].model_extra == {}

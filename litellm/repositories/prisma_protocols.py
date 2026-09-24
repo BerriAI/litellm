@@ -12,6 +12,11 @@ from typing import Protocol, TypeVar
 RowT_co = TypeVar("RowT_co", covariant=True)
 
 
+class DatabaseClient(Protocol):
+    @property
+    def db(self) -> object: ...
+
+
 class TableActions(Protocol[RowT_co]):
     """The prisma-client-py per-model action surface, keyed to the row it returns.
 
@@ -143,5 +148,11 @@ class PrismaBatch(Protocol):
 
     @property
     def litellm_endusertable(self) -> BatchTable: ...
+
+    @property
+    def litellm_modelaccessgroupbudgettable(self) -> BatchTable: ...
+
+    @property
+    def litellm_projecttable(self) -> BatchTable: ...
 
     async def commit(self) -> None: ...

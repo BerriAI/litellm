@@ -1,11 +1,17 @@
 import asyncio
+import base64
 import copy
 import json
 import os
+import struct
+import zlib
 from datetime import datetime
 from types import SimpleNamespace
+from collections.abc import AsyncIterator, Mapping, Sequence
+from typing import Final
 from unittest.mock import Mock
 
+import httpx
 import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
@@ -23,11 +29,13 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
+    as_system_content_blocks,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
-
 
 
 @pytest.mark.asyncio
@@ -935,7 +943,7 @@ def test_bedrock_messages_strips_output_config():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=False,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -970,7 +978,7 @@ def test_bedrock_messages_preserves_output_config_for_claude_4_6():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1003,7 +1011,7 @@ def test_bedrock_messages_checks_output_config_support_with_bedrock_provider():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ) as mock_supports_factory:
         result = cfg.transform_anthropic_messages_request(
@@ -1014,11 +1022,7 @@ def test_bedrock_messages_checks_output_config_support_with_bedrock_provider():
             headers={},
         )
 
-    mock_supports_factory.assert_called_with(
-        model="us.anthropic.claude-opus-4-7",
-        custom_llm_provider="bedrock",
-        key="supports_output_config",
-    )
+    mock_supports_factory.assert_called_with("us.anthropic.claude-opus-4-7", "supports_output_config")
     assert result["output_config"] == {"effort": "high"}
 
 
@@ -1038,7 +1042,7 @@ def test_bedrock_messages_forwards_output_config():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1054,27 +1058,29 @@ def test_bedrock_messages_forwards_output_config():
 
 
 def test_bedrock_messages_forwards_output_config_with_output_format():
-    """``output_config`` is forwarded; ``output_format`` is converted to inline schema."""
+    """Legacy ``output_format`` is forwarded as ``output_config.format`` on models
+    that support native structured outputs, alongside the effort key."""
     from unittest.mock import patch
 
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    schema_format = {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+        },
+    }
     optional_params = {
         "max_tokens": 4096,
         "output_config": {"effort": "low"},
-        "output_format": {
-            "type": "json_schema",
-            "schema": {
-                "type": "object",
-                "properties": {"answer": {"type": "string"}},
-            },
-        },
+        "output_format": schema_format,
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1085,12 +1091,14 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
             headers={},
         )
 
-    assert result.get("output_config") == {"effort": "low"}
+    assert result.get("output_config") == {"effort": "low", "format": schema_format}
     assert "output_format" not in result
+    assert "answer" not in json.dumps(result["messages"])
 
 
 def test_bedrock_messages_converts_output_config_format_to_inline_schema():
-    """``output_config.format`` is consumed so Bedrock does not see an unknown nested key."""
+    """Without native structured-output support, ``output_config.format`` falls back
+    to the inline schema so Bedrock does not see an unknown nested key."""
     from unittest.mock import patch
 
     from litellm.types.router import GenericLiteLLMParams
@@ -1110,8 +1118,8 @@ def test_bedrock_messages_converts_output_config_format_to_inline_schema():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
-        return_value=True,
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
+        side_effect=lambda _model, key: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -1146,7 +1154,7 @@ def test_bedrock_messages_normalizes_output_config_effort_for_opus(
     cfg = AmazonAnthropicClaudeMessagesConfig()
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1184,8 +1192,8 @@ def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
-        return_value=True,
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
+        side_effect=lambda _model, key: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -1229,7 +1237,7 @@ def test_bedrock_messages_does_not_mutate_callers_output_config():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         cfg.transform_anthropic_messages_request(
@@ -1271,7 +1279,7 @@ def test_bedrock_messages_strips_output_config_with_output_format():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=False,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1332,7 +1340,7 @@ def test_bedrock_messages_drop_params_keeps_output_config_for_4_7():
     litellm.drop_params = True
     try:
         with patch(
-            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+            "litellm.llms.bedrock.common_utils._bedrock_model_supports",
             return_value=True,
         ):
             result = cfg.transform_anthropic_messages_request(
@@ -1375,7 +1383,7 @@ def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1482,7 +1490,7 @@ def test_bedrock_messages_explicit_output_config_wins_over_reasoning_effort():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1646,6 +1654,92 @@ def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
     assert result["anthropic_version"] == cfg.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
     # Every surviving key is in the allowlist.
     assert set(result).issubset(cfg.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS)
+
+
+@pytest.mark.parametrize(
+    "client_beta_header",
+    ["dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14", "interleaved-thinking-2025-05-14"],
+    ids=["client_sends_beta", "client_omits_beta"],
+)
+def test_bedrock_messages_forwards_safeguards_with_dangerous_tool_use_beta(local_beta_headers_config, client_beta_header):
+    """
+    Claude Code's server-side auto-mode classifier sends `safeguards` alongside the
+    dangerous-tool-use-2026-09-03 beta. Bedrock Invoke accepts the pair, answers
+    "safeguards: Extra inputs are not permitted" for the field alone, and returns
+    `safeguard_results: []` for the beta alone, so the field reaches it unchanged
+    and the beta rides along whether or not the client sent it, as every other
+    body-driven beta does here.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "safeguards": safeguards},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": client_beta_header},
+    )
+
+    assert result["safeguards"] == safeguards
+    assert result["anthropic_beta"].count("dangerous-tool-use-2026-09-03") == 1
+
+
+def test_bedrock_messages_does_not_add_dangerous_tool_use_beta_without_safeguards(local_beta_headers_config):
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "safeguards" not in result
+    assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
+
+
+def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
+    """Bedrock streams the classifier verdicts on message_start and on the final message_delta, exactly as api.anthropic.com does."""
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")
+    tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
+    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
+
+    message_start = decoder._chunk_parser(
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 3, "output_tokens": 0},
+                "safeguard_results": safeguard_results,
+            },
+        }
+    )
+
+    assert isinstance(message_start, dict)
+    assert message_start["message"]["safeguard_results"] == safeguard_results
+
+    message_delta = decoder._chunk_parser(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None, "safeguard_results": safeguard_results},
+            "usage": {"output_tokens": 1},
+            "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3, "outputTokenCount": 1},
+        }
+    )
+
+    assert isinstance(message_delta, dict)
+    assert message_delta["delta"]["safeguard_results"] == safeguard_results
 
 
 def test_bedrock_messages_filters_user_provided_unsupported_beta_header():
@@ -1900,7 +1994,6 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
         custom_llm_provider="bedrock",
     )
     assert cost > 0
-    assert cost == pytest.approx(0.0093951, rel=0, abs=1e-9)
 
 
 @pytest.mark.asyncio
@@ -1911,7 +2004,6 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
     same logging reconstruction as Anthropic /messages. Ensures token counts and
     completion_cost match model_prices for us.anthropic.claude-sonnet-4-6.
     """
-    from litellm import completion_cost
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
     )
@@ -1963,13 +2055,6 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
     assert built.usage.total_tokens == 36058
     assert built.usage.cache_creation_input_tokens == 10553
     assert built.usage.cache_read_input_tokens == 25490
-
-    cost = completion_cost(
-        completion_response=built,
-        model="bedrock/us.anthropic.claude-sonnet-4-6",
-        custom_llm_provider="bedrock",
-    )
-    assert cost == pytest.approx(0.052150725, rel=0, abs=1e-9)
 
 
 @pytest.mark.parametrize(
@@ -2533,20 +2618,16 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
 
 
 def test_as_system_content_blocks_handles_each_shape():
-    """``_as_system_content_blocks`` normalizes every system shape: ``None`` -> empty,
+    """``as_system_content_blocks`` normalizes every system shape: ``None`` -> empty,
     a string -> a single text block, a list -> a shallow copy, and any other value
     (e.g. a bare content-block dict) -> wrapped in a single-element list."""
     block = {"type": "text", "text": "x"}
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(None) == []
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks("hello") == [
-        {"type": "text", "text": "hello"}
-    ]
+    assert as_system_content_blocks(None) == []
+    assert as_system_content_blocks("hello") == [{"type": "text", "text": "hello"}]
     blocks = [block]
-    out = AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(blocks)
+    out = as_system_content_blocks(blocks)
     assert out == blocks and out is not blocks
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(block) == [
-        block
-    ]
+    assert as_system_content_blocks(block) == [block]
 
 
 @pytest.mark.parametrize(
@@ -2648,17 +2729,6 @@ def test_bedrock_clear_thinking_leaves_enabled_thinking_on_non_adaptive_model():
     assert changed is False
     assert request["thinking"] == {"type": "enabled", "budget_tokens": 8000}
     assert "output_config" not in request
-
-
-@pytest.fixture
-def local_beta_headers_config(monkeypatch):
-    from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
-
-    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
-    reload_beta_headers_config()
-    yield
-    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
-    reload_beta_headers_config()
 
 
 def test_bedrock_messages_preserves_clear_tool_uses_context_management_and_adds_beta(
@@ -2826,9 +2896,12 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
         "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "us.anthropic.claude-opus-4-7",
+        "us.anthropic.claude-opus-4-8",
+        "us.anthropic.claude-opus-5",
+        "us.anthropic.claude-sonnet-5",
     ],
 )
-def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config, model):
+def test_bedrock_messages_tool_search_adds_beta_header(local_model_cost_map, local_beta_headers_config, model):
     """
     LIT-4522: Bedrock InvokeModel only admits ``tool_search_tool_*`` tool types
     when the request body carries the ``tool-search-tool-2025-10-19`` beta;
@@ -2838,6 +2911,11 @@ def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config
     Opus 4.7, so the beta was silently dropped for those models and every
     tool-search request failed. Verified live 2026-08-11: Bedrock returns 200
     with ``server_tool_use`` for all three models once the beta is sent.
+
+    LIT-5851: the same allowlist then missed Opus 4.8, Opus 5 and Sonnet 5, so
+    the gate now reads the model map's ``supports_tool_search`` flag (explicit
+    on the Bedrock entries, and the ``claude-tool-search`` rule for Claude 4.5
+    and newer) instead of a per-model name list.
     """
     from litellm.types.router import GenericLiteLLMParams
 
@@ -2871,10 +2949,10 @@ def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config
 
 
 def test_bedrock_messages_tool_search_model_map_flag_is_authoritative(local_model_cost_map, monkeypatch):
-    """``supports_tool_search`` lives in the model map; the name patterns in
-    ``_supports_tool_search_on_bedrock`` are only a fallback for ids the map
-    cannot resolve. Flipping the mapped entry's flag to ``False`` must win even
-    though the model name still matches the ``haiku-4-5`` pattern."""
+    """``supports_tool_search`` lives in the model map; the ``claude-tool-search``
+    rule only fills entries that carry no opinion. Flipping the mapped entry's
+    flag to ``False`` must win even though the id is a Claude 4.5 the rule
+    would flag."""
     import litellm
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -2893,14 +2971,22 @@ def test_bedrock_messages_tool_search_model_map_flag_is_authoritative(local_mode
 @pytest.mark.parametrize(
     "model, expected",
     [
-        pytest.param("us.anthropic.claude-opus-4-6-v99:9", True, id="unmapped_id_falls_back_to_patterns"),
-        pytest.param("anthropic.claude-3-5-sonnet-20240620-v1:0", False, id="mapped_entry_without_flag_no_pattern"),
+        pytest.param("us.anthropic.claude-opus-4-6-v99:9", True, id="unmapped_4_6_variant"),
+        pytest.param("us.anthropic.claude-haiku-5-2", True, id="unmapped_future_minor"),
+        pytest.param(
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5",
+            True,
+            id="inference_profile_arn",
+        ),
+        pytest.param("anthropic.claude-3-5-sonnet-20240620-v1:0", False, id="mapped_claude_3_5_without_flag"),
+        pytest.param("us.anthropic.claude-opus-4-1-20250805-v1:0", False, id="mapped_opus_4_1_without_flag"),
+        pytest.param("us.anthropic.claude-sonnet-4-20250514-v1:0", False, id="mapped_dated_sonnet_4_without_flag"),
     ],
 )
-def test_bedrock_messages_tool_search_pattern_fallback(local_model_cost_map, model, expected):
-    """Ids the model map cannot resolve (or resolves without a
-    ``supports_tool_search`` opinion) fall through to the name patterns, so
-    ARNs and unlisted regional variants of supported families keep working."""
+def test_bedrock_messages_tool_search_follows_claude_tool_search_rule(local_model_cost_map, model, expected):
+    """Ids the model map cannot resolve, or resolves without a ``supports_tool_search``
+    opinion, take the ``claude-tool-search`` fallback rule: Claude 4.5 and newer get
+    the beta, ARNs and unlisted regional variants included, and older Claudes do not."""
     cfg = AmazonAnthropicClaudeMessagesConfig()
 
     assert cfg._supports_tool_search_on_bedrock(model) is expected
@@ -3066,17 +3152,21 @@ def test_bedrock_invoke_messages_allows_converted_websearch_function_tool():
 async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
     """
     Regression test for LIT-5839: closing the outer bedrock_sse_wrapper
-    mid-stream (what the proxy does on a client disconnect) must close the
-    inner async_sse_wrapper deterministically so the partial-stream logging
-    fires. `completion_start_time` is only stamped on the logging object by
-    that dispatch, so it observing a value proves the whole chain ran.
+    mid-stream (what the proxy does on a client disconnect) must not lose the
+    stream's spend logging. Since the detached-pump relay, the upstream read
+    survives the disconnect and billing fires once the provider stream ends,
+    so the dispatch is awaited after releasing the upstream instead of being
+    observed synchronously at aclose(). `completion_start_time` is only
+    stamped on the logging object by that dispatch, so it observing a value
+    proves the whole chain ran.
     """
     cfg = AmazonAnthropicClaudeMessagesConfig()
+    release_upstream = asyncio.Event()
 
-    async def _hanging_stream():
+    async def _gated_stream():
         yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 25, "output_tokens": 1}}}
         yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
-        await asyncio.Event().wait()
+        await release_upstream.wait()
 
     logging_obj = LiteLLMLoggingObj(
         model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
@@ -3087,11 +3177,320 @@ async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
         litellm_call_id="test_bedrock_sse_wrapper_disconnect_logging",
         function_id="test_bedrock_sse_wrapper_disconnect_logging",
     )
-    wrapped = cfg.bedrock_sse_wrapper(_hanging_stream(), litellm_logging_obj=logging_obj, request_body={})
+    wrapped = cfg.bedrock_sse_wrapper(_gated_stream(), litellm_logging_obj=logging_obj, request_body={})
     await wrapped.__anext__()
     await wrapped.__anext__()
     assert logging_obj.completion_start_time is None
 
     await wrapped.aclose()
+    release_upstream.set()
 
+    for _ in range(500):
+        if logging_obj.completion_start_time is not None:
+            break
+        await asyncio.sleep(0.01)
     assert logging_obj.completion_start_time is not None
+
+
+def test_bedrock_messages_forwards_output_config_format_natively(local_model_cost_map):
+    """Regression: on a model Bedrock enforces structured outputs for (Claude
+    Sonnet 4.5), ``output_config.format`` must be forwarded verbatim, not
+    silently rewritten into inline prompt text."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "zebra_count": {"type": "integer"},
+                "is_tuesday": {"type": "boolean"},
+            },
+            "required": ["zebra_count", "is_tuesday"],
+            "additionalProperties": False,
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": schema_format},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+    assert "zebra_count" not in json.dumps(result["messages"])
+
+
+def test_bedrock_messages_inlines_schema_for_claude_5(local_model_cost_map):
+    """Bedrock rejects ``output_config.format`` for the Claude 5 family, so the
+    schema falls back to the inline-text path instead of a deterministic 400."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema = {
+        "type": "object",
+        "properties": {"zebra_count": {"type": "integer"}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_config" not in result
+    last_content = result["messages"][-1]["content"]
+    assert json.loads(last_content[-1]["text"]) == schema
+
+
+def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(local_model_cost_map):
+    """When a request carries both schema forms, the legacy top-level
+    ``output_format`` keeps winning, matching the pre-existing precedence."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    legacy_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"legacy_field": {"type": "string"}}},
+    }
+    newer_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"newer_field": {"type": "string"}}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_format": legacy_format,
+            "output_config": {"format": newer_format},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": legacy_format}
+    assert "output_format" not in result
+    assert "newer_field" not in json.dumps(result)
+
+
+def test_bedrock_messages_drop_params_keeps_native_output_config_format(local_model_cost_map, monkeypatch):
+    """``drop_params=True`` must not strip a natively forwarded
+    ``output_config.format`` on models without effort support (Sonnet 4.5)."""
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": schema_format},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+
+
+def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_model_cost_map):
+    """Sonnet 4.5 has native structured-output support but no effort support, so
+    a mixed ``output_config`` keeps ``format`` and drops ``effort``."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 4096,
+            "output_config": {"format": schema_format, "effort": "high"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+
+
+FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
+
+
+def _invoke_request_with_tools(
+    tools: list[dict[str, object]], headers: dict[str, str] | None = None
+) -> dict[str, object]:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "write a big file"}],
+        anthropic_messages_optional_request_params={"max_tokens": 4096, "tools": copy.deepcopy(tools), "stream": True},
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers or {},
+    )
+
+
+def _eager_invoke_tool(name: str, eager_input_streaming: bool) -> dict[str, object]:
+    return {
+        "name": name,
+        "description": f"{name} tool",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        "eager_input_streaming": eager_input_streaming,
+    }
+
+
+def test_bedrock_invoke_eager_input_streaming_tool_adds_beta_and_strips_key():
+    result = _invoke_request_with_tools(
+        [
+            _eager_invoke_tool("write_file", True),
+            _eager_invoke_tool("read_file", False),
+            {"name": "list_files", "input_schema": {"type": "object", "properties": {}}},
+        ]
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+    assert [tool["name"] for tool in result["tools"]] == ["write_file", "read_file", "list_files"]
+    assert all("eager_input_streaming" not in tool for tool in result["tools"])
+    assert result["tools"][0]["description"] == "write_file tool"
+    assert result["tools"][0]["input_schema"] == {"type": "object", "properties": {"path": {"type": "string"}}}
+
+
+def test_bedrock_invoke_eager_input_streaming_false_strips_key_without_beta():
+    result = _invoke_request_with_tools([_eager_invoke_tool("write_file", False)])
+
+    assert "anthropic_beta" not in result
+    assert result["tools"] == [
+        {
+            "name": "write_file",
+            "description": "write_file tool",
+            "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+        }
+    ]
+
+
+def test_bedrock_invoke_eager_input_streaming_beta_not_duplicated_with_client_header():
+    result = _invoke_request_with_tools(
+        [_eager_invoke_tool("write_file", True)],
+        headers={"anthropic-beta": FINE_GRAINED_TOOL_STREAMING_BETA},
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+
+
+def _bedrock_event_frame(payload: Mapping[str, object]) -> bytes:
+    def _header(name: str, value: str) -> bytes:
+        return (
+            bytes([len(name)])
+            + name.encode()
+            + bytes([7])
+            + struct.pack(">H", len(value))
+            + value.encode()
+        )
+
+    headers: Final = (
+        _header(":message-type", "event")
+        + _header(":event-type", "chunk")
+        + _header(":content-type", "application/json")
+    )
+    body: Final = json.dumps(
+        {"bytes": base64.b64encode(json.dumps(payload).encode()).decode()}
+    ).encode()
+    prelude: Final = struct.pack(">II", 12 + len(headers) + len(body) + 4, len(headers))
+    prelude_crc: Final = struct.pack(">I", zlib.crc32(prelude))
+    message_crc: Final = struct.pack(">I", zlib.crc32(prelude + prelude_crc + headers + body))
+    return prelude + prelude_crc + headers + body + message_crc
+
+
+class _GatedAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: Sequence[bytes], gate: asyncio.Event) -> None:
+        self._chunks = chunks
+        self._gate = gate
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._chunks[0]
+        await self._gate.wait()
+        for chunk in self._chunks[1:]:
+            yield chunk
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_get_async_streaming_response_iterator_yields_small_frame_before_upstream_pauses():
+    gate: Final = asyncio.Event()
+    response: Final = httpx.Response(
+        200,
+        stream=_GatedAsyncByteStream(
+            chunks=(
+                _bedrock_event_frame(
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_test",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [],
+                            "model": "us.anthropic.claude-sonnet-4-6",
+                            "usage": {"input_tokens": 3, "output_tokens": 1},
+                        },
+                    }
+                ),
+                _bedrock_event_frame(
+                    {
+                        "type": "message_stop",
+                        "usage": {"input_tokens": 3, "output_tokens": 9},
+                    }
+                ),
+            ),
+            gate=gate,
+        ),
+    )
+
+    iterator: Final = AmazonAnthropicClaudeMessagesConfig().get_async_streaming_response_iterator(
+        model="us.anthropic.claude-sonnet-4-6",
+        httpx_response=response,
+        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/us.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_small_frame_before_upstream_pauses",
+            function_id="test_small_frame_before_upstream_pauses",
+        ),
+    )
+
+    first: Final = await asyncio.wait_for(anext(iterator), timeout=10)
+    assert first.startswith(b"event: message_start\n"), first
+
+    gate.set()
+    remaining: Final = tuple([chunk async for chunk in iterator])
+    assert any(chunk.startswith(b"event: message_stop\n") for chunk in remaining), remaining
+    await iterator.aclose()

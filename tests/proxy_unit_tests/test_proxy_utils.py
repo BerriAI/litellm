@@ -699,18 +699,19 @@ async def test_proxy_config_update_from_db():
         param_name: str
         param_value: dict
 
-    with patch.object(
-        pc,
-        "get_generic_data",
-        new=AsyncMock(
-            return_value=ReturnValue(
-                param_name="litellm_settings",
-                param_value={
-                    "success_callback": "langfuse",
-                },
-            )
-        ),
-    ):
+    async def get_litellm_settings(_: object, section: str) -> ReturnValue | None:
+        if section != "litellm_settings":
+            return None
+        return ReturnValue(
+            param_name="litellm_settings",
+            param_value={
+                "success_callback": "langfuse",
+            },
+        )
+
+    proxy_config._load_yaml_settings_stores(test_config)
+
+    with patch("litellm.proxy.proxy_server.get_config_param", side_effect=get_litellm_settings):
         new_config = await proxy_config._update_config_from_db(
             prisma_client=pc,
             config=test_config,
@@ -1090,7 +1091,7 @@ def test_get_team_models():
     assert result == ["gpt-4o", "gpt-3.5-turbo", "gpt-4o-mini"]
 
 
-def test_update_config_fields():
+def test_settings_store_preserves_yaml_team_configuration_when_db_value_is_null():
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -1111,7 +1112,6 @@ def test_update_config_fields():
         },
         "param_name": "litellm_settings",
         "db_param_value": {
-            "telemetry": False,
             "drop_params": True,
             "num_retries": 5,
             "request_timeout": 600,
@@ -1120,13 +1120,10 @@ def test_update_config_fields():
             "context_window_fallbacks": [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}],
         },
     }
-    updated_config = proxy_config._update_config_fields(**args)
+    proxy_config.litellm_settings.load_yaml(args["current_config"]["litellm_settings"])
+    proxy_config.litellm_settings.apply_db_row("litellm_settings", args["db_param_value"])
+    all_team_config = proxy_config.litellm_settings["default_team_settings"]
 
-    print("updated_config", updated_config)
-    all_team_config = updated_config["litellm_settings"]["default_team_settings"]
-
-    # check if team id config returned
-    print("all_team_config", all_team_config)
     team_config = proxy_config._get_team_config(
         team_id="c91e32bb-0f2a-4aa1-86c4-307ca2e03ea3", all_teams_config=all_team_config
     )
@@ -1135,7 +1132,7 @@ def test_update_config_fields():
     assert team_config["langfuse_secret"] == "my-fake-secret"
 
 
-def test_update_config_fields_default_internal_user_params(monkeypatch):
+def test_settings_store_applies_default_internal_user_params_from_db(monkeypatch):
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -1153,7 +1150,8 @@ def test_update_config_fields_default_internal_user_params(monkeypatch):
             },
         },
     }
-    proxy_config._update_config_fields(**args)
+    db_values = proxy_config._prepared_db_settings_values("litellm_settings", args["db_param_value"])
+    proxy_config._apply_litellm_settings_db_values(db_values)
 
     assert litellm.default_internal_user_params == {
         "user_role": "proxy_admin",
@@ -1315,6 +1313,62 @@ def test_proxy_config_state_post_init_callback_call(monkeypatch):
 
     config = pc.get_config_state()
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
+
+
+@pytest.mark.asyncio
+async def test_default_team_settings_newrelic_resolves_traces_and_metrics():
+    """Static `default_team_settings` is the config-file twin of POST /team/callback.
+
+    A team pinned to New Relic through `default_team_settings` must reach the
+    same two loggers the dynamic path does: the per-team metrics logger (cost
+    and usage) and the trace logger (LLM/agent spans). This proves the static
+    path resolves both, not just one, so the config-file customer gets the
+    same per-team routing as the API customer.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    pc = ProxyConfig()
+    pc.config = {
+        "litellm_settings": {
+            "default_team_settings": [
+                {
+                    "team_id": "team-a",
+                    "success_callback": ["newrelic"],
+                    "newrelic_api_key": "team-a-ingest-key",
+                    "newrelic_region": "eu",
+                }
+            ]
+        }
+    }
+
+    callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+        team_id="team-a",
+        proxy_config=pc,
+    )
+
+    assert callback_metadata is not None
+    assert callback_metadata.success_callback == ["newrelic"]
+    assert callback_metadata.callback_vars == {
+        "newrelic_api_key": "team-a-ingest-key",
+        "newrelic_region": "eu",
+    }
+
+    logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="static-nr-1",
+        function_id="static-nr-1",
+    )
+    logging_obj._trusted_callback_vars = tuple(callback_metadata.callback_vars.items())
+
+    resolved = logging_obj._resolve_dynamic_callback_string("newrelic")
+    resolved_names = {type(logger).__name__ for logger in resolved}
+    assert resolved_names == {"NewRelicMetricsLogger", "NewRelicLogger"}
 
 
 def test_proxy_config_state_get_config_state_error():
@@ -1949,7 +2003,7 @@ def test_provider_specific_header():
     )
     # Verify multi-provider support: anthropic headers work across multiple providers
     assert data["provider_specific_header"] == {
-        "custom_llm_provider": "anthropic,bedrock,vertex_ai",
+        "custom_llm_provider": "anthropic,bedrock,bedrock_mantle,vertex_ai",
         "extra_headers": {
             "anthropic-beta": "prompt-caching-2024-07-31",
         },
@@ -2021,7 +2075,7 @@ def test_provider_specific_header_multi_provider():
     assert "provider_specific_header" in data
     assert (
         data["provider_specific_header"]["custom_llm_provider"]
-        == "anthropic,bedrock,vertex_ai"
+        == "anthropic,bedrock,bedrock_mantle,vertex_ai"
     )
     assert data["provider_specific_header"]["extra_headers"] == {
         "anthropic-beta": "context-1m-2025-08-07",

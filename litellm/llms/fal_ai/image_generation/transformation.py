@@ -1,6 +1,9 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -14,10 +17,47 @@ from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class FalImageProviderSpecificFields(TypedDict, total=False):
+    width: ReadOnly[int]
+    height: ReadOnly[int]
+    content_type: ReadOnly[str]
+
+
+_FAL_IMAGE_DATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def fal_images_to_image_objects(images: object) -> tuple[ImageObject, ...]:
+    if not isinstance(images, list):
+        return ()
+
+    def to_image_object(image_data: object) -> ImageObject:
+        if isinstance(image_data, Mapping):
+            image_map: Final = _FAL_IMAGE_DATA.validate_python(image_data)
+            url: Final = image_map.get("url")
+            b64_json: Final = image_map.get("b64_json")
+            width: Final = image_map.get("width")
+            height: Final = image_map.get("height")
+            content_type: Final = image_map.get("content_type")
+            provider_specific_fields: Final[FalImageProviderSpecificFields] = {
+                **({"width": width} if isinstance(width, int) and type(width) is int and width > 0 else {}),
+                **({"height": height} if isinstance(height, int) and type(height) is int and height > 0 else {}),
+                **({"content_type": content_type} if isinstance(content_type, str) else {}),
+            }
+            return ImageObject(
+                url=url if isinstance(url, str) else None,
+                b64_json=b64_json if isinstance(b64_json, str) else None,
+                provider_specific_fields=provider_specific_fields or None,
+            )
+        return ImageObject(url=image_data if isinstance(image_data, str) else None, b64_json=None)
+
+    return tuple(to_image_object(image_data) for image_data in images if isinstance(image_data, (Mapping, str)))
 
 
 class FalAIBaseConfig(BaseImageGenerationConfig):
@@ -76,7 +116,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -94,26 +134,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
-        # Handle fal.ai response format
-        images: Final = response_data.get("images", [])
-        if isinstance(images, list):
-            for image_data in images:
-                if isinstance(image_data, dict):
-                    model_response.data.append(
-                        ImageObject(
-                            url=image_data.get("url", None),
-                            b64_json=image_data.get("b64_json", None),
-                        )
-                    )
-                elif isinstance(image_data, str):
-                    # If images is just a list of URLs
-                    model_response.data.append(
-                        ImageObject(
-                            url=image_data,
-                            b64_json=None,
-                        )
-                    )
-
+        model_response.data.extend(fal_images_to_image_objects(response_data.get("images", ())))
         return model_response
 
 

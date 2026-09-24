@@ -7,10 +7,11 @@ import {
   SAVINGS_DRIVERS,
   SAVINGS_SERIES,
   buildDailyToolSeries,
+  classificationRatePer1kTurns,
   computeCacheLeakage,
   formatRangeLabel,
-  isAnthropicModel,
   localIsoDay,
+  savingsSeriesOf,
   toCumulative,
   topToolsBySpend,
   usd,
@@ -64,6 +65,28 @@ const modelDay = (date: string, models: Record<string, Partial<SpendMetrics>>): 
     entities: {},
     api_keys: {},
   },
+});
+
+describe("savingsSeriesOf", () => {
+  it("plots the LiteLLM-injected caching share, sorted oldest first", () => {
+    // Total and injected caching deliberately differ: every chart derives from
+    // SAVINGS_DRIVERS, so the caching series must follow the injected figure.
+    const sharedSavings: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.1,
+      prompt_caching_savings_spend: 0.5,
+      autorouter_savings_spend: 0.05,
+    };
+    const newestFirst = [day("2026-07-02", {}), day("2026-07-01", {})].map((d, i) => ({
+      ...d,
+      metrics: metrics({ ...sharedSavings, gateway_injected_caching_savings_spend: i === 0 ? 0.2 : 0.3 }),
+    }));
+
+    const series = savingsSeriesOf(newestFirst);
+
+    expect(series.map((p) => p.date)).toEqual(["Jul 1", "Jul 2"]);
+    expect(series[0]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.3, "Auto-router": 0.05 });
+    expect(series[1]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.2, "Auto-router": 0.05 });
+  });
 });
 
 describe("computeCacheLeakage", () => {
@@ -185,20 +208,21 @@ describe("computeCacheLeakage", () => {
 });
 
 describe("computeCacheLeakage by model", () => {
-  it("aggregates only Anthropic models and ignores other providers", () => {
+  it("lists every provider's models, not only Anthropic", () => {
     const models: Record<string, Partial<SpendMetrics>> = {
       "claude-sonnet-5": { prompt_tokens: 10000, cache_read_input_tokens: 0 },
-      "anthropic/claude-haiku-4-5": { prompt_tokens: 4000, cache_read_input_tokens: 0 },
-      "bedrock/anthropic.claude-3-5-sonnet": { prompt_tokens: 2000, cache_read_input_tokens: 0 },
-      "gpt-4o": { prompt_tokens: 9000, cache_read_input_tokens: 0 },
-      "deepseek-chat": { prompt_tokens: 8000, cache_read_input_tokens: 0 },
+      "vertex_ai/gemini-2.5-pro": { prompt_tokens: 9000, cache_read_input_tokens: 3000 },
+      "bedrock/openai.gpt-5.6-luna": { prompt_tokens: 8000, cache_read_input_tokens: 0 },
+      "deepseek-chat": { prompt_tokens: 4000, cache_read_input_tokens: 0 },
     };
     const { rows } = computeCacheLeakage([modelDay("2026-07-01", models)], "model");
     expect(rows.map((r) => r.id)).toEqual([
       "claude-sonnet-5",
-      "anthropic/claude-haiku-4-5",
-      "bedrock/anthropic.claude-3-5-sonnet",
+      "bedrock/openai.gpt-5.6-luna",
+      "vertex_ai/gemini-2.5-pro",
+      "deepseek-chat",
     ]);
+    expect(rows.find((r) => r.id === "vertex_ai/gemini-2.5-pro")?.cacheHitRatio).toBeCloseTo(1 / 3, 6);
   });
 
   it("labels model rows by model name with no sublabel", () => {
@@ -208,31 +232,17 @@ describe("computeCacheLeakage by model", () => {
     expect(rows[0].sublabel).toBeNull();
   });
 
-  it("prices model leakage at the Anthropic realized cache-read discount", () => {
+  it("prices model leakage at the realized cache-read discount across providers", () => {
     const results = [
       modelDay("2026-07-01", {
         "claude-sonnet-5": { prompt_tokens: 1000, cache_read_input_tokens: 1000, prompt_caching_savings_spend: 2.0 },
-        "claude-haiku-4-5": { prompt_tokens: 500 },
+        "gemini-2.5-flash": { prompt_tokens: 500 },
       }),
     ];
     const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results, "model");
     expect(netSavingsPerCachedToken).toBeCloseTo(0.002, 6);
-    expect(rows.map((r) => r.id)).toEqual(["claude-haiku-4-5"]);
+    expect(rows.map((r) => r.id)).toEqual(["gemini-2.5-flash"]);
     expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
-  });
-});
-
-describe("isAnthropicModel", () => {
-  it("matches Claude-family models across providers and rejects others", () => {
-    const anthropic = [
-      "claude-sonnet-5",
-      "anthropic/claude-haiku-4-5",
-      "bedrock/anthropic.claude-3-5-sonnet",
-      "vertex_ai/claude-opus-4-8",
-    ];
-    const others = ["gpt-4o", "deepseek-chat", "gemini-2.5-pro", "mistral-large"];
-    expect(anthropic.every(isAnthropicModel)).toBe(true);
-    expect(others.some(isAnthropicModel)).toBe(false);
   });
 });
 
@@ -375,6 +385,23 @@ describe("usd", () => {
     expect(usd(-0.05)).toBe("-$0.0500");
     expect(usd(-0.0004)).toBe("-$0.0004");
     expect(usd(-12.4)).toBe("-$12.40");
+  });
+});
+
+describe("classificationRatePer1kTurns", () => {
+  it("normalizes total classification cost to one thousand turns", () => {
+    expect(classificationRatePer1kTurns(342.18, 140815)).toBe("($2.43 / 1K turns)");
+    expect(classificationRatePer1kTurns(0.0004, 100)).toBe("($0.0040 / 1K turns)");
+  });
+
+  it("shows a floor instead of rounding a real cost down to zero", () => {
+    expect(classificationRatePer1kTurns(0.00001, 1000)).toBe("(<$0.0001 / 1K turns)");
+    expect(classificationRatePer1kTurns(0.0001, 1000)).toBe("($0.0001 / 1K turns)");
+  });
+
+  it("reports zero when there are no turns or no classification cost", () => {
+    expect(classificationRatePer1kTurns(0, 0)).toBe("($0.00 / 1K turns)");
+    expect(classificationRatePer1kTurns(0, 100)).toBe("($0.00 / 1K turns)");
   });
 });
 

@@ -4,20 +4,23 @@ import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
-import { inheritedBudgetGates } from "@/components/shared/InheritedBudgetHint";
+import { inheritedBudgetGates, keyOwnerBudgetSource } from "@/components/shared/InheritedBudgetHint";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DateCell,
+  ENTITY_CELL_TITLE_CLASSES,
   IdCell,
   IdentityCell,
   ModelsCell,
+  MoneyCell,
   SpendBudgetCell,
   StatusBadge,
+  UserPopoverCell,
   type StatusTone,
 } from "@/components/shared/table_cells";
+import { orgDetailHref, teamDetailHref } from "@/utils/entityLinks";
 
-import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 
@@ -32,7 +35,22 @@ const SPEND_BUDGET_SORT_FIELDS: DataTableSortField[] = [
   { id: "max_budget", label: "Budget" },
 ];
 
+export const KEY_TABLE_SORT_FIELDS: readonly string[] = [
+  "key_alias",
+  "token",
+  "created_at",
+  "updated_at",
+  ...SPEND_BUDGET_SORT_FIELDS.map((field) => field.id),
+];
+
 const getKeyStatus = (key: KeyResponse): KeyStatus => {
+  if (key.deleted_at) {
+    return {
+      tone: "neutral",
+      label: "Deleted",
+      tooltip: `Deleted ${new Date(key.deleted_at).toLocaleString()}${key.deleted_by ? ` by ${key.deleted_by}` : ""}. Kept for audit and spend history; requests using this key are rejected.`,
+    };
+  }
   if (key.blocked === true) {
     const isScimBlocked = (key.metadata as Record<string, unknown> | null | undefined)?.scim_blocked === true;
     return {
@@ -54,67 +72,6 @@ const getKeyStatus = (key: KeyResponse): KeyStatus => {
   };
 };
 
-const UserPopoverCell = ({
-  userAlias,
-  userEmail,
-  userId,
-  width,
-}: {
-  userAlias: string | null;
-  userEmail: string | null;
-  userId: string | null;
-  width: number;
-}) => {
-  const displayValue = userAlias || userEmail || userId;
-  const isDefaultAdmin = userId === "default_user_id";
-
-  const popoverContent = (
-    <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
-      {[
-        { label: "User Alias", value: userAlias },
-        { label: "User Email", value: userEmail },
-        { label: "User ID", value: userId },
-      ].map(({ label, value }) => (
-        <div key={label} className="flex flex-col min-w-0">
-          <span className="text-muted-foreground">{label}</span>
-          {value ? (
-            <IdCell value={value} variant="plain" copyable className="max-w-full" />
-          ) : (
-            <span className="font-mono">-</span>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-
-  if (isDefaultAdmin && !userAlias && !userEmail) {
-    return (
-      <HoverCard>
-        <HoverCardTrigger render={<span className="cursor-default" />}>
-          <DefaultProxyAdminTag userId={userId} />
-        </HoverCardTrigger>
-        <HoverCardContent align="start">{popoverContent}</HoverCardContent>
-      </HoverCard>
-    );
-  }
-
-  return (
-    <HoverCard>
-      <HoverCardTrigger
-        render={
-          <span
-            className="font-mono text-xs truncate block cursor-default"
-            style={{ maxWidth: width, overflow: "hidden" }}
-          />
-        }
-      >
-        {displayValue || "-"}
-      </HoverCardTrigger>
-      <HoverCardContent align="start">{popoverContent}</HoverCardContent>
-    </HoverCard>
-  );
-};
-
 const InfoHeader = ({ label, tooltip }: { label: string; tooltip: string }) => (
   <span className="flex items-center gap-1">
     {label}
@@ -129,12 +86,14 @@ interface KeyTableColumnsDeps {
   allTeams: Team[];
   organizations: Organization[];
   onSelectKey: (key: KeyResponse) => void;
+  applyUserBudgetToTeamKeys: boolean;
 }
 
 export const getKeyTableColumns = ({
   allTeams,
   organizations,
   onSelectKey,
+  applyUserBudgetToTeamKeys,
 }: KeyTableColumnsDeps): ColumnDef<KeyResponse>[] => [
   {
     id: "key_alias",
@@ -193,12 +152,12 @@ export const getKeyTableColumns = ({
       const teamId = info.getValue() as string | null;
       if (!teamId) return "-";
       const team = allTeams.find((t) => t.team_id === teamId);
-      const displayValue = team?.team_alias || teamId;
-      const width = info.cell.column.getSize();
       return (
-        <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-          {displayValue}
-        </span>
+        <IdentityCell
+          title={team?.team_alias || teamId}
+          titleClassName={ENTITY_CELL_TITLE_CLASSES}
+          href={teamDetailHref(teamId)}
+        />
       );
     },
   },
@@ -213,12 +172,12 @@ export const getKeyTableColumns = ({
       const orgId = info.getValue() as string | null;
       if (!orgId) return "-";
       const org = organizations.find((o) => o.organization_id === orgId);
-      const displayValue = org?.organization_alias || orgId;
-      const width = info.cell.column.getSize();
       return (
-        <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-          {displayValue}
-        </span>
+        <IdentityCell
+          title={org?.organization_alias || orgId}
+          titleClassName={ENTITY_CELL_TITLE_CLASSES}
+          href={orgDetailHref(orgId)}
+        />
       );
     },
   },
@@ -320,10 +279,28 @@ export const getKeyTableColumns = ({
         <SpendBudgetCell
           spend={row.original.spend}
           maxBudget={row.original.max_budget}
-          inheritedGates={row.original.max_budget == null ? inheritedBudgetGates(team, organization) : []}
+          inheritedGates={
+            row.original.max_budget == null
+              ? inheritedBudgetGates(team, organization, keyOwnerBudgetSource(row.original, applyUserBudgetToTeamKeys))
+              : []
+          }
         />
       );
     },
+  },
+  {
+    id: "total_spend",
+    accessorKey: "total_spend",
+    meta: { title: "Lifetime Spend" },
+    header: () => (
+      <InfoHeader
+        label="Lifetime Spend"
+        tooltip="Cumulative spend across every budget period. Budget resets do not touch this value. Keys created before this field existed only count spend from then on."
+      />
+    ),
+    size: 130,
+    enableSorting: false,
+    cell: (info) => <MoneyCell value={info.getValue() as number | null | undefined} showZero />,
   },
   {
     id: "budget_reset_at",

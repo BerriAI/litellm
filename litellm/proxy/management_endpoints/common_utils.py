@@ -1,4 +1,6 @@
 import math
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
@@ -22,7 +24,7 @@ def validate_finite_spend(spend: float | None) -> None:
         )
 
 
-def validate_budget_duration(budget_duration: str | None) -> None:
+def validate_budget_duration(budget_duration: str | None, status_code: int = 400) -> None:
     """Reject budget durations that can't be parsed, are non-positive, or
     overflow date math, so a bad value can't be persisted and later crash the
     budget reset job.
@@ -32,28 +34,17 @@ def validate_budget_duration(budget_duration: str | None) -> None:
     enough of them exist, they fill each batch and starve every other tenant's
     reset.
     """
-    if budget_duration is None:
-        return
+    from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
-    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-    try:
-        if duration_in_seconds(budget_duration) <= 0:
-            raise ValueError("budget_duration must be positive")
-        get_budget_reset_time(budget_duration=budget_duration)
-    except (ValueError, OverflowError):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."
-            },
-        )
+    error: Final = budget_duration_error(budget_duration)
+    if error is not None:
+        raise HTTPException(status_code=status_code, detail={"error": error})
 
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.proxy._types import (
+    CommonProxyErrors,
     KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
@@ -72,10 +63,60 @@ from litellm.proxy._types import (  # noqa: F401  re-exported
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import _premium_user_check
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+
+def validate_team_model_max_budget(
+    model_max_budget: Mapping[str, BudgetConfig] | None,
+    premium_user: bool,
+) -> None:
+    """Reject a team `model_max_budget` the limiter could not enforce (no duration, bad cap, tpm/rpm limits)."""
+    if not model_max_budget:
+        return
+    if premium_user is not True:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Setting model_max_budget on a team is an enterprise feature. {CommonProxyErrors.not_premium_user.value}"
+            },
+        )
+    for model_name, budget_config in model_max_budget.items():
+        if not model_name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model_max_budget keys must be non-empty model names"},
+            )
+        max_budget = budget_config.max_budget
+        if max_budget is None or not math.isfinite(max_budget) or max_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"model_max_budget[{model_name!r}].max_budget must be a non-negative finite number. "
+                        f"Received: {max_budget}"
+                    )
+                },
+            )
+        if budget_config.budget_duration is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"model_max_budget[{model_name!r}] requires a budget_duration, e.g. '1d' or '30d'"},
+            )
+        validate_budget_duration(budget_config.budget_duration)
+        if budget_config.tpm_limit is not None or budget_config.rpm_limit is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"model_max_budget[{model_name!r}] tpm_limit/rpm_limit are not enforced on a team; "
+                        "set per-model rate limits on the key instead"
+                    )
+                },
+            )
 
 
 def require_caller_user_id_for_non_admin(
@@ -130,6 +171,34 @@ def _check_passthrough_routes_caller_permission(
             status_code=403,
             detail={"error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."},
         )
+
+
+def _check_disable_global_guardrails_caller_permission(
+    disable_global_guardrails: bool | None,
+    metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """
+    Only proxy admins may opt a key or team out of default-on guardrails, whether the
+    flag is top-level or under `metadata`. Re-sending a flag that is already stored is
+    not an opt-out, so non-admin edits of an already exempted object still go through.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    requested: Final = bool(disable_global_guardrails) or (
+        metadata is not None and bool(metadata.get("disable_global_guardrails"))
+    )
+    if not requested:
+        return
+    if existing_metadata is not None and existing_metadata.get("disable_global_guardrails") is True:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can set `disable_global_guardrails` on a {entity}."},
+    )
 
 
 def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
@@ -435,10 +504,43 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
     "model_max_budget",
     "budget_duration",
     "allowed_models",
+    "temp_budget_increase",
+    "temp_budget_expiry",
+)
+
+_TEMP_BUDGET_FIELDS: Final = frozenset({"temp_budget_increase", "temp_budget_expiry"})
+
+
+MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
+    {
+        "max_budget_in_team": "max_budget",
+        "tpm_limit": "tpm_limit",
+        "rpm_limit": "rpm_limit",
+        "budget_duration": "budget_duration",
+        "allowed_models": "allowed_models",
+        "temp_budget_increase": "temp_budget_increase",
+        "temp_budget_expiry": "temp_budget_expiry",
+    }
 )
 
 
-def _is_set_budget_value(value: Any) -> bool:
+def _prisma_value(value: object) -> object:
+    return list(value) if isinstance(value, tuple) else value
+
+
+def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
+    """Map the per-member limit fields a request actually set to their budget-table
+    columns (merge-patch: a sent value updates, an explicit null clears, an absent
+    field is left untouched)."""
+    provided: Final = source.model_dump(exclude_unset=True)
+    return {
+        column: _prisma_value(provided[request_field])
+        for request_field, column in MEMBER_BUDGET_PATCH_FIELDS.items()
+        if request_field in provided
+    }
+
+
+def _is_set_budget_value(value: object) -> bool:
     if value is None:
         return False
     if isinstance(value, list) and len(value) == 0:
@@ -446,7 +548,7 @@ def _is_set_budget_value(value: Any) -> bool:
     return True
 
 
-def _has_meaningful_budget_limit(budget_values: dict[str, Any]) -> bool:
+def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
@@ -459,8 +561,9 @@ async def _upsert_budget_and_membership(
     user_id: str,
     existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    budget_patch: dict[str, Any],
+    budget_patch: Mapping[str, object],
     team_default_budget_id: str | None = None,
+    shared_budget_ids: frozenset[str] | None = None,
 ):
     """
     Apply a merge-patch of per-member budget fields to a team membership.
@@ -475,6 +578,12 @@ async def _upsert_budget_and_membership(
     (from team metadata.team_member_budget_id). When the membership still
     points at it, we clone-on-write so editing one member's budget does not
     mutate the shared default that every other member points at.
+
+    ``shared_budget_ids`` extends that protection to any other row more than one
+    membership points at, which a caller patching several members at once has
+    already counted; a row listed there is cloned rather than written in place.
+    A patch that only touches the temporary budget pair never copies permanent
+    limits into a new row, so the member keeps inheriting the live team default.
     """
     if not budget_patch:
         return
@@ -486,11 +595,10 @@ async def _upsert_budget_and_membership(
             get_budget_reset_time(budget_duration=duration) if duration is not None else None
         )
 
-    is_shared_default: Final = (
-        existing_budget_id is not None
-        and team_default_budget_id is not None
-        and existing_budget_id == team_default_budget_id
+    is_shared_default: Final = existing_budget_id is not None and (
+        existing_budget_id == team_default_budget_id or existing_budget_id in (shared_budget_ids or frozenset())
     )
+    temp_only: Final = frozenset(write_data) <= _TEMP_BUDGET_FIELDS
 
     async def _disconnect():
         await tx.litellm_teammembership.update(
@@ -511,29 +619,31 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    create_data: Final[dict[str, Any]] = {
+    source_row: Final = (
+        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
+        if is_shared_default and not temp_only
+        else None
+    )
+    source: Final[Mapping[str, object]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
+
+    create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
+        **MappingProxyType(
+            {f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _is_set_budget_value(source.get(f))}
+        ),
+        **write_data,
     }
 
-    if is_shared_default:
-        default_budget_row: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
-        if default_budget_row is not None:
-            default_budget_dict: Final = default_budget_row.model_dump()
-            for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS:
-                value = default_budget_dict.get(field)
-                if _is_set_budget_value(value):
-                    create_data[field] = value
-
-    create_data.update(write_data)
-
-    if create_data.get("budget_duration") is not None:
-        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=create_data["budget_duration"])
-    else:
+    # Restarting an inherited window on an unrelated edit hands the member a free period.
+    carried: Final = source.get("budget_reset_at") if "budget_duration" not in budget_patch else None
+    if carried is not None:
+        create_data["budget_reset_at"] = carried
+    if create_data.get("budget_reset_at") is None:
         create_data.pop("budget_reset_at", None)
 
     if not _has_meaningful_budget_limit(create_data):
-        if existing_budget_id is not None:
+        if existing_budget_id is not None and not temp_only:
             await _disconnect()
         return
 
@@ -590,7 +700,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"] = {field_name: _value}
 
 
-def _has_non_empty_value(value: Any) -> bool:
+def _has_non_empty_value(value: object) -> bool:
     """Check if a value has real content (not None, not empty list, not blank string)."""
     if value is None:
         return False

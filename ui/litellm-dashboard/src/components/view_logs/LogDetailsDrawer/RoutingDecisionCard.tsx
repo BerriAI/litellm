@@ -24,9 +24,29 @@ export interface RoutingDecision {
   matched_keyword?: string;
   escalation_keyword?: string;
   classifier_model?: string;
+  classifier_p_solve?: number;
+  classifier_calibrated_p_solve?: number;
+  classifier_threshold?: number;
+  classifier_capability_boundary?: string;
+  classifier_primary_rule?: string;
+  classifier_calibration_version?: string;
+  classifier_efficient_p_solve?: number;
+  classifier_capable_p_solve?: number;
+  classifier_calibrated_efficient_p_solve?: number;
+  classifier_calibrated_capable_p_solve?: number;
+  classifier_max_quality_gap?: number;
+  classifier_confidence?: number;
+  classifier_probabilities?: Record<string, number>;
+  classifier_cost?: number;
   escalated?: boolean;
   tier_boundaries?: RoutingDecisionTierBoundaries;
   reasoning_override_min_score?: number;
+  heuristic_v2_forecast?: {
+    probabilities: Record<string, number>;
+    threshold: number;
+    predicted_tier: string;
+    request_type: string;
+  };
 }
 
 const ROUTER_TYPE_LABELS: Record<string, string> = {
@@ -66,6 +86,16 @@ function describePlanModeFloor(matchedKeyword: string | undefined): string {
   return "Plan-mode floor";
 }
 
+/**
+ * The sentinel is the whole reason this row is worth reading: it is the string an operator
+ * would add to housekeeping_patterns to cover another client, so naming it turns the row into
+ * the instruction. Without it the drawer says only that the classifier was skipped.
+ */
+function describeHousekeeping(matchedKeyword: string | undefined): string {
+  if (matchedKeyword) return `Client housekeeping call: "${matchedKeyword}"`;
+  return "Client housekeeping call, classifier skipped";
+}
+
 /** Rows logged before the floor was recorded name what it tracked back then instead of a number. */
 function describeReasoningOverride(tierLabel: string | undefined, floor: number | undefined): string {
   const stated = floor === undefined ? "the Simple to Medium boundary" : String(floor);
@@ -74,16 +104,25 @@ function describeReasoningOverride(tierLabel: string | undefined, floor: number 
 
 const CONSTANT_CAUSE_LABELS: Record<string, string> = {
   heuristic_scorer: "Heuristic scorer",
+  heuristic_v2: "Heuristic v2",
+  capability_classifier: "Capability",
+  capability_classifier_fallback: "Capable tier, Capability classifier failed",
+  llm_v2_classifier: "FUSE v2",
+  llm_v2_fallback: "Capable tier, FUSE v2 classifier failed",
   heuristic_first_short_circuit: "Heuristic scorer, classifier skipped",
+  hybrid_short_circuit: "Heuristic scorer, score clear of every boundary",
   classifier_plugin: "Custom classifier plugin",
   semantic_keyword_match: "Semantic keyword match",
   session_affinity_pin: "Pinned to session",
   session_affinity_escalation: "Escalated from session pin",
+  user_turn_continuation: "Continuation turn, classifier skipped",
+  modality_escalation: "Escalated for image input",
+  modality_pin_override: "Overrode session pin for image input",
   quality_tier: "Quality tier mapping",
   bandit: "Adaptive bandit",
   default_fallback: "Default model, no route matched",
-  classifier_fallback: "Fallback tier, LLM classifier failed",
-  default_model_fallback: "Default model, LLM classifier failed",
+  classifier_fallback: "Fallback tier, classifier failed",
+  default_model_fallback: "Default model, classifier failed",
 };
 
 function describeCause(decision: RoutingDecision): string {
@@ -103,11 +142,15 @@ function describeCause(decision: RoutingDecision): string {
       return describeReasoningOverride(tierLabel, overrideFloor);
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
+    case "jev_classifier":
+      return "JEV classifier";
     case "literal_keyword_match":
     case "keyword":
       return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
     case "plan_mode":
       return describePlanModeFloor(matchedKeyword);
+    case "housekeeping":
+      return describeHousekeeping(matchedKeyword);
     default:
       return cause ?? "Unknown";
   }
@@ -133,6 +176,71 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
+function PercentageRow({ label, value, unit = "%" }: { label: string; value?: number; unit?: string }) {
+  if (value === undefined) return null;
+  return (
+    <Row label={label}>
+      <span className="tabular-nums">{`${(value * 100).toFixed(1)}${unit}`}</span>
+    </Row>
+  );
+}
+
+function CapabilityForecast({ decision }: { decision: RoutingDecision }) {
+  const {
+    classifier_p_solve: raw,
+    classifier_calibrated_p_solve: calibrated,
+    classifier_threshold: threshold,
+    classifier_capability_boundary: boundary,
+    classifier_primary_rule: rule,
+    classifier_calibration_version: version,
+  } = decision;
+  if ([raw, calibrated, threshold, boundary, rule].every((value) => value === undefined)) return null;
+
+  return (
+    <div className="mt-3 border-t pt-3">
+      <div className="mb-1 text-sm font-medium">Capability estimates</div>
+      <div className="mb-2 text-xs text-muted-foreground">Efficient model solve chance</div>
+      <PercentageRow label="Raw" value={raw} />
+      <PercentageRow label="Calibrated" value={calibrated} />
+      <PercentageRow label="Threshold" value={threshold} />
+      {boundary && <Row label="Boundary">{boundary}</Row>}
+      {rule && <Row label="Rule">{rule}</Row>}
+      {version && <Row label="Calibration">{version}</Row>}
+    </div>
+  );
+}
+
+function FuseV2Forecast({ decision }: { decision: RoutingDecision }) {
+  const {
+    classifier_efficient_p_solve: rawEfficient,
+    classifier_capable_p_solve: rawCapable,
+    classifier_calibrated_efficient_p_solve: calibratedEfficient,
+    classifier_calibrated_capable_p_solve: calibratedCapable,
+    classifier_max_quality_gap: allowedGap,
+    classifier_calibration_version: version,
+  } = decision;
+  if ([rawEfficient, rawCapable, calibratedEfficient, calibratedCapable, allowedGap].every((v) => v === undefined)) {
+    return null;
+  }
+  const isCalibrated = [calibratedEfficient, calibratedCapable, version].some((value) => value !== undefined);
+  const efficient = isCalibrated ? calibratedEfficient : rawEfficient;
+  const capable = isCalibrated ? calibratedCapable : rawCapable;
+  const gap = efficient !== undefined && capable !== undefined ? capable - efficient : undefined;
+
+  return (
+    <div className="mt-3 border-t pt-3">
+      <div className="mb-1 text-sm font-medium">FUSE v2 estimates</div>
+      <PercentageRow label="Efficient (raw)" value={rawEfficient} />
+      <PercentageRow label="Capable (raw)" value={rawCapable} />
+      <PercentageRow label="Efficient (calibrated)" value={calibratedEfficient} />
+      <PercentageRow label="Capable (calibrated)" value={calibratedCapable} />
+      <PercentageRow label="Applied gap" value={gap} unit=" percentage points" />
+      <PercentageRow label="Allowed gap" value={allowedGap} unit=" percentage points" />
+      {version && <Row label="Calibration">{version}</Row>}
+    </div>
+  );
+}
+
 export function RoutingDecisionCard({
   decision,
   className,
@@ -154,6 +262,7 @@ export function RoutingDecisionCard({
     escalated,
     escalation_keyword: escalationKeyword,
     tier_boundaries: tierBoundaries,
+    heuristic_v2_forecast: forecast,
   } = decision;
 
   // On an override row the score did not decide the tier, so showing it against a
@@ -191,6 +300,20 @@ export function RoutingDecisionCard({
         {requestType && <Row label="Request type">{requestType}</Row>}
 
         <Row label="Decided by">{describeCause(decision)}</Row>
+        {decision.classifier_model && <Row label="Classifier model">{decision.classifier_model}</Row>}
+        {decision.classifier_confidence != null && (
+          <Row label="Confidence">{(decision.classifier_confidence * 100).toFixed(1)}%</Row>
+        )}
+        {decision.classifier_probabilities && (
+          <Row label="Probabilities">
+            {Object.entries(decision.classifier_probabilities).map(([name, probability]) => (
+              <div key={name}>
+                {name}: {(probability * 100).toFixed(1)}%
+              </div>
+            ))}
+          </Row>
+        )}
+        {decision.classifier_cost != null && <Row label="Classifier cost">${decision.classifier_cost.toFixed(8)}</Row>}
 
         {score !== undefined && (
           <Row label="Score">
@@ -202,6 +325,29 @@ export function RoutingDecisionCard({
         {routedModel && <Row label="Routed to">{routedModel}</Row>}
 
         {escalated !== undefined && <Row label="Escalated">{describeEscalation(escalated, escalationKeyword)}</Row>}
+
+        {forecast && (
+          <div className="mt-3 border-t pt-3">
+            <div className="mb-1 text-sm font-medium">Heuristic v2 estimates</div>
+            <Row label="Success by tier">
+              <span className="flex flex-wrap gap-1">
+                {["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"].map((predictedTier) => (
+                  <Badge key={predictedTier} variant="outline" className="font-normal tabular-nums">
+                    {predictedTier} {(forecast.probabilities[predictedTier] * 100).toFixed(1)}%
+                  </Badge>
+                ))}
+              </span>
+            </Row>
+            <Row label="Threshold">
+              <span className="tabular-nums">{(forecast.threshold * 100).toFixed(1)}%</span>
+            </Row>
+            <Row label="Predicted tier">{forecast.predicted_tier}</Row>
+            <Row label="Request type">{forecast.request_type}</Row>
+          </div>
+        )}
+
+        <CapabilityForecast decision={decision} />
+        <FuseV2Forecast decision={decision} />
 
         {signals && signals.length > 0 && (
           <Row label="Signals">

@@ -45,6 +45,22 @@ def setup_and_teardown():
     asyncio.set_event_loop(None)  # Remove the reference to the loop
 
 
+@pytest.fixture(scope="function", autouse=True)
+async def drain_logging_worker():
+    """
+    The logging queue is bound to the running loop, so anything left queued when a test's loop
+    goes away is carried onto the next test's loop and fires against its callbacks.
+    """
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    yield
+
+    try:
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.clear_queue(), timeout=10)
+    except asyncio.TimeoutError:
+        pass
+
+
 def pytest_collection_modifyitems(config, items):
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
     custom_logger_tests = [
@@ -58,3 +74,14 @@ def pytest_collection_modifyitems(config, items):
 
     # Reorder the items list
     items[:] = custom_logger_tests + other_tests
+
+
+@pytest.fixture
+def config_only_mcp_manager_factory():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    class ConfigOnlyManager(MCPServerManager):
+        def initialize_tool_name_to_mcp_server_name_mapping(self):
+            return None
+
+    return ConfigOnlyManager

@@ -90,6 +90,7 @@ export interface AgentFormValues {
   guardrails?: string[];
   entitlement_models?: string[];
   entitlement_agents?: string[];
+  access_group_ids?: string[];
   allowed_mcp_servers_and_groups?: McpServerSelection;
   mcp_tool_permissions?: Record<string, string[]>;
   defaultInputModes?: string[];
@@ -121,6 +122,7 @@ export interface AgentRequestPayload {
   agent_card_params?: Record<string, unknown>;
   litellm_params?: Record<string, unknown>;
   object_permission?: Record<string, unknown>;
+  access_group_ids?: string[];
 }
 
 interface AgentFormFieldProps {

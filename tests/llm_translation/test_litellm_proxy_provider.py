@@ -2,16 +2,24 @@ import json
 import re
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock
 
 
+import httpx
 import litellm
 from litellm import completion, embedding
 import pytest
 from unittest.mock import MagicMock, patch
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 import pytest_asyncio
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
+from openai.types import CreateEmbeddingResponse, Embedding
+from openai.types.create_embedding_response import Usage
+
+from tests.capturing_transport import CapturingTransport
+from tests._vcr_conftest_common import rewound_new_episodes_cassette
 
 
 @pytest.mark.asyncio
@@ -86,50 +94,59 @@ async def test_litellm_gateway_from_sdk_structured_output():
         assert "json_schema" in json_schema
 
 
-@pytest.mark.parametrize("is_async", [False, True])
+_GATEWAY_EMBEDDING_RESPONSE: Final = CreateEmbeddingResponse(
+    object="list",
+    data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
+    model="my-vllm-model",
+    usage=Usage(prompt_tokens=2, total_tokens=2),
+)
+
+
+async def _gateway_embedding_via_injected_client(
+    is_async: bool,
+) -> tuple[CapturingTransport, litellm.EmbeddingResponse]:
+    transport: Final = CapturingTransport(_GATEWAY_EMBEDDING_RESPONSE)
+    response: Final = (
+        await litellm.aembedding(
+            model="litellm_proxy/my-vllm-model",
+            input="Hello world",
+            client=AsyncOpenAI(api_key="fake-key", http_client=httpx.AsyncClient(transport=transport)),
+            api_base="my-custom-api-base",
+        )
+        if is_async
+        else litellm.embedding(
+            model="litellm_proxy/my-vllm-model",
+            input="Hello world",
+            client=OpenAI(api_key="fake-key", http_client=httpx.Client(transport=transport)),
+            api_base="my-custom-api-base",
+        )
+    )
+    return transport, response
+
+
+@pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.asyncio
-async def test_litellm_gateway_from_sdk_embedding(is_async):
+async def test_litellm_gateway_from_sdk_embedding(is_async: bool):
     litellm.set_verbose = True
     litellm._turn_on_debug()
 
-    if is_async:
-        from openai import AsyncOpenAI
+    transport, response = await _gateway_embedding_via_injected_client(is_async)
 
-        openai_client = AsyncOpenAI(api_key="fake-key")
-        mock_method = AsyncMock()
-        patch_target = openai_client.embeddings.create
-    else:
-        from openai import OpenAI
+    request_body: Final = transport.request_bodies[0]
+    assert "Hello world" == request_body["input"]
+    assert "my-vllm-model" == request_body["model"]
+    assert "encoding_format" not in request_body
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
-        openai_client = OpenAI(api_key="fake-key")
-        mock_method = MagicMock()
-        patch_target = openai_client.embeddings.create
 
-    with patch.object(patch_target.__self__, patch_target.__name__, new=mock_method):
-        try:
-            if is_async:
-                await litellm.aembedding(
-                    model="litellm_proxy/my-vllm-model",
-                    input="Hello world",
-                    client=openai_client,
-                    api_base="my-custom-api-base",
-                )
-            else:
-                litellm.embedding(
-                    model="litellm_proxy/my-vllm-model",
-                    input="Hello world",
-                    client=openai_client,
-                    api_base="my-custom-api-base",
-                )
-        except Exception as e:
-            print(e)
+@pytest.mark.asyncio
+async def test_litellm_gateway_from_sdk_embedding_under_foreign_cassette(tmp_path: Path):
+    with rewound_new_episodes_cassette(tmp_path):
+        sync_transport, _ = await _gateway_embedding_via_injected_client(is_async=False)
+        async_transport, _ = await _gateway_embedding_via_injected_client(is_async=True)
 
-        mock_method.assert_called_once()
-
-        print("Call KWARGS - {}".format(mock_method.call_args.kwargs))
-
-        assert "Hello world" == mock_method.call_args.kwargs["input"]
-        assert "my-vllm-model" == mock_method.call_args.kwargs["model"]
+    assert tuple(body["input"] for body in sync_transport.request_bodies) == ("Hello world",)
+    assert tuple(body["input"] for body in async_transport.request_bodies) == ("Hello world",)
 
 
 @pytest.mark.parametrize("is_async", [False, True])

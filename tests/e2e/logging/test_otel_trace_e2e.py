@@ -12,22 +12,24 @@ commit 1bd603d1ac).
 Both halves of the contract are asserted: the recorded state (the proxy reports
 the OTEL v2 logger active via /health/readiness/details) and the enforced
 behavior (the complete span tree at the destination, read back through the
-destination's own query API - never proxy-side "export succeeded" logs).
+destination's own query API - never proxy-side "export succeeded" logs). The
+TLS coverage requires the stack to export OTLP over HTTPS with a certificate
+signed by the CA in SSL_CERT_FILE, and treats a missing or plaintext endpoint
+as a stack misconfiguration rather than skipping the test.
 """
 
 from __future__ import annotations
 
 import time
+from typing import Final
 
 import pytest
-from pydantic import BaseModel, ConfigDict, ValidationError
-
-from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import NoBody
+from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, OTEL_EXPORTER_ENDPOINT, unique_marker
 from lifecycle import ResourceManager
-from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok
+from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
 from models import LiteLLMParamsBody
 from otel_client import JaegerSpan, JaegerTrace, OtelReader
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 pytestmark = pytest.mark.e2e
 
@@ -48,11 +50,7 @@ def _assert_otel_destination_configured(client: LoggingClient) -> None:
     """Recorded state: the proxy reports the OTEL v2 logger among its active
     callbacks, so a missing/failed destination config fails here, before any
     traffic-based assertion can time out confusingly."""
-    result = client.proxy.probe("/health/readiness/details", params=NoBody())
-    assert result.status_code == 200, (
-        f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
-    )
-    details = _ReadinessDetails.model_validate_json(result.body)
+    details = _ReadinessDetails.model_validate_json(readiness_details_body(client))
     assert OTEL_V2_LOGGER_NAME in details.success_callbacks, (
         f"the proxy must report the {OTEL_V2_LOGGER_NAME} callback active "
         f"(LITELLM_OTEL_V2 + arize_phoenix preset in the compose config); got: {details.success_callbacks}"
@@ -164,17 +162,14 @@ def served_genai_spans(trace: JaegerTrace, genai_span: str) -> list[JaegerSpan]:
     these tests fail whenever the upstream 429s, 529s, or hands back a stale
     credential on the first try."""
     return [
-        span
-        for span in trace.spans
-        if span.operation_name == genai_span and _tag(span, ERROR_STATUS_TAG) != "ERROR"
+        span for span in trace.spans if span.operation_name == genai_span and _tag(span, ERROR_STATUS_TAG) != "ERROR"
     ]
 
 
 def one_served_genai_span(trace: JaegerTrace, genai_span: str) -> JaegerSpan:
     served = served_genai_spans(trace, genai_span)
     assert len(served) == 1, (
-        f"a streamed call must produce exactly ONE served gen-AI span, got {len(served)}; "
-        f"spans: {trace.span_names()}"
+        f"a streamed call must produce exactly ONE served gen-AI span, got {len(served)}; spans: {trace.span_names()}"
     )
     return served[0]
 
@@ -190,8 +185,7 @@ def _assert_real_ttft(hits: list[JaegerTrace], *, genai_span: str) -> None:
         "(nothing tagged with its call id was found)"
     )
     assert len(hits) == 1, (
-        f"expected exactly ONE trace for the call, got {len(hits)}: "
-        f"{[(t.trace_id, t.span_names()) for t in hits]}"
+        f"expected exactly ONE trace for the call, got {len(hits)}: {[(t.trace_id, t.span_names()) for t in hits]}"
     )
     trace = hits[0]
     span = one_served_genai_span(trace, genai_span)
@@ -280,9 +274,7 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
         "the span status description must carry the same untruncated message as error.message"
     )
     stack = _tag(span, "litellm.provider.error.stack_trace")
-    assert isinstance(stack, str) and stack, (
-        "the error span must carry a non-empty litellm.provider.error.stack_trace"
-    )
+    assert isinstance(stack, str) and stack, "the error span must carry a non-empty litellm.provider.error.stack_trace"
 
 
 class TestOtelTraceCompleteness:
@@ -313,12 +305,39 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = first_ok(
+        outcome = first_ok(client, lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16))
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=f"chat {MODEL}"),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
+
+    @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["chat_completions"])
+    @pytest.mark.otel_tls
+    def test_otel_export_over_tls_with_internal_ca_reaches_destination(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        _assert_otel_destination_configured(client)
+        assert OTEL_EXPORTER_ENDPOINT.startswith("https://"), (
+            "the stack must export OTLP over TLS signed by the CA in SSL_CERT_FILE "
+            "(E2E_OTEL_EXPORTER_ENDPOINT) for this test to prove anything; a "
+            "missing or plaintext value is a stack misconfiguration"
+        )
+
+        route: Final = "/chat/completions"
+        key: Final = client.key_with_alias(f"otel-trace-tls-{unique_marker()}", models=[MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker: Final = unique_marker()
+        outcome: Final = first_ok(
             client, lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16)
         )
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
 
-        hits = otel_reader.poll_traces_for_call(
+        hits: Final = otel_reader.poll_traces_for_call(
             call_id=outcome.call_id,
             settled_names=_settled_names(route=route, genai_span=f"chat {MODEL}"),
             settled_prefixes={DB_SPAN_PREFIX},
@@ -520,9 +539,7 @@ class TestOtelTraceCompleteness:
         route = "/v1/responses"
         _assert_otel_destination_configured(client)
 
-        key = client.key_with_alias(
-            f"otel-stream-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL]
-        )
+        key = client.key_with_alias(f"otel-stream-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL])
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
@@ -660,9 +677,7 @@ class TestOtelTraceCompleteness:
         route = "/v1/responses"
         _assert_otel_destination_configured(client)
 
-        key = client.key_with_alias(
-            f"otel-ttft-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL]
-        )
+        key = client.key_with_alias(f"otel-ttft-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL])
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()

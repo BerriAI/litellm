@@ -14,6 +14,7 @@ import json
 import os
 import sys
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +25,33 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
 FAKE_REGULAR_KEY = "sk-ant-api03-regular-key-for-testing-123456789"
 FAKE_AUTH_TOKEN = "sk-ant-aut01-fake-auth-token-for-testing-123456789"
+
+
+@pytest.mark.parametrize(
+    "messages,system,expected",
+    [
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: cc_is_subagent=true;", True),
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: =junk; cc_is_subagent=true;", False),
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: cc_version=; cc_is_subagent=true;", False),
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: malformed", False),
+        ([{"content": "missing role"}], "x-anthropic-billing-header: cc_is_subagent=true;", False),
+        (["not-a-mapping"], "x-anthropic-billing-header: cc_is_subagent=true;", False),
+        ([{"role": "user", "content": "hi"}], ["not-a-mapping"], False),
+        ([{"role": "user", "content": "hi"}], None, False),
+    ],
+)
+def test_is_claude_code_one_shot_subagent_request(messages, system, expected):
+    from litellm.llms.anthropic.common_utils import is_claude_code_one_shot_subagent_request
+
+    assert (
+        is_claude_code_one_shot_subagent_request(
+            messages=messages,
+            system=system,
+            tools=None,
+            user_agent="claude-cli/2.1.263 (external, cli)",
+        )
+        is expected
+    )
 
 
 class TestOptionallyHandleAnthropicOAuth:
@@ -1292,11 +1320,12 @@ class TestPassthroughAuthToken:
 
 
 class TestAnthropicThinkingSignatureSelfHeal:
-    """Helpers for retrying after invalid encrypted thinking signatures."""
+    """Helpers for retrying after invalid thinking blocks in replayed history:
+    invalid encrypted signatures, and blocks with empty thinking text."""
 
-    def test_is_anthropic_invalid_thinking_signature_error_positive(self):
+    def test_is_anthropic_invalid_thinking_block_error_positive(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
         raw = (
@@ -1304,34 +1333,114 @@ class TestAnthropicThinkingSignatureSelfHeal:
             '"message":"messages.3.content.3: Invalid `signature` in `thinking` block"},'
             '"request_id":"req_011Ca2EtQDxp7x6RGUY2jVn9"}'
         )
-        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
 
-    def test_is_anthropic_invalid_thinking_signature_error_positive_bedrock(self):
+    def test_is_anthropic_invalid_thinking_block_error_positive_bedrock(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
         # Real user-reported Bedrock scenario
         raw = '{"message":"messages.2.content.0.thinking.signature.str: Input should be a valid string"}'
-        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
 
-    def test_is_anthropic_invalid_thinking_signature_error_positive_vertex(self):
+    def test_is_anthropic_invalid_thinking_block_error_positive_vertex(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
         raw = "messages.4.content.1.thinking.signature.str: Input should be a valid string"
-        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
 
-    def test_is_anthropic_invalid_thinking_signature_error_negative(self):
+    def test_is_anthropic_invalid_thinking_block_error_negative(self):
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
-        assert is_anthropic_invalid_thinking_signature_error("") is False
-        assert is_anthropic_invalid_thinking_signature_error("rate limit exceeded") is False
-        assert is_anthropic_invalid_thinking_signature_error("invalid_request_error: model not found") is False
-        assert is_anthropic_invalid_thinking_signature_error("thinking signature is malformed") is False
+        assert is_anthropic_invalid_thinking_block_error("") is False
+        assert is_anthropic_invalid_thinking_block_error("rate limit exceeded") is False
+        assert is_anthropic_invalid_thinking_block_error("invalid_request_error: model not found") is False
+        assert is_anthropic_invalid_thinking_block_error("thinking signature is malformed") is False
+
+    def test_is_anthropic_invalid_thinking_block_error_positive_empty_thinking(self):
+        """LIT-6357: replayed history holding {"type": "thinking", "thinking": ""}
+        (produced when a non-Anthropic reasoning model's turn is bridged to the
+        Anthropic surface with no reasoning text) 400s with a message that names
+        no signature, so the pre-rename matcher missed it and the strip-and-retry
+        never fired. Raw string captured live on 2026-08-27."""
+        from litellm.llms.anthropic.common_utils import (
+            is_anthropic_invalid_thinking_block_error,
+        )
+
+        raw = (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages.1.content.0.thinking: each thinking block must contain thinking"},'
+            '"request_id":"req_011CeUTxhJj2rTUkK61qtbJ8"}'
+        )
+        assert is_anthropic_invalid_thinking_block_error(raw) is True
+
+    def test_is_empty_thinking_block(self):
+        from litellm.llms.anthropic.common_utils import is_empty_thinking_block
+
+        assert is_empty_thinking_block({"type": "thinking", "thinking": ""}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": " \n\t "}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": None}) is True
+        assert is_empty_thinking_block({"type": "thinking"}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": "", "signature": "sig_abc"}) is True
+        assert is_empty_thinking_block({"type": "thinking", "thinking": "plan", "signature": "sig"}) is False
+        assert is_empty_thinking_block({"type": "redacted_thinking", "data": "opaque"}) is False
+        assert is_empty_thinking_block({"type": "text", "text": ""}) is False
+        assert is_empty_thinking_block("not a dict") is False
+
+    def test_is_empty_unsigned_thinking_block(self):
+        """Emit-side predicate: a signature-only block must be kept (Bedrock
+        Converse adaptive thinking emits empty text with only a signature, and
+        the client needs it to replay reasoning in tool-use turns); only an
+        empty block with nothing to preserve is droppable."""
+        from litellm.llms.anthropic.common_utils import is_empty_unsigned_thinking_block
+
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": ""}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": " \n\t "}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking"}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": "", "signature": ""}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": "", "signature": "sig_abc"}) is False
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": " ", "signature": "sig_abc"}) is False
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": "plan"}) is False
+        assert is_empty_unsigned_thinking_block({"type": "redacted_thinking", "data": "opaque"}) is False
+        assert is_empty_unsigned_thinking_block("not a dict") is False
+
+    def test_strip_empty_content_blocks_drops_empty_thinking_blocks(self):
+        """LIT-6357 ingestion half: an assistant tool-loop turn carrying an
+        empty (even signed) thinking block keeps its tool_use blocks and loses
+        the poison; whitespace-only counts as empty; a non-empty thinking block
+        and redacted_thinking are untouched."""
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        tu = {"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {"city": "Paris"}}
+        msgs = [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": "sig_abc"}, tu],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": " \n "},
+                    {"type": "thinking", "thinking": "real plan", "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                ],
+            },
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": ""}]},
+        ]
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
+        assert len(out) == 3
+        assert [b["type"] for b in out[1]["content"]] == ["tool_use"]
+        assert [b["type"] for b in out[2]["content"]] == ["thinking", "redacted_thinking"]
+        assert out[2]["content"][0]["thinking"] == "real plan"
+        assert len(msgs[1]["content"]) == 2
 
     def test_strip_thinking_blocks_from_anthropic_messages(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1398,14 +1507,14 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
-    def test_strip_empty_text_blocks_from_anthropic_messages(self):
+    def test_strip_empty_content_blocks_from_anthropic_messages(self):
         """Covers #22930.  The core regression scenario: an assistant message
         with an empty text block alongside ``tool_use`` loses the empty block
         and keeps the ``tool_use``; a whole message that reduces to no blocks
         is dropped; whitespace-only text counts as empty; the caller's list
         is never mutated."""
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         tu = {"type": "tool_use", "id": "x", "name": "Bash", "input": {}}
@@ -1414,14 +1523,14 @@ class TestAnthropicThinkingSignatureSelfHeal:
             {"role": "assistant", "content": [{"type": "text", "text": "  \n "}, tu]},
             {"role": "assistant", "content": [{"type": "text", "text": ""}]},
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert len(out) == 2 and out[0] is msgs[0]
         assert [b["type"] for b in out[1]["content"]] == ["tool_use"]
         assert len(msgs[1]["content"]) == 2  # caller's content unchanged
 
     def test_strip_empty_text_blocks_preserves_thinking_blocks(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1433,12 +1542,77 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["thinking"]
+
+    def test_strip_keeps_encrypted_reasoning_blocks_for_the_responses_bridge(self):
+        """The /v1/messages handler runs this before dispatch, so the bridge must still see the replay."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            encrypted_reasoning_signature,
+        )
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_1")},
+                    {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_2")},
+                    {"type": "text", "text": "The answer."},
+                ],
+            }
+        ]
+        assert strip_empty_content_blocks_from_anthropic_messages(msgs) == msgs
+
+    def test_strip_encrypted_reasoning_drops_only_the_bridge_tagged_blocks(self):
+        """A session resumed on an Anthropic model replays reasoning only OpenAI can verify."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            encrypted_reasoning_signature,
+        )
+        from litellm.llms.anthropic.common_utils import (
+            strip_encrypted_reasoning_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {"role": "user", "content": "Solve it."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_1")},
+                    {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_2")},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_3")},
+                    {"type": "thinking", "thinking": "native", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                    {"type": "redacted_thinking", "data": "EmwKAhgBEgy_anthropic_minted"},
+                    {"type": "text", "text": "The answer."},
+                ],
+            },
+        ]
+        out = strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs)
+        assert [m["role"] for m in out] == ["user", "assistant"]
+        assert [b["type"] for b in out[1]["content"]] == ["thinking", "redacted_thinking", "text"]
+        assert out[1]["content"][0]["signature"] == "EqQBCkYIAxgCIkA_anthropic_signed"
+        assert len(msgs[1]["content"]) == 2
+        assert len(msgs[2]["content"]) == 4
+
+    def test_strip_encrypted_reasoning_leaves_malformed_messages_for_the_provider_to_reject(self):
+        """A bare string in messages must reach Anthropic as a 400, not die in the stripper as a 500."""
+        from litellm.llms.anthropic.common_utils import (
+            strip_encrypted_reasoning_blocks_from_anthropic_messages,
+        )
+
+        msgs = ["hi", {"role": "user", "content": "hello"}]
+        assert strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs) == msgs
 
     def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1450,12 +1624,12 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_strip_empty_text_blocks_treats_missing_text_key_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1467,21 +1641,21 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_strip_empty_text_blocks_leaves_non_empty_text_alone(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert out[0] is msgs[0]  # untouched messages keep identity
 
     def test_strip_empty_text_blocks_treats_non_string_text_value_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
-            strip_empty_text_blocks_from_anthropic_messages,
+            strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1493,7 +1667,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_flatten_unencrypted_web_search_results_keeps_snippet_evidence(self):
@@ -1655,7 +1829,11 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
         assert out[0] is msgs[0]
 
-    def test_flatten_unencrypted_web_search_results_leaves_error_blocks_alone(self):
+    def test_flatten_unencrypted_web_search_results_flattens_error_blocks(self):
+        """A failed intercepted search is replayed by the client as the error
+        object LiteLLM emitted. Anthropic rejects a replayed ``server_tool_use``
+        it never issued, so the pair is flattened to text the same way a
+        successful unencrypted result is."""
         from litellm.llms.anthropic.common_utils import (
             flatten_unencrypted_web_search_results_in_anthropic_messages,
         )
@@ -1664,6 +1842,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
             {
                 "role": "assistant",
                 "content": [
+                    {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "q"}},
                     {
                         "type": "web_search_tool_result",
                         "tool_use_id": "srvtoolu_1",
@@ -1671,14 +1850,18 @@ class TestAnthropicThinkingSignatureSelfHeal:
                             "type": "web_search_tool_result_error",
                             "error_code": "max_uses_exceeded",
                         },
-                    }
+                    },
                 ],
             }
         ]
 
-        out = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+        once = flatten_unencrypted_web_search_results_in_anthropic_messages(msgs)
+        twice = flatten_unencrypted_web_search_results_in_anthropic_messages(once)
 
-        assert out[0] is msgs[0]
+        assert once[0]["content"] == [
+            {"type": "text", "text": "Web search results for 'q':\n\nSearch failed: max_uses_exceeded"}
+        ]
+        assert json.dumps(twice) == json.dumps(once)
 
     def test_sanitize_tool_use_ids_in_anthropic_messages(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1801,20 +1984,6 @@ class TestClaudeOpus48AdaptiveThinking:
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
-    def test_resolver_reads_flag_through_bedrock_invoke_prefix(self, local_model_cost_map):
-        """The resolver fix: ``bedrock/invoke/...`` resolves to the flagged
-        Bedrock entry. Pure ``_supports_factory`` without prefix-stripping
-        returns False here, which is why the data-only fix alone was not enough."""
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        assert (
-            AnthropicModelInfo._supports_model_capability(
-                "bedrock/invoke/us.anthropic.claude-opus-4-8",
-                "supports_adaptive_thinking",
-                "anthropic",
-            )
-            is True
-        )
 
     @pytest.mark.parametrize(
         "model",
@@ -1999,15 +2168,6 @@ class TestCapabilityProbeUsesCallerProvider:
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is False
 
-    def test_native_anthropic_probe_still_reads_anthropic_entry(self, local_model_cost_map, monkeypatch):
-        import litellm
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        monkeypatch.setitem(litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False)
-        litellm.get_model_info.cache_clear()
-
-        assert AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic") is True
-
 
 def test_create_anthropic_model_list_response_shape():
     from litellm.llms.anthropic.common_utils import (
@@ -2094,3 +2254,94 @@ def test_create_anthropic_model_list_response_empty():
     assert response["has_more"] is False
     assert response["first_id"] is None
     assert response["last_id"] is None
+
+
+def test_create_anthropic_model_list_response_lists_ids_as_told():
+    """listed_ids renames an entry for the caller while display_name and every other field stay keyed to the served
+    id, and the envelope's first/last ids follow the renamed entries."""
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response(
+        [
+            {"id": "gpt-4o", "object": "model", "created": 0, "owned_by": "openai", "max_input_tokens": 1000000},
+            {"id": "claude-haiku-4-5", "object": "model", "created": 0, "owned_by": "openai"},
+        ],
+        display_names={"gpt-4o": "GPT 4o"},
+        listed_ids={"gpt-4o": "claude-router-gpt-4o[1m]"},
+    )
+
+    gpt, haiku = response["data"]
+    assert (gpt["id"], gpt["display_name"], gpt["max_input_tokens"]) == ("claude-router-gpt-4o[1m]", "GPT 4o", 1000000)
+    assert (haiku["id"], haiku["display_name"]) == ("claude-haiku-4-5", "claude-haiku-4-5")
+    assert (response["first_id"], response["last_id"]) == ("claude-router-gpt-4o[1m]", "claude-haiku-4-5")
+
+
+class TestMalformedContentListItems:
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param(["what type of file is this?"], id="string_containing_type"),
+            pytest.param(["how do I set cache_control?"], id="string_containing_cache_control"),
+            pytest.param([None], id="none_item"),
+            pytest.param([5], id="int_item"),
+            pytest.param([["nested"]], id="list_item"),
+        ],
+    )
+    def test_beta_headers_resolve_for_non_dict_content_items(self, content: list[object]) -> None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config: Final = AnthropicModelInfo()
+        messages: Final = [{"role": "user", "content": content}]
+
+        headers: Final = config.validate_environment(
+            headers={},
+            model="claude-sonnet-4-5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            api_key=FAKE_REGULAR_KEY,
+        )
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert config.is_cache_control_set(messages) is False
+        assert config.is_pdf_used(messages) is False
+
+    def test_real_content_parts_still_set_their_beta_headers(self) -> None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config: Final = AnthropicModelInfo()
+
+        assert config.is_pdf_used([{"role": "user", "content": [{"type": "image", "source": {}}]}]) is True
+        assert config.is_pdf_used([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]) is False
+        assert (
+            config.is_cache_control_set(
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}],
+                    }
+                ]
+            )
+            is True
+        )
+
+    def test_mixed_list_keeps_detecting_the_valid_part(self) -> None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config: Final = AnthropicModelInfo()
+        messages: Final = [{"role": "user", "content": ["what type of file is this?", {"type": "image", "source": {}}]}]
+
+        assert config.is_pdf_used(messages) is True
+
+    def test_litellm_completion_rejects_bare_string_content_item_as_bad_request(self) -> None:
+        import litellm
+
+        with pytest.raises(litellm.BadRequestError):
+            litellm.completion(
+                model="anthropic/claude-haiku-4-5-20251001",
+                messages=[{"role": "user", "content": ["what type of file is this?"]}],
+                api_key=FAKE_REGULAR_KEY,
+                max_tokens=5,
+            )

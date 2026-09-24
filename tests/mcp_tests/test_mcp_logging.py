@@ -1,28 +1,50 @@
-import os
-import pytest
 import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 from unittest.mock import AsyncMock, patch
 
+import pytest
+from mcp.types import CallToolResult, TextContent
+from mcp.types import Tool as MCPTool
 
 import litellm
-from litellm.types.utils import StandardLoggingPayload
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    MCPServerManager,
+)
 from litellm.proxy._experimental.mcp_server.server import (
     mcp_server_tool_call,
     set_auth_context,
 )
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-    MCPServerManager,
-)
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.types.mcp import MCPPostCallResponseObject
-from litellm.types.utils import HiddenParams
-from mcp.types import Tool as MCPTool, CallToolResult, TextContent
 
+
+def _mcp_request_ctx(**overrides):
+    from types import SimpleNamespace
+
+    from mcp.server.context import ServerRequestContext
+
+    kwargs = {
+        "session": SimpleNamespace(),
+        "lifespan_context": {},
+        "protocol_version": "2025-06-18",
+        "method": "",
+        "params": None,
+        "request_id": 1,
+        "meta": None,
+        "request": None,
+    }
+    kwargs.update(overrides)
+    return ServerRequestContext(**kwargs)
+
+
+def _call_tool_params(name, arguments=None):
+    from mcp.types import CallToolRequestParams
+
+    return CallToolRequestParams(name=name, arguments=arguments)
 
 class TestMCPLogger(CustomLogger):
     def __init__(self):
@@ -120,7 +142,7 @@ async def test_mcp_cost_tracking():
                 local_mcp_server_manager,
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+                "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
                 local_mcp_server_manager,
             ),
         ):
@@ -142,8 +164,8 @@ async def test_mcp_cost_tracking():
 
             # Call mcp tool
             response = await mcp_server_tool_call(
-                name="zapier_gmail_server-add_tools",  # Use correct prefixed name with - separator
-                arguments={"test": "test"},
+                _mcp_request_ctx(),
+                _call_tool_params("zapier_gmail_server-add_tools", {"test": "test"}),
             )
 
             # wait 1-2 seconds for logging to be processed
@@ -271,7 +293,7 @@ async def test_mcp_cost_tracking_per_tool():
                 local_mcp_server_manager,
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+                "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
                 local_mcp_server_manager,
             ),
         ):
@@ -285,8 +307,8 @@ async def test_mcp_cost_tracking_per_tool():
 
             # Test 1: Call expensive_tool - should cost 5.0
             response1 = await mcp_server_tool_call(
-                name="test_server-expensive_tool",  # Use correct prefixed name with - separator
-                arguments={"data": "test_expensive"},
+                _mcp_request_ctx(),
+                _call_tool_params("test_server-expensive_tool", {"data": "test_expensive"}),
             )
 
             # wait for logging to be processed
@@ -313,8 +335,8 @@ async def test_mcp_cost_tracking_per_tool():
 
             # Test 2: Call cheap_tool - should cost 0.1
             response2 = await mcp_server_tool_call(
-                name="test_server-cheap_tool",  # Use correct prefixed name with - separator
-                arguments={"data": "test_cheap"},
+                _mcp_request_ctx(),
+                _call_tool_params("test_server-cheap_tool", {"data": "test_cheap"}),
             )
 
             # wait for logging to be processed
@@ -356,7 +378,7 @@ async def test_mcp_cost_tracking_per_tool():
 class MCPLoggerHook(TestMCPLogger):
     async def async_post_mcp_tool_call_hook(
         self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
-    ) -> Optional[MCPPostCallResponseObject]:
+    ) -> MCPPostCallResponseObject | None:
         print("post mcp tool call response_obj", response_obj)
         # update the MCPPostCallResponseObject with the response_cost
         response_obj.hidden_params.response_cost = 1.42
@@ -429,7 +451,7 @@ async def test_mcp_tool_call_hook():
                 local_mcp_server_manager,
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+                "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
                 local_mcp_server_manager,
             ),
         ):
@@ -443,8 +465,8 @@ async def test_mcp_tool_call_hook():
 
             # Call mcp tool using the correct separator format (- not /)
             response = await mcp_server_tool_call(
-                name="zapier_gmail_server-add_tools",  # Use correct prefixed name with - separator
-                arguments={"test": "test"},
+                _mcp_request_ctx(),
+                _call_tool_params("zapier_gmail_server-add_tools", {"test": "test"}),
             )
 
             # wait 1-2 seconds for logging to be processed
