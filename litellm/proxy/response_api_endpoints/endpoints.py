@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, get_ar
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
 from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -46,6 +47,20 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 router: Final = APIRouter()
+
+_ResponseDocSchemas = dict[int | str, dict[str, Any]]  # pyright: ignore[reportExplicitAny]  # fastapi's responses kwarg
+
+RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponsesAPIResponse}}
+RESPONSES_API_CREATE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {
+    200: {
+        "model": ResponsesAPIResponse,
+        "content": {
+            "text/event-stream": {"schema": {"type": "string", "description": "Server sent events when stream=true"}}
+        },
+    }
+}
+DELETE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": DeleteResponseResult}}
+RESPONSE_ITEM_LIST_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponseItemList}}
 
 _user_api_key_auth_dep: Final = Depends(user_api_key_auth)
 _RESPONSES_TAGS: Final[list[str | Enum]] = ["responses"]  # mutable-ok: fastapi's route signature requires list tags
@@ -96,11 +111,7 @@ def _normalize_tool_dialect(
     tools: Final = data.get("tools")
     tool_choice: Final = data.get("tool_choice")
     normalized_tools: Final = (
-        [
-            _convert_tool_envelope(tool, to_chat=to_chat) for tool in tools
-        ]  # mutable-ok: body's tools stays a plain JSON list
-        if isinstance(tools, list)
-        else tools
+        [_convert_tool_envelope(tool, to_chat=to_chat) for tool in tools] if isinstance(tools, list) else tools
     )
     normalized_choice: Final = _convert_tool_envelope(tool_choice, to_chat=to_chat)
     if normalized_tools == tools and normalized_choice == tool_choice:
@@ -184,16 +195,19 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     "/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/openai/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 async def responses_api(
     request: Request,
@@ -666,16 +680,19 @@ async def cursor_chat_completions(
     "/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 @router.get(
     "/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 @router.get(
     "/openai/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 async def get_response(
     response_id: str,
@@ -779,16 +796,19 @@ async def get_response(
     "/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=DELETE_RESPONSE_SCHEMAS,
 )
 @router.delete(
     "/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=DELETE_RESPONSE_SCHEMAS,
 )
 @router.delete(
     "/openai/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=DELETE_RESPONSE_SCHEMAS,
 )
 async def delete_response(
     response_id: str,
@@ -885,16 +905,19 @@ async def delete_response(
     "/v1/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSE_ITEM_LIST_SCHEMAS,
 )
 @router.get(
     "/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSE_ITEM_LIST_SCHEMAS,
 )
 @router.get(
     "/openai/v1/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSE_ITEM_LIST_SCHEMAS,
 )
 async def get_response_input_items(
     response_id: str,

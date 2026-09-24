@@ -1785,25 +1785,27 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     )}
                   </FormField>
 
-                  <FormField
-                    control={form.control}
-                    name="disable_global_guardrails"
-                    label={labelWithHint(
-                      "Disable all global guardrails",
-                      "Kill switch: bypass every global guardrail for this team, including any added in the future. For per-guardrail opt-out instead, use the Guardrails dropdown above.",
-                    )}
-                  >
-                    {({ id, value, onChange }) => (
-                      <Switch
-                        id={id}
-                        checked={value === true}
-                        onCheckedChange={(checked) => {
-                          onChange(checked);
-                          applyKillSwitchToGuardrails(checked);
-                        }}
-                      />
-                    )}
-                  </FormField>
+                  {is_proxy_admin && (
+                    <FormField
+                      control={form.control}
+                      name="disable_global_guardrails"
+                      label={labelWithHint(
+                        "Disable all global guardrails",
+                        "Kill switch: bypass every global guardrail for this team, including any added in the future. For per-guardrail opt-out instead, use the Guardrails dropdown above.",
+                      )}
+                    >
+                      {({ id, value, onChange }) => (
+                        <Switch
+                          id={id}
+                          checked={value === true}
+                          onCheckedChange={(checked) => {
+                            onChange(checked);
+                            applyKillSwitchToGuardrails(checked);
+                          }}
+                        />
+                      )}
+                    </FormField>
+                  )}
 
                   {canViewPolicies && (
                     <FormField

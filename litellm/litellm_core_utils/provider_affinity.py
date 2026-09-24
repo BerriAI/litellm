@@ -83,7 +83,7 @@ def get_stable_session_id(litellm_params: object | None) -> str | None:
     return None
 
 
-def add_provider_affinity_header(  # mutable-ok: downstream handlers add auth and signing headers
+def add_provider_affinity_header(
     headers: Mapping[str, object], litellm_params: object | None
 ) -> dict[str, object]:  # mutable-ok: downstream handlers add auth and signing headers
     header_name: Final = _get_provider_affinity_header_name(litellm_params)

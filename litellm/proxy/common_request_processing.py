@@ -1999,6 +1999,7 @@ class ProxyBaseLLMRequestProcessing:
         model: str | None = None,
         llm_router: Router | None = None,
         rate_limited_model: str | None = None,
+        skip_guardrails: bool = False,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2187,6 +2188,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             data=self.data,
             call_type=route_type,
+            skip_guardrails=skip_guardrails,
         )
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
@@ -2206,7 +2208,7 @@ class ProxyBaseLLMRequestProcessing:
         # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
         # add_litellm_data_to_request predates that mutation.
-        refresh_proxy_server_request_body_snapshot(self.data)
+        refresh_proxy_server_request_body_snapshot(self.data, guardrails_applied=True)
         verbose_proxy_logger.debug("receiving data: %s", self.data)
 
         if "messages" in self.data and self.data["messages"]:
