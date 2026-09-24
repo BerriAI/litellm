@@ -1,5 +1,6 @@
 [
   "tests/e2e/ui/tests/integrationCritical/projectDetachment.spec.ts::project creation and explicit detachment preserve saved scope and restore serving",
+  "tests/e2e/ui/tests/integrationCritical/teamGlobalGuardrailKillSwitch.spec.ts::proxy admin can enable the global guardrail kill switch from the models page team drill-in",
   "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::per-user MCP env var stays updatable and clearable from the card after it is set",
   "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::cancelling the clear confirmation keeps the stored value and sends no delete",
   "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::pressing Enter on Update opens the credentials modal instead of the server editor",
