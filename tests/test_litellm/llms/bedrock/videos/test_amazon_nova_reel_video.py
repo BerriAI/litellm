@@ -195,6 +195,17 @@ def test_fps_seed_string_coercion():
     assert cfg["seed"] == 42
 
 
+def test_seconds_string_coerces():
+    body = _create_request({"output_s3_uri": "s3://bucket/out/", "seconds": "8"})
+    assert body["modelInput"]["videoGenerationConfig"]["durationSeconds"] == 8
+
+
+def test_seconds_non_numeric_raises():
+    """Non-numeric seconds must raise like fps/seed, not silently keep the default 6."""
+    with pytest.raises(ValueError, match="seconds"):
+        _create_request({"output_s3_uri": "s3://bucket/out/", "seconds": "abc"})
+
+
 def test_fps_non_numeric_raises():
     with pytest.raises(ValueError, match="fps"):
         _create_request({"output_s3_uri": "s3://bucket/out/", "fps": "abc"})
@@ -297,6 +308,25 @@ def test_transform_status_response_empty_status_raises():
     resp = httpx.Response(200, json={"invocationArn": TEST_ARN, "status": ""})
     with pytest.raises(BedrockError, match="unexpected shape"):
         config.transform_video_status_retrieve_response(raw_response=resp, logging_obj=None, model=TEST_MODEL)
+
+
+def test_transform_status_response_unknown_status_warns_and_maps_processing(monkeypatch):
+    """An unmapped AWS invocationStatus must log a warning while still reporting processing."""
+    config = _make_config()
+    logger = Mock()
+    monkeypatch.setattr("litellm.llms.bedrock.videos.transformation.verbose_logger", logger)
+    resp = httpx.Response(
+        200,
+        json={
+            "invocationArn": TEST_ARN,
+            "status": "Throttled",
+            "submitTime": 1758000000.0,
+        },
+    )
+    video = config.transform_video_status_retrieve_response(raw_response=resp, logging_obj=None, model=TEST_MODEL)
+    assert video.status == "processing"
+    logger.warning.assert_called_once()
+    assert "Throttled" in str(logger.warning.call_args)
 
 
 #################################################
@@ -721,7 +751,7 @@ def test_get_supported_openai_params_includes_video_params():
 
 
 #################################################
-# litellm_params threading into the create request
+# litellm_params threading + timeout/error mapping on the HTTP paths
 #################################################
 
 
@@ -760,3 +790,204 @@ def test_handler_create_threads_litellm_params_request_id_into_token(monkeypatch
     assert video.status == "processing"
     parsed = json.loads(bodies[0])
     assert parsed["clientRequestToken"] == "req-abc-123"
+
+
+def test_handler_async_injected_client_receives_timeout_on_post(monkeypatch):
+    """An injected async client must receive the timeout kwarg on post (the shared
+    factory path applied it; the injected path dropped it)."""
+    handler = BedrockVideoGeneration()
+    monkeypatch.setattr(
+        BedrockVideoGeneration,
+        "_get_boto_credentials_from_optional_params",
+        lambda self, params, model=None, bearer_token=None: _FakeCredentialsInfo(),
+    )
+    seen: dict[str, object] = {}
+
+    class _RecordingAsyncClient(httpx.AsyncClient):
+        async def post(self, **kwargs):
+            seen.update(kwargs)
+            return httpx.Response(
+                200,
+                json={"invocationArn": TEST_ARN},
+                request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"),
+            )
+
+    video = asyncio.run(
+        handler.async_video_generation(
+            model="bedrock/amazon.nova-reel-v1:0",
+            prompt="waves at sunset",
+            optional_params={"output_s3_uri": "s3://bucket/out/"},
+            logging_obj=None,
+            timeout=4.5,
+            client=_RecordingAsyncClient(),
+        )
+    )
+    assert seen["timeout"] == 4.5
+    assert video.status == "processing"
+
+
+def test_handler_sync_get_timeout_maps_to_bedrock_408(monkeypatch):
+    """A status GET timeout must surface as BedrockError 408 like the create path."""
+    handler = BedrockVideoGeneration()
+
+    class _TimingOutClient:
+        def get(self, **kwargs):
+            raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._get_httpx_client", lambda: _TimingOutClient())
+    with pytest.raises(BedrockError) as excinfo:
+        handler._sync_get(Mock(url="https://example.com/async-invoke/arn", headers={}), timeout=1.0)
+    assert excinfo.value.status_code == 408
+
+
+def test_handler_async_get_timeout_maps_to_bedrock_408(monkeypatch):
+    handler = BedrockVideoGeneration()
+
+    class _TimingOutAsyncClient:
+        async def get(self, **kwargs):
+            raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        lambda llm_provider=None, params=None: _TimingOutAsyncClient(),
+    )
+    with pytest.raises(BedrockError) as excinfo:
+        asyncio.run(handler._async_get(Mock(url="https://example.com/async-invoke/arn", headers={}), timeout=1.0))
+    assert excinfo.value.status_code == 408
+
+
+def test_handler_video_content_missing_s3_uri_redacts_invocation(monkeypatch):
+    """The no-S3-output ValueError must not leak invocationArn (account id); the raw
+    payload goes to debug logs and the raise names only the observed key names."""
+    handler = BedrockVideoGeneration()
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    video_id = encode_video_id_with_provider(TEST_ARN, "bedrock", TEST_MODEL)
+    monkeypatch.setattr(
+        handler,
+        "_status_request_parts",
+        lambda arn, params, api_base, api_key=None: (
+            "https://example.com/async-invoke/arn",
+            Mock(url="https://example.com/async-invoke/arn", headers={}),
+            "us-east-1",
+        ),
+    )
+    resp = httpx.Response(
+        200,
+        json={
+            "invocationArn": TEST_ARN,
+            "status": "Completed",
+            "outputDataConfig": {"s3OutputDataConfig": {}},
+        },
+    )
+    monkeypatch.setattr(handler, "_sync_get", lambda prepped, timeout=None: resp)
+    with pytest.raises(ValueError, match="No S3 output location") as excinfo:
+        handler.video_content(video_id=video_id, litellm_params={})
+    message = str(excinfo.value)
+    assert "123456789012" not in message
+    assert "invocationArn" not in message
+    assert "s3OutputDataConfig" in message  # observed key names are still reported
+
+
+def test_download_s3_object_no_credentials_maps_to_502(monkeypatch):
+    """NoCredentialsError (a BotoCoreError) must map to BedrockError 502, not escape raw."""
+    from botocore.exceptions import NoCredentialsError
+
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+
+    def _raise(bucket, key):
+        raise NoCredentialsError()
+
+    _patch_s3_download(monkeypatch, handler, _raise)
+    with pytest.raises(BedrockError) as excinfo:
+        handler._download_s3_object("bucket", ["out/output.mp4"], {}, raw, region_default="us-east-1")
+    assert excinfo.value.status_code == 502
+    assert "Failed to download Nova Reel output from S3" in str(excinfo.value.message)
+    assert "NoCredentialsError" in str(excinfo.value.message)
+
+
+def test_download_s3_object_endpoint_connection_error_maps_to_502(monkeypatch):
+    from botocore.exceptions import EndpointConnectionError
+
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+
+    def _raise(bucket, key):
+        raise EndpointConnectionError(endpoint_url="https://s3.us-east-1.amazonaws.com/bucket/out/output.mp4")
+
+    _patch_s3_download(monkeypatch, handler, _raise)
+    with pytest.raises(BedrockError) as excinfo:
+        handler._download_s3_object("bucket", ["out/output.mp4"], {}, raw, region_default="us-east-1")
+    assert excinfo.value.status_code == 502
+    assert "EndpointConnectionError" in str(excinfo.value.message)
+
+
+def test_download_s3_object_falls_back_to_second_candidate_key(monkeypatch):
+    """A ClientError on the first candidate key falls through to the second."""
+    from botocore.exceptions import ClientError
+
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+    attempted: list[str] = []
+
+    def _first_key_missing(bucket, key):
+        attempted.append(key)
+        if key == "out/abc123-def456/output.mp4":
+            raise ClientError(
+                {"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}},
+                "GetObject",
+            )
+        return {"Body": io.BytesIO(b"mp4-from-second-key")}
+
+    _patch_s3_download(monkeypatch, handler, _first_key_missing)
+    content = handler._download_s3_object(
+        "bucket",
+        ["out/abc123-def456/output.mp4", "out/output.mp4"],
+        {},
+        raw,
+        region_default="us-east-1",
+    )
+    assert content == b"mp4-from-second-key"
+    assert attempted == ["out/abc123-def456/output.mp4", "out/output.mp4"]
+
+
+def test_main_layer_bedrock_status_and_content_pass_default_timeout(monkeypatch):
+    """The bedrock branches of litellm.video_status / litellm.video_content must thread
+    a real timeout into the handler (never None), like the create branch already does."""
+    from litellm.llms.bedrock.videos.handler import BedrockVideoGeneration as _Handler
+    from litellm.types.videos.utils import encode_video_id_with_provider
+    from litellm.videos import main as videos_main
+
+    status_kwargs: dict = {}
+    content_kwargs: dict = {}
+
+    def fake_video_status(self, **kwargs):
+        status_kwargs.update(kwargs)
+        return Mock()
+
+    def fake_video_content(self, **kwargs):
+        content_kwargs.update(kwargs)
+        return b"mp4-bytes"
+
+    monkeypatch.setattr(_Handler, "video_status", fake_video_status)
+    monkeypatch.setattr(_Handler, "video_content", fake_video_content)
+
+    video_id = encode_video_id_with_provider(TEST_ARN, "bedrock", TEST_MODEL)
+    status_result = videos_main.video_status(video_id=video_id, custom_llm_provider="bedrock")
+    content_result = videos_main.video_content(video_id=video_id, custom_llm_provider="bedrock")
+
+    assert status_result is not None
+    assert content_result == b"mp4-bytes"
+    # video_status signature default (600s) flows through as-is; video_content's
+    # None default is replaced by the layer DEFAULT_REQUEST_TIMEOUT. Never None.
+    assert status_kwargs["timeout"] == 600
+    assert content_kwargs["timeout"] == videos_main.DEFAULT_REQUEST_TIMEOUT
+    assert status_kwargs["timeout"] is not None
+    assert content_kwargs["timeout"] is not None
+
+    # Explicit timeout threads through both branches unchanged.
+    videos_main.video_status(video_id=video_id, custom_llm_provider="bedrock", timeout=33.5)
+    videos_main.video_content(video_id=video_id, custom_llm_provider="bedrock", timeout=44.5)
+    assert status_kwargs["timeout"] == 33.5
+    assert content_kwargs["timeout"] == 44.5

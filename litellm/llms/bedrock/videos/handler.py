@@ -22,6 +22,7 @@ from urllib.parse import quote
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.bedrock.videos.transformation import BedrockNovaReelVideoConfig
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import (
@@ -381,6 +382,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
                 url=endpoint_url,
                 headers=prepped.headers,
                 content=body,
+                timeout=timeout,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -446,7 +448,10 @@ class BedrockVideoGeneration(BaseAWSLLM):
         from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
         client: Final = _get_httpx_client()
-        return client.get(url=prepped.url, headers=prepped.headers, timeout=timeout)
+        try:
+            return client.get(url=prepped.url, headers=prepped.headers, timeout=timeout)
+        except httpx.TimeoutException:
+            raise BedrockError(status_code=408, message="Timeout error occurred.")
 
     async def _async_get(
         self,
@@ -459,7 +464,10 @@ class BedrockVideoGeneration(BaseAWSLLM):
             llm_provider=litellm.LlmProviders.BEDROCK,
             params={"timeout": timeout},  # mutable-ok: per-call timeout kwargs for the shared client factory
         )
-        return await client.get(url=prepped.url, headers=prepped.headers, timeout=timeout)
+        try:
+            return await client.get(url=prepped.url, headers=prepped.headers, timeout=timeout)
+        except httpx.TimeoutException:
+            raise BedrockError(status_code=408, message="Timeout error occurred.")
 
     def _map_status_response(
         self,
@@ -552,7 +560,14 @@ class BedrockVideoGeneration(BaseAWSLLM):
 
         s3_uri: Final[str | None] = _s3_uri_from_output_config(raw.get("outputDataConfig"))
         if not s3_uri:
-            raise ValueError(f"No S3 output location on completed invocation: {raw}")
+            # The raw get-async-invoke payload carries invocationArn (with the
+            # account id); debug-log it, raise with only the observed key names.
+            verbose_logger.debug("Nova Reel completed invocation without an S3 output location: %r", raw)
+            output_config: Final = raw.get("outputDataConfig")
+            observed_keys: Final = tuple(sorted(output_config.keys())) if isinstance(output_config, Mapping) else ()
+            raise ValueError(
+                f"No S3 output location on completed invocation (observed outputDataConfig keys: {observed_keys})"
+            )
 
         bucket, prefix = _parse_s3_uri(s3_uri)
         # Nova writes output.mp4 into a per-invocation folder (v1:1 docs); older
@@ -579,7 +594,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
         """
         try:
             import boto3
-            from botocore.exceptions import ClientError
+            from botocore.exceptions import BotoCoreError, ClientError
         except ImportError:
             raise ImportError("Missing boto3 to download Nova Reel output. Run 'pip install boto3'.")
 
@@ -600,13 +615,23 @@ class BedrockVideoGeneration(BaseAWSLLM):
 
         s3_uri: Final[str | None] = _s3_uri_from_output_config(raw.get("outputDataConfig"))
         errors: list[str] = []  # mutable-ok: error strings accumulate across candidate keys
-        for key in key_candidates:
-            try:
-                obj = s3_client.get_object(Bucket=bucket, Key=key)
-                content = obj["Body"].read()
-                return bytes(content)
-            except ClientError as err:
-                errors.append(str(err))
+        try:
+            for key in key_candidates:
+                try:
+                    obj = s3_client.get_object(Bucket=bucket, Key=key)
+                    content = obj["Body"].read()
+                    return bytes(content)
+                except ClientError as err:
+                    errors.append(str(err))
+        except BotoCoreError as err:
+            # ClientError (caught per-key above) is a BotoCoreError subclass;
+            # anything else (NoCredentialsError, EndpointConnectionError, ...)
+            # aborts the download and maps to a 502. botocore messages carry
+            # class name + failure reason, never credentials.
+            raise BedrockError(
+                status_code=502,
+                message=f"Failed to download Nova Reel output from S3: {type(err).__name__}: {err}",
+            )
         raise BedrockError(
             status_code=404,
             message=(

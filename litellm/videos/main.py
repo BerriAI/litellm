@@ -398,6 +398,7 @@ def video_content(
                 logging_obj=litellm_logging_obj,
                 api_base=litellm_params.get("api_base"),
                 api_key=kwargs.get("api_key"),
+                timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             )
         return base_llm_http_handler.video_content_handler(
             video_id=video_id,
@@ -1113,6 +1114,7 @@ def video_status(
                 api_base=litellm_params.get("api_base"),
                 api_key=kwargs.get("api_key"),
                 astatus=_is_async,
+                timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             )
 
         # Call the handler with _is_async flag instead of directly calling the async handler

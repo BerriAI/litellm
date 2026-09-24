@@ -276,8 +276,8 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         if isinstance(seconds, (int, float, str)):
             try:
                 generation_config["durationSeconds"] = int(float(seconds))
-            except ValueError:
-                verbose_logger.debug("Nova Reel ignoring non-numeric seconds=%r", seconds)
+            except ValueError as err:
+                raise ValueError(f"Nova Reel seconds must be a number; got {seconds!r}") from err
         size: Final = op.pop("size", None)
         if size is not None and isinstance(size, str) and "x" in size:
             generation_config["dimension"] = size.replace(" ", "")
@@ -397,6 +397,8 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
                 ),
             )
         raw_status: Final[str] = status_field
+        if raw_status not in NOVA_REEL_STATUS_MAP:
+            verbose_logger.warning("Nova Reel unmapped invocationStatus=%r; reporting processing", raw_status)
         status: Final[str] = NOVA_REEL_STATUS_MAP.get(raw_status, "processing")
 
         failure_message: Final[str | None] = response_data.get("failureMessage")

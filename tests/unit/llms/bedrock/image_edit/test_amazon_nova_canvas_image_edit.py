@@ -203,9 +203,7 @@ def test_transform_request_image_pathlike_input(tmp_path):
     )
 
     assert body["taskType"] == "IMAGE_VARIATION"
-    assert body["imageVariationParams"]["images"][0] == base64.b64encode(
-        image_bytes
-    ).decode("utf-8")
+    assert body["imageVariationParams"]["images"][0] == base64.b64encode(image_bytes).decode("utf-8")
 
 
 def test_transform_request_inpainting_with_mask():
@@ -366,9 +364,7 @@ def test_transform_request_inpainting_explicit_task_without_mask_raises():
     """INPAINTING taskType without mask or maskPrompt must fail fast."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
     img = io.BytesIO(b"img")
-    with pytest.raises(
-        ValueError, match="INPAINTING requires either maskPrompt or maskImage"
-    ):
+    with pytest.raises(ValueError, match="INPAINTING requires either maskPrompt or maskImage"):
         config.transform_image_edit_request(
             model="amazon.nova-canvas-v1:0",
             prompt="fix it",
@@ -538,6 +534,26 @@ def test_transform_request_text_image_with_mask_raises():
     assert "INPAINTING or OUTPAINTING" in str(excinfo.value)
 
 
+def test_transform_request_text_image_with_mask_prompt_raises():
+    """TEXT_IMAGE has no maskPrompt field either; fail fast like the binary mask
+    instead of silently dropping it."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"cond")
+    with pytest.raises(ValueError, match="does not support a mask") as excinfo:
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt="restyle",
+            image=img,
+            image_edit_optional_request_params={
+                "taskType": "TEXT_IMAGE",
+                "maskPrompt": "the sky region",
+            },
+            litellm_params={},  # type: ignore[arg-type]
+            headers={},
+        )
+    assert "INPAINTING or OUTPAINTING" in str(excinfo.value)
+
+
 def test_transform_request_image_variation_with_mask_still_ignores_mask():
     """The documented IMAGE_VARIATION mask-ignoring behavior is untouched by F13."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
@@ -625,6 +641,42 @@ def test_transform_request_text_image_control_strength_bounds_pass(control_stren
         headers={},
     )
     assert body["textToImageParams"]["controlStrength"] == control_strength
+
+
+def test_transform_request_text_image_control_strength_string_coerced():
+    """controlStrength arriving as a string (multipart form data) is coerced to a float."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"cond")
+    body, _ = config.transform_image_edit_request(
+        model="amazon.nova-canvas-v1:0",
+        prompt="restyle",
+        image=img,
+        image_edit_optional_request_params={
+            "taskType": "TEXT_IMAGE",
+            "controlStrength": "0.7",
+        },
+        litellm_params={},  # type: ignore[arg-type]
+        headers={},
+    )
+    assert body["textToImageParams"]["controlStrength"] == 0.7
+
+
+def test_transform_request_text_image_control_strength_non_numeric_string_raises():
+    """A non-numeric controlStrength string must raise ValueError, not TypeError."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    img = io.BytesIO(b"cond")
+    with pytest.raises(ValueError, match="controlStrength must be a number"):
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt="restyle",
+            image=img,
+            image_edit_optional_request_params={
+                "taskType": "TEXT_IMAGE",
+                "controlStrength": "abc",
+            },
+            litellm_params={},  # type: ignore[arg-type]
+            headers={},
+        )
 
 
 def test_transform_request_text_image_forwards_style():

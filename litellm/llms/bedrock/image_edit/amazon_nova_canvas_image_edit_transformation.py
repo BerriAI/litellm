@@ -55,7 +55,7 @@ def _nova_canvas_task_body(
     mask_prompt: str | None,
     out_painting_mode: str | None,
     control_mode: str | None = None,
-    control_strength: float | None = None,
+    control_strength: float | str | None = None,
     style: str | None = None,
 ) -> dict[str, object]:
     """Build InvokeModel body task section (without imageGenerationConfig)."""
@@ -91,9 +91,9 @@ def _nova_canvas_task_body(
         # generated image via textToImageParams.conditionImage. SEGMENTATION
         # controlMode derives a segmentation mask from the condition image;
         # CANNY_EDGE (the AWS default) follows its prominent contours.
-        if mask_b64 is not None:
+        if mask_b64 is not None or mask_prompt is not None:
             # AWS TEXT_IMAGE has no mask field; fail fast instead of silently
-            # dropping the caller's mask.
+            # dropping the caller's mask or maskPrompt.
             raise ValueError(
                 "Amazon Nova Canvas TEXT_IMAGE (conditioned editing) does not support a "
                 "mask. Use INPAINTING or OUTPAINTING for mask-based editing workflows."
@@ -102,10 +102,18 @@ def _nova_canvas_task_body(
             raise ValueError(
                 f"Unsupported Amazon Nova Canvas controlMode: {control_mode!r}. Use one of {NOVA_CANVAS_CONTROL_MODES}."
             )
-        if control_strength is not None and not 0.0 <= control_strength <= 1.0:
-            raise ValueError(
-                f"Amazon Nova Canvas controlStrength must be between 0.0 and 1.0; got {control_strength!r}."
-            )
+        control_strength_value: float | None = None
+        if control_strength is not None:
+            # Multipart form data delivers controlStrength as a string; coerce
+            # before the range check (raw strings would TypeError on <=).
+            try:
+                control_strength_value = float(control_strength)
+            except (TypeError, ValueError):
+                raise ValueError("Amazon Nova Canvas controlStrength must be a number in [0.0, 1.0].")
+            if not 0.0 <= control_strength_value <= 1.0:
+                raise ValueError(
+                    f"Amazon Nova Canvas controlStrength must be between 0.0 and 1.0; got {control_strength_value!r}."
+                )
         t2i_params: Final[dict[str, object]] = {  # mutable-ok: optional conditioned-editing keys are set below
             "text": text,
             "conditionImage": image_b64,
@@ -114,8 +122,8 @@ def _nova_canvas_task_body(
             t2i_params["negativeText"] = negative_text
         if control_mode is not None:
             t2i_params["controlMode"] = control_mode
-        if control_strength is not None:
-            t2i_params["controlStrength"] = control_strength
+        if control_strength_value is not None:
+            t2i_params["controlStrength"] = control_strength_value
         if style is not None:
             t2i_params["style"] = style
         return {  # mutable-ok: InvokeModel JSON body is a plain dict
