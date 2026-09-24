@@ -2205,8 +2205,13 @@ async def _fetch_uncached_tags(
     uncached_tags: Sequence[str],
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
+    fail_open: bool,
 ) -> tuple[tuple[str, LiteLLM_TagTable], ...]:
-    """Rows for the tags a cache probe missed; names absent from the registry never reach the DB."""
+    """Rows for the tags a cache probe missed; names absent from the registry never reach the DB.
+
+    With ``fail_open`` a DB error reads as "no tag rows"; without it the error propagates so an
+    authorization decision that depends on the rows (tag ownership) cannot be skipped by an outage.
+    """
     if not uncached_tags:
         return ()
 
@@ -2233,7 +2238,9 @@ async def _fetch_uncached_tags(
                 model_type=LiteLLM_TagTable,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
-    except Exception as e:  # noqa: BLE001  # fail-safe: a tag fetch error must yield "no budget objects", never break auth
+    except Exception as e:  # noqa: BLE001  # fail-safe (fail_open callers): a tag fetch error must yield "no budget objects"
+        if not fail_open:
+            raise
         verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
         return ()
     else:
@@ -2247,6 +2254,7 @@ async def get_tag_objects_batch(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    fail_open: bool = True,
 ) -> dict[str, LiteLLM_TagTable]:
     """
     Batch fetch multiple tag objects from cache and db.
@@ -2262,6 +2270,7 @@ async def get_tag_objects_batch(
         user_api_key_cache: Cache for storing tag objects
         parent_otel_span: Optional OpenTelemetry span for tracing
         proxy_logging_obj: Optional proxy logging object
+        fail_open: When False a DB read error propagates instead of reading as "no rows"
 
     Returns:
         Dictionary mapping tag_name to LiteLLM_TagTable object
@@ -2280,6 +2289,7 @@ async def get_tag_objects_batch(
         uncached_tags=tuple(tag_name for tag_name, tag_obj in probed if tag_obj is None),
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
+        fail_open=fail_open,
     )
     return {tag_name: tag_obj for tag_name, tag_obj in (*probed, *fetched) if tag_obj is not None}
 
@@ -6193,6 +6203,17 @@ def _team_metadata_tags(team_object: LiteLLM_TeamTableCachedObj | None) -> tuple
     return tuple(tag for tag in team_tags if isinstance(tag, str))
 
 
+def _project_metadata_tags(valid_token: UserAPIKeyAuth | None) -> tuple[str, ...]:
+    project_tags: Final = (
+        valid_token.project_metadata.get("tags")
+        if valid_token is not None and valid_token.project_metadata is not None
+        else None
+    )
+    if not isinstance(project_tags, list):
+        return ()
+    return tuple(tag for tag in project_tags if isinstance(tag, str))
+
+
 async def _tag_owner_and_budget_check(
     request_body: dict,
     team_object: LiteLLM_TeamTableCachedObj | None,
@@ -6206,14 +6227,15 @@ async def _tag_owner_and_budget_check(
     Reject tags owned by another team, then (unless budgets are skipped) reject tags over their max budget.
 
     Tags are read from the request body (root, metadata and litellm_metadata, plus the key tags merged
-    in before this runs) and from the team's metadata, so every tag that will be recorded against this
-    request is checked with a single batched lookup before any spend is written.
+    in before this runs) and from the team's and project's metadata, so every tag that will be recorded
+    against this request is checked with a single batched lookup before any spend is written.
     """
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
     request_tags: Final = tuple(get_tags_from_request_body(request_body=request_body))
+    inherited_tags: Final = (*_team_metadata_tags(team_object), *_project_metadata_tags(valid_token))
     await _tag_checks_for_tags(
-        tags=request_tags + tuple(tag for tag in _team_metadata_tags(team_object) if tag not in request_tags),
+        tags=request_tags + tuple(dict.fromkeys(tag for tag in inherited_tags if tag not in request_tags)),
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -6269,6 +6291,7 @@ async def _tag_checks_for_tags(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        fail_open=False,
     )
 
     for tag_object in tag_objects.values():

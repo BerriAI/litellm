@@ -2835,10 +2835,9 @@ async def test_owned_tag_is_rejected_from_every_request_body_slot_even_when_budg
 async def test_team_metadata_tag_owned_by_another_team_is_rejected():
     from fastapi import HTTPException
 
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from litellm.proxy.auth.auth_checks import _tag_owner_and_budget_check
     from litellm.proxy.utils import ProxyLogging
-
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
     team_object = LiteLLM_TeamTableCachedObj(team_id="team-b", metadata={"tags": ["team-a-tag"]})
     with pytest.raises(HTTPException) as exc_info:
@@ -2857,10 +2856,9 @@ async def test_team_metadata_tag_owned_by_another_team_is_rejected():
 
 @pytest.mark.asyncio
 async def test_team_metadata_tag_owned_by_the_same_team_is_allowed():
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from litellm.proxy.auth.auth_checks import _tag_owner_and_budget_check
     from litellm.proxy.utils import ProxyLogging
-
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
     team_object = LiteLLM_TeamTableCachedObj(team_id="team-a", metadata={"tags": ["team-a-tag"]})
     mock_prisma = _owned_tag_prisma({"team-a-tag": "team-a"})
@@ -2875,6 +2873,65 @@ async def test_team_metadata_tag_owned_by_the_same_team_is_allowed():
     )
     batch_calls = _batch_calls(mock_prisma.db.litellm_tagtable.find_many)
     assert [call.kwargs["where"]["tag_name"]["in"] for call in batch_calls] == [["team-a-tag"]]
+
+
+@pytest.mark.asyncio
+async def test_project_metadata_tag_owned_by_another_team_is_rejected():
+    """A project's inherited tags are recorded against the request, so they get the same owner check."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import _tag_owner_and_budget_check
+    from litellm.proxy.utils import ProxyLogging
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token", team_id="team-b", project_id="proj-1", project_metadata={"tags": ["team-a-tag"]}
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _tag_owner_and_budget_check(
+            request_body={"model": "gpt-4o", "messages": []},
+            team_object=None,
+            prisma_client=_owned_tag_prisma({"team-a-tag": "team-a"}),
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            valid_token=valid_token,
+            check_budgets=False,
+        )
+    assert exc_info.value.status_code == 403
+    assert "team-a-tag" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_tag_row_read_failure_does_not_skip_the_owner_check():
+    """A failed tag-row read must not read as "no owner"; the error surfaces instead of widening access."""
+    from litellm.proxy.auth.auth_checks import _tag_owner_and_budget_check
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=Exception("db down"))
+    with pytest.raises(Exception, match="db down"):
+        await _tag_owner_and_budget_check(
+            request_body={"model": "gpt-4o", "metadata": {"tags": ["team-a-tag"]}},
+            team_object=None,
+            prisma_client=mock_prisma,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id="team-b"),
+            check_budgets=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_tag_objects_batch_stays_fail_open_for_budget_only_callers():
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=Exception("db down"))
+    assert (
+        await get_tag_objects_batch(
+            tag_names=["team-a-tag"], prisma_client=mock_prisma, user_api_key_cache=UserApiKeyCache()
+        )
+        == {}
+    )
 
 
 @pytest.mark.asyncio
