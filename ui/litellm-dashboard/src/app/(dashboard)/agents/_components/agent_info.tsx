@@ -22,6 +22,7 @@ import KeyInfoView from "@/components/templates/key_info_view";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import AgentVirtualKeys from "./agent_virtual_keys";
+import AgentKillSwitchDangerZone from "./AgentKillSwitchDangerZone";
 import AgentFormFields, { unmountedA2AFieldNames } from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData, unmountedDynamicFieldNames } from "./dynamic_agent_form_fields";
 import {
@@ -228,7 +229,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       );
 
       const built: AgentRequestPayload = usesDynamicFields
-        ? { ...buildDynamicAgentData(values, selectedAgentTypeInfo), agent_name: values.agent_name }
+        ? { ...buildDynamicAgentData(values, selectedAgentTypeInfo, agent), agent_name: values.agent_name }
         : buildAgentDataFromForm(values, agent);
 
       const updateData = appliedDiscoveredSelection
@@ -459,6 +460,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                 </DetailList>
               </div>
             )}
+
+            <AgentKillSwitchDangerZone
+              agentId={agent.agent_id}
+              agentName={agent.agent_name}
+              killSwitch={agent.kill_switch}
+              accessToken={accessToken}
+              isAdmin={isAdmin}
+            />
           </TabsContent>
 
           {/* Settings Panel (only for admins) */}

@@ -3776,6 +3776,7 @@ AGENT_MANAGEMENT_ROUTES = [
     "/v1/agents/abc-123",
     "/v1/agents/make_public",
     "/v1/agents/abc-123/make_public",
+    "/v1/agents/abc-123/kill_switch",
 ]
 
 AGENT_INFERENCE_ROUTES = [

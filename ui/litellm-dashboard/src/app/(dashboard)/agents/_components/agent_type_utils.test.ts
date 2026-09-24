@@ -58,6 +58,32 @@ describe("parseDynamicAgentForForm", () => {
 
     expect(values.agent_runtime_arn).toBe(FULL_RUNTIME_ARN);
   });
+
+  it("loads the stored kill switch into the edit form for non-A2A agents", () => {
+    const agent = {
+      agent_id: "agent-1",
+      agent_name: "bedrock-agent",
+      agent_card_params: { description: "" },
+      litellm_params: { model: `bedrock/agentcore/${FULL_RUNTIME_ARN}` },
+      kill_switch: {
+        url: "https://ops.example.com/kill",
+        method: "DELETE",
+        headers: { "X-Env": "prod" },
+        auth: { type: "bearer", token: "REDACTED_BY_LITELM" },
+      },
+    } as unknown as Agent;
+
+    const values = parseDynamicAgentForForm(agent, bedrockAgentcoreInfo);
+
+    const expectedForm = {
+      url: "https://ops.example.com/kill",
+      method: "DELETE",
+      headers: [{ key: "X-Env", value: "prod" }],
+      auth_type: "bearer",
+      auth_token: "REDACTED_BY_LITELM",
+    };
+    expect(values.kill_switch).toMatchObject(expectedForm);
+  });
 });
 
 describe("detectAgentType", () => {

@@ -6273,6 +6273,16 @@ export const getAgentInfo = async (accessToken: string, agentId: string) => {
   }
 };
 
+export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
+
+export const triggerAgentKillSwitchCall = async (
+  accessToken: string,
+  agentId: string,
+): Promise<AgentKillSwitchResult> =>
+  await apiClient.post<AgentKillSwitchResult>(`/v1/agents/${encodeURIComponent(agentId)}/kill_switch`, {
+    accessToken,
+  });
+
 export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
@@ -6312,6 +6322,7 @@ export const patchAgentCall = async (
     session_tpm_limit?: number | null;
     session_rpm_limit?: number | null;
     access_group_ids?: string[];
+    kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
   },
 ) => {
   try {
