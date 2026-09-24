@@ -11402,7 +11402,11 @@ async def model_info(
         general_settings=settings,
         llm_router=llm_router,
     )
-    hidden_names: Final = blocked_names | unhealthy_names
+    hidden_names: Final = (
+        blocked_names
+        | unhealthy_names
+        | undiscoverable_model_names(all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id)
+    )
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
 

@@ -27,6 +27,7 @@ def router(monkeypatch) -> Router:
             _deployment("gpt-4.1-mini"),
             _deployment("gpt-4.1", model="openai/gpt-4.1"),
             _deployment("model_name_team1_abc", team_id="team1", team_public_model_name="team-chat"),
+            _deployment("hidden", model="anthropic/claude-sonnet-4-5", discoverable=False),
         ]
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -37,14 +38,16 @@ def router(monkeypatch) -> Router:
     return router
 
 
-def _team_member(team_id: str = "team1", **aliases: dict[str, str] | None) -> UserAPIKeyAuth:
+def _team_member(
+    team_id: str = "team1", models: list[str] | None = None, **aliases: dict[str, str] | None
+) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(
         api_key="sk-test",
         user_id="u",
         user_role=LitellmUserRoles.INTERNAL_USER,
         team_id=team_id,
         team_models=["gpt-4.1-mini", "model_name_team1_abc"],
-        models=["gpt-4.1-mini", "model_name_team1_abc"],
+        models=models or ["gpt-4.1-mini", "model_name_team1_abc"],
         **aliases,
     )
 
@@ -125,6 +128,16 @@ async def test_v1_models_by_id_retrieves_the_listed_model_when_an_alias_collides
     assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat"]
     response = await proxy_server.model_info(model_id="team-chat", user_api_key_dict=caller)
     assert response["id"] == "team-chat"
+
+
+@pytest.mark.asyncio
+async def test_v1_models_by_id_resolves_an_alias_named_like_an_undiscoverable_model_to_the_alias_target(router):
+    caller = _team_member(aliases={"hidden": "gpt-4.1-mini"}, models=["gpt-4.1-mini", "model_name_team1_abc", "hidden"])
+
+    assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat", "hidden"]
+    target = await proxy_server.model_info(model_id="gpt-4.1-mini", user_api_key_dict=caller)
+    response = await proxy_server.model_info(model_id="hidden", user_api_key_dict=caller)
+    assert response == {**target, "id": "hidden"}
 
 
 @pytest.mark.asyncio
