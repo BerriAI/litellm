@@ -2601,4 +2601,32 @@ describe("KeyEditView", () => {
       },
     );
   });
+
+  describe("disable_global_guardrails toggle gating", () => {
+    const renderAs = (userRole: string) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="test-user"
+          userRole={userRole}
+          premiumUser={true}
+        />,
+      );
+
+    it("hides the switch from a non-admin", async () => {
+      renderAs("Internal User");
+      await screen.findByRole("button", { name: /save changes/i });
+
+      expect(screen.queryByRole("switch", { name: /disable global guardrails/i })).not.toBeInTheDocument();
+    });
+
+    it("shows the switch to a proxy admin", async () => {
+      renderAs("Admin");
+
+      expect(await screen.findByRole("switch", { name: /disable global guardrails/i })).toBeInTheDocument();
+    });
+  });
 });
