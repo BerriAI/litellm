@@ -53,51 +53,74 @@ def _apply_service_tier_as_completion_window(
         extra_metadata.get("completion_window")
     ) or _completion_window_str(metadata.get("completion_window"))
     window: Final[str | None] = caller_window or mapped_window
-    new_body: Final[dict[str, object]] = {  # mutable-ok: transform_request returns a plain dict
-        key: value for key, value in body.items() if key != "service_tier"
-    }
+    new_body: Final = MappingProxyType({key: value for key, value in body.items() if key != "service_tier"})
     if window is None or (caller_window is None and window == "asap" and body.get("background") is True):
-        return new_body
-    merged: Final[dict[str, object]] = {  # mutable-ok: transform_request returns a plain dict
-        **new_body,
-        "metadata": {**metadata, "completion_window": window},  # mutable-ok: transform_request returns a plain dict
-    }
+        return dict(new_body)  # mutable-ok: transform_request returns a plain dict
+    windowed_metadata: Final = {**metadata, "completion_window": window}  # mutable-ok: nested wire dict
+    merged: Final = {**new_body, "metadata": windowed_metadata}  # mutable-ok: transform_request returns a plain dict
     if isinstance(raw_extra_metadata, dict) and "completion_window" not in extra_metadata:
-        return {  # mutable-ok: transform_request returns a plain dict
-            **merged,
-            "extra_body": {  # mutable-ok: SDK merges extra_body into the wire body
-                **extra_body,
-                "metadata": {  # mutable-ok: SDK merges extra_body into the wire body
-                    **extra_metadata,
-                    "completion_window": window,
-                },
-            },
+        windowed_extra_metadata: Final = {  # mutable-ok: nested wire dict
+            **extra_metadata,
+            "completion_window": window,
         }
+        extra_body_with_window: Final = {  # mutable-ok: nested wire dict
+            **extra_body,
+            "metadata": windowed_extra_metadata,
+        }
+        return {**merged, "extra_body": extra_body_with_window}  # mutable-ok: SDK merges extra_body into the wire body
     return merged
 
 
 def _merge_extra_body_keeping_metadata(
-    request: dict[str, object],  # mutable-ok: wire request body is a plain dict
+    request: Mapping[str, object],
     extra_body: Mapping[str, object] | None,
 ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
     """Shallow merge where ``metadata`` merges one level deep so a caller window
     inside ``extra_body.metadata`` wins over a mapped one but cannot wipe it out
     by replacing the whole metadata dict."""
     if not extra_body:
-        return request
+        return dict(request)  # mutable-ok: wire request body is a plain dict
     request_metadata: Final = request.get("metadata")
     extra_metadata: Final = extra_body.get("metadata")
     if not isinstance(request_metadata, dict) or not isinstance(extra_metadata, dict):
         return {**request, **extra_body}  # mutable-ok: request body sent over the wire
-    return {  # mutable-ok: request body sent over the wire
-        **request,
-        **extra_body,
-        "metadata": {**request_metadata, **extra_metadata},  # mutable-ok: request body sent over the wire
-    }
+    merged_metadata: Final = {**request_metadata, **extra_metadata}  # mutable-ok: request body sent over the wire
+    return {**request, **extra_body, "metadata": merged_metadata}  # mutable-ok: request body sent over the wire
 
 
 def _service_tier_as_completion_window_enabled(provider: SimpleProviderConfig) -> bool:
     return provider.special_handling.get("service_tier_as_completion_window") is True
+
+
+_SUPPORTED_SERVICE_TIERS: Final = frozenset((*_SERVICE_TIER_TO_COMPLETION_WINDOW, "auto"))
+
+
+def _service_tier_completion_window_drop(
+    provider: SimpleProviderConfig, service_tier: object, model: str, drop_params: bool | None
+) -> bool:
+    """Whether the caller's service_tier must be dropped instead of sent.
+
+    Raises UnsupportedParamsError for values Sail cannot map onto a
+    completion_window unless the request or deployment opts into drop_params.
+    """
+    import litellm
+
+    if not _service_tier_as_completion_window_enabled(provider):
+        return False
+    if service_tier is None or (isinstance(service_tier, str) and service_tier.lower() in _SUPPORTED_SERVICE_TIERS):
+        return False
+    if drop_params or litellm.drop_params:
+        return True
+    raise litellm.UnsupportedParamsError(
+        status_code=400,
+        message=(
+            f"{provider.slug} does not support service_tier '{service_tier}'. "
+            "Supported values: auto, default, flex, balanced, priority. "
+            "To drop unsupported params set litellm.drop_params=True"
+        ),
+        model=model,
+        llm_provider=provider.slug,
+    )
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -176,16 +199,16 @@ def create_config_class(provider: SimpleProviderConfig):
             self,
             model: str,
             messages: list[AllMessageValues],  # mutable-ok: matches base signature
-            optional_params: dict[str, object],  # mutable-ok: matches base signature
-            litellm_params: dict[str, object],  # mutable-ok: matches base signature
-            headers: dict[str, object],  # mutable-ok: matches base signature
+            optional_params: Mapping[str, object],
+            litellm_params: Mapping[str, object],
+            headers: Mapping[str, object],
         ) -> dict[str, object]:  # mutable-ok: matches base signature
             body: Final = super().transform_request(
                 model=model,
                 messages=messages,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                headers=headers,
+                optional_params=dict(optional_params),  # mutable-ok: base signature requires dict
+                litellm_params=dict(litellm_params),  # mutable-ok: base signature requires dict
+                headers=dict(headers),  # mutable-ok: base signature requires dict
             )
             if _service_tier_as_completion_window_enabled(provider):
                 return _apply_service_tier_as_completion_window(body)
@@ -193,7 +216,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
         def merge_extra_body(
             self,
-            request: dict[str, object],  # mutable-ok: wire request body is a plain dict
+            request: Mapping[str, object],
             extra_body: Mapping[str, object] | None,
         ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
             if _service_tier_as_completion_window_enabled(provider):
@@ -242,8 +265,18 @@ def create_config_class(provider: SimpleProviderConfig):
 
             supported_params: Final = self.get_supported_openai_params(model)
 
+            drop_service_tier: Final = _service_tier_completion_window_drop(
+                provider, non_default_params.get("service_tier"), model, drop_params
+            )
+            params_to_map: Final = (
+                {  # mutable-ok: drop_params strips the tier into a fresh dict
+                    key: value for key, value in non_default_params.items() if key != "service_tier"
+                }
+                if drop_service_tier
+                else non_default_params
+            )
             # Apply supported params
-            for param, value in non_default_params.items():
+            for param, value in params_to_map.items():
                 # Check parameter mappings first
                 if param in provider.param_mappings:
                     optional_params[provider.param_mappings[param]] = value
@@ -283,6 +316,46 @@ def create_config_class(provider: SimpleProviderConfig):
 _responses_config_cache: Final[dict] = {}
 
 
+def _json_responses_complete_url(provider: SimpleProviderConfig, api_base: str | None) -> str:
+    resolved: Final = (
+        api_base or (get_secret_str(provider.api_base_env) if provider.api_base_env else None) or provider.base_url
+    )
+    if resolved is None:
+        raise ValueError(f"api_base is required for provider {provider.slug}")
+    return f"{resolved.rstrip('/')}/responses"
+
+
+def _json_responses_request_body(provider: SimpleProviderConfig, config, model, input, params, litellm_params, headers):
+    from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+    if provider.special_handling.get("force_store_false"):
+        params["store"] = False
+    body: Final = OpenAILikeResponsesConfig.transform_responses_api_request(
+        config,
+        model=model,
+        input=input,
+        response_api_optional_request_params=params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
+    if _service_tier_as_completion_window_enabled(provider):
+        return _apply_service_tier_as_completion_window(body)
+    return body
+
+
+def _json_responses_map_params(provider: SimpleProviderConfig, config, params, model: str, drop_params: bool):
+    from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+    mapped: Final = OpenAILikeResponsesConfig.map_openai_params(
+        config, response_api_optional_params=params, model=model, drop_params=drop_params
+    )
+    if _service_tier_completion_window_drop(provider, params.get("service_tier"), model, drop_params):
+        return {  # mutable-ok: drop_params strips the tier into a fresh dict
+            key: value for key, value in mapped.items() if key != "service_tier"
+        }
+    return mapped
+
+
 def create_responses_config_class(provider: SimpleProviderConfig):
     """Generate a Responses API config class dynamically from JSON configuration.
 
@@ -295,7 +368,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
     from litellm.llms.openai_like.responses.transformation import (
         OpenAILikeResponsesConfig,
     )
-    from litellm.types.llms.openai import ResponseInputParam
+    from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
     from litellm.types.router import GenericLiteLLMParams
 
     class JSONProviderResponsesConfig(OpenAILikeResponsesConfig):
@@ -320,17 +393,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             api_base: str | None,
             litellm_params: dict,
         ) -> str:
-            if not api_base:
-                if provider.api_base_env:
-                    api_base = get_secret_str(provider.api_base_env)
-                if not api_base:
-                    api_base = provider.base_url
-
-            if api_base is None:
-                raise ValueError(f"api_base is required for provider {provider.slug}")
-
-            api_base = api_base.rstrip("/")
-            return f"{api_base}/responses"
+            return _json_responses_complete_url(provider, api_base)
 
         def transform_responses_api_request(
             self,
@@ -340,27 +403,32 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             litellm_params: GenericLiteLLMParams,
             headers: dict[str, object],  # mutable-ok: matches base signature
         ) -> dict[str, object]:  # mutable-ok: matches base signature
-            if provider.special_handling.get("force_store_false"):
-                response_api_optional_request_params["store"] = False
-            body: Final = super().transform_responses_api_request(
-                model=model,
-                input=input,
-                response_api_optional_request_params=response_api_optional_request_params,
-                litellm_params=litellm_params,
-                headers=headers,
+            return _json_responses_request_body(
+                provider,
+                self,
+                model,
+                input,
+                response_api_optional_request_params,
+                litellm_params,
+                headers,
             )
-            if _service_tier_as_completion_window_enabled(provider):
-                return _apply_service_tier_as_completion_window(body)
-            return body
 
         def merge_extra_body(
             self,
-            request: dict[str, object],  # mutable-ok: wire request body is a plain dict
+            request: Mapping[str, object],
             extra_body: Mapping[str, object] | None,
         ) -> dict[str, object]:  # mutable-ok: wire request body is a plain dict
             if _service_tier_as_completion_window_enabled(provider):
                 return _merge_extra_body_keeping_metadata(request, extra_body)
             return super().merge_extra_body(request, extra_body)
+
+        def map_openai_params(
+            self,
+            response_api_optional_params: ResponsesAPIOptionalRequestParams,
+            model: str,
+            drop_params: bool,
+        ) -> dict:
+            return _json_responses_map_params(provider, self, response_api_optional_params, model, drop_params)
 
     _responses_config_cache[provider.slug] = JSONProviderResponsesConfig
     return JSONProviderResponsesConfig

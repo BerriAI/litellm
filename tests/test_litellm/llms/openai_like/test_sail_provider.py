@@ -992,9 +992,7 @@ class TestProviderListBlastRadius:
             expected[base] = json_provider.slug if json_provider is not None else legacy_endpoint_providers.get(base)
 
         actual = {
-            base: get_llm_provider(
-                model="test-model", custom_llm_provider=None, api_base=base, api_key=None
-            )[1]
+            base: get_llm_provider(model="test-model", custom_llm_provider=None, api_base=base, api_key=None)[1]
             for base in openai_compatible_endpoints
         }
         assert actual == expected
@@ -1004,8 +1002,7 @@ class TestProviderListBlastRadius:
                 assert provider == json_provider.slug
                 assert json_provider.base_url == base
             assert provider is None or (
-                provider in openai_compatible_providers
-                or provider in providers_outside_openai_compatible_list
+                provider in openai_compatible_providers or provider in providers_outside_openai_compatible_list
             ), f"{base} resolved to {provider}, which is not a registered openai-compatible provider"
 
 
@@ -1022,3 +1019,158 @@ def test_model_info_balanced_fields_are_none_off_sail_and_set_on_sail():
     sail_info = litellm.get_model_info(MODEL, custom_llm_provider="sail")
     assert sail_info["input_cost_per_token_balanced"] is not None
     assert sail_info["output_cost_per_token_balanced"] is not None
+
+
+_UNKNOWN_TIER_MESSAGE = (
+    "litellm.UnsupportedParamsError: sail does not support service_tier 'bogus'. "
+    "Supported values: auto, default, flex, balanced, priority. "
+    "To drop unsupported params set litellm.drop_params=True"
+)
+
+
+class TestSailUnknownServiceTierRejected:
+    @pytest.mark.respx()
+    def test_chat_unknown_tier_raises_400_before_the_wire(self, respx_mock: respx.Router):
+        with pytest.raises(litellm.UnsupportedParamsError) as exc:
+            litellm.completion(model=MODEL, messages=_MESSAGES, service_tier="bogus")
+
+        assert str(exc.value) == _UNKNOWN_TIER_MESSAGE
+        assert respx_mock.calls.call_count == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_responses_unknown_tier_raises_400_before_the_wire(self, respx_mock: respx.Router):
+        with pytest.raises(litellm.UnsupportedParamsError) as exc:
+            await litellm.aresponses(model=MODEL, input="hi", service_tier="bogus")
+
+        assert str(exc.value) == _UNKNOWN_TIER_MESSAGE
+        assert respx_mock.calls.call_count == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_messages_unknown_tier_raises_400_before_the_wire(self, respx_mock: respx.Router):
+        with pytest.raises(litellm.UnsupportedParamsError) as exc:
+            await litellm.anthropic_messages(model=MODEL, messages=_MESSAGES, max_tokens=50, service_tier="bogus")
+
+        assert str(exc.value) == _UNKNOWN_TIER_MESSAGE
+        assert respx_mock.calls.call_count == 0
+
+    @pytest.mark.respx()
+    def test_chat_unknown_tier_dropped_with_drop_params(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
+
+        litellm.completion(model=MODEL, messages=_MESSAGES, service_tier="bogus", drop_params=True)
+        litellm.completion(model=MODEL, messages=_MESSAGES)
+
+        bodies = [json.loads(call.request.content) for call in respx_mock.calls]
+        assert bodies[0] == bodies[1] == {"model": MODEL.split("/", 1)[1], "messages": _MESSAGES}
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_responses_unknown_tier_dropped_with_drop_params(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_RESPONSES).respond(json=_responses_payload())
+
+        await litellm.aresponses(model=MODEL, input="hi", service_tier="bogus", drop_params=True)
+        await litellm.aresponses(model=MODEL, input="hi")
+
+        bodies = [json.loads(call.request.content) for call in respx_mock.calls]
+        assert bodies[0] == bodies[1]
+        assert "service_tier" not in bodies[0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_messages_unknown_tier_dropped_with_drop_params(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(
+            model=MODEL, messages=_MESSAGES, max_tokens=50, service_tier="bogus", drop_params=True
+        )
+        await litellm.anthropic_messages(model=MODEL, messages=_MESSAGES, max_tokens=50)
+
+        bodies = [json.loads(call.request.content) for call in respx_mock.calls]
+        assert bodies[0] == bodies[1]
+        assert "service_tier" not in bodies[0]
+        assert "extra_body" not in bodies[0]
+
+    @pytest.mark.respx()
+    def test_chat_uppercase_tier_maps_to_window(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
+
+        litellm.completion(model=MODEL, messages=_MESSAGES, service_tier="FLEX")
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"completion_window": "flex"}
+        assert "service_tier" not in body
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_responses_uppercase_tier_maps_to_window(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_RESPONSES).respond(json=_responses_payload())
+
+        await litellm.aresponses(model=MODEL, input="hi", service_tier="FLEX")
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"completion_window": "flex"}
+        assert "service_tier" not in body
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_messages_uppercase_tier_maps_to_window(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(model=MODEL, messages=_MESSAGES, max_tokens=50, service_tier="FLEX")
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert body["metadata"] == {"completion_window": "flex"}
+        assert "service_tier" not in body
+
+    @pytest.mark.respx()
+    def test_chat_auto_tier_sends_no_tier_no_metadata(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
+
+        litellm.completion(model=MODEL, messages=_MESSAGES, service_tier="auto")
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert "service_tier" not in body
+        assert "metadata" not in body
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_responses_auto_tier_sends_no_tier_no_metadata(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_RESPONSES).respond(json=_responses_payload())
+
+        await litellm.aresponses(model=MODEL, input="hi", service_tier="auto")
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert "service_tier" not in body
+        assert "metadata" not in body
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_messages_auto_tier_sends_no_tier_no_metadata(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(model=MODEL, messages=_MESSAGES, max_tokens=50, service_tier="auto")
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert "service_tier" not in body
+        assert "metadata" not in body
+
+    def test_non_sail_json_provider_keeps_unknown_tier_passthrough(self):
+        config = create_config_class(
+            SimpleProviderConfig("fake", {"base_url": "https://x.example/v1", "api_key_env": "FAKE_KEY"})
+        )()
+        optional_params: dict = {}
+        assert config.map_openai_params({"service_tier": "bogus"}, optional_params, "m", False) == optional_params
+
+        from litellm.llms.openai_like.messages.transformation import (
+            JSONProviderAnthropicMessagesConfig,
+        )
+
+        messages_config = JSONProviderAnthropicMessagesConfig(
+            SimpleProviderConfig("fake", {"base_url": "https://x.example/v1", "api_key_env": "FAKE_KEY"})
+        )
+        optional = {"metadata": {"user_id": "u"}, "max_tokens": 5}
+        assert messages_config.translate_passthrough_params(
+            optional, {"service_tier": "bogus", "extra_body": {"a": 1}}
+        ) == dict(optional)
