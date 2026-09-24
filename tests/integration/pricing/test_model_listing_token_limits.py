@@ -13,7 +13,7 @@ def _listed_model(gateway: Gateway, model: str) -> dict[str, JsonValue]:
 
 def test_v1_models_carries_cost_map_context_window_for_a_known_model(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
-        model: Final = scenario.model()
+        model: Final = scenario.model(model="openai/gpt-4o-mini")
         listed: Final = _listed_model(gateway, model)
         assert listed["max_input_tokens"] == 128000, listed
         assert listed["max_output_tokens"] == 16384, listed
