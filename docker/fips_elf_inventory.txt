@@ -1,5 +1,4 @@
 /app/.venv/lib/python3.13/site-packages/81d243bd2c585b0f4821__mypyc.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/_awscrt.abi3.so
 /app/.venv/lib/python3.13/site-packages/_cffi_backend.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/_polars_runtime_32/_polars_runtime.abi3.so
 /app/.venv/lib/python3.13/site-packages/aiohttp/_http_parser.cpython-313-ARCH-linux-gnu.so
@@ -35,25 +34,14 @@
 /app/.venv/lib/python3.13/site-packages/google/_upb/_message.abi3.so
 /app/.venv/lib/python3.13/site-packages/google_crc32c.libs/libcrc32c.so.1.1.0
 /app/.venv/lib/python3.13/site-packages/google_crc32c/_crc32c.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/granian/_granian.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/grpc/_cython/cygrpc.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/hf_xet/hf_xet.abi3.so
 /app/.venv/lib/python3.13/site-packages/hiredis/hiredis.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/ijson.libs/libyajl.so.2.1.1
 /app/.venv/lib/python3.13/site-packages/ijson/backends/_yajl2.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/jiter/jiter.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/litellm/rust_bridge/_native.abi3.so
-/app/.venv/lib/python3.13/site-packages/lxml/_elementpath.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/lxml/builder.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/lxml/etree.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/lxml/html/_difflib.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/lxml/html/diff.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/lxml/objectify.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/lxml/sax.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/markupsafe/_speedups.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/ml_dtypes/_ml_dtypes_ext.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/multidict/_multidict.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/nacl/_sodium.abi3.so
 /app/.venv/lib/python3.13/site-packages/numpy.libs/libgfortran-daac5196.so.5.0.0
 /app/.venv/lib/python3.13/site-packages/numpy.libs/libscipy_openblas64_.so
 /app/.venv/lib/python3.13/site-packages/numpy/_core/_multiarray_tests.cpython-313-ARCH-linux-gnu.so
@@ -96,7 +84,6 @@
 /app/.venv/lib/python3.13/site-packages/psycopg_binary/_psycopg.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/psycopg_binary/pq.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/pydantic_core/_pydantic_core.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/pyroscope/_native__lib.cpython-39-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/regex/_regex.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/rpds/rpds.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/tiktoken/_tiktoken.cpython-313-ARCH-linux-gnu.so
@@ -105,7 +92,6 @@
 /app/.venv/lib/python3.13/site-packages/uvloop/loop.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/websockets/speedups.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/wrapt/_wrappers.cpython-313-ARCH-linux-gnu.so
-/app/.venv/lib/python3.13/site-packages/xmlsec.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/yaml/_yaml.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/yarl/_quoting_c.cpython-313-ARCH-linux-gnu.so
 /opt/prisma/.cache/prisma/master/ac9d7041ed77bcc8a8dbd2ab6616b39013829574/debian-openssl-1.1.x/query-engine

@@ -76,6 +76,7 @@ RUN --mount=type=secret,id=cgr-token \
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0 \
+    LITELLM_SKIP_RUST_BRIDGE=1 \
     PATH="/app/.venv/bin:${PATH}"
 
 COPY pyproject.toml uv.lock ./
@@ -87,8 +88,10 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
     --extra proxy-runtime \
     --extra extra_proxy \
     --extra semantic-router \
-    --extra saml \
-    --extra bedrock-realtime \
+    --no-install-package hf-xet \
+    --no-install-package pyroscope-io \
+    --no-install-package granian \
+    --no-install-package pynacl \
     --python python3.13
 
 COPY . .
@@ -103,9 +106,14 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra proxy-runtime \
     --extra extra_proxy \
     --extra semantic-router \
-    --extra saml \
-    --extra bedrock-realtime \
+    --no-install-package hf-xet \
+    --no-install-package pyroscope-io \
+    --no-install-package granian \
+    --no-install-package pynacl \
     --python python3.13
+
+RUN test -z "$(find /app/.venv -name '_native*.so' -path '*litellm/rust_bridge*')" && \
+    test -z "$(find /app/.venv -name 'hf_xet*.so' -o -name '_awscrt*.so' -o -name 'xmlsec*.so' -o -path '*/nacl/_sodium*' -o -path '*/granian/*.so' -o -path '*/pyroscope/*.so')"
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
@@ -131,7 +139,8 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     PRISMA_CLI_PATH=/opt/prisma/binaries/node_modules/.bin/prisma \
     PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
-    PRISMA_OFFLINE_MODE=true
+    PRISMA_OFFLINE_MODE=true \
+    HF_HUB_DISABLE_XET=1
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/docker /app/docker

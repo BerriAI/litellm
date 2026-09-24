@@ -52,13 +52,7 @@ is_waived() {
   case "$1" in
     */cryptography/hazmat/bindings/_rust.abi3.so) ;;
     */grpc/_cython/cygrpc*.so) ;;
-    */hf_xet/hf_xet.abi3.so) ;;
-    */_awscrt.abi3.so) ;;
-    */pyroscope/_native__lib*.so) ;;
     */psycopg_binary.libs/libcrypto-*) ;;
-    */nacl/_sodium*.so|*/libsodium*) ;;
-    */litellm/rust_bridge/*|*/granian*) ;;
-    */xmlsec*|*xmlsec.libs*) ;;
     */_polars_runtime_32/_polars_runtime.abi3.so) ;;
     */ddtrace/internal/native/_native*.so) ;;
     /opt/prisma/*query-engine*|/opt/prisma/*schema-engine*) ;;
