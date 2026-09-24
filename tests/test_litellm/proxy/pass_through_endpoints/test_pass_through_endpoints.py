@@ -7304,6 +7304,61 @@ def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_bo
     assert kwargs["litellm_params"]["metadata"]["model_info"] == {"id": "vertex-gemini-38-flash-dep"}
 
 
+def test_passthrough_metadata_carries_key_team_project_tags_and_key_spend_logs_metadata():
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/anthropic/v1/messages"
+    mock_request.headers = Headers({"x-litellm-tags": "caller-tag,key-tag"})
+    mock_request.scope = {}
+
+    cached_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"tags": ["key-tag", "shared-tag"], "spend_logs_metadata": {"cost_center": "key"}},
+        team_metadata={
+            "tags": ["team-tag", "shared-tag"],
+            "spend_logs_metadata": {"cost_center": "team", "team_field": "team"},
+        },
+        project_metadata={"tags": ["project-tag"]},
+    )
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=cached_key,
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={
+            "metadata": {
+                "tags": ["body-tag"],
+                "spend_logs_metadata": {"request_id": "body"},
+                "user_api_key_auth_metadata": "forged",
+            }
+        },
+        litellm_call_id="lit-5359-call-id",
+    )
+    second = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=cached_key,
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={},
+        litellm_call_id="lit-5359-second-call-id",
+    )
+
+    metadata = kwargs["litellm_params"]["metadata"]
+    assert metadata["tags"] == ["body-tag", "key-tag", "shared-tag", "team-tag", "project-tag", "caller-tag"]
+    assert metadata["spend_logs_metadata"] == {"request_id": "body", "cost_center": "key", "team_field": "team"}
+    assert metadata["user_api_key_auth_metadata"] == {
+        "tags": ["key-tag", "shared-tag"],
+        "spend_logs_metadata": {"cost_center": "key"},
+    }
+    assert second["litellm_params"]["metadata"]["spend_logs_metadata"] == {"cost_center": "key", "team_field": "team"}
+    assert cached_key.metadata == {"tags": ["key-tag", "shared-tag"], "spend_logs_metadata": {"cost_center": "key"}}
+    assert cached_key.team_metadata == {
+        "tags": ["team-tag", "shared-tag"],
+        "spend_logs_metadata": {"cost_center": "team", "team_field": "team"},
+    }
+
+
 @pytest.mark.asyncio
 async def test_chat_completion_pass_through_endpoint_answers_an_openai_typed_error_for_an_unknown_model(
     monkeypatch: pytest.MonkeyPatch,
