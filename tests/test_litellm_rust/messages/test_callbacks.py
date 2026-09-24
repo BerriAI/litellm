@@ -204,3 +204,109 @@ def test_native_sync_messages_returns_the_provider_message(messages_server: Reco
     assert_served_natively(messages_server)
     assert response["content"] == MESSAGES_RESPONSE["content"]
     assert len(recorder.wait_for("log_success_event")) == 1
+
+
+INVALID_SIGNATURE: Final = ResponseSpec(
+    body={
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "messages.1.content.0: Invalid `signature` in `thinking` block",
+        },
+    },
+    status=400,
+)
+REPLAYED_THINKING: Final = (
+    {"role": "user", "content": "hi"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "plan", "signature": "from-another-deployment"},
+            {"type": "text", "text": "hello"},
+        ],
+    },
+    {"role": "user", "content": "again"},
+)
+WITHOUT_THINKING: Final = [
+    {"role": "user", "content": "hi"},
+    {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+    {"role": "user", "content": "again"},
+]
+
+
+def replayed_thinking(server: RecordingServer, **kwargs: object) -> dict[str, object]:
+    return arguments(
+        server,
+        model="anthropic/claude-haiku-4-5",
+        messages=[dict(message) for message in REPLAYED_THINKING],
+        max_tokens=2048,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_thinking_signature_is_resent_once_without_thinking_and_logged_as_resent(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.expected_requests = 2
+    messages_server.enqueue(INVALID_SIGNATURE)
+    recorder: Final = RecordingLogger()
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        **replayed_thinking(messages_server, callbacks=[recorder])
+    )
+
+    assert response["content"] == MESSAGES_RESPONSE["content"]
+    first, second = (request.body for request in messages_server.requests)
+    assert first["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert first["messages"] == list(REPLAYED_THINKING)
+    assert second == {key: value for key, value in first.items() if key not in {"thinking", "messages"}} | {
+        "messages": WITHOUT_THINKING
+    }
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert len(success) == 1
+    assert success[0].kwargs["additional_args"]["complete_input_dict"] == second
+    assert "log_failure_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+async def test_invalid_thinking_signature_twice_surfaces_the_second_error(messages_server: RecordingServer) -> None:
+    messages_server.expected_requests = 2
+    messages_server.enqueue(INVALID_SIGNATURE)
+    messages_server.enqueue(
+        ResponseSpec(
+            body={"type": "error", "error": {"type": "invalid_request_error", "message": "second"}}, status=400
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="second"):
+        await litellm.anthropic.messages.acreate(**replayed_thinking(messages_server))
+
+
+@pytest.mark.asyncio
+async def test_other_bad_requests_are_not_resent(messages_server: RecordingServer) -> None:
+    messages_server.enqueue(
+        ResponseSpec(
+            body={"type": "error", "error": {"type": "invalid_request_error", "message": "prompt is too long"}},
+            status=400,
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="prompt is too long"):
+        await litellm.anthropic.messages.acreate(**replayed_thinking(messages_server))
+
+
+@pytest.mark.asyncio
+async def test_invalid_thinking_signature_on_a_stream_is_resent_and_relayed(messages_server: RecordingServer) -> None:
+    messages_server.expected_requests = 2
+    messages_server.enqueue(INVALID_SIGNATURE)
+    messages_server.enqueue(STREAM)
+
+    stream: Final = await litellm.anthropic.messages.acreate(**replayed_thinking(messages_server, stream=True))
+    assert isinstance(stream, AsyncIterator)
+    chunks: Final = [chunk async for chunk in stream]
+
+    assert b"".join(chunks) == sse_payload()
+    assert messages_server.requests[1].body["messages"] == WITHOUT_THINKING
+    assert messages_server.requests[1].body["stream"] is True

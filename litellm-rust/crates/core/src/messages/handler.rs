@@ -28,13 +28,17 @@ pub(super) async fn send(
     http_request(builder).await.map_err(network)
 }
 
+pub(super) fn http_error(status: u16, body: &str) -> Error {
+    Error::Transport(TransportError::Http {
+        status,
+        body: truncate_error_body(body),
+    })
+}
+
 pub(super) async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
     match response.text().await {
-        Ok(text) => Error::Transport(TransportError::Http {
-            status,
-            body: truncate_error_body(&text),
-        }),
+        Ok(text) => http_error(status, &text),
         Err(error) => network(error),
     }
 }

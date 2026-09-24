@@ -55,6 +55,7 @@ pub enum FailureOrigin {
 /// What a machine reports while it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MachineEvent {
+    RequestResent { body: Value },
     ResponseReceived { raw: RawResponse },
 }
 

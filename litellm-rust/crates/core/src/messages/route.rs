@@ -12,9 +12,12 @@ use litellm_host::{
     machine::{HostChannel, MachineFault, RouteMachine},
     route::Route,
 };
+use litellm_llms::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
 use litellm_secrets::source::SecretSource;
 use litellm_types::{
-    llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
+    llms::anthropic_messages::{
+        anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
+    },
     utils::ProviderSpecificHeaders,
 };
 use serde_json::{Map, Value};
@@ -22,7 +25,7 @@ use serde_json::{Map, Value};
 use super::{
     Error,
     common_utils::messages_provider_config,
-    handler::{decode_response, network, provider_error, send},
+    handler::{decode_response, http_error, network, provider_error, send},
     prepare::{prepare_provider_request, resolve_provider},
     types::{MessagesRequest, MessagesShaping},
 };
@@ -183,9 +186,11 @@ async fn execute(
         )
         .await?;
     let response = send(&wire.url, &wire.headers, &wire.body, request.timeout).await?;
-    if !response.status().is_success() {
-        return Err(provider_error(response).await);
-    }
+    let response = if response.status().is_success() {
+        response
+    } else {
+        resend_after_error(&host, request.config, &wire, request.timeout, response).await?
+    };
     if stream {
         return relay(&host, response).await;
     }
@@ -196,6 +201,32 @@ async fn execute(
     .await?;
     decode_response(request.config, &request.model, &text)
         .map(|message| MessagesOutput::Message(Box::new(message)))
+}
+
+async fn resend_after_error(
+    host: &MessagesHost,
+    config: &dyn BaseAnthropicMessagesConfig,
+    wire: &WireRequest,
+    timeout: Option<Duration>,
+    response: reqwest::Response,
+) -> Result<reqwest::Response, Error> {
+    let status = response.status().as_u16();
+    let text = response.text().await.map_err(network)?;
+    let Some(request) = serde_json::from_value::<AnthropicMessagesRequest>(wire.body.clone())
+        .ok()
+        .and_then(|request| config.request_after_http_error(status, &text, request))
+    else {
+        return Err(http_error(status, &text));
+    };
+    let body = serde_json::to_value(request)
+        .map_err(|error| Error::InvalidRequest(format!("invalid messages request: {error}")))?;
+    host.emit(MachineEvent::RequestResent { body: body.clone() })
+        .await?;
+    let response = send(&wire.url, &wire.headers, &body, timeout).await?;
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    Err(provider_error(response).await)
 }
 
 /// Hands each upstream chunk to the caller as it arrives. A caller that stops reading
