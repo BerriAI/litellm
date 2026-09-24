@@ -519,7 +519,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         scan_attachments: Final = getattr(guardrail_to_apply, "scans_attachments", False) is True
         texts, holders = _extract_converse_texts(body, skip_system, skip_tool)
-        images, files = _extract_converse_attachments(body, skip_tool) if scan_attachments else ([], [])
+        images, files = (
+            _extract_converse_attachments(body, skip_tool)
+            if scan_attachments
+            else ([], [])  # mutable-ok: attachment lists feed the guardrail request payload
+        )
 
         if not texts and not (scan_attachments and (images or files)):
             return data

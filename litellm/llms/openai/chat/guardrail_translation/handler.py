@@ -303,13 +303,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs["tool_calls"] = tool_calls_to_check
         structured_messages: Final = self.get_structured_messages(data)
         scoped_message_indices: Final = scoped_structured_message_indices(
-            structured_messages or [],
+            structured_messages or [],  # mutable-ok: empty fallback for the scoping helper
             scan_only_tool_results=scan_only_tool_results,
             skip_system=skip_system,
             skip_tool=skip_tool,
         )
         if structured_messages:
-            inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
+            inputs["structured_messages"] = [  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
+                structured_messages[index] for index in scoped_message_indices
+            ]
         tools: Final = data.get("tools")
         if tools and isinstance(tools, list) and not scan_only_tool_results:
             inputs["tools"] = cast("list[ChatCompletionToolParam]", tools)  # cast-ok: raw request json
@@ -556,18 +558,20 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Use the real request_data if provided (proxy path), otherwise
         # create a standalone dict (SDK / direct-call path).
         if request_data is None:
-            request_data = {"response": response}
+            request_data = {"response": response}  # mutable-ok: proxy request body dict, mutated by the logging helper
         else:
             if "response" not in request_data:
                 request_data["response"] = response
 
         self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
-        inputs: Final = GenericGuardrailAPIInputs(texts=list(texts_to_check))
+        inputs: Final = GenericGuardrailAPIInputs(
+            texts=list(texts_to_check)  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
+        )
         if images_to_check:
-            inputs["images"] = list(images_to_check)
+            inputs["images"] = list(images_to_check)  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
         if tool_calls_to_check:
-            inputs["tool_calls"] = list(tool_calls_to_check)
+            inputs["tool_calls"] = list(tool_calls_to_check)  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
         # Include model information from the response if available
         if hasattr(response, "model") and response.model:
             inputs["model"] = response.model
@@ -579,7 +583,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
 
-        guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+        guardrailed_texts: Final = guardrailed_inputs.get("texts", [])  # mutable-ok: empty default, read-only below
         returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
         guardrailed_tool_calls: Final[Sequence[dict[str, object]]] = (
             cast(list[dict[str, object]], returned_tool_calls)

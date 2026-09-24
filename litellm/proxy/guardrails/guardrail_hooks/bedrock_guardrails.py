@@ -3373,7 +3373,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             text: Final = part.get("text")
             if isinstance(text, str) and part.get("type") not in ("image_url", "image", "file", "document"):
                 if masking_index < len(masked_texts):
-                    new_item: Final = dict(item)
+                    new_item: Final = dict(item)  # mutable-ok: rewritten copy of the caller's content item
                     new_item["text"] = masked_texts[masking_index]
                     return new_item, masking_index + 1
         return item, masking_index
@@ -3387,17 +3387,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             masked, masking_index = BedrockGuardrail._mask_leaf(
                 item=inner, masked_texts=masked_texts, masking_index=masking_index
             )
-            new_item: Final = dict(item)
+            new_item: Final = dict(item)  # mutable-ok: rewritten copy of the caller's content item
             new_item["content"] = masked
             return new_item, masking_index
         if isinstance(inner, list):
-            rewritten: Final[list[object]] = []
+            rewritten: Final[list[object]] = []  # mutable-ok: filled by the masking loop
             for part in inner:
                 masked_part, masking_index = BedrockGuardrail._mask_leaf(
                     item=part, masked_texts=masked_texts, masking_index=masking_index
                 )
                 rewritten.append(masked_part)
-            new_item_list: Final = dict(item)
+            new_item_list: Final = dict(item)  # mutable-ok: rewritten copy of the caller's content item
             new_item_list["content"] = rewritten
             return new_item_list, masking_index
         return item, masking_index
@@ -3418,7 +3418,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             Updated content list with masked items
         """
-        new_content: Final[list[object]] = []
+        new_content: Final[list[object]] = []  # mutable-ok: filled by the masking loop
         for item in content_list:
             if isinstance(item, dict) and item.get("type") == "tool_result":
                 new_item, masking_index = self._mask_tool_result(

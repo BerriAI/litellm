@@ -599,7 +599,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         texts_to_check: Final = [item.text for item in scanned]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
         images_to_check: Final = [image for one_message in extracted for image in one_message.images]
-        files_to_check: Final = [file for one_message in extracted for file in one_message.files]
+        files_to_check: Final = [  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
+            file for one_message in extracted for file in one_message.files
+        ]
         scanned_tool_calls: Final = tuple(item for one_message in extracted for item in one_message.tool_calls)
         tool_calls_to_check: Final = [item.tool_call for item in scanned_tool_calls]
         pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
