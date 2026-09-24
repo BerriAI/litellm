@@ -7249,6 +7249,9 @@ async def test_during_call_hook_chat_tool_output_attachment_scans_as_text():
         )
 
     mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert tool_output in sent_texts
 
 
 @pytest.mark.asyncio
@@ -7640,6 +7643,9 @@ async def test_during_call_hook_chat_tool_output_metadata_members_scan_as_text(m
         )
 
     mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert json.dumps([member]) in sent_texts
 
 
 @pytest.mark.asyncio
@@ -7687,6 +7693,9 @@ async def test_during_call_hook_responses_tool_output_metadata_members_scan_as_t
         )
 
     mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert any(str(member.get("id", "")) in text or str(member.get("name", "")) in text for text in sent_texts)
 
 
 @pytest.mark.asyncio
