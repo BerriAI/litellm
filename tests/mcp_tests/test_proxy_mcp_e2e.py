@@ -35,10 +35,10 @@ from litellm.proxy.proxy_server import (
     initialize,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-CONFIG_TEMPLATE_PATH = PROJECT_ROOT / "tests/integration/mcp_sdk1/test_config_mcp_e2e.yaml"
-MCP_SERVER_SCRIPT = PROJECT_ROOT / "tests/integration/mcp_sdk1/mcp_math_server.py"
+CONFIG_TEMPLATE_PATH = Path("tests/mcp_tests/test_configs/test_config_mcp_e2e.yaml")
+MCP_SERVER_SCRIPT = Path("tests/mcp_tests/mcp_server.py")
 MCP_PEER_PYTHON = os.environ.get("MCP_TEST_PEER_PYTHON", sys.executable)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROXY_START_TIMEOUT = 30
 
 

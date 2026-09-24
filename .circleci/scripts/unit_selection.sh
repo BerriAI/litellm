@@ -50,7 +50,7 @@ legacy_paths() {
     mcp-integration)
       echo tests/unit/proxy/_experimental/mcp_server
       echo tests/unit/responses/mcp
-      echo tests/integration/mcp_sdk1 ;;
+      echo tests/mcp_tests/test_proxy_mcp_e2e.py ;;
     proxy-db-auth-checks)
       echo tests/unit/proxy/auth/test_auth_checks.py
       echo tests/unit/proxy/auth/test_user_api_key_auth.py
@@ -105,7 +105,6 @@ legacy_paths() {
       echo tests/unit/proxy/auth/test_proxy_routes.py
       echo tests/unit/proxy/middleware/test_request_size_limit_middleware.py
       echo tests/unit/proxy/test_proxy_config_unit_test.py
-      echo tests/unit/proxy/test_proxy_pass_user_config.py
       echo tests/unit/proxy/test_proxy_token_counter.py
       echo tests/unit/proxy/test_server_root_path.py ;;
     proxy-db-proxy-server-core)

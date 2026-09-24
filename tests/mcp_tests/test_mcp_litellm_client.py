@@ -18,8 +18,8 @@ import json
 async def test_mcp_agent():
     """Test MCP agent functionality with a simple math server"""
     try:
-        local_server_path = "./mcp_math_server.py"
-        ci_cd_server_path = "tests/integration/mcp_sdk1/mcp_math_server.py"
+        local_server_path = "./mcp_server.py"
+        ci_cd_server_path = "tests/mcp_tests/mcp_server.py"
 
         # Use the correct path for the server
         server_path = (

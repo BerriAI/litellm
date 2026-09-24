@@ -17,7 +17,7 @@ mcp_servers:
     transport: stdio
     command: python3
     args:
-      - tests/integration/mcp_sdk1/mcp_math_server.py
+      - tests/mcp_tests/mcp_server.py
     allow_all_keys: true  # Needed for master_key auth when DB/object_permission not used
   math_streamable_http:
     transport: http

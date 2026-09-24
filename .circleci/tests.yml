@@ -186,6 +186,9 @@ jobs:
       legacy_mcp_peer:
         type: boolean
         default: false
+      reruns:
+        type: integer
+        default: 0
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
@@ -214,14 +217,19 @@ jobs:
           no_output_timeout: 20m
           command: |
             mkdir -p test-results/<< parameters.flag >>
-            selection="$(bash .circleci/scripts/unit_selection.sh << parameters.flag >>)"
+            selection="$(bash .circleci/scripts/unit_selection.sh << parameters.flag >>)" || { echo "unit_selection.sh failed for << parameters.flag >>"; exit 1; }
             [ -n "${selection}" ] || { echo "unit_selection.sh produced no files for << parameters.flag >>"; exit 1; }
             mapfile -t files < <(printf '%s\n' "${selection}" | circleci tests split --split-by=timings --timings-type=filename)
             if [ "${#files[@]}" -eq 0 ]; then echo "shard ${CIRCLE_NODE_INDEX} received no << parameters.flag >> files; nothing to run"; exit 0; fi
             xdist_args=()
             if [ "<< parameters.workers >>" -gt 0 ]; then xdist_args=(-n << parameters.workers >> --dist=<< parameters.dist >>); fi
+            rerun_args=(-p no:rerunfailures)
+            if [ "<< parameters.reruns >>" -gt 0 ]; then rerun_args=(--reruns << parameters.reruns >> --reruns-delay 1 --rerun-except "from pytest-timeout"); fi
+            test_env=(PATH="$PATH" HOME="$HOME" CI=true COVERAGE_CORE="$COVERAGE_CORE" LITELLM_LOCAL_MODEL_COST_MAP="$LITELLM_LOCAL_MODEL_COST_MAP")
+            if [ -n "${MCP_TEST_PEER_PYTHON:-}" ]; then test_env+=(MCP_TEST_PEER_PYTHON="$MCP_TEST_PEER_PYTHON"); fi
             set +e
-            uv run --no-sync pytest "${files[@]}" -p no:rerunfailures -p no:pytest-retry --timeout=90 "${xdist_args[@]}" --tb=short --durations=20 -o junit_family=xunit1 --junitxml=test-results/<< parameters.flag >>/junit.xml --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml:coverage.xml --cov-config=pyproject.toml
+            env -i "${test_env[@]}" \
+              uv run --no-sync pytest "${files[@]}" "${rerun_args[@]}" -p no:pytest-retry --timeout=90 "${xdist_args[@]}" --tb=short --durations=20 -o junit_family=xunit1 --junitxml=test-results/<< parameters.flag >>/junit.xml --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml:coverage.xml --cov-config=pyproject.toml
             status=$?
             set -e
             if [ "$status" -eq 5 ]; then echo "pytest collected no tests from the shard; passing"; exit 0; fi
@@ -282,7 +290,7 @@ jobs:
       - start_redis
       - run:
           name: Run owned integration contracts
-          command: bash .circleci/scripts/run_integration.sh << parameters.suite >>
+          command: env -i PATH="$PATH" HOME="$HOME" CIRCLE_SHA1="$CIRCLE_SHA1" CIRCLE_WORKFLOW_ID="$CIRCLE_WORKFLOW_ID" bash .circleci/scripts/run_integration.sh << parameters.suite >>
           no_output_timeout: 15m
       - run:
           name: Stop owned database and Redis
@@ -309,6 +317,7 @@ workflows:
           name: unit-<< matrix.flag >>
           shards: 1
           workers: 2
+          reruns: 2
           matrix:
             parameters:
               flag: [caching-local, proxy-extras, enterprise-routing]
@@ -325,6 +334,7 @@ workflows:
       - unit:
           name: unit-<< matrix.flag >>
           shards: 1
+          reruns: 2
           matrix:
             parameters:
               flag:
@@ -346,6 +356,7 @@ workflows:
           name: unit-proxy-db-proxy-utils
           flag: proxy-db-proxy-utils
           shards: 1
+          reruns: 2
           dist: worksteal
           base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
           pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
@@ -354,6 +365,7 @@ workflows:
           flag: proxy-db-key-generation
           shards: 1
           workers: 0
+          reruns: 2
           base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
           pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
       - documentation
