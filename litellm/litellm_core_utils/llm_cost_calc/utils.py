@@ -466,18 +466,32 @@ def _weekday_calendar(weekday_timezone: object) -> tzinfo:
     return timezone.utc
 
 
-def _matches_weekdays(reference_utc: datetime, weekdays: object, weekday_timezone: object) -> bool:
+_MONDAY_TO_FRIDAY: Final = frozenset({1, 2, 3, 4, 5})
+
+
+def _calendar_date(reference_utc: datetime, weekday_timezone: object) -> str:
+    return reference_utc.astimezone(_weekday_calendar(weekday_timezone)).date().isoformat()
+
+
+def _matches_weekdays(
+    reference_utc: datetime, weekdays: object, weekday_timezone: object, weekday_dates: frozenset[str]
+) -> bool:
     """Return True when reference_utc falls on one of the rule's weekdays, read on the calendar
     named by weekday_timezone (default UTC). An absent weekdays means every day. The calendar
     matters even when UTC and vendor-local weekdays agree at every currently priced hour: a
-    window past 16:00 UTC is where an Asia/Shanghai weekday diverges from the UTC one.
+    window past 16:00 UTC is where an Asia/Shanghai weekday diverges from the UTC one. A
+    calendar date listed in weekday_dates is a make-up workday, so it follows the
+    Monday-to-Friday rules whatever its real isoweekday is.
     """
     if weekdays is None:
         return True
     if isinstance(weekdays, str) or not isinstance(weekdays, Sequence):
         return False
     allowed: Final = frozenset(day for day in map(_normalize_weekday, weekdays) if day is not None)
-    return reference_utc.astimezone(_weekday_calendar(weekday_timezone)).isoweekday() in allowed
+    local: Final = reference_utc.astimezone(_weekday_calendar(weekday_timezone))
+    if local.date().isoformat() in weekday_dates:
+        return not allowed.isdisjoint(_MONDAY_TO_FRIDAY)
+    return local.isoweekday() in allowed
 
 
 def _as_window_strings(value: object) -> tuple[str, ...]:
@@ -488,29 +502,40 @@ def _as_window_strings(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _as_date_strings(value: object) -> frozenset[str]:
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        return frozenset()
+    return frozenset(entry for entry in value if isinstance(entry, str))
+
+
 def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None = None) -> bool:
     """Return True when current_time (UTC, defaulting to now) is off-peak under the block's
     rules: the flat hours_utc windows, which apply every day, or any entry in windows, whose
-    hours apply only on its weekdays.
+    hours apply only on its weekdays. off_peak_dates lists calendar dates that are off-peak
+    all day, and weekday_dates lists dates that follow the Monday-to-Friday rules even on a
+    weekend; both are read on the weekday_timezone calendar.
     """
     reference: Final = current_time if current_time is not None else current_billing_time()
     reference_utc: Final = (
         reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference.replace(tzinfo=timezone.utc)
     )
+    weekday_timezone: Final = off_peak.get("weekday_timezone")
+    if _calendar_date(reference_utc, weekday_timezone) in _as_date_strings(off_peak.get("off_peak_dates")):
+        return True
     flat_windows: Final = _as_window_strings(off_peak.get("hours_utc"))
     if flat_windows and _is_within_off_peak_window(flat_windows, reference_utc):
         return True
     windows: Final = off_peak.get("windows")
     if isinstance(windows, str) or not isinstance(windows, Sequence):
         return False
-    weekday_timezone: Final = off_peak.get("weekday_timezone")
+    weekday_dates: Final = _as_date_strings(off_peak.get("weekday_dates"))
     for rule in windows:
         if not isinstance(rule, Mapping):
             continue
         rule_windows = _as_window_strings(rule.get("hours_utc"))
         if not rule_windows:
             continue
-        if not _matches_weekdays(reference_utc, rule.get("weekdays"), weekday_timezone):
+        if not _matches_weekdays(reference_utc, rule.get("weekdays"), weekday_timezone, weekday_dates):
             continue
         if _is_within_off_peak_window(rule_windows, reference_utc):
             return True
