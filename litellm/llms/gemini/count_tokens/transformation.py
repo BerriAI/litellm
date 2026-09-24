@@ -313,7 +313,7 @@ def _textify_server_side_blocks(
                 else block
             )
             for block in content
-        ]  # mutable-ok: rebuilt content list
+        ]
 
     return tuple(
         (
