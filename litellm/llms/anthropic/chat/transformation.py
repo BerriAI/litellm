@@ -715,6 +715,53 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _tool_choice
 
+    @staticmethod
+    def _is_first_party_anthropic_api_base(api_base: object) -> bool:
+        """True when api_base is absent or points at the first-party Anthropic API."""
+        if not isinstance(api_base, str) or not api_base:
+            return True
+        return api_base.startswith("https://api.anthropic.com")
+
+    @staticmethod
+    def _strip_custom_tool_type_for_compat_endpoints(
+        optional_params: dict,
+        litellm_params: dict | None,
+    ) -> None:
+        """Drop `type: "custom"` from user-defined tools when the deployment
+        targets a third-party Anthropic-compatible endpoint (custom api_base).
+
+        `map_openai_params` stamps every mapped tool with `type: "custom"`
+        (see `_map_tool_helper`). First-party Anthropic accepts that marker,
+        but compatible endpoints (DeepSeek /anthropic, Z.AI, MiniMax, ...)
+        reject the request outright:
+            "Failed to deserialize the JSON body into the target type:
+             tools[0]: unknown variant `custom`, expected
+             `web_search_20250305` or `web_search_20260209`"
+
+        The classic untyped {name, description, input_schema} shape is
+        accepted by the first-party API and every compatible endpoint, so
+        this only ever widens compatibility.
+        """
+        tools = optional_params.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return
+        api_base = litellm_params.get("api_base") if isinstance(litellm_params, dict) else None
+        if AnthropicConfig._is_first_party_anthropic_api_base(api_base):
+            return
+        stripped_tools = []
+        stripped_any = False
+        for tool in tools:
+            if isinstance(tool, dict) and tool.get("type") == "custom":
+                tool = {key: value for key, value in tool.items() if key != "type"}
+                stripped_any = True
+            stripped_tools.append(tool)
+        if stripped_any:
+            optional_params["tools"] = stripped_tools
+            litellm.verbose_logger.debug(
+                "AnthropicCompat: dropped type='custom' from user-defined tools for non-first-party api_base=%s",
+                api_base,
+            )
+
     def _map_tool_helper(
         self,
         tool: ChatCompletionToolParam,
@@ -1965,6 +2012,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             messages = self._rewrite_tool_names_in_messages(messages, _name_forward_map)
         if _name_reverse_map and isinstance(litellm_params, dict):
             litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _name_reverse_map
+
+        # Anthropic-compatible third-party endpoints (e.g. DeepSeek's
+        # /anthropic, Z.AI, MiniMax) implement an older subset of the tools
+        # schema: their deserializers reject `type: "custom"` on user-defined
+        # tools ("unknown variant `custom`, expected `web_search_20250305` or
+        # `web_search_20260209`"). The typed form is only meaningful for the
+        # first-party API, so drop the marker when the deployment overrides
+        # api_base to a non-Anthropic host. The classic untyped
+        # {name, description, input_schema} shape is accepted everywhere,
+        # including the first-party API.
+        self._strip_custom_tool_type_for_compat_endpoints(
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
 
         # Separate system prompt from rest of message
         anthropic_system_message_list: Final = self.translate_system_message(messages=messages)

@@ -6519,3 +6519,58 @@ def test_eager_input_streaming_reaches_anthropic_request_tools():
 
     assert result["tools"][0]["eager_input_streaming"] is True
     assert result["tools"][0]["name"] == "write_file"
+
+
+def _sample_openai_function_tools():
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+
+
+def test_custom_tool_type_stripped_for_third_party_api_base():
+    """Third-party Anthropic-compatible endpoints (e.g. DeepSeek /anthropic)
+    reject `type: "custom"` on user-defined tools. When the deployment
+    overrides api_base to a non-Anthropic host, transform_request must emit
+    the classic untyped tool shape instead."""
+    config = AnthropicConfig()
+    optional_params = {"tools": config._map_tools(_sample_openai_function_tools())[0]}
+    assert optional_params["tools"][0]["type"] == "custom"  # mapped form today
+
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={"api_base": "https://api.deepseek.com/anthropic"},
+        headers={},
+    )
+
+    assert "type" not in result["tools"][0]
+    assert result["tools"][0]["name"] == "get_weather"
+    assert result["tools"][0]["input_schema"]["properties"]["city"] == {"type": "string"}
+
+
+def test_custom_tool_type_kept_for_first_party_api_base():
+    """First-party requests (no api_base override) keep the typed form."""
+    config = AnthropicConfig()
+    optional_params = {"tools": config._map_tools(_sample_openai_function_tools())[0]}
+
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["tools"][0]["type"] == "custom"
