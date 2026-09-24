@@ -30,7 +30,6 @@ async def test_xinference_image_generation():
         def parse(self):
             return MockResponse()
 
-    # Create a mock client with the images.with_raw_response.generate method
     mock_client = AsyncMock()
     mock_client.images.with_raw_response.generate = AsyncMock(return_value=MockRawResponse())
 
@@ -109,7 +108,6 @@ async def test_xinference_image_generation_with_response_format():
         def parse(self):
             return MockResponse()
 
-    # Create a mock client with the images.with_raw_response.generate method
     mock_client = AsyncMock()
     mock_client.images.with_raw_response.generate = AsyncMock(return_value=MockRawResponse())
 
