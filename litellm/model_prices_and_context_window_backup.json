@@ -65843,7 +65843,7 @@
         "supports_web_search": false
     },
     "openrouter/moonshotai/kimi-k2.7-code": {
-        "input_cost_per_token": 7.062e-07,
+        "input_cost_per_token": 6.562e-07,
         "output_cost_per_token": 3.3e-06,
         "cache_read_input_token_cost": 1.8e-07,
         "litellm_provider": "openrouter",
