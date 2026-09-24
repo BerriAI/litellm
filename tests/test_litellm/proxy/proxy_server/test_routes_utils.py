@@ -423,5 +423,32 @@ def test_token_counter_contents_only_request_counts_text_parts(client, auth_as, 
     assert response.status_code == 200, response.text
     assert response.json()["total_tokens"] == litellm.token_counter(
         model="claude-fable-5",
-        messages=[{"role": "user", "content": "hello world"}, {"role": "assistant", "content": "hi there"}],
+        messages=[
+            {"role": "user", "content": 'hello world\n{"inline_data": {"data": "<binary>"}}'},
+            {"role": "assistant", "content": "hi there"},
+            {"role": "user", "content": '{"inline_data": {"data": "<binary>"}}'},
+        ],
+    )
+
+
+def test_token_counter_media_only_contents_falls_back_instead_of_500(client, auth_as, monkeypatch):
+    """Regression: contents carrying only media or function-call parts (no text)
+    still produce a local count, because their JSON frames serialize to text."""
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
+    contents = [
+        {"role": "user", "parts": [{"inline_data": {"mime_type": "image/png", "data": "aGVsbG8="}}]},
+        {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {"city": "sf"}}}]},
+    ]
+
+    with auth_as():
+        response = client.post("/utils/token_counter", json={"model": "claude-fable-5", "contents": contents})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["total_tokens"] == litellm.token_counter(
+        model="claude-fable-5",
+        messages=[
+            {"role": "user", "content": '{"inline_data": {"mime_type": "image/png", "data": "<binary>"}}'},
+            {"role": "assistant", "content": '{"function_call": {"name": "get_weather", "args": {"city": "sf"}}}'},
+        ],
     )

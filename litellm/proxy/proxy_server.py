@@ -13459,24 +13459,57 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     return message
 
 
+def _elide_binary_blobs(part: object) -> object:
+    """Replace base64 blobs (inlineData.data, file data) so serialized
+    parts stay a sane size for the local tokenizer."""
+    if isinstance(part, Mapping):
+        return {
+            key: ("<binary>" if key == "data" and isinstance(value, str) else _elide_binary_blobs(value))
+            for key, value in part.items()
+        }
+    if isinstance(part, list):
+        return [_elide_binary_blobs(item) for item in part]
+    return part
+
+
+def _part_to_text(part: object) -> str:
+    if isinstance(part, Mapping) and isinstance(part.get("text"), str):
+        return part["text"]
+    return json.dumps(_elide_binary_blobs(part), default=str)
+
+
+def _content_parts(content: Mapping[str, object]) -> tuple[object, ...]:
+    parts: Final = content.get("parts")
+    if isinstance(parts, list):
+        return tuple(parts)
+    return (content,)
+
+
 def _contents_as_messages(contents: object) -> tuple[Mapping[str, object], ...] | None:
     """Approximate gemini contents as chat messages for the local fallback
-    tokenizer; only text parts are countable locally."""
-    if not isinstance(contents, list):
+    tokenizer. Text parts count as text; other parts count as their JSON
+    frame with base64 blobs elided."""
+    if contents is None:
         return None
-    messages: Final = tuple(
+    if isinstance(contents, list):
+        messages: Final = tuple(
+            {  # mutable-ok: transient chat-shaped message for the local tokenizer
+                "role": "assistant" if content.get("role") == "model" else "user",
+                "content": "\n".join(_part_to_text(part) for part in _content_parts(content)),
+            }
+            for content in contents
+            if isinstance(content, Mapping)
+        )
+        counted: Final = tuple(message for message in messages if message["content"])
+        if counted:
+            return counted
+    fallback: Final[tuple[Mapping[str, object], ...]] = (
         {  # mutable-ok: transient chat-shaped message for the local tokenizer
-            "role": "assistant" if content.get("role") == "model" else "user",
-            "content": "\n".join(
-                part["text"]
-                for part in content.get("parts", ())
-                if isinstance(part, Mapping) and isinstance(part.get("text"), str)
-            ),
-        }
-        for content in contents
-        if isinstance(content, Mapping)
+            "role": "user",
+            "content": json.dumps(_elide_binary_blobs(contents), default=str),
+        },
     )
-    return tuple(message for message in messages if message["content"]) or None
+    return fallback
 
 
 @router.post(
