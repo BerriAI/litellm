@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tupl
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
+    CLI_SESSION_KEY_PREFIX,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
@@ -151,6 +152,8 @@ class CheckBatchCost:
         """Resolve the creating virtual key's alias from its hashed token."""
         if not api_key:
             return None
+        if api_key.startswith(f"{CLI_SESSION_KEY_PREFIX}-"):
+            return api_key
         try:
             key_row: prisma_models.LiteLLM_VerificationToken | None = await _token_table(
                 self.prisma_client

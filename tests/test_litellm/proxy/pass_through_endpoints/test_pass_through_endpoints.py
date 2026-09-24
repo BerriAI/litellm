@@ -7417,3 +7417,34 @@ async def test_chat_completion_pass_through_endpoint_failure_carries_the_callers
     record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
     assert record.litellm_call_id == call_id
     assert call_id in record.getMessage()
+
+
+def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token():
+    """A pass-through request signed with a CLI session token must stamp the same stable per-user alias the
+    unified routes do, so every login rolls up to one key and the token itself never reaches a spend row."""
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_spend_logs_metadata
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/anthropic/v1/messages"
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+    session = UserAPIKeyAuth(
+        api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+        key_alias="cli-session-alice",
+        user_id="alice",
+        is_session_token=True,
+    )
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=session,
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={},
+        litellm_call_id="lit-6852-passthrough-call-id",
+    )
+
+    metadata = kwargs["litellm_params"]["metadata"]
+    assert metadata["user_api_key"] == "cli-session-alice"
+    assert _get_spend_logs_metadata(metadata)["user_api_key"] == "cli-session-alice"
