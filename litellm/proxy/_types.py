@@ -1246,7 +1246,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     policies: list[str] | None = None
     prompts: list[str] | None = None
     blocked: bool | None = None
-    aliases: dict | None = {}
+    aliases: dict[str, str] | None = {}
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
     @field_validator("max_budget", mode="before")

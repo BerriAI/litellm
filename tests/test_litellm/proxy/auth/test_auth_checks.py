@@ -1783,6 +1783,71 @@ def test_can_object_call_model_access_via_alias_only():
     assert result is True
 
 
+def test_can_object_call_model_key_alias_to_allowed_target_is_allowed():
+    """A key alias whose target is on the key allowlist resolves like a team alias."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    result = _can_object_call_model(
+        model="mistral-7b",
+        llm_router=None,
+        models=["gpt-4o-mini"],
+        key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    assert result is True
+
+
+def test_can_object_call_model_key_alias_to_disallowed_target_is_denied():
+    """A key alias whose target is outside the key allowlist stays denied."""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="mistral-7b",
+            llm_router=None,
+            models=["gpt-4o-mini"],
+            key_model_aliases={"mistral-7b": "gpt-4"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_honors_key_alias():
+    """A key on a team can call a model through its own alias when the target is on the team allowlist."""
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        models=["gpt-4o-mini"],
+    )
+
+    assert (
+        await can_team_access_model(
+            model="mistral-7b",
+            team_object=team_object,
+            llm_router=None,
+            key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_team_access_model(
+            model="mistral-7b",
+            team_object=team_object,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
 def test_can_object_call_model_access_via_underlying_model_only():
     """
     Test that a key can access a model via underlying model even when using an alias.

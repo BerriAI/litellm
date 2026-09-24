@@ -834,12 +834,14 @@ async def test_key_model_list(model_access, model_access_level, model_endpoint):
                 assert len(model_list["data"]) > 0
         if model_access == "gpt-3.5-turbo":
             if model_endpoint == "/v1/models":
-                assert (
-                    len(model_list["data"]) == 1
-                ), "model_access={}, model_access_level={}".format(
+                # generate_key always sets aliases {"mistral-7b": "gpt-3.5-turbo"};
+                # /v1/models lists key aliases whose target is on the allowlist
+                assert {entry["id"] for entry in model_list["data"]} == {
+                    model_access,
+                    "mistral-7b",
+                }, "model_access={}, model_access_level={}".format(
                     model_access, model_access_level
                 )
-                assert model_list["data"][0]["id"] == model_access
             elif model_endpoint == "/model/info":
                 assert isinstance(model_list["data"], list)
                 assert len(model_list["data"]) == 1

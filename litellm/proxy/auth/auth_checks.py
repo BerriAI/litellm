@@ -89,6 +89,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
 )
+from litellm.proxy.common_utils.model_listing_utils import alias_map
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
@@ -1018,6 +1019,7 @@ async def common_checks(
                     team_object=team_object,
                     llm_router=llm_router,
                     team_model_aliases=(valid_token.team_model_aliases if valid_token else None),
+                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                 )
             except ProxyException as team_denial:
                 if team_denial.type != ProxyErrorTypes.team_model_access_denied:
@@ -4349,6 +4351,7 @@ def _can_object_call_model(
     models: list[str],
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
+    key_model_aliases: Mapping[str, str] | None = None,
     object_type: Literal["user", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
@@ -4378,6 +4381,7 @@ def _can_object_call_model(
                 models=models,
                 team_model_aliases=team_model_aliases,
                 team_id=team_id,
+                key_model_aliases=key_model_aliases,
                 object_type=object_type,
                 fallback_depth=fallback_depth + 1,
             )
@@ -4386,13 +4390,21 @@ def _can_object_call_model(
     from litellm.router_strategy.complexity_router.context_compaction import native_compaction_parent
 
     compaction_parent: Final = native_compaction_parent(model)
-    potential_models: Final = [model, compaction_parent] if compaction_parent is not None else [model]
-    if model in litellm.model_alias_map:
-        potential_models.append(litellm.model_alias_map[model])
-    elif llm_router and model in llm_router.model_group_alias:
-        _model: Final = llm_router._get_model_from_alias(model)
-        if _model:
-            potential_models.append(_model)
+    global_or_router_alias_target: Final = (
+        litellm.model_alias_map[model]
+        if model in litellm.model_alias_map
+        else (
+            llm_router._get_model_from_alias(model)
+            if llm_router is not None and model in llm_router.model_group_alias
+            else None
+        )
+    )
+    key_alias_target: Final = key_model_aliases.get(model) if key_model_aliases is not None else None
+    potential_models: Final = (
+        *((model, compaction_parent) if compaction_parent is not None else (model,)),
+        *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
+        *((key_alias_target,) if key_alias_target else ()),
+    )
 
     ## check model access for alias + underlying model - allow if either is in allowed models
     for m in potential_models:
@@ -4510,6 +4522,10 @@ def _model_in_team_aliases(model: str, team_model_aliases: dict[str, str] | None
         if model in team_model_aliases:
             return True
     return False
+
+
+def key_model_aliases_for_auth_check(valid_token: UserAPIKeyAuth | None) -> Mapping[str, str] | None:
+    return alias_map(valid_token.aliases) if valid_token is not None and valid_token.aliases else None
 
 
 def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]:
@@ -4831,6 +4847,7 @@ async def can_key_call_model(
             models=key_models,
             team_model_aliases=valid_token.team_model_aliases,
             team_id=valid_token.team_id,
+            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             object_type="key",
         )
     except ProxyException:
@@ -4848,6 +4865,7 @@ async def can_key_call_model(
                     models=models_from_groups,
                     team_model_aliases=valid_token.team_model_aliases,
                     team_id=valid_token.team_id,
+                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                     object_type="key",
                 )
         raise
@@ -4906,6 +4924,7 @@ async def can_key_call_resolved_model(
                 team_object=team_object,
                 llm_router=llm_router,
                 team_model_aliases=valid_token.team_model_aliases,
+                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
         except ProxyException as team_denial:
             if team_denial.type != ProxyErrorTypes.team_model_access_denied:
@@ -4968,6 +4987,7 @@ async def can_team_access_model(
     team_object: LiteLLM_TeamTable | None,
     llm_router: Router | None,
     team_model_aliases: dict[str, str] | None = None,
+    key_model_aliases: Mapping[str, str] | None = None,
     prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
     """
@@ -4983,6 +5003,7 @@ async def can_team_access_model(
             models=team_object.models if team_object else [],
             team_model_aliases=team_model_aliases,
             team_id=team_object.team_id if team_object else None,
+            key_model_aliases=key_model_aliases,
             object_type="team",
         )
     except ProxyException:
@@ -5000,6 +5021,7 @@ async def can_team_access_model(
                     models=list(dict.fromkeys([*(team_object.models if team_object else []), *models_from_groups])),
                     team_model_aliases=team_model_aliases,
                     team_id=team_object.team_id if team_object else None,
+                    key_model_aliases=key_model_aliases,
                     object_type="team",
                 )
         raise
