@@ -180,6 +180,11 @@
     "api_key_env": "COGNITION_API_KEY",
     "api_base_env": "COGNITION_API_BASE"
   },
+  "mizumi": {
+    "base_url": "https://api.mizumi.co/v1",
+    "api_key_env": "MIZUMI_API_KEY",
+    "api_base_env": "MIZUMI_API_BASE"
+  },
   "pinstripes": {
     "base_url": "https://pinstripes.io/v1",
     "api_key_env": "PINSTRIPES_API_KEY",
