@@ -56,6 +56,7 @@ LlmRoute = Literal[
     "gemini",
     "hosted_vllm",
     "openai",
+    "sail",
     "together_ai",
     "vertex",
     "xiaomi_mimo",
