@@ -488,6 +488,55 @@ describe("MCPToolPermissions", () => {
       expect(deleteIssue).toBeChecked();
     });
 
+    it("lifts a denied editable tool on a toolset-only server when it is re-checked", async () => {
+      const toolsetServer = { server_id: "srv-toolset-1", server_name: "Toolset Server", alias: "Toolset Server" };
+      const writes: McpToolPermissionWrite[] = [];
+      const Harness = () => {
+        const [write, setWrite] = useState<McpToolPermissionWrite>({
+          toolPermissions: {},
+          deniedTools: { [toolsetServer.server_id]: ["delete_issue"] },
+        });
+        return (
+          <MCPToolPermissions
+            accessToken={mockAccessToken}
+            selectedServers={[]}
+            selectedToolsets={["ts-1"]}
+            toolPermissions={write.toolPermissions}
+            deniedTools={write.deniedTools}
+            onChange={(next) => {
+              writes.push(next);
+              setWrite(next);
+            }}
+          />
+        );
+      };
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([toolsetServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([
+        {
+          toolset_id: "ts-1",
+          toolset_name: "Support Toolset",
+          tools: [{ server_id: toolsetServer.server_id, tool_name: "list_issues" }],
+        },
+      ]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      renderWithProviders(<Harness />);
+
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      await userEvent.click(screen.getByText("Flat List"));
+      const deleteIssue = screen.getByRole("checkbox", { name: "delete_issue" });
+      expect(deleteIssue).not.toBeChecked();
+
+      await userEvent.click(deleteIssue);
+
+      // The backend resolves deny over allow, so the write must lift the deny or the
+      // re-checked tool would stay blocked and render unchecked again
+      const last = writes.at(-1)!;
+      expect(last.toolPermissions).toEqual({ [toolsetServer.server_id]: ["delete_issue"] });
+      expect(last.deniedTools).toEqual({});
+      expect(deleteIssue).toBeChecked();
+    });
+
     it("keeps a tool-permission-only server listed and granting after Select All", async () => {
       const keyedServer = { server_id: "srv-keyed-1", server_name: "Keyed Server", alias: "Keyed Server" };
       const Harness = () => {

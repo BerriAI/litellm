@@ -880,6 +880,98 @@ describe("applyToolCheckboxWrite", () => {
     expect(written).toEqual({ toolPermissions: { "uuid-1": [] }, deniedTools: {} });
     expect(resolvedAfterWrite(written).allowedTools).toEqual(["read"]);
   });
+
+  // The allowlist write lifts this entry's deny on a re-checked tool: otherwise the backend's
+  // deny-wins rule would keep the tool blocked and the admin could never re-enable it here.
+  it("lifts the entry's own deny on a checked editable tool", () => {
+    const deniedTools = { "uuid-1": ["write"] };
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      selectedToolsets: ["ts-2"],
+      toolsets: [reader],
+      deniedTools,
+    };
+    const [entry] = resolveEffectiveMcpServers(input);
+    const written = applyToolCheckboxWrite(
+      checkboxInput(entry, ["write"], { deniedTools, fetchedTools: ["read", "write"] }),
+    );
+
+    expect(written).toEqual({ toolPermissions: { "uuid-1": ["write"] }, deniedTools: {} });
+
+    const afterWrite = {
+      ...emptyInput,
+      allServers: [named],
+      selectedToolsets: ["ts-2"],
+      toolsets: [reader],
+      toolPermissions: written.toolPermissions,
+      deniedTools: written.deniedTools,
+    };
+    const [resolved] = resolveEffectiveMcpServers(afterWrite);
+    expect(resolved.allowedTools).toEqual(expect.arrayContaining(["write"]));
+    expect(resolved.deniedTools ?? []).not.toContain("write");
+  });
+
+  it("keeps other denied names on the same server when only some are re-checked", () => {
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      toolPermissions: { "uuid-1": ["read"] },
+      deniedTools: { "uuid-1": ["write", "delete"] },
+    };
+    const [entry] = resolveEffectiveMcpServers(input);
+    const written = applyToolCheckboxWrite(
+      checkboxInput(entry, ["read", "write"], {
+        toolPermissions: { "uuid-1": ["read"] },
+        deniedTools: { "uuid-1": ["write", "delete"] },
+        fetchedTools: ["read", "write", "delete"],
+      }),
+    );
+
+    expect(written).toEqual({
+      toolPermissions: { "uuid-1": ["read", "write"] },
+      deniedTools: { "uuid-1": ["delete"] },
+    });
+  });
+
+  it("leaves existing denies untouched for tools the admin did not check", () => {
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      toolPermissions: { "uuid-1": ["read"] },
+      deniedTools: { "uuid-1": ["write"] },
+    };
+    const [entry] = resolveEffectiveMcpServers(input);
+    const written = applyToolCheckboxWrite(
+      checkboxInput(entry, [], {
+        toolPermissions: { "uuid-1": ["read"] },
+        deniedTools: { "uuid-1": ["write"] },
+        fetchedTools: ["read", "write"],
+      }),
+    );
+
+    expect(written).toEqual({ toolPermissions: { "uuid-1": [] }, deniedTools: { "uuid-1": ["write"] } });
+  });
+
+  it("keeps a locked toolset tool's deny since its checkbox can never re-decide it", () => {
+    const deniedTools = { "uuid-1": ["read"] };
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      selectedToolsets: ["ts-2"],
+      toolsets: [reader],
+      deniedTools,
+    };
+    const [entry] = resolveEffectiveMcpServers(input);
+    const written = applyToolCheckboxWrite(
+      checkboxInput(entry, ["write"], { deniedTools, fetchedTools: ["read", "write"] }),
+    );
+
+    expect(written).toEqual({
+      toolPermissions: { "uuid-1": ["write"] },
+      deniedTools: { "uuid-1": ["read"] },
+    });
+  });
 });
 
 describe("resolveEffectiveMcpServers denylist", () => {

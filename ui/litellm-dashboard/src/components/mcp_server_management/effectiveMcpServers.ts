@@ -224,7 +224,8 @@ export const applyToolDenyWrite = ({
 
 // A denylist cannot grant a tool, so the deny write is only valid for a server granted directly or
 // through an access group with no selected toolset feeding it (the backend unions toolset tools
-// into the allowlist). Every other shape keeps the allowlist write so checking a tool still grants it.
+// into the allowlist). Every other shape keeps the allowlist write so checking a tool still grants
+// it; that write also lifts this entry's deny on any tool now checked, so re-enabling works.
 export const applyToolCheckboxWrite = ({
   toolPermissions,
   deniedTools,
@@ -243,9 +244,16 @@ export const applyToolCheckboxWrite = ({
   const keepsAllowlistWrite =
     entry.toolsetTools !== undefined || (entry.source.kind !== "direct" && entry.source.kind !== "accessGroup");
   if (keepsAllowlistWrite) {
+    const deniedKeys = mcpToolPermissionKeysFor(entry.server, deniedTools, allServers).filter((key) =>
+      mcpKeyNamesOneServerOnly(allServers, key),
+    );
+    const nextDenied = Object.entries(deniedTools).flatMap(([key, names]): [string, string[]][] => {
+      const kept = deniedKeys.includes(key) ? names.filter((name) => !checked.includes(name)) : [...names];
+      return kept.length === 0 && deniedKeys.includes(key) ? [] : [[key, kept]];
+    });
     return {
       toolPermissions: applyToolPermissionWrite({ toolPermissions, entry, allowed: checked }),
-      deniedTools: Object.fromEntries(Object.entries(deniedTools).map(([key, names]) => [key, [...names]])),
+      deniedTools: Object.fromEntries(nextDenied),
     };
   }
   const denyWrite = { toolPermissions, deniedTools, entry, allServers, fetchedTools, checked };
