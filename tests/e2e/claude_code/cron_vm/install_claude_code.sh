@@ -1,16 +1,4 @@
 #!/usr/bin/env bash
-# Downloads one Claude Code CLI release into a directory and verifies it.
-#
-#   install_claude_code.sh <version> <dest-dir>
-#
-# The binary comes from the native release channel the official
-# installer (https://claude.ai/install.sh) reads, and its sha256 is
-# checked against the `linux-x64` entry of that release's manifest.json
-# before anything is executed (AGENTS.md, "CI supply-chain safety").
-# The freshly downloaded binary then runs `--version` once, under a
-# scrubbed environment so its first execution sees none of the run's
-# provider keys, and the install fails unless it reports the requested
-# version.
 
 set -Eeuo pipefail
 
