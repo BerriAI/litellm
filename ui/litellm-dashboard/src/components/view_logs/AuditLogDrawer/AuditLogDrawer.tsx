@@ -19,6 +19,7 @@ const ACTION_TONE: Record<string, StatusTone> = {
   updated: "info",
   deleted: "error",
   rotated: "warning",
+  kill_switch_fired: "error",
 };
 
 function CopyableJsonBlock({ label, value }: { label: string; value: Record<string, any> }) {
