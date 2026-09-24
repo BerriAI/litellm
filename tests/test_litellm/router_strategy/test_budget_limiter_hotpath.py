@@ -30,9 +30,7 @@ async def test_get_llm_provider_for_deployment_dict_does_not_require_litellm_par
 ):
     class RaiseOnInit:
         def __init__(self, *args, **kwargs):
-            raise AssertionError(
-                "LiteLLM_Params should not be instantiated in hot path"
-            )
+            raise AssertionError("LiteLLM_Params should not be instantiated in hot path")
 
     monkeypatch.setattr(
         "litellm.router_strategy.budget_limiter.LiteLLM_Params",
@@ -99,9 +97,7 @@ async def test_get_llm_provider_for_deployment_dict_view_supports_mapping_and_at
 
 
 @pytest.mark.asyncio
-async def test_async_filter_deployments_resolves_provider_once_per_deployment(
-    disable_budget_sync, monkeypatch
-):
+async def test_async_filter_deployments_resolves_provider_once_per_deployment(disable_budget_sync, monkeypatch):
     provider_budget = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config={
@@ -207,9 +203,7 @@ def _legacy_provider_resolution(deployment):
     Reference implementation used before hot-path optimization.
     """
     try:
-        _litellm_params = LiteLLM_Params(
-            **deployment.get("litellm_params", {"model": ""})
-        )
+        _litellm_params = LiteLLM_Params(**deployment.get("litellm_params", {"model": ""}))
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(
             model=_litellm_params.model,
             litellm_params=_litellm_params,
@@ -228,9 +222,7 @@ def _legacy_provider_resolution(deployment):
     ],
 )
 @pytest.mark.asyncio
-async def test_get_llm_provider_for_deployment_matches_legacy_behavior(
-    disable_budget_sync, deployment
-):
+async def test_get_llm_provider_for_deployment_matches_legacy_behavior(disable_budget_sync, deployment):
     provider_budget = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config={},
@@ -242,9 +234,7 @@ async def test_get_llm_provider_for_deployment_matches_legacy_behavior(
     assert current_provider == legacy_provider
 
 
-def test_register_deployment_budget_for_runtime_added_deployment(
-    disable_budget_sync, monkeypatch
-):
+def test_register_deployment_budget_for_runtime_added_deployment(disable_budget_sync, monkeypatch):
     import asyncio
 
     monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
@@ -274,9 +264,7 @@ def test_register_deployment_budget_for_runtime_added_deployment(
     assert budget_limiter._get_budget_config_for_deployment(model_id) is None
 
 
-def test_router_add_deployment_registers_deployment_budget(
-    disable_budget_sync, monkeypatch
-):
+def test_router_add_deployment_registers_deployment_budget(disable_budget_sync, monkeypatch):
     import asyncio
 
     from litellm import Router
@@ -304,9 +292,7 @@ def test_router_add_deployment_registers_deployment_budget(
 
     budget_limiter = router._get_router_deployment_budget_limiter()
     assert budget_limiter is not None
-    config = budget_limiter._get_budget_config_for_deployment(
-        "runtime-budget-deployment"
-    )
+    config = budget_limiter._get_budget_config_for_deployment("runtime-budget-deployment")
     assert config is not None
     assert config.max_budget == 0.000000000001
 
@@ -378,7 +364,9 @@ async def test_push_returns_before_redis_answers(disable_budget_sync):
 async def test_push_task_failure_is_logged_once_and_not_leaked(disable_budget_sync, caplog):
     """A real Redis failure on the background push must surface as one error line, never as an unretrieved task exception."""
     redis_cache = MagicMock(spec=RedisCache)
-    redis_cache.async_increment_pipeline = AsyncMock(side_effect=ConnectionError("Error 61 connecting to 127.0.0.1:6379"))
+    redis_cache.async_increment_pipeline = AsyncMock(
+        side_effect=ConnectionError("Error 61 connecting to 127.0.0.1:6379")
+    )
     limiter = await _limiter_with_redis(redis_cache)
     loop = asyncio.get_running_loop()
     unretrieved = MagicMock()
@@ -396,3 +384,26 @@ async def test_push_task_failure_is_logged_once_and_not_leaked(disable_budget_sy
         "Error syncing in-memory cache with Redis: Error 61 connecting to 127.0.0.1:6379"
     ]
     unretrieved.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_batch_line_item_events_do_not_charge_the_provider_budget(disable_budget_sync):
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": BudgetConfig(max_budget=100.0, budget_duration="1d")},
+    )
+    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+
+    await limiter.async_log_success_event(
+        kwargs={
+            "call_type": "acompletion",
+            "litellm_params": {"custom_llm_provider": "openai", "batch_parent_id": "batch_x"},
+            "standard_logging_object": {"response_cost": 1.0, "model_id": "dep-1"},
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert limiter.dual_cache.in_memory_cache.get_cache("provider_spend:openai:1d") in (None, 0)
+    assert limiter.redis_increment_operation_queue == []
