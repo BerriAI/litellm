@@ -18,6 +18,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "null",
       "pickle": {
         "0": "4e2e",
@@ -45,6 +51,12 @@
       },
       "lax_int": {
         "value": "1"
+      },
+      "lax_float": {
+        "value": "1.0"
+      },
+      "lax_bool": {
+        "value": "True"
       },
       "json": "true",
       "pickle": {
@@ -74,6 +86,12 @@
       "lax_int": {
         "value": "0"
       },
+      "lax_float": {
+        "value": "0.0"
+      },
+      "lax_bool": {
+        "value": "False"
+      },
       "json": "false",
       "pickle": {
         "0": "4930300a2e",
@@ -101,6 +119,12 @@
       },
       "lax_int": {
         "value": "0"
+      },
+      "lax_float": {
+        "value": "0.0"
+      },
+      "lax_bool": {
+        "value": "False"
       },
       "json": "0",
       "pickle": {
@@ -130,6 +154,12 @@
       "lax_int": {
         "value": "-7"
       },
+      "lax_float": {
+        "value": "-7.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "-7",
       "pickle": {
         "0": "492d370a2e",
@@ -157,6 +187,12 @@
       },
       "lax_int": {
         "value": "9223372036854775807"
+      },
+      "lax_float": {
+        "value": "9.223372036854776e+18"
+      },
+      "lax_bool": {
+        "error": "ValueError"
       },
       "json": "9223372036854775807",
       "pickle": {
@@ -186,6 +222,12 @@
       "lax_int": {
         "value": "-9223372036854775808"
       },
+      "lax_float": {
+        "value": "-9.223372036854776e+18"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "-9223372036854775808",
       "pickle": {
         "0": "4c2d393232333337323033363835343737353830384c0a2e",
@@ -213,6 +255,12 @@
       },
       "lax_int": {
         "value": "18446744073709551616"
+      },
+      "lax_float": {
+        "value": "1.8446744073709552e+19"
+      },
+      "lax_bool": {
+        "error": "ValueError"
       },
       "json": "18446744073709551616",
       "pickle": {
@@ -242,6 +290,12 @@
       "lax_int": {
         "value": "-1180591620717411303424"
       },
+      "lax_float": {
+        "value": "-1.1805916207174113e+21"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "-1180591620717411303424",
       "pickle": {
         "0": "4c2d313138303539313632303731373431313330333432344c0a2e",
@@ -269,6 +323,12 @@
       },
       "lax_int": {
         "value": "0"
+      },
+      "lax_float": {
+        "value": "0.0"
+      },
+      "lax_bool": {
+        "value": "False"
       },
       "json": "0.0",
       "pickle": {
@@ -298,6 +358,12 @@
       "lax_int": {
         "value": "0"
       },
+      "lax_float": {
+        "value": "-0.0"
+      },
+      "lax_bool": {
+        "value": "False"
+      },
       "json": "-0.0",
       "pickle": {
         "0": "462d302e300a2e",
@@ -324,6 +390,12 @@
         "value": "0.2"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "0.2"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "0.2",
@@ -354,6 +426,12 @@
       "lax_int": {
         "value": "1"
       },
+      "lax_float": {
+        "value": "1.0"
+      },
+      "lax_bool": {
+        "value": "True"
+      },
       "json": "1.0",
       "pickle": {
         "0": "46312e300a2e",
@@ -380,6 +458,12 @@
         "value": "-1.5"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "-1.5"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "-1.5",
@@ -410,6 +494,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "0.30000000000000004"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "0.30000000000000004",
       "pickle": {
         "0": "46302e33303030303030303030303030303030340a2e",
@@ -436,6 +526,12 @@
         "value": "123456789.123"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "123456789.123"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "123456789.123",
@@ -466,6 +562,12 @@
       "lax_int": {
         "value": "1000000000000000"
       },
+      "lax_float": {
+        "value": "1000000000000000.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1000000000000000.0",
       "pickle": {
         "0": "46313030303030303030303030303030302e300a2e",
@@ -493,6 +595,12 @@
       },
       "lax_int": {
         "value": "10000000000000000"
+      },
+      "lax_float": {
+        "value": "1e+16"
+      },
+      "lax_bool": {
+        "error": "ValueError"
       },
       "json": "1e+16",
       "pickle": {
@@ -522,6 +630,12 @@
       "lax_int": {
         "value": "15000000000000000"
       },
+      "lax_float": {
+        "value": "1.5e+16"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1.5e+16",
       "pickle": {
         "0": "46312e35652b31360a2e",
@@ -550,6 +664,12 @@
       "lax_int": {
         "value": "9999999999999998"
       },
+      "lax_float": {
+        "value": "9999999999999998.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "9999999999999998.0",
       "pickle": {
         "0": "46393939393939393939393939393939382e300a2e",
@@ -576,6 +696,12 @@
         "value": "0.0001"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "0.0001"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "0.0001",
@@ -606,6 +732,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "1e-05"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1e-05",
       "pickle": {
         "0": "4631652d30350a2e",
@@ -632,6 +764,12 @@
         "value": "1.25e-07"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "1.25e-07"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "1.25e-07",
@@ -662,6 +800,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "5e-324"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "5e-324",
       "pickle": {
         "0": "4635652d3332340a2e",
@@ -688,6 +832,12 @@
         "value": "1.7976931348623157e+308"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "1.7976931348623157e+308"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "1.7976931348623157e+308",
@@ -718,6 +868,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "1e+22"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1e+22",
       "pickle": {
         "0": "4631652b32320a2e",
@@ -744,6 +900,12 @@
         "value": "inf"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "inf"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "Infinity",
@@ -774,6 +936,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "-inf"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "-Infinity",
       "pickle": {
         "0": "462d696e660a2e",
@@ -800,6 +968,12 @@
         "value": "nan"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "nan"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "NaN",
@@ -830,6 +1004,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type complex is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a636f6d706c65780a70300a2846302e300a46312e300a7470310a5270320a2e",
@@ -856,6 +1036,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json_error": "Object of type complex is not JSON serializable",
@@ -886,6 +1072,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type complex is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a636f6d706c65780a70300a2846302e300a462d312e300a7470310a5270320a2e",
@@ -912,6 +1104,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json_error": "Object of type complex is not JSON serializable",
@@ -942,6 +1140,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type complex is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a636f6d706c65780a70300a28462d312e350a462d302e350a7470310a5270320a2e",
@@ -968,6 +1172,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json_error": "Object of type complex is not JSON serializable",
@@ -998,6 +1208,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\"",
       "pickle": {
         "0": "560a70300a2e",
@@ -1024,6 +1240,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"plain\"",
@@ -1054,6 +1276,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"it's\"",
       "pickle": {
         "0": "56697427730a70300a2e",
@@ -1080,6 +1308,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"say \\\"hi\\\"\"",
@@ -1110,6 +1344,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"both ' and \\\"\"",
       "pickle": {
         "0": "56626f7468202720616e6420220a70300a2e",
@@ -1136,6 +1376,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"back\\\\slash\"",
@@ -1166,6 +1412,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\t\\n\\r\"",
       "pickle": {
         "0": "56095c75303030615c75303030640a70300a2e",
@@ -1192,6 +1444,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"\\u0000\\u001f\\u007f\"",
@@ -1222,6 +1480,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\u0085\\u00a0\\u00ad\"",
       "pickle": {
         "0": "5685a0ad0a70300a2e",
@@ -1248,6 +1512,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"caf\\u00e9\"",
@@ -1278,6 +1548,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\u65e5\\u672c\"",
       "pickle": {
         "0": "565c75363565355c75363732630a70300a2e",
@@ -1304,6 +1580,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"\\u200b\\u2028\\u3000\"",
@@ -1334,6 +1616,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\ud83d\\ude00\"",
       "pickle": {
         "0": "565c5530303031663630300a70300a2e",
@@ -1360,6 +1648,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"\\udb40\\udc01\\udbff\\udfff\"",
@@ -1390,6 +1684,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\b\\f\"",
       "pickle": {
         "0": "56080c0a70300a2e",
@@ -1416,6 +1716,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json_error": "Object of type bytes is not JSON serializable",
@@ -1446,6 +1752,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type bytes is not JSON serializable",
       "pickle": {
         "0": "635f636f646563730a656e636f64650a70300a28566162630a70310a566c6174696e310a70320a7470330a5270340a2e",
@@ -1472,6 +1784,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json_error": "Object of type bytes is not JSON serializable",
@@ -1502,6 +1820,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type bytes is not JSON serializable",
       "pickle": {
         "0": "635f636f646563730a656e636f64650a70300a285661226227630a70310a566c6174696e310a70320a7470330a5270340a2e",
@@ -1528,6 +1852,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json_error": "Object of type bytes is not JSON serializable",
@@ -1558,6 +1888,12 @@
       "lax_int": {
         "value": "12"
       },
+      "lax_float": {
+        "value": "12.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\" 12 \"",
       "pickle": {
         "0": "56203132200a70300a2e",
@@ -1585,6 +1921,12 @@
       },
       "lax_int": {
         "value": "5"
+      },
+      "lax_float": {
+        "value": "5.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
       },
       "json": "\"+5\"",
       "pickle": {
@@ -1614,6 +1956,12 @@
       "lax_int": {
         "value": "-4"
       },
+      "lax_float": {
+        "value": "-4.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"-4\"",
       "pickle": {
         "0": "562d340a70300a2e",
@@ -1641,6 +1989,12 @@
       },
       "lax_int": {
         "value": "7"
+      },
+      "lax_float": {
+        "value": "7.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
       },
       "json": "\"007\"",
       "pickle": {
@@ -1670,6 +2024,12 @@
       "lax_int": {
         "value": "1000"
       },
+      "lax_float": {
+        "value": "1000.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"1_000\"",
       "pickle": {
         "0": "56315f3030300a70300a2e",
@@ -1696,6 +2056,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"1__0\"",
@@ -1726,6 +2092,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"_1\"",
       "pickle": {
         "0": "565f310a70300a2e",
@@ -1752,6 +2124,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"1_\"",
@@ -1782,6 +2160,12 @@
       "lax_int": {
         "value": "3"
       },
+      "lax_float": {
+        "value": "3.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"3.0\"",
       "pickle": {
         "0": "56332e300a70300a2e",
@@ -1810,6 +2194,12 @@
       "lax_int": {
         "value": "3"
       },
+      "lax_float": {
+        "value": "3.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"3.00\"",
       "pickle": {
         "0": "56332e30300a70300a2e",
@@ -1836,6 +2226,12 @@
         "value": "3.5"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "3.5"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"3.5\"",
@@ -1866,6 +2262,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "0.5"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\" 0.5 \"",
       "pickle": {
         "0": "5620302e35200a70300a2e",
@@ -1876,6 +2278,176 @@
         "5": "80059509000000000000008c0520302e3520942e"
       },
       "view": "' 0.5 '"
+    },
+    {
+      "name": "'true'",
+      "source": "'true'",
+      "literal": true,
+      "plain": true,
+      "repr": "'true'",
+      "str": "true",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "value": "True"
+      },
+      "json": "\"true\"",
+      "pickle": {
+        "0": "56747275650a70300a2e",
+        "1": "58040000007472756571002e",
+        "2": "800258040000007472756571002e",
+        "3": "800358040000007472756571002e",
+        "4": "80049508000000000000008c0474727565942e",
+        "5": "80059508000000000000008c0474727565942e"
+      },
+      "view": "'true'"
+    },
+    {
+      "name": "' Yes '",
+      "source": "' Yes '",
+      "literal": true,
+      "plain": true,
+      "repr": "' Yes '",
+      "str": " Yes ",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\" Yes \"",
+      "pickle": {
+        "0": "5620596573200a70300a2e",
+        "1": "5805000000205965732071002e",
+        "2": "80025805000000205965732071002e",
+        "3": "80035805000000205965732071002e",
+        "4": "80049509000000000000008c052059657320942e",
+        "5": "80059509000000000000008c052059657320942e"
+      },
+      "view": "' Yes '"
+    },
+    {
+      "name": "'off'",
+      "source": "'off'",
+      "literal": true,
+      "plain": true,
+      "repr": "'off'",
+      "str": "off",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "value": "False"
+      },
+      "json": "\"off\"",
+      "pickle": {
+        "0": "566f66660a70300a2e",
+        "1": "58030000006f666671002e",
+        "2": "800258030000006f666671002e",
+        "3": "800358030000006f666671002e",
+        "4": "80049507000000000000008c036f6666942e",
+        "5": "80059507000000000000008c036f6666942e"
+      },
+      "view": "'off'"
+    },
+    {
+      "name": "'2'",
+      "source": "'2'",
+      "literal": true,
+      "plain": true,
+      "repr": "'2'",
+      "str": "2",
+      "truthy": true,
+      "int": {
+        "value": "2"
+      },
+      "float": {
+        "value": "2.0"
+      },
+      "lax_int": {
+        "value": "2"
+      },
+      "lax_float": {
+        "value": "2.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"2\"",
+      "pickle": {
+        "0": "56320a70300a2e",
+        "1": "58010000003271002e",
+        "2": "800258010000003271002e",
+        "3": "800358010000003271002e",
+        "4": "80049505000000000000008c0132942e",
+        "5": "80059505000000000000008c0132942e"
+      },
+      "view": "'2'"
+    },
+    {
+      "name": "1",
+      "source": "1",
+      "literal": true,
+      "plain": true,
+      "repr": "1",
+      "str": "1",
+      "truthy": true,
+      "int": {
+        "value": "1"
+      },
+      "float": {
+        "value": "1.0"
+      },
+      "lax_int": {
+        "value": "1"
+      },
+      "lax_float": {
+        "value": "1.0"
+      },
+      "lax_bool": {
+        "value": "True"
+      },
+      "json": "1",
+      "pickle": {
+        "0": "49310a2e",
+        "1": "4b012e",
+        "2": "80024b012e",
+        "3": "80034b012e",
+        "4": "80044b012e",
+        "5": "80054b012e"
+      },
+      "view": "1"
     },
     {
       "name": "'.5'",
@@ -1892,6 +2464,12 @@
         "value": "0.5"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "0.5"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\".5\"",
@@ -1922,6 +2500,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "5.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"5.\"",
       "pickle": {
         "0": "56352e0a70300a2e",
@@ -1948,6 +2532,12 @@
         "value": "1000.0"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "1000.0"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"1e3\"",
@@ -1978,6 +2568,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "10.5"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"1_0.5\"",
       "pickle": {
         "0": "56315f302e350a70300a2e",
@@ -2004,6 +2600,12 @@
         "value": "10000000000.0"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "10000000000.0"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"1e1_0\"",
@@ -2034,6 +2636,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "inf"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"inf\"",
       "pickle": {
         "0": "56696e660a70300a2e",
@@ -2060,6 +2668,12 @@
         "value": "-inf"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "-inf"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"-Infinity\"",
@@ -2090,6 +2704,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "nan"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"nan\"",
       "pickle": {
         "0": "566e616e0a70300a2e",
@@ -2116,6 +2736,12 @@
         "value": "nan"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "nan"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"NaN\"",
@@ -2146,6 +2772,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"0x10\"",
       "pickle": {
         "0": "56307831300a70300a2e",
@@ -2172,6 +2804,12 @@
         "error": "ValueError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "\"abc\"",
@@ -2202,6 +2840,12 @@
       "lax_int": {
         "value": "12"
       },
+      "lax_float": {
+        "value": "12.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type bytes is not JSON serializable",
       "pickle": {
         "0": "635f636f646563730a656e636f64650a70300a285631320a70310a566c6174696e310a70320a7470330a5270340a2e",
@@ -2228,6 +2872,12 @@
         "value": "1.5"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "1.5"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json_error": "Object of type bytes is not JSON serializable",
@@ -2258,6 +2908,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "3.9"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "3.9",
       "pickle": {
         "0": "46332e390a2e",
@@ -2284,6 +2940,12 @@
         "value": "-3.9"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "-3.9"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "-3.9",
@@ -2314,6 +2976,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "value": "2.5"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "2.5",
       "pickle": {
         "0": "46322e350a2e",
@@ -2340,6 +3008,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "[]",
@@ -2370,6 +3044,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "[1, \"a\", null, true]",
       "pickle": {
         "0": "286c70300a49310a6156610a70310a614e614930310a612e",
@@ -2396,6 +3076,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "[]",
@@ -2426,6 +3112,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "[1]",
       "pickle": {
         "0": "2849310a7470300a2e",
@@ -2452,6 +3144,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "[1, [2, 3]]",
@@ -2482,6 +3180,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "{}",
       "pickle": {
         "0": "286470300a2e",
@@ -2508,6 +3212,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "{\"a\": 1, \"b\": [1.0, 2.5]}",
@@ -2538,6 +3248,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "{\"z\": 1, \"a\": 2, \"m\": 3}",
       "pickle": {
         "0": "286470300a567a0a70310a49310a7356610a70320a49320a73566d0a70330a49330a732e",
@@ -2564,6 +3280,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "{\"1\": \"bool\", \"2.5\": \"float\", \"null\": \"none\"}",
@@ -2594,6 +3316,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "keys must be str, int, float, bool or None, not tuple",
       "pickle": {
         "0": "286470300a2849310a49320a7470310a567475706c65206b65790a70320a732e",
@@ -2620,6 +3348,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "{\"nested\": {\"deeper\": {\"deepest\": [{}]}}}",
@@ -2650,6 +3384,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type set is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a7365740a70300a28286c70310a49310a617470320a5270330a2e",
@@ -2676,6 +3416,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json_error": "Object of type set is not JSON serializable",
@@ -2706,6 +3452,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type frozenset is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a66726f7a656e7365740a70300a28286c70310a49310a617470320a5270330a2e",
@@ -2732,6 +3484,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "[[[[[[[[[[1]]]]]]]]]]",
@@ -2762,6 +3520,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
       "pickle": {
         "0": "286c70300a286c70310a286c70320a286c70330a286c70340a286c70350a286c70360a286c70370a286c70380a286c70390a286c7031300a286c7031310a286c7031320a286c7031330a286c7031340a286c7031350a286c7031360a286c7031370a286c7031380a286c7031390a286c7032300a286c7032310a286c7032320a286c7032330a286c7032340a286c7032350a286c7032360a286c7032370a286c7032380a286c7032390a286c7033300a286c7033310a286c7033320a286c7033330a286c7033340a286c7033350a286c7033360a286c7033370a286c7033380a286c7033390a286c7034300a286c7034310a286c7034320a286c7034330a286c7034340a286c7034350a286c7034360a286c7034370a286c7034380a286c7034390a286c7035300a286c7035310a286c7035320a286c7035330a286c7035340a286c7035350a286c7035360a286c7035370a286c7035380a286c7035390a286c7036300a286c7036310a286c7036320a286c7036330a286c7036340a286c7036350a286c7036360a286c7036370a286c7036380a286c7036390a286c7037300a286c7037310a286c7037320a286c7037330a286c7037340a286c7037350a286c7037360a286c7037370a286c7037380a286c7037390a286c7038300a286c7038310a286c7038320a286c7038330a286c7038340a286c7038350a286c7038360a286c7038370a286c7038380a286c7038390a286c7039300a286c7039310a286c7039320a286c7039330a286c7039340a286c7039350a286c7039360a286c7039370a286c7039380a286c7039390a286c703130300a286c703130310a286c703130320a286c703130330a286c703130340a286c703130350a286c703130360a286c703130370a286c703130380a286c703130390a286c703131300a286c703131310a286c703131320a286c703131330a286c703131340a286c703131350a286c703131360a286c703131370a286c703131380a286c703131390a286c703132300a286c703132310a286c703132320a286c703132330a286c703132340a286c703132350a286c703132360a286c703132370a286c703132380a286c703132390a286c703133300a286c703133310a286c703133320a286c703133330a286c703133340a286c703133350a286c703133360a286c703133370a286c703133380a286c703133390a286c703134300a286c703134310a286c703134320a286c703134330a286c703134340a286c703134350a286c703134360a286c703134370a286c703134380a286c703134390a49310a6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e",
@@ -2790,6 +3554,12 @@
       "lax_int": {
         "error": "ValueError"
       },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "{\"timestamp\": 1726000000.123, \"response\": \"{\\\"id\\\": \\\"chatcmpl-1\\\", \\\"object\\\": \\\"chat.completion\\\"}\"}",
       "pickle": {
         "0": "286470300a5674696d657374616d700a70310a46313732363030303030302e3132330a7356726573706f6e73650a70320a567b226964223a202263686174636d706c2d31222c20226f626a656374223a2022636861742e636f6d706c6574696f6e227d0a70330a732e",
@@ -2816,6 +3586,12 @@
         "error": "TypeError"
       },
       "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
         "error": "ValueError"
       },
       "json": "{\"model\": \"gpt-4o\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"temperature\": 0.2, \"stream\": false}",

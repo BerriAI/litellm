@@ -3,7 +3,7 @@
     python scripts/generate_fixtures.py > generated/values.json
 
 Each row records `repr`, `str`, `json.dumps` (or its error), `bool`, `int`, `float`, pydantic's
-lax `int` validation, and `pickle.dumps` at every protocol. Conversions record the result's
+lax `int`, `float`, and `bool` validation, and `pickle.dumps` at every protocol. Conversions record the result's
 `repr` or the exception class raised. Run it with the repository environment, which has pydantic. `literal` says whether `ast.literal_eval(repr(value))` gives the value back,
 which is how Python reads `str(dict)` text back from a cache; the Rust tests reach the other
 rows only through pickle. `view` is `repr` of the value as `pickle::loads` decodes it, with
@@ -20,6 +20,8 @@ import warnings
 from pydantic import TypeAdapter, ValidationError
 
 LAX_INT = TypeAdapter(int)
+LAX_FLOAT = TypeAdapter(float)
+LAX_BOOL = TypeAdapter(bool)
 
 # Entries are source texts, or `(name, source)` when the source is too long to read in a
 # test report. `name` is what the Rust `KNOWN` table keys on.
@@ -97,6 +99,11 @@ CORPUS = [
     "'3.00'",
     "'3.5'",
     "' 0.5 '",
+    "'true'",
+    "' Yes '",
+    "'off'",
+    "'2'",
+    "1",
     "'.5'",
     "'5.'",
     "'1e3'",
@@ -369,6 +376,8 @@ def row(entry):
         "int": converted(int, value),
         "float": converted(float, value),
         "lax_int": converted(LAX_INT.validate_python, value),
+        "lax_float": converted(LAX_FLOAT.validate_python, value),
+        "lax_bool": converted(LAX_BOOL.validate_python, value),
     }
     try:
         entry["json"] = json.dumps(value)

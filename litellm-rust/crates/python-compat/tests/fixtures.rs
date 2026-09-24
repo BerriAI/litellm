@@ -64,6 +64,8 @@ struct Row {
     int: Conversion,
     float: Conversion,
     lax_int: Conversion,
+    lax_float: Conversion,
+    lax_bool: Conversion,
     json: Option<String>,
     json_error: Option<String>,
     pickle: Option<BTreeMap<String, String>>,
@@ -235,6 +237,20 @@ fn check_value(mismatches: &mut Mismatches, row: &Row, value: &Value) {
         "pydantic lax int",
         &row.lax_int.expected(),
         &outcome(pydantic::lax_int(value), |int| int.to_string()),
+    );
+    mismatches.check(
+        row,
+        "pydantic lax float",
+        &row.lax_float.expected(),
+        &outcome(pydantic::lax_float(value), float_repr),
+    );
+    mismatches.check(
+        row,
+        "pydantic lax bool",
+        &row.lax_bool.expected(),
+        &outcome(pydantic::lax_bool(value), |flag| {
+            if flag { "True" } else { "False" }.to_owned()
+        }),
     );
     let expected = row.json.clone().or_else(|| {
         row.json_error

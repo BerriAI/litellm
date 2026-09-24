@@ -1,10 +1,10 @@
-//! pydantic's lax-mode validation, which LiteLLM's usage and response models apply to the
+//! pydantic's lax-mode validation of `int`, `float`, and `bool`, which LiteLLM's usage and response models apply to the
 //! numbers providers send.
 
 use num_bigint::BigInt;
 use num_traits::Zero;
 
-use crate::number::{int_from_float, parse_int_literal};
+use crate::number::{self, int_from_float, parse_int_literal};
 use crate::{Error, PythonException, Value};
 
 /// pydantic-core converts floats through `i64`, so larger magnitudes fail validation.
@@ -50,5 +50,36 @@ pub fn lax_int(value: &Value) -> Result<BigInt, Error> {
         Value::Str(text) => int_from_text(text),
         Value::Bytes(bytes) => int_from_text(&String::from_utf8_lossy(bytes)),
         _ => Err(invalid("Input should be a valid integer")),
+    }
+}
+
+/// `TypeAdapter(float).validate_python(value)` in lax mode.
+pub fn lax_float(value: &Value) -> Result<f64, Error> {
+    match value {
+        Value::Bool(_) | Value::Int(_) | Value::Float(_) => number::float(value),
+        Value::Str(text) => number::float(&Value::Str(text.trim().to_owned())).map_err(|_| {
+            invalid("Input should be a valid number, unable to parse string as a number")
+        }),
+        Value::Bytes(bytes) => lax_float(&Value::Str(String::from_utf8_lossy(bytes).into_owned())),
+        _ => Err(invalid("Input should be a valid number")),
+    }
+}
+
+/// `TypeAdapter(bool).validate_python(value)` in lax mode.
+pub fn lax_bool(value: &Value) -> Result<bool, Error> {
+    let unparsable = || invalid("Input should be a valid boolean, unable to interpret input");
+    match value {
+        Value::Bool(flag) => Ok(*flag),
+        Value::Int(number) if number.is_zero() => Ok(false),
+        Value::Int(number) if *number == BigInt::from(1) => Ok(true),
+        Value::Float(number) if *number == 0.0 => Ok(false),
+        Value::Float(number) if *number == 1.0 => Ok(true),
+        Value::Str(text) => match text.to_ascii_lowercase().as_str() {
+            "0" | "off" | "f" | "false" | "n" | "no" => Ok(false),
+            "1" | "on" | "t" | "true" | "y" | "yes" => Ok(true),
+            _ => Err(unparsable()),
+        },
+        Value::Bytes(bytes) => lax_bool(&Value::Str(String::from_utf8_lossy(bytes).into_owned())),
+        _ => Err(unparsable()),
     }
 }
