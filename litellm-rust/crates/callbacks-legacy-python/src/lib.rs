@@ -17,7 +17,7 @@ mod logger;
 mod preparation;
 mod python;
 #[cfg(test)]
-#[path = "../tests/support.rs"]
+#[path = "../tests/legacy/support.rs"]
 mod test_support;
 
 pub(crate) use adapter::LegacyLogging;

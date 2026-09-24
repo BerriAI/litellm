@@ -56,7 +56,7 @@ pub struct ChatCompletionsChoice {
 ///
 /// There is deliberately no `id`: Python mints the `chatcmpl-…` id on the
 /// `ModelResponse` it already created, and echoing the provider's own id here
-/// would change it. Pinned by `response_carries_no_id` in `tests.rs`.
+/// would change it. Pinned by `response_carries_no_id` in the Anthropic chat transformation tests.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatCompletionsResponse {
     pub created: u64,

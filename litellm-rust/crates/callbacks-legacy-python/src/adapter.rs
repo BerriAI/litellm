@@ -487,11 +487,11 @@ impl PythonLifecycle for LegacyLogging {
 }
 
 #[cfg(test)]
-#[path = "../tests/deployment_hooks.rs"]
+#[path = "../tests/legacy/deployment_hooks.rs"]
 mod deployment_hooks_tests;
 #[cfg(test)]
-#[path = "../tests/payload.rs"]
+#[path = "../tests/legacy/payload.rs"]
 mod payload_tests;
 #[cfg(test)]
-#[path = "../tests/terminal.rs"]
+#[path = "../tests/legacy/terminal.rs"]
 mod terminal_tests;

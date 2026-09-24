@@ -63,5 +63,5 @@ impl PendingLogging {
 }
 
 #[cfg(test)]
-#[path = "../tests/deferred.rs"]
+#[path = "../tests/legacy/deferred.rs"]
 mod tests;

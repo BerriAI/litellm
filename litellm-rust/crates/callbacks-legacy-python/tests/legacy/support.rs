@@ -8,7 +8,7 @@ use crate::{LegacyLogging, LegacySurface, PublicCall};
 /// The parameters of every `callbacks_legacy_python` function, as the real module declares them.
 /// `tests/test_litellm/rust_bridge/test_callbacks_legacy_python.py` pins this file to the Python
 /// signatures, and [`namespace`] binds every fake call against it.
-pub(crate) const PYTHON_CONTRACT: &str = include_str!("../python_contract.json");
+pub(crate) const PYTHON_CONTRACT: &str = include_str!("../../python_contract.json");
 
 /// Stand-ins for `callbacks_legacy_python`, the only Python module the crate calls. Tests
 /// share one interpreter and run concurrently, so each fake is installed idempotently and
