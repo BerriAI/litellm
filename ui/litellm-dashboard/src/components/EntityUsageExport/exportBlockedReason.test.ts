@@ -31,7 +31,6 @@ describe("getExportBlockedReason", () => {
     expect(reason).toMatch(/failed to load/i);
     expect(reason).not.toMatch(/stopped/i);
   });
-
 });
 
 describe("getApiKeyTruncation", () => {
