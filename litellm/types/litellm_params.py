@@ -135,7 +135,6 @@ class RoutingOptions:
     provider_affinity_header: str | None = None
     search_tool_name: str | None = None
     model_list: "Sequence[DeploymentTypedDict] | None" = None
-    model_alias_map: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -168,7 +167,7 @@ class SpecializedRouterOptions:
     complexity_router_config: Mapping[str, object] | None = None
     complexity_router_default_model: str | None = None
     adaptive_router_config: Mapping[str, object] | None = None
-    adaptive_router_default_model: str | None = None  # TODO: nothing reads it; registered before this module existed
+    adaptive_router_default_model: str | None = None  # TODO: no reader; kept only so the owned set stays unchanged
     quality_router_config: Mapping[str, object] | None = None
     quality_router_default_model: str | None = None
 
@@ -288,7 +287,8 @@ class CallState:
     """Identity and bookkeeping LiteLLM attaches to one call."""
 
     litellm_call_id: str | None = None
-    completion_call_id: str | None = None  # TODO: nothing reads it; registered before this module existed
+    completion_call_id: str | None = None  # TODO: no reader; kept only so the owned set stays unchanged
+    model_alias_map: Mapping[str, str] | None = None  # TODO: stamped from litellm.model_alias_map, never read back
     data_residency: str | None = None
     litellm_logging_obj: "Logging | None" = None
     preset_cache_key: str | None = None

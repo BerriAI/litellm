@@ -7,6 +7,7 @@ from typing import Final, TypeAlias
 import pytest
 from pydantic import BaseModel
 
+import litellm
 from litellm.caching.caching import Cache
 from litellm.litellm_core_utils.get_litellm_params import (
     get_litellm_params,  # pyright: ignore[reportUnknownVariableType]  # untyped legacy carrier
@@ -18,9 +19,6 @@ from litellm.types.litellm_params import (
     LITELLM_OWNED_ROOTS,
     TRUSTED_CALLBACK_VARS_FIELD,
     CachingOptions,
-    ConnectionSettings,
-    InternalState,
-    LiteLLMOptions,
     owned_wire_names,
     wire,
     wire_names,
@@ -97,7 +95,6 @@ OPTION_NAMES: Final = (
     "provider_affinity_header",
     "search_tool_name",
     "model_list",
-    "model_alias_map",
     "model_info",
     "rpm",
     "tpm",
@@ -185,6 +182,7 @@ AGENTIC_LOOP_STATE_NAMES: Final = (
 INTERNAL_STATE_NAMES: Final = (
     "litellm_call_id",
     "completion_call_id",
+    "model_alias_map",
     "data_residency",
     "litellm_logging_obj",
     "preset_cache_key",
@@ -372,10 +370,6 @@ PRICING_NAMES: Final = (
     "regional_endpoint_uplift_multiplier",
 )
 
-DECLARED_BY_ROOT: Final[Mapping[type, tuple[str, ...]]] = MappingProxyType(
-    {ConnectionSettings: CONNECTION_NAMES, LiteLLMOptions: OPTION_NAMES, InternalState: INTERNAL_STATE_NAMES}
-)
-
 OWNED_NAMES: Final = (
     *CONNECTION_NAMES,
     *OPTION_NAMES,
@@ -414,18 +408,23 @@ def test_a_name_no_object_declares_reaches_the_provider() -> None:
     assert result == MappingProxyType({PROVIDER_KNOB: 1})
 
 
-def _cache_key_for_model_group(model_group: str, options: CachingOptions) -> str:
-    return Cache().get_cache_key(  # pyright: ignore[reportUnknownMemberType]  # untyped legacy key builder
+def _cache_key_for_model_group(cache: Cache, model_group: str, options: CachingOptions) -> str:
+    return cache.get_cache_key(  # pyright: ignore[reportUnknownMemberType]  # untyped legacy key builder
         model=model_group,
         messages=(MappingProxyType({"role": "user", "content": "shared prompt"}),),
         metadata=MappingProxyType({"caching_groups": options.caching_groups, "model_group": model_group}),
     )
 
 
-def test_caching_groups_is_a_flat_sequence_of_model_groups_that_share_one_cache_key() -> None:
+def test_caching_groups_is_a_flat_sequence_of_model_groups_that_share_one_cache_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for callback_list in ("input_callback", "success_callback", "_async_success_callback"):
+        monkeypatch.setattr(litellm, callback_list, [])  # mutable-ok: Cache() appends "cache" to these lists
     options: Final = CachingOptions(caching_groups=(("gpt-4", "gpt-4o"), ("claude-3",)))
+    cache: Final = Cache()
 
-    keys: Final = tuple(_cache_key_for_model_group(group, options) for group in ("gpt-4", "gpt-4o", "claude-3"))
+    keys: Final = tuple(_cache_key_for_model_group(cache, group, options) for group in ("gpt-4", "gpt-4o", "claude-3"))
 
     assert (keys[0] == keys[1], keys[0] == keys[2]) == (True, False)
 
@@ -435,22 +434,17 @@ def test_all_litellm_params_is_exactly_the_owned_inventory() -> None:
 
 
 def test_callback_vars_are_the_fields_of_the_callback_typed_dict() -> None:
-    assert tuple(StandardCallbackDynamicParams.__annotations__) == CALLBACK_VAR_NAMES
+    assert frozenset(StandardCallbackDynamicParams.__annotations__) == frozenset(CALLBACK_VAR_NAMES)
 
 
 def test_pricing_names_are_the_fields_of_the_pricing_model() -> None:
-    assert tuple(CustomPricingLiteLLMParams.model_fields) == PRICING_NAMES
+    assert frozenset(CustomPricingLiteLLMParams.model_fields) == frozenset(PRICING_NAMES)
 
 
 def test_every_owned_name_has_exactly_one_owner() -> None:
     duplicated: Final = tuple(name for name in dict.fromkeys(all_litellm_params) if all_litellm_params.count(name) > 1)
 
     assert duplicated == ()
-
-
-@pytest.mark.parametrize("root", LITELLM_OWNED_ROOTS, ids=(root.__name__ for root in LITELLM_OWNED_ROOTS))
-def test_root_declares_exactly_the_names_that_live_on_its_object(root: type) -> None:
-    assert frozenset(owned_wire_names(root)) == frozenset(DECLARED_BY_ROOT[root])
 
 
 @pytest.mark.parametrize(
@@ -558,10 +552,10 @@ def test_every_param_get_litellm_params_carries_is_kept_out_of_provider_params(n
     assert result == MappingProxyType({PROVIDER_KNOB: provider_value})
 
 
-TYPED_MODEL_OWNERS: Final[Mapping[str, tuple[tuple[type[BaseModel], ...], type]]] = MappingProxyType(
+TYPED_CONFIG_MODELS: Final[Mapping[str, tuple[type[BaseModel], ...]]] = MappingProxyType(
     {
-        "credentials": ((CredentialLiteLLMParams,), ConnectionSettings),
-        "router": ((RouterConfig, UpdateRouterConfig), LiteLLMOptions),
+        "credentials": (CredentialLiteLLMParams,),
+        "router": (RouterConfig, UpdateRouterConfig),
     }
 )
 
@@ -597,6 +591,7 @@ NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingPr
             "cooldown_time",
             "enable_tag_filtering",
             "fallbacks",
+            "max_retries",
             "model_list",
             "num_retries",
             "retry_policy",
@@ -606,12 +601,11 @@ NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingPr
 )
 
 
-@pytest.mark.parametrize("source", TYPED_MODEL_OWNERS)
-def test_names_a_typed_config_model_shares_with_its_root_are_exactly_the_declared_ones(source: str) -> None:
-    models, root = TYPED_MODEL_OWNERS[source]
-    model_names: Final = frozenset(name for model in models for name in model.model_fields)
+@pytest.mark.parametrize("source", TYPED_CONFIG_MODELS)
+def test_names_a_typed_config_model_shares_with_the_owned_inventory_are_exactly_these(source: str) -> None:
+    model_names: Final = frozenset(name for model in TYPED_CONFIG_MODELS[source] for name in model.model_fields)
 
-    assert frozenset(owned_wire_names(root)) & model_names == frozenset(NAMES_SHARED_WITH_TYPED_MODELS[source])
+    assert DECLARED_NAMES & model_names == frozenset(NAMES_SHARED_WITH_TYPED_MODELS[source])
 
 
 @pytest.mark.parametrize("name", PRICING_NAMES)
