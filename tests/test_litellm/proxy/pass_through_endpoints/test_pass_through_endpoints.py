@@ -25,6 +25,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_through_module
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -7333,6 +7334,55 @@ def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_
     assert litellm_params["proxy_server_request"]["body"] == json.loads(
         '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
     )
+
+
+def test_passthrough_merges_both_metadata_carriers_from_the_body_into_one_metadata_key() -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    mock_request.headers = Headers()
+    mock_request.scope = MappingProxyType({})
+
+    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body=json.loads(
+            '{"metadata": {"client_tag": "a"}, "contents": [{"parts": [{"text": "hi"}]}], "ttl": 30,'
+            ' "litellm_metadata": {"lm": "b"}, "generationConfig": {"temperature": 0}}'
+        ),
+        litellm_call_id="lit-metadata-carriers-call-id",
+    )
+
+    litellm_params: Final = kwargs["litellm_params"]
+    assert tuple(litellm_params) == ("ttl", "metadata", "proxy_server_request")
+    assert tuple(litellm_params["metadata"][k] for k in ("client_tag", "lm")) == ("a", "b")
+    assert litellm_params["proxy_server_request"]["body"] == json.loads(
+        '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
+    )
+
+
+def test_passthrough_reads_the_owned_names_at_request_time_not_at_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pass_through_module, "all_litellm_params", (*litellm.all_litellm_params, "registered_later"))
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    mock_request.headers = Headers()
+    mock_request.scope = MappingProxyType({})
+
+    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body=json.loads('{"registered_later": 1, "contents": [{"parts": [{"text": "hi"}]}]}'),
+        litellm_call_id="lit-live-owned-names-call-id",
+    )
+
+    litellm_params: Final = kwargs["litellm_params"]
+    assert tuple(litellm_params) == ("registered_later", "metadata", "proxy_server_request")
+    assert litellm_params["proxy_server_request"]["body"] == json.loads('{"contents": [{"parts": [{"text": "hi"}]}]}')
 
 
 @pytest.mark.asyncio

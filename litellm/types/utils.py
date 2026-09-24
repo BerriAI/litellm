@@ -3913,7 +3913,7 @@ agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)  # 
 
 bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
 
-all_litellm_params = [  # rebind-ok: a star import re-binds it in litellm/__init__.py  # mutable-ok: callers concat
+all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it  # mutable-ok: callers concat
     *OWNED_KWARG_NAMES,
     *KWARG_ARTIFACTS,
     *StandardCallbackDynamicParams.__annotations__,
