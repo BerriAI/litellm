@@ -29,10 +29,12 @@ GET /tag/wau
 GET /team/daily/activity
 GET /team/daily/activity/aggregated
 GET /team/daily/activity/export
+GET /team/daily/activity/aggregated/search
 GET /team/spend/by_user
 GET /team/spend/report
 GET /user/daily/activity
 GET /user/daily/activity/aggregated
+GET /user/daily/activity/aggregated/search
 GET /user/spend/report
 
 # Admin UI helper endpoints; serve UI forms and caller-scoped views, not desired state

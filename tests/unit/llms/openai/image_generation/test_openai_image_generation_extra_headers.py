@@ -12,6 +12,14 @@ import pytest
 
 
 from litellm.llms.openai.openai import OpenAIChatCompletion
+from litellm.types.utils import ImageResponse
+
+
+def _raw_image_response(mock_image_data):
+    raw_response = MagicMock()
+    raw_response.parse.return_value = mock_image_data
+    raw_response.headers = {"x-request-id": "req-image"}
+    return raw_response
 
 
 @pytest.fixture
@@ -41,7 +49,7 @@ class TestImageGenerationExtraHeaders:
         }
 
         mock_openai_client = MagicMock()
-        mock_openai_client.images.generate.return_value = mock_image_data
+        mock_openai_client.images.with_raw_response.generate.return_value = _raw_image_response(mock_image_data)
         mock_openai_client.api_key = "test-key"
         mock_openai_client._base_url._uri_reference = "https://api.openai.com"
 
@@ -58,7 +66,7 @@ class TestImageGenerationExtraHeaders:
             client=mock_openai_client,
         )
 
-        _, kwargs = mock_openai_client.images.generate.call_args
+        _, kwargs = mock_openai_client.images.with_raw_response.generate.call_args
         assert kwargs.get("extra_headers") == test_headers
 
     def test_sync_image_generation_without_headers(
@@ -72,7 +80,7 @@ class TestImageGenerationExtraHeaders:
         }
 
         mock_openai_client = MagicMock()
-        mock_openai_client.images.generate.return_value = mock_image_data
+        mock_openai_client.images.with_raw_response.generate.return_value = _raw_image_response(mock_image_data)
         mock_openai_client.api_key = "test-key"
         mock_openai_client._base_url._uri_reference = "https://api.openai.com"
 
@@ -86,7 +94,7 @@ class TestImageGenerationExtraHeaders:
             client=mock_openai_client,
         )
 
-        _, kwargs = mock_openai_client.images.generate.call_args
+        _, kwargs = mock_openai_client.images.with_raw_response.generate.call_args
         assert "extra_headers" not in kwargs
 
     @pytest.mark.asyncio
@@ -101,7 +109,9 @@ class TestImageGenerationExtraHeaders:
         }
 
         mock_openai_client = MagicMock()
-        mock_openai_client.images.generate = AsyncMock(return_value=mock_image_data)
+        mock_openai_client.images.with_raw_response.generate = AsyncMock(
+                return_value=_raw_image_response(mock_image_data)
+            )
         mock_openai_client.api_key = "test-key"
 
         test_headers = {"cf-aig-authorization": "Bearer custom-token"}
@@ -109,7 +119,7 @@ class TestImageGenerationExtraHeaders:
         await openai_chat_completions.aimage_generation(
             prompt="A white cat",
             data={"model": "dall-e-3", "prompt": "A white cat"},
-            model_response=MagicMock(),
+            model_response=ImageResponse(),
             timeout=60.0,
             logging_obj=mock_logging_obj,
             api_key="test-key",
@@ -117,7 +127,7 @@ class TestImageGenerationExtraHeaders:
             client=mock_openai_client,
         )
 
-        _, kwargs = mock_openai_client.images.generate.call_args
+        _, kwargs = mock_openai_client.images.with_raw_response.generate.call_args
         assert kwargs.get("extra_headers") == test_headers
 
     @pytest.mark.asyncio
@@ -132,20 +142,22 @@ class TestImageGenerationExtraHeaders:
         }
 
         mock_openai_client = MagicMock()
-        mock_openai_client.images.generate = AsyncMock(return_value=mock_image_data)
+        mock_openai_client.images.with_raw_response.generate = AsyncMock(
+                return_value=_raw_image_response(mock_image_data)
+            )
         mock_openai_client.api_key = "test-key"
 
         await openai_chat_completions.aimage_generation(
             prompt="A white cat",
             data={"model": "dall-e-3", "prompt": "A white cat"},
-            model_response=MagicMock(),
+            model_response=ImageResponse(),
             timeout=60.0,
             logging_obj=mock_logging_obj,
             api_key="test-key",
             client=mock_openai_client,
         )
 
-        _, kwargs = mock_openai_client.images.generate.call_args
+        _, kwargs = mock_openai_client.images.with_raw_response.generate.call_args
         assert "extra_headers" not in kwargs
 
     @pytest.mark.parametrize("is_async", [False, True])
@@ -169,11 +181,13 @@ class TestImageGenerationExtraHeaders:
         test_headers = {"cf-aig-authorization": "Bearer custom-token"}
 
         if is_async:
-            mock_openai_client.images.generate = AsyncMock(return_value=mock_image_data)
+            mock_openai_client.images.with_raw_response.generate = AsyncMock(
+                return_value=_raw_image_response(mock_image_data)
+            )
             await openai_chat_completions.aimage_generation(
                 prompt="A white cat",
                 data={"model": "dall-e-3", "prompt": "A white cat"},
-                model_response=MagicMock(),
+                model_response=ImageResponse(),
                 timeout=60.0,
                 logging_obj=mock_logging_obj,
                 api_key="test-key",
@@ -181,7 +195,7 @@ class TestImageGenerationExtraHeaders:
                 client=mock_openai_client,
             )
         else:
-            mock_openai_client.images.generate.return_value = mock_image_data
+            mock_openai_client.images.with_raw_response.generate.return_value = _raw_image_response(mock_image_data)
             openai_chat_completions.image_generation(
                 model="dall-e-3",
                 prompt="A white cat",
@@ -197,7 +211,7 @@ class TestImageGenerationExtraHeaders:
             "complete_input_dict"
         ]
         assert "extra_headers" not in logged_body
-        _, kwargs = mock_openai_client.images.generate.call_args
+        _, kwargs = mock_openai_client.images.with_raw_response.generate.call_args
         assert kwargs.get("extra_headers") == test_headers
 
     def test_sync_image_generation_forwards_headers_to_async(
@@ -242,7 +256,9 @@ class TestImageGenerationEntryPointHeaders:
         }
 
         mock_openai_client = MagicMock()
-        mock_openai_client.images.generate = AsyncMock(return_value=mock_image_data)
+        mock_openai_client.images.with_raw_response.generate = AsyncMock(
+                return_value=_raw_image_response(mock_image_data)
+            )
         mock_openai_client.api_key = "test-key"
         mock_openai_client._base_url._uri_reference = "https://api.openai.com"
 
@@ -256,6 +272,6 @@ class TestImageGenerationEntryPointHeaders:
             api_key="test-key",
         )
 
-        mock_openai_client.images.generate.assert_called_once()
-        _, kwargs = mock_openai_client.images.generate.call_args
+        mock_openai_client.images.with_raw_response.generate.assert_called_once()
+        _, kwargs = mock_openai_client.images.with_raw_response.generate.call_args
         assert kwargs.get("extra_headers") == test_headers

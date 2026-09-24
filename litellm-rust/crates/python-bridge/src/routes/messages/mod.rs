@@ -39,11 +39,12 @@ fn run_messages(
             "the Rust Messages route does not serve this provider",
         ));
     }
+    let secrets = crate::secrets::source(py)?;
     run_legacy_call(
         py,
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,
-        crate::logger::LoggedMachine::new(messages_machine()),
+        crate::logger::LoggedMachine::new(messages_machine(secrets)),
         MessagesRouteHost::new(request.unbind()),
         asynchronous,
     )
