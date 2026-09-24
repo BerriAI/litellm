@@ -321,6 +321,35 @@ func TestUpdateKeyOmitsEmptyBudgetDuration(t *testing.T) {
 	}
 }
 
+// /key/generate omits an empty key_alias, so an update that sends "" stores an
+// alias the key never had, and the proxy then 400s every other aliasless key on
+// its unique-alias check.
+func TestUpdateKeyOmitsEmptyKeyAlias(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key": "sk-test"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	if _, err := client.UpdateKey(&Key{Key: "sk-test"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if _, present := captured["key_alias"]; present {
+		t.Errorf("update payload contains empty key_alias: %v", captured["key_alias"])
+	}
+
+	if _, err := client.UpdateKey(&Key{Key: "sk-test", KeyAlias: "alias-1"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if captured["key_alias"] != "alias-1" {
+		t.Errorf("key_alias = %v, want alias-1", captured["key_alias"])
+	}
+}
+
 func TestResourceKeyUpdateFailureKeepsPriorState(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
