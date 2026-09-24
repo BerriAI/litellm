@@ -1610,6 +1610,4 @@ def test_connection_pool_status_reports_the_sync_pool(socket_redis_cache: RedisC
     status = socket_redis_cache.connection_pool_status()
 
     assert status["max_connections"] == socket_redis_cache.redis_client.connection_pool.max_connections
-    assert status["connection_class"] == type(
-        socket_redis_cache.redis_client.connection_pool.connection_class
-    ).__name__ or isinstance(status["connection_class"], str)
+    assert status["connection_class"] == socket_redis_cache.redis_client.connection_pool.connection_class.__name__

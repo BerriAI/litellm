@@ -17,7 +17,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
@@ -586,6 +586,13 @@ class _PubSubFrame(TypedDict):
 
 
 _PUBSUB_FRAME: Final = TypeAdapter(_PubSubFrame)
+
+
+class RedisPoolStatus(TypedDict):
+    max_connections: ReadOnly[int | None]
+    connection_class: ReadOnly[str | None]
+
+
 _PUBSUB_WAIT_SLICE_SECONDS: Final = 1.0
 
 
@@ -622,13 +629,11 @@ class RedisSubscription:
         clock: Final = asyncio.get_running_loop().time
         deadline: Final = None if timeout is None else clock() + timeout
         while True:
-            remaining = (  # rebind-ok: countdown per frame
-                _PUBSUB_WAIT_SLICE_SECONDS if deadline is None else max(deadline - clock(), 0.0)
-            )
-            frame: object = await self.pubsub.get_message(timeout=remaining)  # rebind-ok: one frame per loop turn
+            remaining = _PUBSUB_WAIT_SLICE_SECONDS if deadline is None else max(deadline - clock(), 0.0)
+            frame: object = await self.pubsub.get_message(timeout=remaining)
             if frame is None:
                 return None
-            message = _redis_message(frame)  # rebind-ok: one frame per loop turn
+            message = _redis_message(frame)
             if message is not None:
                 return message
 
@@ -1916,14 +1921,15 @@ class RedisCache(BaseCache):
         await pubsub.subscribe(*channels)
         return RedisSubscription(pubsub)
 
-    def connection_pool_status(self) -> Mapping[str, object]:
+    def connection_pool_status(self) -> "RedisPoolStatus":
         pool: Final = getattr(self.redis_client, "connection_pool", None)
-        if pool is None:
-            return {}
-        return {
-            "max_connections": getattr(pool, "max_connections", None),
-            "connection_class": getattr(getattr(pool, "connection_class", None), "__name__", None),
+        max_connections: Final = getattr(pool, "max_connections", None)
+        connection_class: Final = getattr(getattr(pool, "connection_class", None), "__name__", None)
+        status: Final[RedisPoolStatus] = {
+            "max_connections": max_connections if isinstance(max_connections, int) else None,
+            "connection_class": connection_class if isinstance(connection_class, str) else None,
         }
+        return status
 
     async def _pipeline_increment_helper(
         self,
