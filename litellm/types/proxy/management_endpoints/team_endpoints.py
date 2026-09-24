@@ -21,7 +21,10 @@ TeamIdSearchMatch = Literal["exact", "prefix"]
 
 TeamIdSearchFilter = TypedDict(
     "TeamIdSearchFilter",
-    {"in": NotRequired[ReadOnly[Sequence[str]]], "notIn": NotRequired[ReadOnly[Sequence[str]]]},
+    {  # mutable-ok: functional TypedDict field map
+        "in": NotRequired[ReadOnly[Sequence[str]]],
+        "notIn": NotRequired[ReadOnly[Sequence[str]]],
+    },
 )
 
 
