@@ -717,11 +717,32 @@ def test_is_off_peak_ignores_malformed_override_dates():
 
     peak_instant = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
     peak_windows = [{"hours_utc": "00:30-01:00", "weekdays": [1, 2, 3, 4, 5]}]
-    for bad in ("2026-01-01", [20260101, None], ["2026-1-1"]):
+    for bad in (
+        "2026-01-01",
+        [20260101, None],
+        ["2026-1-1"],
+        ["2026-W01-4"],
+        ["2026-01-1 "],
+    ):
         block = {"windows": peak_windows + [{"hours_utc": "00:00-00:00", "override_dates": bad}]}
         assert _is_off_peak(block, peak_instant) is False, (
             f"override_dates={bad!r} is malformed and must disable its rule"
         )
+
+
+def test_is_off_peak_override_rule_without_valid_hours_is_disabled():
+    """An override rule whose hours_utc does not parse never applies, even on a listed
+    date: the flat hours_utc still decides instead of the broken rule billing peak all day."""
+    from datetime import datetime, timezone
+
+    block = {
+        "hours_utc": "00:00-00:00",
+        "windows": [
+            {"override_dates": ["2026-03-03"], "hours_utc": 5},
+            {"override_dates": ["2026-03-03"]},
+        ],
+    }
+    assert _is_off_peak(block, datetime(2026, 3, 3, 12, 0, tzinfo=timezone.utc)) is True
 
 
 def test_is_off_peak_disables_rules_with_partially_malformed_override_dates():
@@ -758,7 +779,8 @@ def test_override_dates_use_weekday_timezone_calendar_on_shipped_deepseek_rows()
     """Every shipped DeepSeek row with off_peak_pricing carries the same block as
     deepseek/deepseek-flash: the 2026 PRC holidays and make-up workdays, read on the
     Asia/Shanghai calendar. The make-up Sunday bills weekday hours and a holiday is
-    off-peak all day."""
+    off-peak all day. Dates per the State Council 2026 notice,
+    https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm, read 2026-09-24."""
     from datetime import datetime, timezone
 
     import litellm

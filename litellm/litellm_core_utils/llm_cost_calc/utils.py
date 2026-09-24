@@ -466,8 +466,8 @@ def _weekday_calendar(weekday_timezone: object) -> tzinfo:
     return timezone.utc
 
 
-def _calendar_date(reference_utc: datetime, weekday_timezone: object) -> str:
-    return reference_utc.astimezone(_weekday_calendar(weekday_timezone)).date().isoformat()
+def _calendar_date(reference_utc: datetime, weekday_timezone: object) -> date:
+    return reference_utc.astimezone(_weekday_calendar(weekday_timezone)).date()
 
 
 def _matches_weekdays(reference_utc: datetime, weekdays: object, weekday_timezone: object) -> bool:
@@ -492,23 +492,28 @@ def _as_window_strings(value: object) -> tuple[str, ...]:
     return ()
 
 
-def _is_iso_date(value: object) -> bool:
-    if not isinstance(value, str) or len(value) != 10:
-        return False
+def _parse_iso_date(value: object) -> date | None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 10
+        or value[4] != "-"
+        or value[7] != "-"
+        or not (value[:4] + value[5:7] + value[8:10]).isdigit()
+    ):
+        return None
     try:
-        date.fromisoformat(value)
+        return date(int(value[:4]), int(value[5:7]), int(value[8:10]))
     except ValueError:
-        return False
-    return True
+        return None
 
 
-def _as_date_strings(value: object) -> tuple[str, ...]:
+def _as_dates(value: object) -> frozenset[date]:
     if isinstance(value, str) or not isinstance(value, Sequence):
-        return ()
-    entries: Final = tuple(value)
-    if not entries or not all(_is_iso_date(entry) for entry in entries):
-        return ()
-    return entries
+        return frozenset()
+    parsed: Final = tuple(_parse_iso_date(entry) for entry in value)
+    if not parsed or any(entry is None for entry in parsed):
+        return frozenset()
+    return frozenset(entry for entry in parsed if entry is not None)
 
 
 def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None = None) -> bool:
@@ -517,8 +522,8 @@ def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None =
     hours apply only on its weekdays. A rule carrying override_dates applies only on those
     dates, read on the weekday_timezone calendar: on a listed date the matching rules alone
     decide (their weekdays are ignored, and the flat hours_utc and every other rule are
-    skipped), and on any other date the rule never applies (a malformed override_dates
-    disables the rule entirely).
+    skipped), and on any other date the rule never applies (a malformed override_dates or
+    hours_utc disables the rule entirely).
     """
     reference: Final = current_time if current_time is not None else current_billing_time()
     reference_utc: Final = (
@@ -532,7 +537,11 @@ def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None =
         if isinstance(windows, str) or not isinstance(windows, Sequence)
         else tuple(rule for rule in windows if isinstance(rule, Mapping))
     )
-    override_rules: Final = tuple(rule for rule in rules if today in _as_date_strings(rule.get("override_dates")))
+    override_rules: Final = tuple(
+        rule
+        for rule in rules
+        if _as_window_strings(rule.get("hours_utc")) and today in _as_dates(rule.get("override_dates"))
+    )
     if override_rules:
         for rule in override_rules:
             if _is_within_off_peak_window(_as_window_strings(rule.get("hours_utc")), reference_utc):
