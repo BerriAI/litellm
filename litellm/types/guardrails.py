@@ -1332,6 +1332,8 @@ class ApplyGuardrailResponse(BaseModel):
 
 
 class PatchGuardrailRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     guardrail_name: str | None = None
     litellm_params: BaseLitellmParams | None = None
     guardrail_info: dict[str, object] | None = None
