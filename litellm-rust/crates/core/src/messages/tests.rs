@@ -110,16 +110,52 @@ async fn route_reads_the_provider_credential_and_base_from_the_secret_source() {
             .contains("x-api-key: sk-from-manager"),
         "{request}"
     );
-    let requested = secrets.requested.lock().unwrap().clone();
     assert_eq!(
-        requested,
-        messages_provider_config("anthropic")
-            .unwrap()
-            .secret_names()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
+        *secrets.requested.lock().unwrap(),
+        [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_API_BASE",
+            "ANTHROPIC_BASE_URL"
+        ]
     );
+}
+
+#[tokio::test]
+async fn route_reads_no_secret_when_the_caller_supplies_the_key_and_base() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response_body = r#"{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
+        socket
+            .write_all(write_response(response_body).as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+    let failing = Arc::new(RecordingSecrets::new(Vec::new(), true));
+
+    let output = litellm_host::run::run(
+        messages_machine(failing.clone()),
+        &LocalMessagesHost::new(MessagesCall {
+            api_key: Some("sk-caller".into()),
+            api_base: Some(format!("http://{addr}")),
+            ..secrets_call()
+        }),
+    )
+    .await
+    .expect("messages request succeeds without touching the secret manager");
+
+    assert!(matches!(output, MessagesOutput::Message(_)));
+    assert!(
+        server
+            .await
+            .expect("server task completes")
+            .to_ascii_lowercase()
+            .contains("x-api-key: sk-caller")
+    );
+    assert!(failing.requested.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

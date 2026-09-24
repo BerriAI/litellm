@@ -12,7 +12,7 @@ use litellm_host::{
     machine::{HostChannel, MachineFault, RouteMachine},
     route::Route,
 };
-use litellm_secrets::source::SecretSource;
+use litellm_secrets::source::{SecretSource, resolve_on_demand};
 use litellm_types::{
     llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
     utils::ProviderSpecificHeaders,
@@ -139,23 +139,24 @@ async fn execute(
 ) -> Result<MessagesOutput, Error> {
     let MessagesOpResult::Request(call) = host.route(MessagesOp::ProjectRequest).await?;
     let stream = call.streams();
-    let resolved = resolve_provider(&call.model, call.custom_llm_provider.as_deref())?;
-    let secrets = secrets.resolve(resolved.config.secret_names()).await?;
-    let request = prepare_provider_request(
-        MessagesRequest {
-            model: &call.model,
-            body: Value::Object(call.body.clone()),
-            api_key: call.api_key.as_deref(),
-            api_base: call.api_base.as_deref(),
-            custom_llm_provider: call.custom_llm_provider.as_deref(),
-            extra_headers: call.extra_headers.clone(),
-            provider_specific_header: call.provider_specific_header.clone(),
-            timeout: call.timeout,
-            shaping: call.shaping.clone(),
-        },
-        resolved,
-        secrets.as_ref(),
-    )?;
+    let request = resolve_on_demand(secrets.as_ref(), |secrets| {
+        prepare_provider_request(
+            MessagesRequest {
+                model: &call.model,
+                body: Value::Object(call.body.clone()),
+                api_key: call.api_key.as_deref(),
+                api_base: call.api_base.as_deref(),
+                custom_llm_provider: call.custom_llm_provider.as_deref(),
+                extra_headers: call.extra_headers.clone(),
+                provider_specific_header: call.provider_specific_header.clone(),
+                timeout: call.timeout,
+                shaping: call.shaping.clone(),
+            },
+            resolve_provider(&call.model, call.custom_llm_provider.as_deref())?,
+            secrets,
+        )
+    })
+    .await?;
     if stream && request.provider != ANTHROPIC_MESSAGES_PROVIDER {
         return Err(Error::Unsupported("streaming messages for this provider"));
     }

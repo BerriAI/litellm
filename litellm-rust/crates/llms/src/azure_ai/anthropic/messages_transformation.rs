@@ -76,10 +76,6 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
         resolve_azure_api_key(api_key, env_lookup)
     }
 
-    fn secret_names(&self) -> &'static [&'static str] {
-        &[AZURE_API_KEY_ENV, AZURE_API_BASE_ENV]
-    }
-
     fn auth_strategy(&self) -> MessagesAuthStrategy {
         self.anthropic.auth_strategy()
     }
@@ -599,27 +595,5 @@ mod tests {
         assert_eq!(value["stop_reason"], json!("end_turn"));
         assert_eq!(value["stop_sequence"], json!(null));
         assert_eq!(value["content"][0]["text"], json!("hello"));
-    }
-
-    #[test]
-    fn secret_names_cover_every_credential_and_base_lookup() {
-        let requested = std::cell::RefCell::new(Vec::<String>::new());
-        let record = |name: &str| -> Option<String> {
-            requested.borrow_mut().push(name.to_string());
-            None
-        };
-        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.authenticate(Vec::new(), None, &record);
-        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
-        let requested = requested.into_inner();
-        assert!(!requested.is_empty());
-        let undeclared: Vec<&String> = requested
-            .iter()
-            .filter(|name| {
-                !AZURE_ANTHROPIC_MESSAGES_CONFIG
-                    .secret_names()
-                    .contains(&name.as_str())
-            })
-            .collect();
-        assert_eq!(undeclared, Vec::<&String>::new());
     }
 }

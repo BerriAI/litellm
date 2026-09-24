@@ -61,8 +61,6 @@ pub trait BaseAnthropicMessagesConfig: Sync {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
-    fn secret_names(&self) -> &'static [&'static str];
-
     fn auth_strategy(&self) -> MessagesAuthStrategy {
         MessagesAuthStrategy::Header("x-api-key")
     }
@@ -119,10 +117,6 @@ mod tests {
     }
 
     impl BaseAnthropicMessagesConfig for StubConfig {
-        fn secret_names(&self) -> &'static [&'static str] {
-            &[]
-        }
-
         fn get_complete_url(
             &self,
             _api_base: Option<&str>,
@@ -154,10 +148,6 @@ mod tests {
     struct DefaultsConfig;
 
     impl BaseAnthropicMessagesConfig for DefaultsConfig {
-        fn secret_names(&self) -> &'static [&'static str] {
-            &[]
-        }
-
         fn get_complete_url(
             &self,
             _api_base: Option<&str>,
