@@ -489,20 +489,13 @@ def test_realtime_health_check_azure_ad_params_drop_reserved_keys():
     from litellm.realtime_api import main as realtime_main
 
     seen = []
-    with (
-        patch.object(realtime_main, "get_azure_ad_token", lambda params: seen.append(params) or "ad-token"),
-        patch.object(
-            realtime_main.azure_realtime,
-            "get_auth_headers",
-            lambda api_key, azure_ad_token: {"Authorization": f"Bearer {azure_ad_token}"},
-        ),
-    ):
+    with patch.object(realtime_main, "get_azure_ad_token", lambda params: seen.append(params) or "ad-token"):
         headers = realtime_main._realtime_health_check_auth_headers(
             "azure",
             None,
             MappingProxyType({"api_base": "https://x.openai.azure.com", "self": 1, "params": 2, "__class__": 3}),
         )
 
-    assert headers == {"Authorization": "Bearer ad-token"}
+    assert dict(headers) == {"Authorization": "Bearer ad-token"}
     assert seen[0].api_base == "https://x.openai.azure.com"
     assert seen[0].model_extra == {}
