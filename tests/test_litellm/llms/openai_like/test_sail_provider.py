@@ -1,17 +1,13 @@
-"""
-Tests for the Sail (sailresearch.com) JSON-configured provider.
-
-Each test asserts the outbound HTTP request that litellm would send to Sail,
-via a mocked httpx transport, rather than asserting registry contents.
-"""
+"""Tests for the Sail (sailresearch.com) JSON-configured provider."""
 
 import json
 
-import httpx
 import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 SAIL_BASE_URL = "https://api.sailresearch.com/v1"
 SAIL_CHAT_COMPLETIONS = f"{SAIL_BASE_URL}/chat/completions"
@@ -79,7 +75,7 @@ def _responses_payload() -> dict:
 
 @pytest.fixture(autouse=True)
 def _sail_env(monkeypatch: pytest.MonkeyPatch):
-    litellm.disable_aiohttp_transport = True
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("SAIL_API_KEY", "sk-sail-test")
     monkeypatch.delenv("SAIL_API_BASE", raising=False)
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -100,8 +96,6 @@ class TestSailRequestShape:
         request = respx_mock.calls[0].request
         assert request.url == SAIL_CHAT_COMPLETIONS
         assert request.headers["Authorization"] == "Bearer sk-sail-test"
-
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         _, provider, _, _ = get_llm_provider(
             model=MODEL, custom_llm_provider=None, api_base=None, api_key=None
@@ -229,8 +223,6 @@ class TestSailRequestShape:
 
 class TestSailCostTracking:
     def test_cached_tokens_billed_at_sail_cache_read_rate(self, monkeypatch: pytest.MonkeyPatch):
-        from litellm.types.utils import PromptTokensDetailsWrapper, Usage
-
         rates = litellm.model_cost[MODEL]
         prompt_tokens = 1000
         cached_tokens = 600
