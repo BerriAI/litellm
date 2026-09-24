@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
+from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import (
@@ -1461,6 +1462,7 @@ class BaseLLMHTTPHandler:
         transformed: Final = provider_config.transform_audio_transcription_response(
             raw_response=response,
         )
+        set_provider_response_headers_in_hidden_params(transformed, response.headers)
         if not provider_config.supports_subtitle_synthesis:
             return transformed
         requested_format: Final = optional_params.get("response_format")
@@ -6958,11 +6960,13 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return image_edit_provider_config.transform_image_edit_response(
+        image_edit_response: Final = image_edit_provider_config.transform_image_edit_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
+        return image_edit_response
 
     async def async_image_edit_handler(
         self,
@@ -7057,11 +7061,13 @@ class BaseLLMHTTPHandler:
                 provider_config=image_edit_provider_config,
             )
 
-        return image_edit_provider_config.transform_image_edit_response(
+        image_edit_response: Final = image_edit_provider_config.transform_image_edit_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(image_edit_response, response.headers)
+        return image_edit_response
 
     def image_generation_handler(
         self,
@@ -7184,6 +7190,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
             encoding=None,
         )
+        set_provider_response_headers_in_hidden_params(model_response, response.headers)
 
         return model_response
 
@@ -7291,6 +7298,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
             encoding=None,
         )
+        set_provider_response_headers_in_hidden_params(model_response, response.headers)
 
         return model_response
 
@@ -12075,11 +12083,13 @@ class BaseLLMHTTPHandler:
                 provider_config=text_to_speech_provider_config,
             )
 
-        return text_to_speech_provider_config.transform_text_to_speech_response(
+        speech_response: Final = text_to_speech_provider_config.transform_text_to_speech_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(speech_response, response.headers)
+        return speech_response
 
     async def async_text_to_speech_handler(
         self,
@@ -12174,11 +12184,13 @@ class BaseLLMHTTPHandler:
                 provider_config=text_to_speech_provider_config,
             )
 
-        return text_to_speech_provider_config.transform_text_to_speech_response(
+        speech_response: Final = text_to_speech_provider_config.transform_text_to_speech_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
+        set_provider_response_headers_in_hidden_params(speech_response, response.headers)
+        return speech_response
 
     #########################################################
     ########## SKILLS API HANDLERS ##########################

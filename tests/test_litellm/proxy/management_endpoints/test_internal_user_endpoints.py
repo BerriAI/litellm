@@ -2660,6 +2660,172 @@ async def test_get_user_daily_activity_aggregated_non_admin_cannot_view_other_us
 
 
 @pytest.mark.asyncio
+async def test_search_user_daily_activity_keys_passes_matched_tokens_to_aggregation(monkeypatch):
+    """The search endpoint resolves matching verification tokens by hash, alias, or
+    user id, then aggregates daily spend for exactly those tokens. This is what lets
+    the Usage page find keys outside the top-spend subset the aggregated endpoint caps."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        search_user_daily_activity_keys,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[SimpleNamespace(token="tok-a"), SimpleNamespace(token="tok-b")]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_response = MagicMock()
+    mock_get_daily_agg = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        mock_get_daily_agg,
+    )
+
+    admin_key_dict = UserAPIKeyAuth(
+        user_id="admin-user-001",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    result = await search_user_daily_activity_keys(
+        search="gamma",
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        user_id=None,
+        timezone=480,
+        include_current_utc_day=False,
+        user_api_key_dict=admin_key_dict,
+    )
+
+    assert result is mock_response
+
+    find_many_kwargs = mock_prisma_client.db.litellm_verificationtoken.find_many.call_args.kwargs
+    assert find_many_kwargs["take"] == USAGE_TOP_API_KEYS_LIMIT
+    assert find_many_kwargs["where"]["OR"] == (
+        {"token": "gamma"},
+        {"key_alias": {"contains": "gamma", "mode": "insensitive"}},
+        {"user_id": {"contains": "gamma", "mode": "insensitive"}},
+    )
+    assert "user_id" not in find_many_kwargs["where"]
+
+    mock_get_daily_agg.assert_called_once_with(
+        prisma_client=mock_prisma_client,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        model=None,
+        api_key=["tok-a", "tok-b"],
+        timezone_offset_minutes=480,
+        include_current_utc_day=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_user_daily_activity_keys_no_match_returns_empty_without_aggregating(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        search_user_daily_activity_keys,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_get_daily_agg = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        mock_get_daily_agg,
+    )
+
+    admin_key_dict = UserAPIKeyAuth(
+        user_id="admin-user-001",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    result = await search_user_daily_activity_keys(
+        search="nothing-matches",
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        user_id=None,
+        timezone=None,
+        include_current_utc_day=False,
+        user_api_key_dict=admin_key_dict,
+    )
+
+    assert result.results == []
+    assert result.metadata.api_key_limit == USAGE_TOP_API_KEYS_LIMIT
+    assert result.metadata.total_api_keys == 0
+    mock_get_daily_agg.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_user_daily_activity_keys_non_admin_scoped_to_caller(monkeypatch):
+    """Same scoping contract as the aggregated route: a non-admin with no user_id
+    is scoped to their own rows, and any other user_id is a 403."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        search_user_daily_activity_keys,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[SimpleNamespace(token="tok-a")])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    non_admin_key_dict = UserAPIKeyAuth(
+        user_id="user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    mock_response = MagicMock()
+    mock_get_daily_agg = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        mock_get_daily_agg,
+    )
+
+    result = await search_user_daily_activity_keys(
+        search="gamma",
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        user_id=None,
+        timezone=None,
+        include_current_utc_day=False,
+        user_api_key_dict=non_admin_key_dict,
+    )
+
+    assert result is mock_response
+    assert mock_get_daily_agg.call_args.kwargs["entity_id"] == "user-1"
+    find_many_kwargs = mock_prisma_client.db.litellm_verificationtoken.find_many.call_args.kwargs
+    assert find_many_kwargs["where"]["user_id"] == "user-1"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await search_user_daily_activity_keys(
+            search="gamma",
+            start_date="2025-02-01",
+            end_date="2025-02-28",
+            user_id="user-2",
+            timezone=None,
+            include_current_utc_day=False,
+            user_api_key_dict=non_admin_key_dict,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Non-admin users can only view their own spend data" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     """
     Test that delete_user removes invitation links where the deleted user is the

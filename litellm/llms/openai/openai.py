@@ -27,6 +27,7 @@ from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.files.types import FileContentStreamingResult
+from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -1407,7 +1408,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         organization: str | None = None,
         headers: dict | None = None,
     ):
-        response = None
         try:
             openai_aclient: Final = self._get_openai_client(
                 is_async=True,
@@ -1431,8 +1431,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             request_data: Final = {**data, "extra_headers": headers} if headers else data
-            response = await openai_aclient.images.generate(**request_data, timeout=timeout)
-            stringified_response: Final = response.model_dump()
+            raw_response: Final = await openai_aclient.images.with_raw_response.generate(
+                **request_data, timeout=timeout
+            )
+            stringified_response: Final = raw_response.parse().model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1440,11 +1442,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            return convert_to_model_response_object(
+            image_response: Final[ImageResponse] = convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="image_generation",
             )
+            set_provider_response_headers_in_hidden_params(image_response, raw_response.headers)
+            return image_response
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -1515,9 +1519,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             ## COMPLETION CALL
             request_data: Final = {**data, "extra_headers": headers} if headers else data
-            _response: Final = openai_client.images.generate(**request_data, timeout=timeout)
+            raw_response: Final = openai_client.images.with_raw_response.generate(**request_data, timeout=timeout)
 
-            response: Final = _response.model_dump()
+            response: Final = raw_response.parse().model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1525,11 +1529,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 additional_args={"complete_input_dict": data},
                 original_response=response,
             )
-            return convert_to_model_response_object(
+            image_response: Final[ImageResponse] = convert_to_model_response_object(
                 response_object=response,
                 model_response_object=model_response,
                 response_type="image_generation",
             )
+            set_provider_response_headers_in_hidden_params(image_response, raw_response.headers)
+            return image_response
         except OpenAIError as e:
             ## LOGGING
             logging_obj.post_call(
@@ -1612,7 +1618,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             input=input,
             **optional_params,
         )
-        return HttpxBinaryResponseContent(response=response.response)
+        speech_response: Final = HttpxBinaryResponseContent(response=response.response)
+        set_provider_response_headers_in_hidden_params(speech_response, response.response.headers)
+        return speech_response
 
     async def async_audio_speech(
         self,
@@ -1658,8 +1666,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             input=input,
             **optional_params,
         )
-
-        return HttpxBinaryResponseContent(response=response.response)
+        speech_response: Final = HttpxBinaryResponseContent(response=response.response)
+        set_provider_response_headers_in_hidden_params(speech_response, response.response.headers)
+        return speech_response
 
 
 class OpenAIFilesAPI(BaseLLM):
