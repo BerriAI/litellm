@@ -105,6 +105,7 @@ def test_added_chat_model_matches_reviewed_registry_shape() -> None:
         "input_cost_per_token": 3e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
+        "max_output_tokens": 120000,
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
@@ -117,6 +118,12 @@ def test_added_chat_model_matches_reviewed_registry_shape() -> None:
         "supports_tool_choice": True,
         "supports_vision": True,
     }
+
+
+def test_unreviewed_chat_model_gets_catalog_defaults() -> None:
+    outcome = sync.compute_sync({}, [_chat_model("acme/unreviewed")], _doc({"x": "2026-01-01"}))
+    entry = outcome.cost_map["together_ai/acme/unreviewed"]
+    assert {key: entry[key] for key in sync._CHAT_DEFAULTS} == dict(sync._CHAT_DEFAULTS)
 
 
 def test_added_embedding_model_has_no_output_token_cap() -> None:
@@ -144,7 +151,7 @@ def test_output_ceiling_comes_from_the_rule_never_from_context_length() -> None:
     glm = next(model for model in RECORDED_CATALOG if model.id == "zai-org/GLM-5.2")
     fresh = sync.compute_sync({}, [_chat_model("acme/unreviewed", ctx=1048576), glm], _doc({"x": "2026-01-01"}))
     unreviewed = fresh.cost_map["together_ai/acme/unreviewed"]
-    assert "max_output_tokens" not in unreviewed
+    assert unreviewed["max_output_tokens"] == 120000
     assert (unreviewed["max_input_tokens"], unreviewed["max_tokens"]) == (1048576, 1048576)
     reviewed = fresh.cost_map["together_ai/zai-org/GLM-5.2"]
     assert (reviewed["max_input_tokens"], reviewed["max_output_tokens"], reviewed["max_tokens"]) == (

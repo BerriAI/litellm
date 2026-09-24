@@ -85,6 +85,16 @@ _TOOLS: Final = MappingProxyType(
     }
 )
 
+_CHAT_DEFAULTS: Final = MappingProxyType(
+    {
+        "max_output_tokens": 120000,
+        "supports_function_calling": True,
+        "supports_parallel_function_calling": True,
+        "supports_reasoning": True,
+        "supports_tool_choice": True,
+    }
+)
+
 CAPABILITY_RULES: Final = (
     _rule(
         "MiniMaxAI/MiniMax-M3",
@@ -308,6 +318,7 @@ def _new_entry(model: CatalogModel, mode: str) -> RegistryEntry:
         "litellm_provider": PROVIDER,
         "mode": mode,
         "source": SOURCE_URL,
+        **(_CHAT_DEFAULTS if model.type == "chat" else {}),
         **(dict(rule.fields) if rule else {}),
     }
     return dict(sorted(merged.items()))
