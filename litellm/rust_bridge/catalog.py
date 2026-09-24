@@ -1,4 +1,4 @@
-"""Ordered rollout policy for routes, the response cache facade and backends, and secret managers.
+"""Ordered rollout policy for routes, the response cache, and secret managers.
 
 The first matching rule wins; unmatched contexts stay on Python. Native
 admission separately decides whether the selected implementation can execute.
@@ -12,7 +12,6 @@ from typing import Final, TypeAlias
 
 from litellm.rust_bridge.configuration import Decision, Rollout
 from litellm.rust_bridge.configuration import decision as _decision
-from litellm.types.caching import LiteLLMCacheType
 from litellm.types.secret_managers.main import KeyManagementSystem
 
 
@@ -61,29 +60,15 @@ class RouteRule:
 
 @dataclass(frozen=True, slots=True)
 class CacheContext:
-    backend: str
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class CacheRule:
     rollout: Rollout
-    backends: frozenset[str] | None = None
 
     def matches(self, context: Context) -> bool:
-        return isinstance(context, CacheContext) and (self.backends is None or context.backend in self.backends)
-
-
-@dataclass(frozen=True, slots=True)
-class CacheFacadeContext:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class CacheFacadeRule:
-    rollout: Rollout
-
-    def matches(self, context: Context) -> bool:
-        return isinstance(context, CacheFacadeContext)
+        return isinstance(context, CacheContext)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,8 +98,8 @@ class LoggerRule:
         return isinstance(context, LoggerContext)
 
 
-Context: TypeAlias = RouteContext | CacheContext | CacheFacadeContext | SecretManagerContext | LoggerContext
-Rule: TypeAlias = RouteRule | CacheRule | CacheFacadeRule | SecretManagerRule | LoggerRule
+Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext | LoggerContext
+Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule | LoggerRule
 Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
@@ -128,16 +113,7 @@ RULES: Final[Rules] = (
     RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
-    CacheFacadeRule(Rollout.PYTHON_ONLY),
-    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.LOCAL})),
-    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.REDIS})),
-    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.REDIS_SEMANTIC})),
-    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.VALKEY_SEMANTIC})),
-    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.S3})),
-    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.DISK})),
-    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.QDRANT_SEMANTIC})),
-    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.AZURE_BLOB})),
-    CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.GCS})),
+    CacheRule(Rollout.PYTHON_ONLY),
     SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.GOOGLE_KMS.value})),
     SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.AZURE_KEY_VAULT.value})),
     SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.AWS_SECRET_MANAGER.value})),

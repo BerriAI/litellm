@@ -15,14 +15,10 @@ import redis
 
 from litellm.caching.caching import Cache
 from litellm.caching.valkey_semantic_cache import ValkeySemanticCache
-from litellm.rust_bridge import _native, catalog
+from litellm.rust_bridge import _native
 from litellm.rust_bridge.catalog import CacheRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.response_cache import (
-    NativeResponseCacheRuntime,
-    ResponseCacheRuntime,
-    resolve_native_runtime,
-)
+from litellm.rust_bridge.response_cache import NativeResponseCacheRuntime, resolve_native_runtime
 from litellm.types.caching import LiteLLMCacheType
 
 pytestmark: Final = pytest.mark.requires_rust_extension
@@ -120,7 +116,7 @@ def _facade(
     return facade
 
 
-_RUST_RULES: Final = (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({LiteLLMCacheType.VALKEY_SEMANTIC})),)
+_RUST_RULES: Final = (CacheRule(Rollout.RUST_REQUIRED),)
 
 
 def _runtime(url: str, index_name: str, backend: ValkeySemanticCache) -> NativeResponseCacheRuntime:
@@ -262,9 +258,7 @@ async def test_async_embedding_runs_inline_in_caller_task(
 def test_facade_activation_and_mutation_fallback(
     valkey_url: str,
     index_name: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(catalog, "RULES", _RUST_RULES)
     facade: Final = _native.Cache(
         type=LiteLLMCacheType.VALKEY_SEMANTIC,
         redis_url=valkey_url,
@@ -532,7 +526,7 @@ def test_field_key_isolates_tenant_scope(
 def test_tls_valkey_facade_falls_back_to_python(
     index_name: str,
 ) -> None:
-    facade: Final = Cache(
+    facade: Final = _native.Cache(
         type=LiteLLMCacheType.VALKEY_SEMANTIC,
         redis_url="rediss://127.0.0.1:6390/0",
         similarity_threshold=0.8,
@@ -550,18 +544,3 @@ async def test_ping_maps_unsupported_native_operation_to_not_implemented(
     binding: Final = _runtime(valkey_url, index_name, backend)
     with pytest.raises(NotImplementedError):
         await binding.ping()
-
-
-async def test_rust_required_rule_activates_the_facade_natively(
-    valkey_url: str,
-    index_name: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(catalog, "RULES", _RUST_RULES)
-    facade: Final = _facade(valkey_url, index_name, {"semantic cache prompt": [1.0, 0.0]})
-    runtime: Final = facade._native_cache  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
-    assert isinstance(runtime, ResponseCacheRuntime)
-    assert runtime.kind == "native"
-    kwargs: Final = {"model": "gpt-4o", "messages": _request()["messages"]}
-    await facade.async_add_cache({"answer": "valkey"}, **kwargs)
-    assert await facade.async_get_cache(**kwargs) == {"answer": "valkey"}

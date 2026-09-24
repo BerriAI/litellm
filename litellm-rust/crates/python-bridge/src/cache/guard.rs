@@ -80,10 +80,6 @@ const CLUSTER_POOL: RedisPoolAttributes = RedisPoolAttributes {
 
 const VALKEY_POOL: RedisPoolAttributes = STANDALONE_POOL;
 
-/// Class-level defaults an instance overwrites with its own state rather than behavior: the
-/// Python facade's `Cache._native_cache` holds the runtime `Cache.__init__` resolved.
-const INSTANCE_STATE: &[&str] = &["_native_cache"];
-
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
@@ -170,9 +166,7 @@ impl ObjectGuard {
                 return Ok(false);
             }
             for (name, value) in &expected.attributes {
-                if (instance.contains(name)?
-                    && !self.config_names.contains(&name.as_str())
-                    && !INSTANCE_STATE.contains(&name.as_str()))
+                if (instance.contains(name)? && !self.config_names.contains(&name.as_str()))
                     || !attributes.get_item(name)?.is(value.bind(py))
                 {
                     return Ok(false);
@@ -361,10 +355,9 @@ impl FacadeGuard {
     ) -> PyResult<Self> {
         let identity = service.identity();
         let kind = identity.kind();
-        let python_facade = py.import("litellm.caching.caching")?.getattr("Cache")?;
-        if !facade.get_type().is(&python_facade) && !facade.is_instance_of::<Cache>() {
+        if !facade.is_instance_of::<Cache>() {
             return Err(PyTypeError::new_err(
-                "only exact built-in Cache facades can be registered",
+                "only native Cache facades can be registered",
             ));
         }
         let cluster = matches!(

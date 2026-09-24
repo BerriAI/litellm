@@ -1,5 +1,7 @@
 //! The facade's read and write paths.
 
+use std::time::Duration;
+
 use litellm_cache::ExactCacheContext;
 use litellm_cache_response::{CacheKeyInput, ResponseCacheRequest};
 use litellm_host_python::{from_py, json_loads, release_gil, to_py};
@@ -207,6 +209,24 @@ fn duration_option(value: Option<Bound<'_, PyAny>>) -> Option<f64> {
     (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
 }
 
+fn cache_control<'py>(kwargs: &Bound<'py, PyDict>) -> PyResult<Bound<'py, PyDict>> {
+    Ok(kwargs
+        .get_item("cache")?
+        .and_then(|control| control.cast_into::<PyDict>().ok())
+        .unwrap_or_else(|| PyDict::new(kwargs.py())))
+}
+
+fn sync_max_age(kwargs: &Bound<'_, PyDict>) -> PyResult<Option<Duration>> {
+    let control = cache_control(kwargs)?;
+    let limit = |name: &str| -> PyResult<Option<f64>> {
+        Ok(duration_option(control.get_item(name)?).filter(|seconds| *seconds > 0.0))
+    };
+    limit("s-maxage")?
+        .or(limit("s-max-age")?)
+        .map(duration)
+        .transpose()
+}
+
 fn json_value(kwargs: &Bound<'_, PyDict>, name: &str) -> PyResult<Option<Value>> {
     match kwargs.get_item(name)? {
         Some(value) if !value.is_none() => from_py(&value).map(Some),
@@ -219,14 +239,10 @@ pub(super) fn native_request(
     kwargs: &Bound<'_, PyDict>,
     key: &Bound<'_, PyAny>,
 ) -> PyResult<Option<NativeRequest>> {
-    let py = slf.py();
     let Some(preset) = key.extract::<String>().ok().filter(|key| !key.is_empty()) else {
         return Ok(None);
     };
-    let control = kwargs
-        .get_item("cache")?
-        .and_then(|control| control.cast_into::<PyDict>().ok())
-        .unwrap_or_else(|| PyDict::new(py));
+    let control = cache_control(kwargs)?;
     let configured_ttl = slf.getattr("ttl")?;
     let configured_ttl = if configured_ttl.is_none() {
         duration_option(kwargs.get_item("ttl")?)
@@ -293,6 +309,10 @@ pub(super) fn get_cache(
         Binding::Native(service) => {
             let Some(request) = native_request(slf, kwargs, &key)? else {
                 return Ok(py.None());
+            };
+            let request = NativeRequest {
+                max_age: sync_max_age(kwargs)?,
+                ..request
             };
             if keys::is_semantic_cache(slf)? {
                 let lookup = release_gil(py, move || service.lookup_semantic(&request, now()))

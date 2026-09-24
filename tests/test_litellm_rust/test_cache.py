@@ -38,15 +38,9 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.caching.redis_semantic_cache import RedisSemanticCache
 from litellm.caching.s3_cache import S3Cache
 from litellm.rust_bridge import _native, catalog
-from litellm.rust_bridge.catalog import CacheFacadeRule, CacheRule, Route, RouteRule, Rules, SecretManagerRule
+from litellm.rust_bridge.catalog import CacheRule, Rules
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.response_cache import (
-    NativeResponseCacheRuntime,
-    ResponseCacheRuntime,
-    resolve_native_runtime,
-    resolve_response_cache,
-    select_cache_facade,
-)
+from litellm.rust_bridge.response_cache import NativeResponseCacheRuntime, resolve_native_runtime, select_cache_facade
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.llms.custom_llm import CustomLLMItem
 from litellm.types.utils import EmbeddingResponse
@@ -70,14 +64,16 @@ def request(key: str = "key") -> dict[str, object]:
     return {"key": {"preset": key}}
 
 
-def rust_rules(backend: LiteLLMCacheType) -> Rules:
-    return (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({backend})),)
+RUST_REQUIRED: Final[Rules] = (CacheRule(Rollout.RUST_REQUIRED),)
+
+
+def require_rust(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(catalog, "RULES", RUST_REQUIRED)
 
 
 def runtime_for(facade: object) -> NativeResponseCacheRuntime:
-    """The native runtime the catalog activates for `facade`'s storage object under a Rust rule."""
-    backend: Final = LiteLLMCacheType(cast(str, getattr(facade, "type")))
-    runtime: Final = resolve_native_runtime(cast(Cache, facade), rust_rules(backend))
+    """The native runtime built from `facade`'s storage object, raising when the native client declines it."""
+    runtime: Final = resolve_native_runtime(cast(Cache, facade), RUST_REQUIRED)
     assert runtime is not None
     assert runtime.kind == "native"
     return runtime
@@ -207,7 +203,6 @@ def cluster_nodes() -> tuple[tuple[str, int], ...]:
 def test_existing_constructor_and_global_are_unchanged() -> None:
     facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
     assert type(facade.cache) is InMemoryCache
-    assert resolve_response_cache(facade) is None
     with rebound(litellm, "cache", facade):
         resolver: Final = _CacheResolver(litellm)
         assert resolver.resolve().kind == "python_callback"
@@ -215,30 +210,19 @@ def test_existing_constructor_and_global_are_unchanged() -> None:
         assert cast(CacheLookup, facade).get_cache(cache_key="key") == {"answer": 7}
 
 
-async def test_catalog_constructs_native_runtime_from_public_cache_configuration() -> None:
-    rules: Final = (
-        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
-        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
-        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
-    )
+async def test_native_runtime_is_built_from_public_cache_configuration() -> None:
     facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    runtime: Final = resolve_response_cache(facade, rules)
-    assert isinstance(runtime, ResponseCacheRuntime)
-    assert runtime.kind == "native"
+    runtime: Final = runtime_for(facade)
 
-    sync_request: Final = runtime.request(facade, {"cache_key": "sync"})
-    assert sync_request is not None
-    runtime.store(sync_request, {"answer": 1})
-    assert runtime.lookup(sync_request) == {"answer": 1}
+    runtime.store(request("sync"), {"answer": 1})
+    assert runtime.lookup(request("sync")) == {"answer": 1}
     assert facade.cache.get_cache("sync") is None
 
-    async_request: Final = runtime.request(facade, {"cache_key": "async"})
-    assert async_request is not None
-    await runtime.async_store(async_request, {"answer": 2})
-    assert await runtime.async_lookup(async_request) == {"answer": 2}
+    await runtime.async_store(request("async"), {"answer": 2})
+    assert await runtime.async_lookup(request("async")) == {"answer": 2}
     assert await facade.cache.async_get_cache("async") is None
 
-    requests: Final = (sync_request, async_request)
+    requests: Final = (request("sync"), request("async"))
     expected: Final = {
         "values": [{"answer": 1}, {"answer": 2}],
         "missing_indices": [],
@@ -247,59 +231,8 @@ async def test_catalog_constructs_native_runtime_from_public_cache_configuration
     assert await runtime.async_lookup_batch(requests) == expected
 
     await runtime.async_flush()
-    assert runtime.lookup(sync_request) is None
-    assert await runtime.async_lookup(async_request) is None
-
-
-async def test_inference_resolver_uses_the_configured_native_cache_directly() -> None:
-    rules: Final = (
-        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
-        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
-        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
-    )
-    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    runtime: Final = resolve_response_cache(facade, rules)
-    assert isinstance(runtime, ResponseCacheRuntime)
-    facade._native_cache = runtime
-
-    selected: Final = _CacheResolver(SimpleNamespace(cache=facade)).resolve()
-    assert selected.kind == "native"
-    request: Final = runtime.request(facade, {"cache_key": "inference-native"})
-    assert request is not None
-    await selected.async_store(request, {"answer": 42})
-    assert await selected.async_lookup(request) == {"answer": 42}
-    assert await runtime.async_lookup(request) == {"answer": 42}
-    assert facade.cache.get_cache("inference-native") is None
-
-    facade._native_cache = None
-    fallback: Final = _CacheResolver(SimpleNamespace(cache=facade)).resolve()
-    assert fallback.kind == "python_callback"
-    await fallback.async_store(None, {"answer": 7}, callback_kwargs={"cache_key": "inference-python"})
-    assert facade.get_cache(cache_key="inference-python") == {"answer": 7}
-    assert facade.cache.get_cache("inference-python") is not None
-
-
-async def test_inference_resolver_declines_a_native_runtime_whose_facade_changed() -> None:
-    rules: Final = (
-        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
-        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
-        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
-    )
-    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    runtime: Final = resolve_response_cache(facade, rules)
-    assert isinstance(runtime, ResponseCacheRuntime)
-    facade._native_cache = runtime
-    stale_request: Final = runtime.request(facade, {"cache_key": "stale-only"})
-    assert stale_request is not None
-    await runtime.async_store(stale_request, {"answer": "stale"})
-
-    replacement: Final = InMemoryCache()
-    facade.cache = replacement
-    with pytest.raises(_native.RustBridgeDeclined):
-        _CacheResolver(SimpleNamespace(cache=facade)).resolve()
-    assert await runtime.async_lookup(stale_request) == {"answer": "stale"}
-    assert replacement.get_cache("stale-only") is None
-    assert replacement.get_cache("swapped-backend") is None
+    assert runtime.lookup(request("sync")) is None
+    assert await runtime.async_lookup(request("async")) is None
 
 
 def test_existing_global_lifecycle_remains_the_resolver_source_of_truth() -> None:
@@ -328,14 +261,14 @@ def test_existing_global_lifecycle_remains_the_resolver_source_of_truth() -> Non
 async def test_native_bindings_survive_replacement_and_capture_writes_before_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.LOCAL)
-    namespace: Final = SimpleNamespace(cache=Cache(type=LiteLLMCacheType.LOCAL))
+    require_rust(monkeypatch)
+    namespace: Final = SimpleNamespace(cache=NativeCache(type=LiteLLMCacheType.LOCAL))
     resolver: Final = _CacheResolver(namespace)
     selected: Final = resolver.resolve()
     assert selected.kind == "native"
     selected.store(request(), {"answer": 1})
     assert await selected.async_lookup(request()) == {"answer": 1}
-    with rebound(namespace, "cache", Cache(type=LiteLLMCacheType.LOCAL)):
+    with rebound(namespace, "cache", NativeCache(type=LiteLLMCacheType.LOCAL)):
         replacement: Final = resolver.resolve()
         await selected.async_store(request(), {"answer": 2})
         assert replacement.lookup(request()) is None
@@ -403,7 +336,7 @@ async def test_callback_cancellation_stays_in_the_callers_task() -> None:
 
 
 def test_native_facade_serves_rust_callers_until_an_instance_override_appears(monkeypatch: pytest.MonkeyPatch) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.LOCAL)
+    require_rust(monkeypatch)
     facade: Final = NativeCache(type=LiteLLMCacheType.LOCAL)
     resolver: Final = _CacheResolver(SimpleNamespace(cache=facade))
     native: Final = resolver.resolve()
@@ -436,7 +369,7 @@ def test_native_facade_serves_rust_callers_until_an_instance_override_appears(mo
 def test_facade_subclasses_backend_replacement_and_configuration_changes_are_not_bypassed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.LOCAL)
+    require_rust(monkeypatch)
 
     class CustomCache(NativeCache):
         pass
@@ -645,7 +578,7 @@ def test_azure_blob_facade_serves_natively_and_python_reads_the_same_blobs(
         "missing_indices": [1, 2],
     }
 
-    require_rust(monkeypatch, LiteLLMCacheType.AZURE_BLOB)
+    require_rust(monkeypatch)
     account_url: Final = backend.container_client.url.removesuffix(f"/{backend.container_client.container_name}")
     facade: Final = NativeCache(
         type=LiteLLMCacheType.AZURE_BLOB,
@@ -702,7 +635,7 @@ async def test_azure_blob_native_async_writes_overwrite_batch_and_flush_like_pyt
 
 
 async def test_redis_facade_buffers_native_async_writes(redis_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.REDIS)
+    require_rust(monkeypatch)
     parsed: Final = urlparse(redis_url)
     facade: Final = NativeCache(
         type=LiteLLMCacheType.REDIS,
@@ -781,7 +714,7 @@ async def test_disk_entries_survive_a_fresh_runtime_and_expire_on_time(tmp_path:
 def test_disk_facade_activates_natively_and_store_changes_fall_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.DISK)
+    require_rust(monkeypatch)
     facade: Final = NativeCache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path))
     resolver: Final = _CacheResolver(SimpleNamespace(cache=facade))
     binding: Final = resolver.resolve()
@@ -906,7 +839,7 @@ def s3_facade(url: str, facade_class: type[Cache] = Cache, **settings: object) -
 def test_s3_facade_activates_natively_and_falls_back_on_mutation(
     s3_stub: S3Stub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.S3)
+    require_rust(monkeypatch)
     facade: Final = s3_facade(s3_stub.url, NativeCache)
     resolver: Final = _CacheResolver(SimpleNamespace(cache=facade))
     binding: Final = resolver.resolve()
@@ -947,18 +880,18 @@ def test_s3_facade_activates_natively_and_falls_back_on_mutation(
 
 
 def test_s3_facade_rejects_configurations_that_require_python(s3_stub: S3Stub, monkeypatch: pytest.MonkeyPatch) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.S3)
+    require_rust(monkeypatch)
     with pytest.raises(RuntimeError, match="requires Python"):
-        s3_facade("https://s3.example.test", s3_verify=False)
+        s3_facade("https://s3.example.test", NativeCache, s3_verify=False)
     with pytest.raises(RuntimeError, match="requires Python"):
-        s3_facade(s3_stub.url, s3_config=botocore.config.Config(proxies={"https": "http://proxy.test"}))
+        s3_facade(s3_stub.url, NativeCache, s3_config=botocore.config.Config(proxies={"https": "http://proxy.test"}))
 
 
 def test_gcs_facade_activates_natively_and_falls_back_on_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GCS_PATH_SERVICE_ACCOUNT", raising=False)
     monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent")
-    require_rust(monkeypatch, LiteLLMCacheType.GCS)
+    require_rust(monkeypatch)
     facade: Final = NativeCache(type=LiteLLMCacheType.GCS, gcs_bucket_name="bucket", gcs_path="cache/")
     assert type(facade.cache) is GCSCache
     resolver: Final = _CacheResolver(SimpleNamespace(cache=facade))
@@ -989,14 +922,14 @@ def test_gcs_facade_activates_natively_and_falls_back_on_mutation(monkeypatch: p
     assert resolver.resolve().kind == "native"
 
     with pytest.raises(RuntimeError, match="requires a configured bucket name"):
-        Cache(type=LiteLLMCacheType.GCS)
+        NativeCache(type=LiteLLMCacheType.GCS)
 
 
 async def test_redis_cluster_facade_serves_multi_slot_batches_and_scoped_flush_natively(
     cluster_nodes: tuple[tuple[str, int], ...], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     startup_nodes: Final = [{"host": host, "port": port} for host, port in cluster_nodes]
-    require_rust(monkeypatch, LiteLLMCacheType.REDIS)
+    require_rust(monkeypatch)
     with rebound(litellm, "default_redis_ttl", 60):
         facade: Final = NativeCache(type=LiteLLMCacheType.REDIS, redis_startup_nodes=startup_nodes, namespace="parity")
         assert type(facade.cache) is RedisClusterCache
@@ -1526,7 +1459,7 @@ def test_redis_semantic_configuration_drift_falls_back_to_python(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     url, index = redis_stack
-    require_rust(monkeypatch, LiteLLMCacheType.REDIS_SEMANTIC)
+    require_rust(monkeypatch)
     facade: Final = semantic_facade(url, index, facade_class=NativeCache)
     resolver: Final = _CacheResolver(SimpleNamespace(cache=facade))
     assert resolver.resolve().kind == "native"
@@ -1553,7 +1486,7 @@ def test_redis_semantic_native_facade_keeps_custom_backends_on_python(
     redis_stack: tuple[str, str], semantic_embedding: DeterministicEmbedding, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     url, index = redis_stack
-    require_rust(monkeypatch, LiteLLMCacheType.REDIS_SEMANTIC)
+    require_rust(monkeypatch)
 
     class CustomSemanticCache(RedisSemanticCache):
         pass
@@ -1696,7 +1629,7 @@ def test_qdrant_semantic_mutation_and_projection_fallback(
     qdrant_url: str, fake_embedding_endpoint: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     del fake_embedding_endpoint
-    require_rust(monkeypatch, LiteLLMCacheType.QDRANT_SEMANTIC)
+    require_rust(monkeypatch)
     facade: Final = qdrant_facade(qdrant_url, f"cache_{uuid4().hex}", NativeCache)
     assert resolved_kind(facade) == "native"
     facade.cache.qdrant_api_key = "rotated"
@@ -1714,18 +1647,11 @@ def test_qdrant_semantic_mutation_and_projection_fallback(
         runtime_for(unsupported)
 
 
-CacheFactory: TypeAlias = Callable[[], Cache]
+CacheFactory: TypeAlias = Callable[[type[Cache]], Cache]
 
 
-def require_rust(monkeypatch: pytest.MonkeyPatch, backend: LiteLLMCacheType) -> None:
-    monkeypatch.setattr(catalog, "RULES", (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({backend})),))
-
-
-def native_runtime(facade: Cache) -> ResponseCacheRuntime:
-    runtime: Final = facade._native_cache  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
-    assert isinstance(runtime, ResponseCacheRuntime)
-    assert runtime.kind == "native"
-    return runtime
+def assert_native(facade: Cache) -> None:
+    assert resolved_kind(facade) == "native"
 
 
 @pytest.fixture
@@ -1733,15 +1659,15 @@ def cache_factory(request: pytest.FixtureRequest, tmp_path: Path) -> CacheFactor
     backend: Final = cast(LiteLLMCacheType, request.param)
     match backend:
         case LiteLLMCacheType.LOCAL:
-            return lambda: Cache(type=backend)
+            return lambda facade_class: facade_class(type=backend)
         case LiteLLMCacheType.DISK:
-            return lambda: Cache(type=backend, disk_cache_dir=str(tmp_path))
+            return lambda facade_class: facade_class(type=backend, disk_cache_dir=str(tmp_path))
         case LiteLLMCacheType.REDIS:
             parsed: Final = urlparse(cast(str, request.getfixturevalue("redis_url")))
-            return lambda: Cache(type=backend, host=parsed.hostname, port=str(parsed.port))
+            return lambda facade_class: facade_class(type=backend, host=parsed.hostname, port=str(parsed.port))
         case LiteLLMCacheType.S3:
             stub: Final = cast(S3Stub, request.getfixturevalue("s3_stub"))
-            return lambda: Cache(
+            return lambda facade_class: facade_class(
                 type=backend,
                 s3_bucket_name="cache-bucket",
                 s3_region_name="us-east-1",
@@ -1751,20 +1677,31 @@ def cache_factory(request: pytest.FixtureRequest, tmp_path: Path) -> CacheFactor
                 s3_path="team",
             )
         case LiteLLMCacheType.GCS:
-            return lambda: Cache(type=backend, gcs_bucket_name="bucket", gcs_path="cache/")
+            return lambda facade_class: facade_class(type=backend, gcs_bucket_name="bucket", gcs_path="cache/")
         case LiteLLMCacheType.REDIS_SEMANTIC:
-            return lambda: Cache(
+            return lambda facade_class: facade_class(
                 type=backend,
                 redis_url="redis://127.0.0.1:6379",
                 similarity_threshold=0.8,
                 redis_semantic_cache_embedding_model="text-embedding-3-small",
             )
         case LiteLLMCacheType.VALKEY_SEMANTIC:
-            return lambda: Cache(type=backend, redis_url="redis://127.0.0.1:6390/0", similarity_threshold=0.8)
+            return lambda facade_class: facade_class(
+                type=backend, redis_url="redis://127.0.0.1:6390/0", similarity_threshold=0.8
+            )
         case _:
             raise AssertionError(f"no local factory for {backend}")
 
 
+ACTIVATION_BACKENDS: Final = (
+    LiteLLMCacheType.LOCAL,
+    LiteLLMCacheType.DISK,
+    LiteLLMCacheType.REDIS,
+    LiteLLMCacheType.S3,
+    LiteLLMCacheType.GCS,
+    LiteLLMCacheType.REDIS_SEMANTIC,
+    LiteLLMCacheType.VALKEY_SEMANTIC,
+)
 ROUND_TRIP_BACKENDS: Final = (
     LiteLLMCacheType.LOCAL,
     LiteLLMCacheType.DISK,
@@ -1778,55 +1715,23 @@ def completion_kwargs(label: str) -> dict[str, object]:
     return {"model": "gpt-4o", "messages": [{"role": "user", "content": f"{label} {uuid4().hex}"}]}
 
 
-@pytest.mark.parametrize("backend", list(LiteLLMCacheType))
-def test_shipped_rules_keep_every_backend_on_python(backend: LiteLLMCacheType) -> None:
-    assert resolve_response_cache(cast(Cache, SimpleNamespace(type=backend))) is None
-
-
-@pytest.mark.parametrize(
-    "cache_factory",
-    [
-        LiteLLMCacheType.LOCAL,
-        LiteLLMCacheType.DISK,
-        LiteLLMCacheType.REDIS,
-        LiteLLMCacheType.S3,
-        LiteLLMCacheType.GCS,
-        LiteLLMCacheType.REDIS_SEMANTIC,
-        LiteLLMCacheType.VALKEY_SEMANTIC,
-    ],
-    indirect=True,
-)
-def test_shipped_rules_construct_python_backed_facades(cache_factory: CacheFactory) -> None:
-    assert cache_factory()._native_cache is None  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
-
-
-@pytest.mark.parametrize(
-    "cache_factory",
-    [
-        LiteLLMCacheType.LOCAL,
-        LiteLLMCacheType.DISK,
-        LiteLLMCacheType.REDIS,
-        LiteLLMCacheType.S3,
-        LiteLLMCacheType.GCS,
-        LiteLLMCacheType.REDIS_SEMANTIC,
-        LiteLLMCacheType.VALKEY_SEMANTIC,
-    ],
-    indirect=True,
-)
-def test_rust_required_rule_activates_the_native_backend(
-    cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+@pytest.mark.parametrize("cache_factory", ACTIVATION_BACKENDS, indirect=True)
+def test_python_facade_never_binds_native_storage_even_under_a_rust_rule(
+    cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
-    native_runtime(cache_factory())
+    require_rust(monkeypatch)
+    assert resolved_kind(cache_factory(Cache)) == "python_callback"
+
+
+@pytest.mark.parametrize("cache_factory", ACTIVATION_BACKENDS, indirect=True)
+def test_native_facade_binds_native_storage_for_every_builtin_backend(cache_factory: CacheFactory) -> None:
+    assert_native(cache_factory(NativeCache))
 
 
 @pytest.mark.parametrize("cache_factory", ROUND_TRIP_BACKENDS, indirect=True)
-async def test_facade_storage_calls_round_trip_through_the_native_backend(
-    cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
-) -> None:
-    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
-    facade: Final = cache_factory()
-    native_runtime(facade)
+async def test_facade_storage_calls_round_trip_through_the_native_backend(cache_factory: CacheFactory) -> None:
+    facade: Final = cache_factory(NativeCache)
+    assert_native(facade)
 
     sync_kwargs: Final = completion_kwargs("sync")
     facade.add_cache({"answer": 1}, **sync_kwargs)
@@ -1838,25 +1743,42 @@ async def test_facade_storage_calls_round_trip_through_the_native_backend(
     assert facade.get_cache(**completion_kwargs("absent")) is None
 
 
-async def test_memory_facade_writes_bypass_the_python_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.LOCAL)
-    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    native_runtime(facade)
+async def test_memory_facade_writes_bypass_the_python_backend() -> None:
+    facade: Final = NativeCache(type=LiteLLMCacheType.LOCAL)
+    assert_native(facade)
     kwargs: Final = completion_kwargs("memory")
     facade.add_cache({"answer": 1}, **kwargs)
     assert facade.cache.get_cache(facade.get_cache_key(**kwargs)) is None
     assert facade.get_cache(**kwargs) == {"answer": 1}
 
 
+@pytest.mark.parametrize("cache_factory", ROUND_TRIP_BACKENDS, indirect=True)
+async def test_native_storage_ignores_the_handlers_dual_cache(cache_factory: CacheFactory) -> None:
+    facade: Final = cache_factory(NativeCache)
+    assert_native(facade)
+    dual_cache: Final = RecordingBackend()
+
+    sync_kwargs: Final = completion_kwargs("dual-sync")
+    facade.add_cache({"answer": 1}, **sync_kwargs)
+    assert facade.get_cache(dynamic_cache_object=dual_cache, **sync_kwargs) == {"answer": 1}
+
+    async_kwargs: Final = completion_kwargs("dual-async")
+    await facade.async_add_cache({"answer": 2}, dynamic_cache_object=dual_cache, **async_kwargs)
+    assert await facade.async_get_cache(**async_kwargs) == {"answer": 2}
+    assert await facade.async_get_cache(dynamic_cache_object=dual_cache, **async_kwargs) == {"answer": 2}
+
+    inputs: Final = [f"dual {uuid4().hex}"]
+    await facade.async_add_cache_pipeline(embedding_result(), dual_cache, model="text-embedding-3-small", input=inputs)
+    assert await facade.async_get_cache(model="text-embedding-3-small", input=inputs[0]) is not None
+    assert dual_cache.calls == []
+
+
 @pytest.mark.parametrize("cache_factory", SHARED_STORE_BACKENDS, indirect=True)
-async def test_native_and_python_facades_share_one_wire_format(
-    cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
-) -> None:
-    python_facade: Final = cache_factory()
-    assert python_facade._native_cache is None  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
-    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
-    native_facade: Final = cache_factory()
-    native_runtime(native_facade)
+async def test_native_and_python_facades_share_one_wire_format(cache_factory: CacheFactory) -> None:
+    python_facade: Final = cache_factory(Cache)
+    assert resolved_kind(python_facade) == "python_callback"
+    native_facade: Final = cache_factory(NativeCache)
+    assert_native(native_facade)
 
     native_written: Final = completion_kwargs("native")
     native_facade.add_cache({"writer": "native"}, **native_written)
@@ -1876,12 +1798,9 @@ async def test_native_and_python_facades_share_one_wire_format(
 
 
 @pytest.mark.parametrize("cache_factory", ROUND_TRIP_BACKENDS, indirect=True)
-async def test_embedding_pipeline_stores_one_native_entry_per_input(
-    cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
-) -> None:
-    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
-    facade: Final = cache_factory()
-    native_runtime(facade)
+async def test_embedding_pipeline_stores_one_native_entry_per_input(cache_factory: CacheFactory) -> None:
+    facade: Final = cache_factory(NativeCache)
+    assert_native(facade)
     inputs: Final = [f"alpha {uuid4().hex}", f"beta {uuid4().hex}"]
     result: Final = EmbeddingResponse(
         model="text-embedding-3-small",
@@ -1903,7 +1822,7 @@ async def test_embedding_pipeline_stores_one_native_entry_per_input(
 
 def redis_facade(redis_url: str, **settings: object) -> Cache:
     parsed: Final = urlparse(redis_url)
-    return Cache(type=LiteLLMCacheType.REDIS, host=parsed.hostname, port=str(parsed.port), **settings)
+    return NativeCache(type=LiteLLMCacheType.REDIS, host=parsed.hostname, port=str(parsed.port), **settings)
 
 
 @pytest.mark.parametrize(
@@ -1934,20 +1853,18 @@ def redis_facade(redis_url: str, **settings: object) -> Cache:
 def test_redis_settings_the_native_client_cannot_honor_decline(
     redis_url: str, monkeypatch: pytest.MonkeyPatch, settings: dict[str, object], message: str
 ) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.REDIS)
+    require_rust(monkeypatch)
     with pytest.raises(RuntimeError, match=f"declined the cache: native Redis.*{message}"):
         redis_facade(redis_url, **settings)
 
 
 def test_redis_verified_tls_activates_natively(redis_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.REDIS)
-    native_runtime(redis_facade(redis_url, ssl=True, ssl_check_hostname=True))
+    assert_native(redis_facade(redis_url, ssl=True, ssl_check_hostname=True))
 
 
 async def test_redis_flush_size_buffers_native_facade_writes(redis_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.REDIS)
     facade: Final = redis_facade(redis_url, redis_flush_size=2, namespace="team")
-    native_runtime(facade)
+    assert_native(facade)
     client: Final = redis.Redis.from_url(redis_url)
     first: Final = completion_kwargs("first")
     await facade.async_add_cache({"value": 1}, **first)
@@ -1993,29 +1910,29 @@ async def test_redis_flush_size_buffers_native_facade_writes(redis_url: str, mon
 def test_semantic_settings_the_native_client_cannot_honor_decline(
     monkeypatch: pytest.MonkeyPatch, backend: LiteLLMCacheType, settings: dict[str, object], message: str
 ) -> None:
-    require_rust(monkeypatch, backend)
+    require_rust(monkeypatch)
     with pytest.raises(RuntimeError, match=f"declined the cache: {message}"):
-        Cache(type=backend, **settings)
+        NativeCache(type=backend, **settings)
 
 
 def test_rust_with_fallback_keeps_python_when_the_native_client_declines(
     redis_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        catalog,
-        "RULES",
-        (CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({LiteLLMCacheType.REDIS})),),
-    )
-    assert redis_facade(redis_url, socket_timeout=1.0)._native_cache is None  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
+    monkeypatch.setattr(catalog, "RULES", (CacheRule(Rollout.RUST_OPT_OUT),))
+    facade: Final = redis_facade(redis_url, socket_timeout=1.0)
+    assert resolved_kind(facade) == "python_callback"
+    kwargs: Final = completion_kwargs("fallback")
+    facade.add_cache({"answer": "python"}, **kwargs)
+    assert facade.cache.get_cache(facade.get_cache_key(**kwargs)) is not None
+    assert facade.get_cache(**kwargs) == {"answer": "python"}
 
 
 def test_qdrant_semantic_rust_required_rule_activates_natively(
     qdrant_url: str, fake_embedding_endpoint: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     del fake_embedding_endpoint
-    require_rust(monkeypatch, LiteLLMCacheType.QDRANT_SEMANTIC)
-    facade: Final = qdrant_facade(qdrant_url, f"cache_{uuid4().hex}")
-    native_runtime(facade)
+    facade: Final = qdrant_facade(qdrant_url, f"cache_{uuid4().hex}", NativeCache)
+    assert_native(facade)
     kwargs: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "qdrant activation"}]}
     facade.add_cache({"answer": "qdrant"}, **kwargs)
     assert facade.get_cache(**kwargs) == {"answer": "qdrant"}
@@ -2026,15 +1943,14 @@ async def test_redis_semantic_rust_required_rule_activates_natively(
 ) -> None:
     del semantic_embedding
     url, index = redis_stack
-    require_rust(monkeypatch, LiteLLMCacheType.REDIS_SEMANTIC)
-    facade: Final = Cache(
+    facade: Final = NativeCache(
         type=LiteLLMCacheType.REDIS_SEMANTIC,
         redis_url=url,
         similarity_threshold=0.8,
         redis_semantic_cache_embedding_model=SEMANTIC_EMBEDDING_MODEL,
         redis_semantic_cache_index_name=index,
     )
-    native_runtime(facade)
+    assert_native(facade)
     kwargs: Final = {"model": "gpt-4o", "messages": semantic_messages("name a primary color")}
     await facade.async_add_cache({"answer": "blue"}, **kwargs)
     assert await facade.async_get_cache(**kwargs) == {"answer": "blue"}
@@ -2046,8 +1962,7 @@ async def test_azure_blob_rust_required_rule_activates_natively(monkeypatch: pyt
         pytest.skip(
             "live Azure Blob parity needs AZURE_BLOB_CACHE_ACCOUNT_URL plus DefaultAzureCredential inputs in the environment"
         )
-    require_rust(monkeypatch, LiteLLMCacheType.AZURE_BLOB)
-    facade: Final = Cache(
+    facade: Final = NativeCache(
         type=LiteLLMCacheType.AZURE_BLOB,
         azure_account_url=account_url,
         azure_blob_container=f"litellm-parity-{uuid.uuid4().hex[:12]}",
@@ -2055,7 +1970,7 @@ async def test_azure_blob_rust_required_rule_activates_natively(monkeypatch: pyt
     backend: Final = facade.cache
     assert isinstance(backend, AzureBlobCache)
     try:
-        native_runtime(facade)
+        assert_native(facade)
         kwargs: Final = completion_kwargs("azure")
         await facade.async_add_cache({"answer": "azure"}, **kwargs)
         assert await facade.async_get_cache(**kwargs) == {"answer": "azure"}
@@ -2065,47 +1980,12 @@ async def test_azure_blob_rust_required_rule_activates_natively(monkeypatch: pyt
         await backend.disconnect()
 
 
-class _SemanticHit:
-    """A native semantic runtime that answers every lookup with one cached response."""
-
-    kind: Final = "native"
-
-    def lookup_semantic(self, request: object) -> tuple[object, float | None]:
-        return {"answer": 42}, 0.97
-
-    async def async_lookup_semantic(self, request: object) -> tuple[object, float | None]:
-        return {"answer": 42}, 0.97
-
-
-@pytest.mark.parametrize("semantic_type", [LiteLLMCacheType.QDRANT_SEMANTIC, LiteLLMCacheType.REDIS_SEMANTIC])
-@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-def test_native_semantic_hit_stamps_similarity_on_request_metadata(
-    semantic_type: LiteLLMCacheType, use_async: bool
-) -> None:
-    """Python semantic backends write `metadata["semantic-similarity"]` on every lookup, and the
-    facade copies it to the caller's metadata; the native path must report it the same way."""
-    facade: Final = Cache()
-    facade.type = semantic_type
-    facade._native_cache = ResponseCacheRuntime(cast(NativeResponseCacheRuntime, _SemanticHit()))  # pyright: ignore[reportPrivateUsage]  # the native path under test has no public setter
-    metadata: Final[dict[str, object]] = {}
-    kwargs: Final = {
-        "cache_key": "semantic-key",
-        "messages": [{"role": "user", "content": "hello"}],
-        "metadata": metadata,
-    }
-
-    result: Final = asyncio.run(facade.async_get_cache(**kwargs)) if use_async else facade.get_cache(**kwargs)
-
-    assert result == {"answer": 42}
-    assert metadata["semantic-similarity"] == 0.97
-
-
 def test_shipped_rules_keep_the_python_facade_and_a_rust_rule_selects_the_native_one() -> None:
     class PythonFacade:
         pass
 
     assert select_cache_facade(PythonFacade) is PythonFacade
-    assert select_cache_facade(PythonFacade, (CacheFacadeRule(Rollout.RUST_REQUIRED),)) is NativeCache
+    assert select_cache_facade(PythonFacade, RUST_REQUIRED) is NativeCache
 
 
 def test_native_facade_keeps_python_subclass_and_attribute_semantics() -> None:
@@ -2141,7 +2021,7 @@ def test_native_facade_keeps_python_subclass_and_attribute_semantics() -> None:
 
 
 @pytest.mark.parametrize("facade_class", [Cache, NativeCache], ids=["python", "native"])
-def test_both_facades_derive_the_same_keys_and_envelopes(facade_class: type[Cache]) -> None:
+def test_both_facades_derive_the_same_keys_and_envelopes(facade_class: type[Cache], tmp_path: Path) -> None:
     kwargs: Final = {
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "hi"}],
@@ -2150,7 +2030,7 @@ def test_both_facades_derive_the_same_keys_and_envelopes(facade_class: type[Cach
         "litellm_params": {},
     }
     python_key: Final = Cache(type=LiteLLMCacheType.LOCAL, namespace="team").get_cache_key(**kwargs)
-    facade: Final = facade_class(type=LiteLLMCacheType.LOCAL, namespace="team", ttl=30)
+    facade: Final = facade_class(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path), namespace="team", ttl=30)
     assert facade.get_cache_key(**kwargs) == python_key
     assert kwargs["litellm_params"] == {"preset_cache_key": python_key}
     facade.add_cache({"answer": 1}, cache_key="envelope")
@@ -2177,7 +2057,7 @@ async def test_native_facade_async_methods_return_coroutines_on_every_path() -> 
 
 
 def test_native_facade_overridden_helpers_steer_its_own_methods(monkeypatch: pytest.MonkeyPatch) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.LOCAL)
+    require_rust(monkeypatch)
     facade: Final = NativeCache(type=LiteLLMCacheType.LOCAL)
     assert resolved_kind(facade) == "native"
     kwargs: Final = completion_kwargs("override")
@@ -2206,13 +2086,9 @@ _FINALIZER_READS_THE_FACADE: Final = """
 from types import SimpleNamespace
 
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.rust_bridge import _native, catalog
-from litellm.rust_bridge.catalog import CacheRule
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
 
-if {native}:
-    catalog.RULES = (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({{LiteLLMCacheType.LOCAL}})),)
 facade = _native.Cache(type=LiteLLMCacheType.LOCAL)
 
 
@@ -2221,11 +2097,15 @@ class ReadsFacadeWhenCollected:
         print("finalizer saw", type(facade.cache).__name__, flush=True)
 
 
+class Custom(InMemoryCache):
+    pass
+
+
 class Replacement(InMemoryCache):
     pass
 
 
-backend = InMemoryCache()
+backend = {backend}()
 backend.finalizer = ReadsFacadeWhenCollected()
 facade.cache = backend
 del backend
@@ -2235,9 +2115,11 @@ print("replaced", flush=True)
 """
 
 
-@pytest.mark.parametrize(("native", "kind"), [(False, "python_callback"), (True, "native")], ids=["python", "native"])
-def test_replacing_the_backend_lets_its_finalizer_read_the_facade(native: bool, kind: str) -> None:
-    result: Final = run_child_interpreter(_FINALIZER_READS_THE_FACADE.format(native=native), timeout=30)
+@pytest.mark.parametrize(
+    ("backend", "kind"), [("Custom", "python_callback"), ("InMemoryCache", "native")], ids=["python", "native"]
+)
+def test_replacing_the_backend_lets_its_finalizer_read_the_facade(backend: str, kind: str) -> None:
+    result: Final = run_child_interpreter(_FINALIZER_READS_THE_FACADE.format(backend=backend), timeout=30)
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [kind, "finalizer saw Replacement", "replaced"], result.stderr
 

@@ -189,11 +189,11 @@ impl Cache {
         facade: &Bound<'_, PyAny>,
         dynamic: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Binding> {
-        if let Some(dynamic) = dynamic.filter(|object| !object.is_none()) {
-            return Ok(Binding::Python(dynamic.clone().unbind()));
-        }
         if let Some(service) = self.native_service(py, facade)? {
             return Ok(Binding::Native(service));
+        }
+        if let Some(dynamic) = dynamic.filter(|object| !object.is_none()) {
+            return Ok(Binding::Python(dynamic.clone().unbind()));
         }
         self.backend(py).map(Binding::Python)
     }
@@ -402,14 +402,6 @@ impl Cache {
         cache_lookup_kwargs: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         entries::update_metadata_from_lookup(original_kwargs, cache_lookup_kwargs)
-    }
-
-    #[staticmethod]
-    fn _stamp_semantic_similarity(
-        kwargs: &Bound<'_, PyAny>,
-        similarity: Option<f64>,
-    ) -> PyResult<()> {
-        entries::stamp_semantic_similarity(kwargs, similarity)
     }
 
     #[pyo3(signature = (dynamic_cache_object=None, **kwargs))]

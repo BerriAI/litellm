@@ -8,7 +8,6 @@ import pytest
 from litellm.rust_bridge import catalog, configuration
 from litellm.rust_bridge.catalog import (
     CacheContext,
-    CacheFacadeContext,
     CacheRule,
     Context,
     Delivery,
@@ -21,7 +20,6 @@ from litellm.rust_bridge.catalog import (
     SecretManagerRule,
 )
 from litellm.rust_bridge.configuration import Decision, Rollout
-from litellm.types.caching import LiteLLMCacheType
 from litellm.types.secret_managers.main import KeyManagementSystem
 
 
@@ -75,10 +73,8 @@ def test_missing_rule_stays_on_python_even_when_rust_is_enabled(monkeypatch: pyt
 @pytest.mark.parametrize(
     "context",
     (
-        CacheFacadeContext(),
-        *(CacheContext(backend.value) for backend in LiteLLMCacheType),
+        CacheContext(),
         *(SecretManagerContext(system.value) for system in KeyManagementSystem),
-        CacheContext("custom"),
         SecretManagerContext("unknown"),
     ),
 )
@@ -97,16 +93,6 @@ def test_logger_rollout_obeys_the_global_switch() -> None:
     assert catalog.decision(LoggerContext()) is Decision.PYTHON
     configuration.rust(True)
     assert catalog.decision(LoggerContext()) is Decision.RUST_WITH_FALLBACK
-
-
-def test_response_cache_rules_select_the_whole_backend_runtime() -> None:
-    rules: Final = (
-        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
-        CacheRule(Rollout.PYTHON_ONLY),
-    )
-
-    assert catalog.decision(CacheContext(backend="local"), rules) is Decision.RUST_REQUIRED
-    assert catalog.decision(CacheContext(backend="redis"), rules) is Decision.PYTHON
 
 
 @pytest.mark.parametrize(
@@ -156,15 +142,14 @@ def test_textract_ocr_has_no_python_path_to_opt_out_to(
         (RouteContext(Route.OCR, provider="local"), Decision.RUST_REQUIRED),
         (RouteContext(Route.OCR, provider="other"), Decision.PYTHON),
         (RouteContext(Route.MESSAGES, provider="local"), Decision.PYTHON),
-        (CacheContext("local"), Decision.RUST_WITH_FALLBACK),
-        (CacheContext("other"), Decision.PYTHON),
+        (CacheContext(), Decision.RUST_WITH_FALLBACK),
         (SecretManagerContext("local"), Decision.PYTHON),
         (SecretManagerContext("other"), Decision.RUST_REQUIRED),
     ),
 )
 def test_mixed_rules_select_only_the_matching_domain(context: Context, expected: Decision) -> None:
     rules: Final[Rules] = (
-        CacheRule(Rollout.RUST_OPT_OUT, backends=frozenset({"local"})),
+        CacheRule(Rollout.RUST_OPT_OUT),
         CacheRule(Rollout.PYTHON_ONLY),
         SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
         SecretManagerRule(Rollout.RUST_REQUIRED),
@@ -175,7 +160,7 @@ def test_mixed_rules_select_only_the_matching_domain(context: Context, expected:
     assert catalog.decision(context, rules) is expected
 
 
-@pytest.mark.parametrize("context", (RouteContext(Route.OCR), CacheContext("local"), SecretManagerContext("local")))
+@pytest.mark.parametrize("context", (RouteContext(Route.OCR), CacheContext(), SecretManagerContext("local")))
 @pytest.mark.parametrize(
     ("rollout", "process", "environment", "expected"),
     (
@@ -213,11 +198,10 @@ def test_all_domains_share_rollout_switches_and_first_match(
     assert catalog.decision(context, ()) is Decision.PYTHON
 
 
-@pytest.mark.parametrize("context", (RouteContext(Route.OCR), CacheContext("local"), SecretManagerContext("local")))
+@pytest.mark.parametrize("context", (RouteContext(Route.OCR), SecretManagerContext("local")))
 def test_empty_constraints_match_nothing(context: Context) -> None:
     rules: Final[Rules] = (
         RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset()),
-        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset()),
         SecretManagerRule(Rollout.RUST_REQUIRED, systems=frozenset()),
     )
 
