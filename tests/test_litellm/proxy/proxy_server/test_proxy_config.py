@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -4903,3 +4903,54 @@ async def test_model_refresh_updates_availability_catalog_and_retains_it_on_db_f
     assert await pc._get_models_from_db(client) == []
     assert pc.auto_router_db_catalog == ()
     assert find_many.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_ignores_keys_no_write_api_can_produce(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    await pc._update_general_settings(
+        {
+            "max_parallel_requests": 7,
+            "allowed_ips": ["10.0.0.1"],
+            "role_permissions": [{"role": "proxy_admin", "models": ["x"]}],
+        }
+    )
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings["max_parallel_requests"] == 7
+    assert ps.general_settings["allowed_ips"] == ["10.0.0.1"]
+    assert ps.general_settings.get("role_permissions") is None
+    assert "role_permissions" not in ps.general_settings
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_logs_ignored_keys_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.proxy_server import _log_ignored_general_settings_keys
+
+    warn = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.verbose_proxy_logger.warning", warn)
+    _log_ignored_general_settings_keys.cache_clear()
+    pc = ProxyConfig()
+    row: Final = {"role_permissions": [{"role": "proxy_admin", "models": ["x"]}]}
+    await pc._update_general_settings(row)
+    await pc._update_general_settings(row)
+    assert warn.call_args_list == [
+        call(
+            "Ignoring general_settings keys from the DB that no supported write path produces: %s",
+            "role_permissions",
+        )
+    ]
+
+    await pc._update_general_settings({"max_parallel_requests": 8})
+    assert warn.call_args_list == [
+        call(
+            "Ignoring general_settings keys from the DB that no supported write path produces: %s",
+            "role_permissions",
+        )
+    ]

@@ -5039,6 +5039,9 @@ class _ConfigWithBaseline(dict[str, object]):
 
 
 _EMPTY_SETTINGS_MAPPING: Final[Mapping[str, SettingsJsonValue]] = MappingProxyType({})
+_DB_GENERAL_SETTINGS_KEYS: Final[frozenset[str]] = frozenset(ConfigGeneralSettings.model_fields) | frozenset(
+    ("allowed_ips",)
+)
 _SETTINGS_MAPPING: Final = TypeAdapter(dict[str, SettingsJsonValue])
 
 
@@ -5057,6 +5060,14 @@ def _get_field_default(field_info: FieldInfo) -> JsonValue:
 def _bind_general_settings_store(settings: SettingsStore) -> None:
     global general_settings
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
+
+
+@lru_cache(maxsize=64)
+def _log_ignored_general_settings_keys(keys: tuple[str, ...]) -> None:
+    verbose_proxy_logger.warning(
+        "Ignoring general_settings keys from the DB that no supported write path produces: %s",
+        ", ".join(keys),
+    )
 
 
 @lru_cache(maxsize=4096)
@@ -7504,10 +7515,17 @@ class ProxyConfig:
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
         previous_retention_values: Final = self._resolved_retention_values()
         previous_pass_through_endpoints: Final = self.settings.get("pass_through_endpoints")
-        self.settings.apply_db_row("general_settings", db_general_settings)
+        row: Final = dict(db_general_settings)
+        db_values: Final = MappingProxyType(
+            {key: value for key, value in row.items() if key in _DB_GENERAL_SETTINGS_KEYS}
+        )
+        ignored: Final = tuple(sorted(key for key in row if key not in _DB_GENERAL_SETTINGS_KEYS))
+        if ignored:
+            _log_ignored_general_settings_keys(ignored)
+        self.settings.apply_db_row("general_settings", db_values)
         _bind_general_settings_store(self.settings)
         await self._apply_general_settings_side_effects(
-            db_general_settings,
+            db_values,
             cache_size_was_db,
             previous_retention_values,
             previous_pass_through_endpoints,

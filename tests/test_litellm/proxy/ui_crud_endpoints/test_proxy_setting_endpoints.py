@@ -4038,3 +4038,62 @@ class TestSyncUiSettingsToGeneralSettings:
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
 
+
+
+@pytest.mark.asyncio
+async def test_update_litellm_setting_refused_save_leaves_runtime_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    import litellm
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError
+    from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import _update_litellm_setting
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"max_budget": 999.0})
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value={"litellm_settings": {}}))
+    monkeypatch.setattr(
+        proxy_config,
+        "save_config",
+        AsyncMock(side_effect=ConfigOwnedKeyError("litellm_settings", "default_internal_user_params")),
+    )
+
+    with pytest.raises(ConfigOwnedKeyError):
+        await _update_litellm_setting(
+            DefaultInternalUserParams(max_budget=777.0),
+            "default_internal_user_params",
+            "updated",
+            UserAPIKeyAuth(),
+        )
+
+    assert litellm.default_internal_user_params == {"max_budget": 999.0}
+
+
+@pytest.mark.asyncio
+async def test_update_litellm_setting_accepted_save_applies_runtime_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    import litellm
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import _update_litellm_setting
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"max_budget": 999.0})
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value={"litellm_settings": {}}))
+    monkeypatch.setattr(proxy_config, "save_config", AsyncMock(return_value=None))
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_config_audit_log", AsyncMock())
+
+    await _update_litellm_setting(
+        DefaultInternalUserParams(max_budget=777.0),
+        "default_internal_user_params",
+        "updated",
+        UserAPIKeyAuth(),
+    )
+
+    assert litellm.default_internal_user_params == DefaultInternalUserParams(max_budget=777.0).model_dump(
+        mode="json", exclude_none=True
+    )
