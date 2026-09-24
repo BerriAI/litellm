@@ -321,6 +321,34 @@ func TestUpdateKeyOmitsEmptyBudgetDuration(t *testing.T) {
 	}
 }
 
+// The proxy 500s on team_id: "" with "Team object not found", so a teamless key
+// must omit it from the update payload entirely.
+func TestUpdateKeyOmitsEmptyTeamID(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key": "sk-test"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	if _, err := client.UpdateKey(&Key{Key: "sk-test"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if _, present := captured["team_id"]; present {
+		t.Errorf("update payload contains empty team_id: %v", captured["team_id"])
+	}
+
+	if _, err := client.UpdateKey(&Key{Key: "sk-test", TeamID: "team-1"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if captured["team_id"] != "team-1" {
+		t.Errorf("team_id = %v, want team-1", captured["team_id"])
+	}
+}
+
 func TestResourceKeyUpdateFailureKeepsPriorState(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
