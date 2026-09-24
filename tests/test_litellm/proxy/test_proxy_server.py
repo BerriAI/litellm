@@ -1733,7 +1733,7 @@ class _PrismaClientWhoseUserTableCannotHash:
     class _Db:
         litellm_usertable = None
 
-    def __init__(self):
+    def __init__(self, database_url, proxy_logging_obj):
         self.db = self._Db()
         self.db.litellm_usertable = self._Table()
         self.writer_db = self.db
@@ -1742,6 +1742,9 @@ class _PrismaClientWhoseUserTableCannotHash:
         pass
 
     async def disconnect(self):
+        pass
+
+    def start_view_setup_task(self):
         pass
 
     async def check_view_exists(self):
@@ -1761,12 +1764,7 @@ async def test_proxy_startup_surfaces_a_password_migration_crypto_failure(monkey
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
-    cannot_hash = _PrismaClientWhoseUserTableCannotHash()
-
-    async def connected(**kwargs):
-        return cannot_hash
-
-    monkeypatch.setattr("litellm.proxy.proxy_server.ProxyStartupEvent._setup_prisma_client", connected)
+    monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", _PrismaClientWhoseUserTableCannotHash)
     monkeypatch.setattr("litellm.proxy.proxy_server.openssl_enforces_fips", lambda: True)
     monkeypatch.setenv("LITELLM_FIPS_MODE", fips_mode)
 
