@@ -200,5 +200,10 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "llmtech": {
+    "base_url": "https://api.llmtech.eu/v1",
+    "api_key_env": "LLMTECH_API_KEY",
+    "api_base_env": "LLMTECH_API_BASE"
   }
 }
