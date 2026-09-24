@@ -1,4 +1,4 @@
-//! Mirrors Python's CallTypes (litellm/types/utils.py), generated from its variant list.
+//! Mirrors Python's CallTypes and PassthroughCallTypes (litellm/types/utils.py), generated from their variant lists.
 
 // variant names mirror Python's enum members verbatim
 #![allow(non_camel_case_types)]
@@ -320,4 +320,21 @@ impl CallTypes {
     pub fn as_str(self) -> &'static str {
         self.into()
     }
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    PartialEq,
+    strum::Display,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+pub enum PassthroughCallTypes {
+    #[strum(serialize = "passthrough-image-generation")]
+    passthrough_image_generation,
 }

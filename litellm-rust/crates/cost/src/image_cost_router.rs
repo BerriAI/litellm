@@ -5,7 +5,7 @@ use crate::azure_ai_image_cost::{
     AzureAiImageRequest, cost_calculator as azure_ai_image_cost_calculator,
 };
 use crate::bedrock_image_cost::cost_calculator as bedrock_image_cost_calculator;
-use crate::call_type::CallTypes;
+use crate::call_type::{CallTypes, PassthroughCallTypes};
 use crate::catalog::ModelInfoCatalog;
 use crate::cost_calculator::{DefaultImageCostRequest, default_image_cost_calculator};
 use crate::error::CostError;
@@ -45,13 +45,12 @@ pub struct AzureAiImageCatalogRequest<'a> {
 
 pub fn call_type_has_image_response(call_type: &str) -> bool {
     matches!(
-        call_type,
-        "image_generation"
-            | "aimage_generation"
-            | "passthrough-image-generation"
-            | "image_edit"
-            | "aimage_edit"
-    )
+        call_type.parse::<CallTypes>(),
+        Ok(CallTypes::image_generation
+            | CallTypes::aimage_generation
+            | CallTypes::image_edit
+            | CallTypes::aimage_edit)
+    ) || call_type.parse::<PassthroughCallTypes>().is_ok()
 }
 
 // CustomPricingLiteLLMParams.model_fields, litellm/types/utils.py as of 2026-09-22.

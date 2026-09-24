@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use crate::call_type::CallTypes;
 use crate::error::CostError;
 use crate::model_selection::{
     ModelSelectionRequest, get_response_model, select_model_name_for_cost_calc,
@@ -23,16 +24,16 @@ pub enum ResponseKind {
 }
 
 impl ResponseKind {
-    fn call_type(self) -> &'static str {
+    fn call_type(self) -> CallTypes {
         match self {
-            Self::Completion => "completion",
-            Self::Embedding => "embedding",
-            Self::Transcription => "transcription",
-            Self::Speech => "speech",
-            Self::Rerank => "rerank",
-            Self::ImageGeneration => "image_generation",
-            Self::TextCompletion => "text_completion",
-            Self::SendMessage => "send_message",
+            Self::Completion => CallTypes::completion,
+            Self::Embedding => CallTypes::embedding,
+            Self::Transcription => CallTypes::transcription,
+            Self::Speech => CallTypes::speech,
+            Self::Rerank => CallTypes::rerank,
+            Self::ImageGeneration => CallTypes::image_generation,
+            Self::TextCompletion => CallTypes::text_completion,
+            Self::SendMessage => CallTypes::send_message,
         }
     }
 }
@@ -55,7 +56,7 @@ pub struct PreparedCompletionInput {
 }
 
 pub fn infer_call_type(explicit: Option<&str>, kind: Option<ResponseKind>) -> Option<&str> {
-    explicit.or_else(|| kind.map(ResponseKind::call_type))
+    explicit.or_else(|| kind.map(|kind| kind.call_type().as_str()))
 }
 
 pub fn map_traffic_type_to_service_tier(traffic_type: Option<&str>) -> Option<&'static str> {
@@ -110,8 +111,10 @@ pub fn prepare_completion_input(
     let response = request.model_selection.response;
     let call_type =
         infer_call_type(request.call_type, request.response_kind).unwrap_or("completion");
-    let model = if matches!(call_type, "image_generation" | "aimage_generation")
-        && request.model_selection.model == Some("")
+    let model = if matches!(
+        call_type.parse::<CallTypes>(),
+        Ok(CallTypes::image_generation | CallTypes::aimage_generation)
+    ) && request.model_selection.model == Some("")
         && LlmProviders::AZURE.matches(request.model_selection.provider)
     {
         Some("dall-e-2")

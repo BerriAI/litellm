@@ -335,15 +335,17 @@ fn price_image_response(
     Ok(flat_priced(prepared, model, total))
 }
 
-fn is_video_call(call_type: &str) -> bool {
+fn is_video_call(call_type: Option<CallTypes>) -> bool {
     matches!(
         call_type,
-        "create_video"
-            | "acreate_video"
-            | "video_edit"
-            | "avideo_edit"
-            | "video_remix"
-            | "avideo_remix"
+        Some(
+            CallTypes::create_video
+                | CallTypes::acreate_video
+                | CallTypes::video_edit
+                | CallTypes::avideo_edit
+                | CallTypes::video_remix
+                | CallTypes::avideo_remix
+        )
     )
 }
 
@@ -660,9 +662,10 @@ pub fn completion_cost_from_response(
         .custom_pricing
         .then_some(request.deployment_info)
         .flatten();
+    let call_type = prepared.call_type.parse::<CallTypes>().ok();
     if matches!(
-        prepared.call_type.as_str(),
-        "send_message" | "asend_message"
+        call_type,
+        Some(CallTypes::send_message | CallTypes::asend_message)
     ) {
         let model = prepared
             .model_candidates
@@ -674,7 +677,7 @@ pub fn completion_cost_from_response(
         let total = calculate_a2a_cost(request.logging_details)?;
         return Ok(flat_priced(prepared, model, total));
     }
-    if prepared.call_type == "call_mcp_tool" {
+    if call_type == Some(CallTypes::call_mcp_tool) {
         let model = prepared
             .model_candidates
             .iter()
@@ -690,13 +693,13 @@ pub fn completion_cost_from_response(
     {
         return price_image_response(catalog, request, prepared, provider, deployment_info);
     }
-    if is_video_call(&prepared.call_type) {
+    if is_video_call(call_type) {
         return price_video_response(catalog, request, prepared, provider, deployment_info);
     }
-    if prepared.call_type == "_arealtime" {
+    if call_type == Some(CallTypes::arealtime) {
         return price_realtime_response(catalog, request, prepared, provider);
     }
-    if prepared.call_type == "_aresponses_websocket" {
+    if call_type == Some(CallTypes::aresponses_websocket) {
         let explicit_pricing = request.input.model_selection.custom_pricing
             || request.input.model_selection.base_model.is_some();
         let region = if explicit_pricing {
@@ -709,28 +712,31 @@ pub fn completion_cost_from_response(
         };
         return price_responses_websocket(catalog, request, prepared, provider, region);
     }
-    if !matches!(prepared.call_type.as_str(), "search" | "asearch")
+    let is_search = matches!(call_type, Some(CallTypes::search | CallTypes::asearch));
+    if !is_search
         && let Some((model, total)) =
             unregistered_replicate_cost(catalog, request, &prepared, provider)
     {
         return Ok(flat_priced(prepared, model, total));
     }
     let needs_token_usage = matches!(
-        prepared.call_type.as_str(),
-        "completion"
-            | "acompletion"
-            | "embedding"
-            | "aembedding"
-            | "text_completion"
-            | "atext_completion"
-            | "responses"
-            | "aresponses"
-            | "moderation"
-            | "amoderation"
-            | "generate_content"
-            | "agenerate_content"
-            | "retrieve_batch"
-            | "aretrieve_batch"
+        call_type,
+        Some(
+            CallTypes::completion
+                | CallTypes::acompletion
+                | CallTypes::embedding
+                | CallTypes::aembedding
+                | CallTypes::text_completion
+                | CallTypes::atext_completion
+                | CallTypes::responses
+                | CallTypes::aresponses
+                | CallTypes::moderation
+                | CallTypes::amoderation
+                | CallTypes::generate_content
+                | CallTypes::agenerate_content
+                | CallTypes::retrieve_batch
+                | CallTypes::aretrieve_batch
+        )
     );
     let counted_usage = if needs_token_usage
         && request.input.model_selection.response.is_none()
@@ -758,7 +764,6 @@ pub fn completion_cost_from_response(
             .and_then(Value::as_str)
             .or(request.region)
     };
-    let is_search = matches!(prepared.call_type.as_str(), "search" | "asearch");
     let custom_pricing = if is_search {
         CustomPricing::NONE
     } else {
