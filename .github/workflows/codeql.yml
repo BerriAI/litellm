@@ -71,13 +71,18 @@ jobs:
       # a lookup key into the haveibeenpwned range API (the protocol mandates
       # SHA-1) and the digest itself never leaves the proxy beyond its first 5
       # characters.
-      - name: Filter SARIF (OCI sha256, HIBP sha1)
+      # It also fires on the MCP advisory-lock derivations in
+      # litellm/proxy/_experimental/mcp_server/db.py, which hash identifier
+      # strings (user_id, server_id, server names) into Postgres advisory lock
+      # keys — neither password nor secret hashing.
+      - name: Filter SARIF (OCI sha256, HIBP sha1, MCP lock ids)
         if: matrix.language == 'python'
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
           patterns: |
             -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
             -litellm/proxy/auth/password_policy.py:py/weak-sensitive-data-hashing
+            -litellm/proxy/_experimental/mcp_server/db.py:py/weak-sensitive-data-hashing
           input: sarif-results/python.sarif
           output: sarif-results/python.sarif
 
