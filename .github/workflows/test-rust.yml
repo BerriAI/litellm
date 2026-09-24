@@ -130,6 +130,9 @@ jobs:
 
       - run: cargo nextest run --workspace --locked
 
+      - name: Test model catalog schema feature
+        run: cargo test -p litellm-model-catalog --locked --features schema --test schema
+
       - run: cargo test --workspace --doc --locked
 
       - name: Test token counter feature combinations

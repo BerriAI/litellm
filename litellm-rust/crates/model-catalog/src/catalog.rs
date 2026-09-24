@@ -1,5 +1,6 @@
 use crate::error::Error;
-use crate::model_info::{FallbackGeneralizations, FallbackRule, ModelInfo};
+use crate::fallback::{FallbackGeneralizations, FallbackRule};
+use crate::model_info::ModelInfo;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::{Map, Value};
