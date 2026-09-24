@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { toast } from "@/lib/toast";
+import type { Team } from "../key_team_helpers/key_list";
 import type { EffectiveMcpServer } from "../mcp_server_management/effectiveMcpServers";
 import type { MCPServer } from "../mcp_tools/types";
 import TeamInfoView, {
@@ -3001,6 +3002,21 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
     },
   });
 
+  const savedTeam: Team = {
+    team_id: "123",
+    team_alias: "Test Team",
+    models: [],
+    max_budget: null,
+    budget_duration: null,
+    tpm_limit: null,
+    rpm_limit: null,
+    organization_id: "org-1",
+    created_at: "2024-01-01T00:00:00Z",
+    keys: [],
+    members_with_roles: [],
+    spend: 0,
+  };
+
   const openEditorWithCustomMembers = async (
     user: ReturnType<typeof userEvent.setup>,
     userIds: string[] = ["user-custom@x.com"],
@@ -3013,7 +3029,7 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
       team_memberships: userIds.map((id) => customBudgetMembership(id, maxBudget)),
     } as TeamData;
     vi.mocked(networking.teamInfoCall).mockResolvedValue(data);
-    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: savedTeam, team_id: "123" });
 
     renderWithProviders(<TeamInfoView {...props} />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
