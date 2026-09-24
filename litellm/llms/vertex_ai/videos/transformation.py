@@ -257,9 +257,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
     @staticmethod
     def _supports_resolution_inference(model: str) -> bool:
-        model_name: Final = model.removeprefix("vertex_ai/")
-        model_info: Final = litellm.get_model_info(model=model_name, custom_llm_provider="vertex_ai")
-        return model_info.get("output_cost_per_second_1080p") is not None
+        model_key: Final = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+        model_info: Final = litellm.model_cost.get(model_key)
+        return model_info is not None and model_info.get("output_cost_per_second_1080p") is not None
 
     def validate_environment(
         self,
