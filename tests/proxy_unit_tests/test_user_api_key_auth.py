@@ -1519,6 +1519,7 @@ async def test_user_budget_lookup_tolerates_an_unreadable_user():
     from litellm.proxy.auth.user_api_key_auth import _read_user_model_max_budget
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     with patch(
         "litellm.proxy.auth.user_api_key_auth.get_user_object",

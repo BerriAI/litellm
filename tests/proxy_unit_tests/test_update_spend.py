@@ -29,6 +29,7 @@ class MockPrismaClient:
     def __init__(self):
         # Create AsyncMock for db operations
         self.db = AsyncMock()
+        self.replica_db = self.db
         self.db.litellm_spendlogs = AsyncMock()
         self.db.litellm_spendlogs.create_many = AsyncMock()
 

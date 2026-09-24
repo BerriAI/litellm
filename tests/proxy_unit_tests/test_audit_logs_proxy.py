@@ -178,6 +178,7 @@ async def test_create_audit_log_for_update_premium_user():
     ):
 
         mock_prisma.db.litellm_auditlog.create = AsyncMock()
+        mock_prisma.replica_db = mock_prisma.db
 
         request_data = LiteLLM_AuditLogs(
             id="test_id",

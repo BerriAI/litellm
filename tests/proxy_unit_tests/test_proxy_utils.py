@@ -1642,6 +1642,7 @@ class MockPrismaClientDB:
         mock_key_data,
     ):
         self.db = MockDb(mock_team_data, mock_key_data)
+        self.replica_db = self.db
 
     async def get_data(
         self,
@@ -1848,6 +1849,7 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
 
     # Create mock prisma client
     mock_prisma = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.connect = AsyncMock()
     mock_prisma.health_check = AsyncMock()
     mock_prisma.check_view_exists = AsyncMock()
@@ -1857,6 +1859,7 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
     mock_db = MagicMock()
     mock_db.start_token_refresh_task = AsyncMock()
     mock_prisma.db = mock_db
+    mock_prisma.replica_db = mock_prisma.db
     # Mock PrismaClient constructor
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.PrismaClient", lambda **kwargs: mock_prisma
@@ -2284,6 +2287,7 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
 def mock_prisma_client():
     client = MagicMock()
     client.db = MagicMock()
+    client.replica_db = client.db
     client.db.litellm_teamtable = AsyncMock()
     return client
 
