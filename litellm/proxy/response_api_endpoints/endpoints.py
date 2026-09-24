@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Mapping, S
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeAlias, cast, get_args
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 
-_ResponseDocSchemas = dict[int | str, dict[str, Any]]  # pyright: ignore[reportExplicitAny]  # fastapi's responses kwarg
+_ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
 RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponsesAPIResponse}}
 RESPONSES_API_CREATE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {

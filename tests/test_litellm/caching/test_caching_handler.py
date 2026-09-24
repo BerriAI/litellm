@@ -591,6 +591,48 @@ async def test_embedding_cache_hit_sets_custom_llm_provider_on_logging_obj():
     assert logging_obj.model_call_details["custom_llm_provider"] == "openai"
 
 
+def test_sync_stream_responses_cache_hit_sets_custom_llm_provider_on_logging_obj(monkeypatch):
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import CallTypes
+
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    kwargs = {"model": "azure/gpt-5.4-mini", "input": "hello", "stream": True}
+    cached_response = {
+        "id": "resp_sync_stream",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": "gpt-5.4-mini",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_sync_stream",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+    }
+    litellm.cache.add_cache(json.dumps(cached_response), **kwargs)
+    handler = LLMCachingHandler(original_function=litellm.responses, request_kwargs=kwargs, start_time=datetime.now())
+    logging_obj = _build_logging_obj(CallTypes.responses.value, stream=True)
+
+    hit = handler._sync_get_cache(
+        model="azure/gpt-5.4-mini",
+        original_function=litellm.responses,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.responses.value,
+        kwargs=kwargs,
+        args=(),
+    )
+
+    assert hit.cached_result is not None
+    assert logging_obj.model_call_details["custom_llm_provider"] == "azure"
+    assert logging_obj.model_call_details["litellm_params"]["custom_llm_provider"] == "azure"
+
+
 def test_request_kwargs_does_not_retain_logging_obj():
     """
     The caching handler lives on logging_obj._llm_caching_handler, so keeping
