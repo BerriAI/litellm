@@ -17,11 +17,13 @@ from litellm.constants import (
     USAGE_TOP_API_KEYS_LIMIT,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    KeyPageCursor,
     _adjust_dates_for_timezone,
     _build_aggregated_sql_query,
     _build_entity_rollup_sql_query,
     _is_user_agent_tag,
     _record_to_spend_metrics,
+    decode_key_page_cursor,
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
@@ -3190,3 +3192,142 @@ async def test_export_csv_omits_flat_cost_columns_when_no_ptu_spend_exists(
     header: Final = _team_export_csv("daily", rows).splitlines()[0]
     assert "Flat Cost" not in header
     assert "Total Cost" not in header
+
+
+class TestKeyPageCursorCodec:
+    def test_round_trip(self):
+        cursor: Final = KeyPageCursor(spend=6.0, api_key="key-004")
+        decoded: Final = decode_key_page_cursor(cursor.encode())
+        assert decoded is not None
+        assert decoded.spend == 6.0
+        assert decoded.api_key == "key-004"
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "not-base64!!!",
+            "aGVsbG8=",  # valid base64, not json
+            "eyJmb28iOiAxfQ==",  # json object missing both fields
+            "eyJzcGVuZCI6ICIxLjUiLCAiYXBpX2tleSI6IDd9",  # wrong types
+        ],
+    )
+    def test_malformed_returns_none(self, raw):
+        assert decode_key_page_cursor(raw) is None
+
+
+class TestBuildAggregatedSqlQueryCursor:
+    def test_no_cursor_keeps_sql_and_params_unchanged(self):
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-05-29",
+            end_date="2026-06-02",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=None,
+        )
+        assert "ranked_api_keys" in sql
+        assert "key_spend < $" not in sql
+        assert params == ["2026-05-29", "2026-06-02", "user-1", PTU_SENTINEL_API_KEY]
+
+    def test_cursor_appends_params_after_sentinel(self):
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-05-29",
+            end_date="2026-06-02",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=None,
+            cursor=KeyPageCursor(spend=6.0, api_key="key-004"),
+        )
+        assert params[-2:] == [6.0, "key-004"]
+        assert "key_spend < $5::float8" in sql
+        assert "key_spend = $5::float8 AND api_key > $6" in sql
+
+    def test_cursor_placeholders_follow_the_marker_param(self):
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=None,
+            start_date="2026-05-29",
+            end_date="2026-06-02",
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=None,
+            global_rollup_through="2026-05-30",
+            cursor=KeyPageCursor(spend=6.0, api_key="key-004"),
+        )
+        assert params[-3:] == ["2026-05-30", 6.0, "key-004"]
+        assert "key_spend < $5::float8" in sql
+        assert "key_spend = $5::float8 AND api_key > $6" in sql
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_pages_api_keys_through_cursor(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """Same 105-key seed as the bounds test. Page 1 must hand back a cursor that
+    decodes to the cutoff key (the 6.0 tie at key-004), and page 2 must return
+    exactly the five keys below the cutoff with no further cursor."""
+    n_keys: Final = USAGE_TOP_API_KEYS_LIMIT + 5
+    key_rows: Final = [
+        (
+            f"row-{i:03d}",
+            f"user-{i:03d}",
+            "2026-06-01",
+            f"key-{i:03d}",
+            "gpt-5",
+            "",
+            "openai",
+            "/v1/chat/completions",
+            10,
+            6.0 if i == 4 else float(i + 1),
+            1,
+            1,
+        )
+        for i in range(n_keys)
+    ]
+    _seed_daily_user_spend(_aggregated_postgresql, key_rows)
+    key_spend: Final = sum(6.0 if i == 4 else float(i + 1) for i in range(n_keys))
+
+    call_kwargs: Final = {
+        "prisma_client": None,
+        "table_name": "litellm_dailyuserspend",
+        "entity_id_field": "user_id",
+        "entity_id": None,
+        "entity_metadata_field": None,
+        "start_date": "2026-06-01",
+        "end_date": "2026-06-01",
+        "model": None,
+        "api_key": None,
+    }
+
+    row_counts: Final[list[int]] = []  # mutable-ok: out-param for the query_raw shim
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, row_counts)
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+
+    first = await get_daily_activity_aggregated(**{**call_kwargs, "prisma_client": mock_prisma})
+
+    assert first.metadata.next_cursor is not None
+    cutoff: Final = decode_key_page_cursor(first.metadata.next_cursor)
+    assert cutoff is not None
+    assert (cutoff.spend, cutoff.api_key) == (6.0, "key-004")
+    first_day: Final = first.results[0]
+    assert len(first_day.breakdown.api_keys) == USAGE_TOP_API_KEYS_LIMIT
+
+    row_counts.clear()
+    second = await get_daily_activity_aggregated(**{**call_kwargs, "prisma_client": mock_prisma}, cursor=cutoff)
+
+    second_day: Final = second.results[0]
+    assert set(second_day.breakdown.api_keys) == {"key-005", "key-003", "key-002", "key-001", "key-000"}
+    assert second.metadata.next_cursor is None
+    assert second.metadata.total_api_keys == n_keys
+    assert second.metadata.total_spend == pytest.approx(first.metadata.total_spend)
+    assert second.metadata.total_spend == pytest.approx(key_spend)
+    assert row_counts == [7 + 6 * 5]

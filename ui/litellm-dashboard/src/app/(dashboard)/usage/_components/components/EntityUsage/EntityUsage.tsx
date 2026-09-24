@@ -46,6 +46,7 @@ import EndpointUsage from "../EndpointUsage/EndpointUsage";
 import ModelViewToggle, { ModelViewType } from "../ModelViewToggle";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
+import { mergeKeyPage } from "@/components/UsagePage/keyPageMerge";
 import TopModelView from "./TopModelView";
 import TeamUserSpendCard from "./TeamUserSpendCard";
 
@@ -75,6 +76,7 @@ interface EntitySpendData {
     total_tokens: number;
     api_key_limit?: number | null;
     total_api_keys?: number | null;
+    next_cursor?: string | null;
   };
 }
 
@@ -163,8 +165,27 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     aggregatedFetchFn,
   });
 
-  const spendData = spendDataRaw as unknown as EntitySpendData;
+  const spendDataBase = spendDataRaw as unknown as EntitySpendData;
+  const [loadedPages, setLoadedPages] = useState<{ base: EntitySpendData; merged: EntitySpendData } | null>(null);
+  const spendData = loadedPages?.base === spendDataBase ? loadedPages.merged : spendDataBase;
   const apiKeyTruncation = getApiKeyTruncation(spendData.metadata?.api_key_limit, spendData.metadata?.total_api_keys);
+
+  const loadMoreKeys =
+    aggregatedFetchFn && accessToken && startTime && endTime && spendData.metadata?.next_cursor
+      ? () =>
+          teamDailyActivityAggregatedCall(
+            accessToken,
+            startTime,
+            endTime,
+            Array.isArray(entityFilterArg) ? entityFilterArg : null,
+            spendData.metadata?.next_cursor ?? null,
+          ).then((page: EntitySpendData) => {
+            setLoadedPages((prev) => {
+              const base = prev?.base === spendDataBase ? prev.merged : spendDataBase;
+              return { base: spendDataBase, merged: mergeKeyPage(base, page) };
+            });
+          })
+      : undefined;
 
   const {
     data: agentSpendDataRaw,
@@ -680,6 +701,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           hidePromptCachingMetrics={entityType === "agent"}
           apiKeyTruncation={apiKeyTruncation}
           searchKeys={entityType === "team" ? searchTeamKeys : undefined}
+          loadMoreKeys={loadMoreKeys}
         />
       ),
     },

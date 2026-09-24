@@ -14858,6 +14858,65 @@ async def test_search_team_daily_activity_keys_excludes_teams_in_where(mock_db_c
         assert mock_aggregated.call_args[1]["exclude_entity_ids"] == ["litellm-dashboard"]
 
 
+@pytest.mark.asyncio
+async def test_get_team_daily_activity_aggregated_rejects_garbage_cursor(mock_db_client):
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity_aggregated,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_aggregated:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_team_daily_activity_aggregated(
+                team_ids=None,
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                model=None,
+                api_key=None,
+                exclude_team_ids=None,
+                timezone=None,
+                cursor="not-a-cursor",
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        assert exc_info.value.status_code == 400
+        mock_aggregated.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_team_daily_activity_aggregated_decodes_cursor_to_key_page_cursor(mock_db_client):
+    from litellm.proxy.management_endpoints.common_daily_activity import KeyPageCursor
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity_aggregated,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_aggregated:
+        mock_aggregated.return_value = MagicMock()
+        mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        encoded = KeyPageCursor(spend=6.0, api_key="key-004").encode()
+
+        await get_team_daily_activity_aggregated(
+            team_ids=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            exclude_team_ids=None,
+            timezone=None,
+            cursor=encoded,
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        forwarded = mock_aggregated.call_args.kwargs["cursor"]
+        assert isinstance(forwarded, KeyPageCursor)
+        assert (forwarded.spend, forwarded.api_key) == (6.0, "key-004")
+
+
 def _wire_new_team_prisma(mock_db_client):
     mock_db_client.jsonify_team_object = lambda db_data: db_data
     mock_db_client.get_data = AsyncMock(return_value=None)

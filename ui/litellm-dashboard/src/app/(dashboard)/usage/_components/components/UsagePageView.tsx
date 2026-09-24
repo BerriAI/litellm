@@ -32,6 +32,7 @@ import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
 import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
+import { mergeKeyPage } from "@/components/UsagePage/keyPageMerge";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
   gatewayDailyActivityCall,
@@ -439,6 +440,24 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     [userSpendData, modelViewType, teams],
   );
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
+  const aggregatedCursor = activeAggregated?.metadata?.next_cursor;
+  const loadMoreKeys = useCallback(() => {
+    if (!accessToken || !startTime || !endTime || !aggregatedCursor) return Promise.resolve();
+    const rangeKey = currentAggregatedRangeKey;
+    return userDailyActivityAggregatedCall(
+      accessToken,
+      startTime,
+      endTime,
+      effectiveUserId,
+      false,
+      null,
+      aggregatedCursor,
+    ).then((page) => {
+      setAggregatedData((prev) =>
+        prev && prev.rangeKey === rangeKey ? { rangeKey, value: mergeKeyPage(prev.value, page) } : prev,
+      );
+    });
+  }, [accessToken, startTime, endTime, effectiveUserId, aggregatedCursor, currentAggregatedRangeKey]);
   const searchKeys = useCallback(
     (q: string) => {
       if (!accessToken || !startTime || !endTime) return Promise.resolve({});
@@ -880,6 +899,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     keyMetrics={keyMetrics}
                     apiKeyTruncation={apiKeyTruncation}
                     searchKeys={searchKeys}
+                    loadMoreKeys={aggregatedCursor ? loadMoreKeys : undefined}
                   />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
