@@ -2986,6 +2986,8 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "strum",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

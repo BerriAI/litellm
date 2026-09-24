@@ -7,7 +7,8 @@ use crate::usage_dispatch::get_usage_object;
 
 pub const ZERO_COST_COUNTER_NAME: &str = "litellm_zero_cost_requests_total";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::Display, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum ZeroCostReason {
     MissingPricingKey,
     PricingNotApplied,
@@ -16,11 +17,7 @@ pub enum ZeroCostReason {
 
 impl ZeroCostReason {
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::MissingPricingKey => "missing_pricing_key",
-            Self::PricingNotApplied => "pricing_not_applied",
-            Self::CostCalculationError => "cost_calculation_error",
-        }
+        self.into()
     }
 }
 

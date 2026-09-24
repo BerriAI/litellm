@@ -1,59 +1,49 @@
-use std::fmt;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum CostError {
+    #[error("usage payload has an invalid shape")]
     InvalidShape,
+    #[error("usage payload has an uncoercible value")]
     InvalidUsage,
+    #[error("reported cost is not a finite number")]
     InvalidCost,
+    #[error("duration is not a finite number of seconds")]
     InvalidDuration,
+    #[error("pricing multiplier is not a usable number")]
     InvalidMultiplier,
+    #[error("provider-reported cost is not a number")]
     InvalidProviderCost,
+    #[error("quantity is missing or not a positive number")]
     InvalidQuantity,
+    #[error("rate is negative, non-finite, or unparseable")]
     InvalidRate,
+    #[error("rate basis must be per image, per token, or per pixel")]
     InvalidRateBasis,
+    #[error("no input cost per character rate")]
     MissingInputCharacterRate,
+    #[error("no cost metric for the model")]
     MissingMetric,
+    #[error("no model in the response or request")]
     MissingModel,
+    #[error("no page count in the OCR usage")]
     MissingPages,
+    #[error("no prompt character count")]
     MissingPromptCharacters,
+    #[error("no provider for a call that needs one")]
     MissingProvider,
+    #[error("no rate for the priced unit")]
     MissingRate,
+    #[error("no usage on the response")]
     MissingUsage,
+    #[error("model is not in the cost map")]
     ModelNotFound,
+    #[error("computed cost is not finite")]
     NonFiniteCost,
+    #[error("token count is not a usable number")]
     TokenCount,
+    #[error("token counts overflow a u64")]
     TokenCountOverflow,
+    #[error("call type has no cost path")]
     UnsupportedCallType,
+    #[error("provider has no image cost path")]
     UnsupportedProvider,
-}
-
-impl fmt::Display for CostError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let text = match self {
-            Self::InvalidShape => "usage payload has an invalid shape",
-            Self::InvalidUsage => "usage payload has an uncoercible value",
-            Self::InvalidCost => "reported cost is not a finite number",
-            Self::InvalidDuration => "duration is not a finite number of seconds",
-            Self::InvalidMultiplier => "pricing multiplier is not a usable number",
-            Self::InvalidProviderCost => "provider-reported cost is not a number",
-            Self::InvalidQuantity => "quantity is missing or not a positive number",
-            Self::InvalidRate => "rate is negative, non-finite, or unparseable",
-            Self::InvalidRateBasis => "rate basis must be per image, per token, or per pixel",
-            Self::MissingInputCharacterRate => "no input cost per character rate",
-            Self::MissingMetric => "no cost metric for the model",
-            Self::MissingModel => "no model in the response or request",
-            Self::MissingPages => "no page count in the OCR usage",
-            Self::MissingPromptCharacters => "no prompt character count",
-            Self::MissingProvider => "no provider for a call that needs one",
-            Self::MissingRate => "no rate for the priced unit",
-            Self::MissingUsage => "no usage on the response",
-            Self::ModelNotFound => "model is not in the cost map",
-            Self::NonFiniteCost => "computed cost is not finite",
-            Self::TokenCount => "token count is not a usable number",
-            Self::TokenCountOverflow => "token counts overflow a u64",
-            Self::UnsupportedCallType => "call type has no cost path",
-            Self::UnsupportedProvider => "provider has no image cost path",
-        };
-        f.write_str(text)
-    }
 }

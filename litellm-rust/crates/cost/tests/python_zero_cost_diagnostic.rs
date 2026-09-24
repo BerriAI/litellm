@@ -212,3 +212,15 @@ fn zero_cost_finding_uses_selected_pricing_and_suppresses_replayed_usage() {
         Some(diagnostic)
     );
 }
+
+#[rstest]
+#[case(ZeroCostReason::MissingPricingKey, "missing_pricing_key")]
+#[case(ZeroCostReason::PricingNotApplied, "pricing_not_applied")]
+#[case(ZeroCostReason::CostCalculationError, "cost_calculation_error")]
+fn zero_cost_reason_labels_match_python_literal(
+    #[case] reason: ZeroCostReason,
+    #[case] label: &str,
+) {
+    assert_eq!(reason.as_str(), label);
+    assert_eq!(reason.to_string(), label);
+}

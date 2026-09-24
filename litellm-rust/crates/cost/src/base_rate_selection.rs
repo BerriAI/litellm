@@ -281,7 +281,8 @@ pub fn get_token_base_cost(
 
 pub fn uses_inclusive_token_thresholds(provider: Option<&str>) -> bool {
     provider.is_some_and(|name| {
-        crate::provider::LlmProviders::parse(name)
+        name.parse::<crate::provider::LlmProviders>()
+            .ok()
             .is_some_and(|provider| provider == crate::provider::LlmProviders::XAI)
     })
 }

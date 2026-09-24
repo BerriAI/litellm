@@ -3,512 +3,341 @@
 // variant names mirror Python's enum members verbatim
 #![allow(non_camel_case_types)]
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    PartialEq,
+    strum::Display,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
 pub enum LlmProviders {
+    #[strum(serialize = "openai")]
     OPENAI,
+    #[strum(serialize = "chatgpt")]
     CHATGPT,
+    #[strum(serialize = "openai_like")]
     OPENAI_LIKE,
+    #[strum(serialize = "jina_ai")]
     JINA_AI,
+    #[strum(serialize = "xai")]
     XAI,
+    #[strum(serialize = "zai")]
     ZAI,
+    #[strum(serialize = "custom_openai")]
     CUSTOM_OPENAI,
+    #[strum(serialize = "text-completion-openai")]
     TEXT_COMPLETION_OPENAI,
+    #[strum(serialize = "cohere")]
     COHERE,
+    #[strum(serialize = "cohere_chat")]
     COHERE_CHAT,
+    #[strum(serialize = "clarifai")]
     CLARIFAI,
+    #[strum(serialize = "anthropic")]
     ANTHROPIC,
+    #[strum(serialize = "anthropic_text")]
     ANTHROPIC_TEXT,
+    #[strum(serialize = "bytez")]
     BYTEZ,
+    #[strum(serialize = "replicate")]
     REPLICATE,
+    #[strum(serialize = "reducto")]
     REDUCTO,
+    #[strum(serialize = "aws_textract")]
     AWS_TEXTRACT,
+    #[strum(serialize = "runwayml")]
     RUNWAYML,
+    #[strum(serialize = "aws_polly")]
     AWS_POLLY,
+    #[strum(serialize = "transcribe")]
     TRANSCRIBE,
+    #[strum(serialize = "huggingface")]
     HUGGINGFACE,
+    #[strum(serialize = "together_ai")]
     TOGETHER_AI,
+    #[strum(serialize = "openrouter")]
     OPENROUTER,
+    #[strum(serialize = "datarobot")]
     DATAROBOT,
+    #[strum(serialize = "vertex_ai")]
     VERTEX_AI,
+    #[strum(serialize = "vertex_ai_beta")]
     VERTEX_AI_BETA,
+    #[strum(serialize = "gemini")]
     GEMINI,
+    #[strum(serialize = "ai21")]
     AI21,
+    #[strum(serialize = "baseten")]
     BASETEN,
+    #[strum(serialize = "black_forest_labs")]
     BLACK_FOREST_LABS,
+    #[strum(serialize = "azure")]
     AZURE,
+    #[strum(serialize = "azure_text")]
     AZURE_TEXT,
+    #[strum(serialize = "azure_ai")]
     AZURE_AI,
+    #[strum(serialize = "sagemaker")]
     SAGEMAKER,
+    #[strum(serialize = "sagemaker_chat")]
     SAGEMAKER_CHAT,
+    #[strum(serialize = "sagemaker_nova")]
     SAGEMAKER_NOVA,
+    #[strum(serialize = "bedrock")]
     BEDROCK,
+    #[strum(serialize = "vllm")]
     VLLM,
+    #[strum(serialize = "nlp_cloud")]
     NLP_CLOUD,
+    #[strum(serialize = "petals")]
     PETALS,
+    #[strum(serialize = "oobabooga")]
     OOBABOOGA,
+    #[strum(serialize = "ollama")]
     OLLAMA,
+    #[strum(serialize = "ollama_chat")]
     OLLAMA_CHAT,
+    #[strum(serialize = "deepinfra")]
     DEEPINFRA,
+    #[strum(serialize = "perplexity")]
     PERPLEXITY,
+    #[strum(serialize = "mistral")]
     MISTRAL,
+    #[strum(serialize = "milvus")]
     MILVUS,
+    #[strum(serialize = "groq")]
     GROQ,
+    #[strum(serialize = "a2a")]
     A2A,
+    #[strum(serialize = "gigachat")]
     GIGACHAT,
+    #[strum(serialize = "nvidia_nim")]
     NVIDIA_NIM,
+    #[strum(serialize = "nvidia_riva")]
     NVIDIA_RIVA,
+    #[strum(serialize = "soniox")]
     SONIOX,
+    #[strum(serialize = "cerebras")]
     CEREBRAS,
+    #[strum(serialize = "ai21_chat")]
     AI21_CHAT,
+    #[strum(serialize = "volcengine")]
     VOLCENGINE,
+    #[strum(serialize = "codestral")]
     CODESTRAL,
+    #[strum(serialize = "text-completion-codestral")]
     TEXT_COMPLETION_CODESTRAL,
+    #[strum(serialize = "dashscope")]
     DASHSCOPE,
+    #[strum(serialize = "qwencloud")]
     QWENCLOUD,
+    #[strum(serialize = "qwen_ai_platform")]
     QWEN_AI_PLATFORM,
+    #[strum(serialize = "modelscope")]
     MODELSCOPE,
+    #[strum(serialize = "moonshot")]
     MOONSHOT,
+    #[strum(serialize = "publicai")]
     PUBLICAI,
+    #[strum(serialize = "v0")]
     V0,
+    #[strum(serialize = "morph")]
     MORPH,
+    #[strum(serialize = "lambda_ai")]
     LAMBDA_AI,
+    #[strum(serialize = "inception")]
     INCEPTION,
+    #[strum(serialize = "text-completion-inception")]
     TEXT_COMPLETION_INCEPTION,
+    #[strum(serialize = "deepseek")]
     DEEPSEEK,
+    #[strum(serialize = "sambanova")]
     SAMBANOVA,
+    #[strum(serialize = "maritalk")]
     MARITALK,
+    #[strum(serialize = "voyage")]
     VOYAGE,
+    #[strum(serialize = "cloudflare")]
     CLOUDFLARE,
+    #[strum(serialize = "xinference")]
     XINFERENCE,
+    #[strum(serialize = "fireworks_ai")]
     FIREWORKS_AI,
+    #[strum(serialize = "friendliai")]
     FRIENDLIAI,
+    #[strum(serialize = "featherless_ai")]
     FEATHERLESS_AI,
+    #[strum(serialize = "watsonx")]
     WATSONX,
+    #[strum(serialize = "watsonx_text")]
     WATSONX_TEXT,
+    #[strum(serialize = "triton")]
     TRITON,
+    #[strum(serialize = "predibase")]
     PREDIBASE,
+    #[strum(serialize = "databricks")]
     DATABRICKS,
+    #[strum(serialize = "empower")]
     EMPOWER,
+    #[strum(serialize = "github")]
     GITHUB,
+    #[strum(serialize = "ragflow")]
     RAGFLOW,
+    #[strum(serialize = "compactifai")]
     COMPACTIFAI,
+    #[strum(serialize = "docker_model_runner")]
     DOCKER_MODEL_RUNNER,
+    #[strum(serialize = "custom")]
     CUSTOM,
+    #[strum(serialize = "litellm_proxy")]
     LITELLM_PROXY,
+    #[strum(serialize = "hosted_vllm")]
     HOSTED_VLLM,
+    #[strum(serialize = "tencent")]
     TENCENT,
+    #[strum(serialize = "llamafile")]
     LLAMAFILE,
+    #[strum(serialize = "lm_studio")]
     LM_STUDIO,
+    #[strum(serialize = "galadriel")]
     GALADRIEL,
+    #[strum(serialize = "nebius")]
     NEBIUS,
+    #[strum(serialize = "infinity")]
     INFINITY,
+    #[strum(serialize = "deepgram")]
     DEEPGRAM,
+    #[strum(serialize = "elevenlabs")]
     ELEVENLABS,
+    #[strum(serialize = "novita")]
     NOVITA,
+    #[strum(serialize = "aiohttp_openai")]
     AIOHTTP_OPENAI,
+    #[strum(serialize = "langfuse")]
     LANGFUSE,
+    #[strum(serialize = "humanloop")]
     HUMANLOOP,
+    #[strum(serialize = "topaz")]
     TOPAZ,
+    #[strum(serialize = "sap")]
     SAP_GENERATIVE_AI_HUB,
+    #[strum(serialize = "assemblyai")]
     ASSEMBLYAI,
+    #[strum(serialize = "azure_speech")]
     AZURE_SPEECH,
+    #[strum(serialize = "charity_engine")]
     CHARITY_ENGINE,
+    #[strum(serialize = "github_copilot")]
     GITHUB_COPILOT,
+    #[strum(serialize = "snowflake")]
     SNOWFLAKE,
+    #[strum(serialize = "gradient_ai")]
     GRADIENT_AI,
+    #[strum(serialize = "meta_llama")]
     LLAMA,
+    #[strum(serialize = "nscale")]
     NSCALE,
+    #[strum(serialize = "pg_vector")]
     PG_VECTOR,
+    #[strum(serialize = "s3_vectors")]
     S3_VECTORS,
+    #[strum(serialize = "valkey")]
     VALKEY,
+    #[strum(serialize = "mongodb")]
     MONGODB,
+    #[strum(serialize = "helicone")]
     HELICONE,
+    #[strum(serialize = "hyperbolic")]
     HYPERBOLIC,
+    #[strum(serialize = "recraft")]
     RECRAFT,
+    #[strum(serialize = "fal_ai")]
     FAL_AI,
+    #[strum(serialize = "stability")]
     STABILITY,
+    #[strum(serialize = "heroku")]
     HEROKU,
+    #[strum(serialize = "aiml")]
     AIML,
+    #[strum(serialize = "cometapi")]
     COMETAPI,
+    #[strum(serialize = "oci")]
     OCI,
+    #[strum(serialize = "auto_router")]
     AUTO_ROUTER,
+    #[strum(serialize = "vercel_ai_gateway")]
     VERCEL_AI_GATEWAY,
+    #[strum(serialize = "edenai")]
     EDENAI,
+    #[strum(serialize = "dotprompt")]
     DOTPROMPT,
+    #[strum(serialize = "manus")]
     MANUS,
+    #[strum(serialize = "wandb")]
     WANDB,
+    #[strum(serialize = "ovhcloud")]
     OVHCLOUD,
+    #[strum(serialize = "scaleway")]
     SCALEWAY,
+    #[strum(serialize = "lemonade")]
     LEMONADE,
+    #[strum(serialize = "amazon_nova")]
     AMAZON_NOVA,
+    #[strum(serialize = "a2a_agent")]
     A2A_AGENT,
+    #[strum(serialize = "langgraph")]
     LANGGRAPH,
+    #[strum(serialize = "langflow")]
     LANGFLOW,
+    #[strum(serialize = "minimax")]
     MINIMAX,
+    #[strum(serialize = "synthetic")]
     SYNTHETIC,
+    #[strum(serialize = "apertis")]
     APERTIS,
+    #[strum(serialize = "nano-gpt")]
     NANOGPT,
+    #[strum(serialize = "poe")]
     POE,
+    #[strum(serialize = "chutes")]
     CHUTES,
+    #[strum(serialize = "neosantara")]
     NEOSANTARA,
+    #[strum(serialize = "parasail")]
     PARASAIL,
+    #[strum(serialize = "xiaomi_mimo")]
     XIAOMI_MIMO,
+    #[strum(serialize = "tensormesh")]
     TENSORMESH,
+    #[strum(serialize = "libertai")]
     LIBERTAI,
+    #[strum(serialize = "pinstripes")]
     PINSTRIPES,
+    #[strum(serialize = "cognition")]
     COGNITION,
+    #[strum(serialize = "scx-ai")]
     SCX_AI,
+    #[strum(serialize = "darkbloom")]
     DARKBLOOM,
+    #[strum(serialize = "meta")]
     META,
+    #[strum(serialize = "litellm_agent")]
     LITELLM_AGENT,
+    #[strum(serialize = "cursor")]
     CURSOR,
+    #[strum(serialize = "bedrock_mantle")]
     BEDROCK_MANTLE,
+    #[strum(serialize = "gdc")]
     GDC,
 }
 
 impl LlmProviders {
-    pub const VALUES: [Self; 159] = [
-        Self::OPENAI,
-        Self::CHATGPT,
-        Self::OPENAI_LIKE,
-        Self::JINA_AI,
-        Self::XAI,
-        Self::ZAI,
-        Self::CUSTOM_OPENAI,
-        Self::TEXT_COMPLETION_OPENAI,
-        Self::COHERE,
-        Self::COHERE_CHAT,
-        Self::CLARIFAI,
-        Self::ANTHROPIC,
-        Self::ANTHROPIC_TEXT,
-        Self::BYTEZ,
-        Self::REPLICATE,
-        Self::REDUCTO,
-        Self::AWS_TEXTRACT,
-        Self::RUNWAYML,
-        Self::AWS_POLLY,
-        Self::TRANSCRIBE,
-        Self::HUGGINGFACE,
-        Self::TOGETHER_AI,
-        Self::OPENROUTER,
-        Self::DATAROBOT,
-        Self::VERTEX_AI,
-        Self::VERTEX_AI_BETA,
-        Self::GEMINI,
-        Self::AI21,
-        Self::BASETEN,
-        Self::BLACK_FOREST_LABS,
-        Self::AZURE,
-        Self::AZURE_TEXT,
-        Self::AZURE_AI,
-        Self::SAGEMAKER,
-        Self::SAGEMAKER_CHAT,
-        Self::SAGEMAKER_NOVA,
-        Self::BEDROCK,
-        Self::VLLM,
-        Self::NLP_CLOUD,
-        Self::PETALS,
-        Self::OOBABOOGA,
-        Self::OLLAMA,
-        Self::OLLAMA_CHAT,
-        Self::DEEPINFRA,
-        Self::PERPLEXITY,
-        Self::MISTRAL,
-        Self::MILVUS,
-        Self::GROQ,
-        Self::A2A,
-        Self::GIGACHAT,
-        Self::NVIDIA_NIM,
-        Self::NVIDIA_RIVA,
-        Self::SONIOX,
-        Self::CEREBRAS,
-        Self::AI21_CHAT,
-        Self::VOLCENGINE,
-        Self::CODESTRAL,
-        Self::TEXT_COMPLETION_CODESTRAL,
-        Self::DASHSCOPE,
-        Self::QWENCLOUD,
-        Self::QWEN_AI_PLATFORM,
-        Self::MODELSCOPE,
-        Self::MOONSHOT,
-        Self::PUBLICAI,
-        Self::V0,
-        Self::MORPH,
-        Self::LAMBDA_AI,
-        Self::INCEPTION,
-        Self::TEXT_COMPLETION_INCEPTION,
-        Self::DEEPSEEK,
-        Self::SAMBANOVA,
-        Self::MARITALK,
-        Self::VOYAGE,
-        Self::CLOUDFLARE,
-        Self::XINFERENCE,
-        Self::FIREWORKS_AI,
-        Self::FRIENDLIAI,
-        Self::FEATHERLESS_AI,
-        Self::WATSONX,
-        Self::WATSONX_TEXT,
-        Self::TRITON,
-        Self::PREDIBASE,
-        Self::DATABRICKS,
-        Self::EMPOWER,
-        Self::GITHUB,
-        Self::RAGFLOW,
-        Self::COMPACTIFAI,
-        Self::DOCKER_MODEL_RUNNER,
-        Self::CUSTOM,
-        Self::LITELLM_PROXY,
-        Self::HOSTED_VLLM,
-        Self::TENCENT,
-        Self::LLAMAFILE,
-        Self::LM_STUDIO,
-        Self::GALADRIEL,
-        Self::NEBIUS,
-        Self::INFINITY,
-        Self::DEEPGRAM,
-        Self::ELEVENLABS,
-        Self::NOVITA,
-        Self::AIOHTTP_OPENAI,
-        Self::LANGFUSE,
-        Self::HUMANLOOP,
-        Self::TOPAZ,
-        Self::SAP_GENERATIVE_AI_HUB,
-        Self::ASSEMBLYAI,
-        Self::AZURE_SPEECH,
-        Self::CHARITY_ENGINE,
-        Self::GITHUB_COPILOT,
-        Self::SNOWFLAKE,
-        Self::GRADIENT_AI,
-        Self::LLAMA,
-        Self::NSCALE,
-        Self::PG_VECTOR,
-        Self::S3_VECTORS,
-        Self::VALKEY,
-        Self::MONGODB,
-        Self::HELICONE,
-        Self::HYPERBOLIC,
-        Self::RECRAFT,
-        Self::FAL_AI,
-        Self::STABILITY,
-        Self::HEROKU,
-        Self::AIML,
-        Self::COMETAPI,
-        Self::OCI,
-        Self::AUTO_ROUTER,
-        Self::VERCEL_AI_GATEWAY,
-        Self::EDENAI,
-        Self::DOTPROMPT,
-        Self::MANUS,
-        Self::WANDB,
-        Self::OVHCLOUD,
-        Self::SCALEWAY,
-        Self::LEMONADE,
-        Self::AMAZON_NOVA,
-        Self::A2A_AGENT,
-        Self::LANGGRAPH,
-        Self::LANGFLOW,
-        Self::MINIMAX,
-        Self::SYNTHETIC,
-        Self::APERTIS,
-        Self::NANOGPT,
-        Self::POE,
-        Self::CHUTES,
-        Self::NEOSANTARA,
-        Self::PARASAIL,
-        Self::XIAOMI_MIMO,
-        Self::TENSORMESH,
-        Self::LIBERTAI,
-        Self::PINSTRIPES,
-        Self::COGNITION,
-        Self::SCX_AI,
-        Self::DARKBLOOM,
-        Self::META,
-        Self::LITELLM_AGENT,
-        Self::CURSOR,
-        Self::BEDROCK_MANTLE,
-        Self::GDC,
-    ];
-
-    const NAMES: [(Self, &'static str); 159] = [
-        (Self::OPENAI, "openai"),
-        (Self::CHATGPT, "chatgpt"),
-        (Self::OPENAI_LIKE, "openai_like"),
-        (Self::JINA_AI, "jina_ai"),
-        (Self::XAI, "xai"),
-        (Self::ZAI, "zai"),
-        (Self::CUSTOM_OPENAI, "custom_openai"),
-        (Self::TEXT_COMPLETION_OPENAI, "text-completion-openai"),
-        (Self::COHERE, "cohere"),
-        (Self::COHERE_CHAT, "cohere_chat"),
-        (Self::CLARIFAI, "clarifai"),
-        (Self::ANTHROPIC, "anthropic"),
-        (Self::ANTHROPIC_TEXT, "anthropic_text"),
-        (Self::BYTEZ, "bytez"),
-        (Self::REPLICATE, "replicate"),
-        (Self::REDUCTO, "reducto"),
-        (Self::AWS_TEXTRACT, "aws_textract"),
-        (Self::RUNWAYML, "runwayml"),
-        (Self::AWS_POLLY, "aws_polly"),
-        (Self::TRANSCRIBE, "transcribe"),
-        (Self::HUGGINGFACE, "huggingface"),
-        (Self::TOGETHER_AI, "together_ai"),
-        (Self::OPENROUTER, "openrouter"),
-        (Self::DATAROBOT, "datarobot"),
-        (Self::VERTEX_AI, "vertex_ai"),
-        (Self::VERTEX_AI_BETA, "vertex_ai_beta"),
-        (Self::GEMINI, "gemini"),
-        (Self::AI21, "ai21"),
-        (Self::BASETEN, "baseten"),
-        (Self::BLACK_FOREST_LABS, "black_forest_labs"),
-        (Self::AZURE, "azure"),
-        (Self::AZURE_TEXT, "azure_text"),
-        (Self::AZURE_AI, "azure_ai"),
-        (Self::SAGEMAKER, "sagemaker"),
-        (Self::SAGEMAKER_CHAT, "sagemaker_chat"),
-        (Self::SAGEMAKER_NOVA, "sagemaker_nova"),
-        (Self::BEDROCK, "bedrock"),
-        (Self::VLLM, "vllm"),
-        (Self::NLP_CLOUD, "nlp_cloud"),
-        (Self::PETALS, "petals"),
-        (Self::OOBABOOGA, "oobabooga"),
-        (Self::OLLAMA, "ollama"),
-        (Self::OLLAMA_CHAT, "ollama_chat"),
-        (Self::DEEPINFRA, "deepinfra"),
-        (Self::PERPLEXITY, "perplexity"),
-        (Self::MISTRAL, "mistral"),
-        (Self::MILVUS, "milvus"),
-        (Self::GROQ, "groq"),
-        (Self::A2A, "a2a"),
-        (Self::GIGACHAT, "gigachat"),
-        (Self::NVIDIA_NIM, "nvidia_nim"),
-        (Self::NVIDIA_RIVA, "nvidia_riva"),
-        (Self::SONIOX, "soniox"),
-        (Self::CEREBRAS, "cerebras"),
-        (Self::AI21_CHAT, "ai21_chat"),
-        (Self::VOLCENGINE, "volcengine"),
-        (Self::CODESTRAL, "codestral"),
-        (Self::TEXT_COMPLETION_CODESTRAL, "text-completion-codestral"),
-        (Self::DASHSCOPE, "dashscope"),
-        (Self::QWENCLOUD, "qwencloud"),
-        (Self::QWEN_AI_PLATFORM, "qwen_ai_platform"),
-        (Self::MODELSCOPE, "modelscope"),
-        (Self::MOONSHOT, "moonshot"),
-        (Self::PUBLICAI, "publicai"),
-        (Self::V0, "v0"),
-        (Self::MORPH, "morph"),
-        (Self::LAMBDA_AI, "lambda_ai"),
-        (Self::INCEPTION, "inception"),
-        (Self::TEXT_COMPLETION_INCEPTION, "text-completion-inception"),
-        (Self::DEEPSEEK, "deepseek"),
-        (Self::SAMBANOVA, "sambanova"),
-        (Self::MARITALK, "maritalk"),
-        (Self::VOYAGE, "voyage"),
-        (Self::CLOUDFLARE, "cloudflare"),
-        (Self::XINFERENCE, "xinference"),
-        (Self::FIREWORKS_AI, "fireworks_ai"),
-        (Self::FRIENDLIAI, "friendliai"),
-        (Self::FEATHERLESS_AI, "featherless_ai"),
-        (Self::WATSONX, "watsonx"),
-        (Self::WATSONX_TEXT, "watsonx_text"),
-        (Self::TRITON, "triton"),
-        (Self::PREDIBASE, "predibase"),
-        (Self::DATABRICKS, "databricks"),
-        (Self::EMPOWER, "empower"),
-        (Self::GITHUB, "github"),
-        (Self::RAGFLOW, "ragflow"),
-        (Self::COMPACTIFAI, "compactifai"),
-        (Self::DOCKER_MODEL_RUNNER, "docker_model_runner"),
-        (Self::CUSTOM, "custom"),
-        (Self::LITELLM_PROXY, "litellm_proxy"),
-        (Self::HOSTED_VLLM, "hosted_vllm"),
-        (Self::TENCENT, "tencent"),
-        (Self::LLAMAFILE, "llamafile"),
-        (Self::LM_STUDIO, "lm_studio"),
-        (Self::GALADRIEL, "galadriel"),
-        (Self::NEBIUS, "nebius"),
-        (Self::INFINITY, "infinity"),
-        (Self::DEEPGRAM, "deepgram"),
-        (Self::ELEVENLABS, "elevenlabs"),
-        (Self::NOVITA, "novita"),
-        (Self::AIOHTTP_OPENAI, "aiohttp_openai"),
-        (Self::LANGFUSE, "langfuse"),
-        (Self::HUMANLOOP, "humanloop"),
-        (Self::TOPAZ, "topaz"),
-        (Self::SAP_GENERATIVE_AI_HUB, "sap"),
-        (Self::ASSEMBLYAI, "assemblyai"),
-        (Self::AZURE_SPEECH, "azure_speech"),
-        (Self::CHARITY_ENGINE, "charity_engine"),
-        (Self::GITHUB_COPILOT, "github_copilot"),
-        (Self::SNOWFLAKE, "snowflake"),
-        (Self::GRADIENT_AI, "gradient_ai"),
-        (Self::LLAMA, "meta_llama"),
-        (Self::NSCALE, "nscale"),
-        (Self::PG_VECTOR, "pg_vector"),
-        (Self::S3_VECTORS, "s3_vectors"),
-        (Self::VALKEY, "valkey"),
-        (Self::MONGODB, "mongodb"),
-        (Self::HELICONE, "helicone"),
-        (Self::HYPERBOLIC, "hyperbolic"),
-        (Self::RECRAFT, "recraft"),
-        (Self::FAL_AI, "fal_ai"),
-        (Self::STABILITY, "stability"),
-        (Self::HEROKU, "heroku"),
-        (Self::AIML, "aiml"),
-        (Self::COMETAPI, "cometapi"),
-        (Self::OCI, "oci"),
-        (Self::AUTO_ROUTER, "auto_router"),
-        (Self::VERCEL_AI_GATEWAY, "vercel_ai_gateway"),
-        (Self::EDENAI, "edenai"),
-        (Self::DOTPROMPT, "dotprompt"),
-        (Self::MANUS, "manus"),
-        (Self::WANDB, "wandb"),
-        (Self::OVHCLOUD, "ovhcloud"),
-        (Self::SCALEWAY, "scaleway"),
-        (Self::LEMONADE, "lemonade"),
-        (Self::AMAZON_NOVA, "amazon_nova"),
-        (Self::A2A_AGENT, "a2a_agent"),
-        (Self::LANGGRAPH, "langgraph"),
-        (Self::LANGFLOW, "langflow"),
-        (Self::MINIMAX, "minimax"),
-        (Self::SYNTHETIC, "synthetic"),
-        (Self::APERTIS, "apertis"),
-        (Self::NANOGPT, "nano-gpt"),
-        (Self::POE, "poe"),
-        (Self::CHUTES, "chutes"),
-        (Self::NEOSANTARA, "neosantara"),
-        (Self::PARASAIL, "parasail"),
-        (Self::XIAOMI_MIMO, "xiaomi_mimo"),
-        (Self::TENSORMESH, "tensormesh"),
-        (Self::LIBERTAI, "libertai"),
-        (Self::PINSTRIPES, "pinstripes"),
-        (Self::COGNITION, "cognition"),
-        (Self::SCX_AI, "scx-ai"),
-        (Self::DARKBLOOM, "darkbloom"),
-        (Self::META, "meta"),
-        (Self::LITELLM_AGENT, "litellm_agent"),
-        (Self::CURSOR, "cursor"),
-        (Self::BEDROCK_MANTLE, "bedrock_mantle"),
-        (Self::GDC, "gdc"),
-    ];
-
     pub fn as_str(self) -> &'static str {
-        Self::NAMES
-            .iter()
-            .find(|(variant, _)| *variant == self)
-            .map(|(_, name)| *name)
-            .expect("every variant carries its name")
-    }
-
-    pub fn parse(name: &str) -> Option<Self> {
-        Self::NAMES
-            .iter()
-            .find(|(_, known)| *known == name)
-            .map(|(variant, _)| *variant)
-    }
-}
-
-impl std::fmt::Display for LlmProviders {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        self.into()
     }
 }

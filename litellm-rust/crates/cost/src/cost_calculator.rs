@@ -98,7 +98,9 @@ pub fn cost_per_token_for_call(
     request: ModelCostRequest<'_>,
     call: CostCall<'_>,
 ) -> Result<(f64, f64), CostError> {
-    let provider = request.provider.and_then(LlmProviders::parse);
+    let provider = request
+        .provider
+        .and_then(|provider| provider.parse::<LlmProviders>().ok());
     match call {
         CostCall::Token {
             call_type,
@@ -117,7 +119,7 @@ pub fn cost_per_token_for_call(
             }
             if provider == Some(LlmProviders::TOGETHER_AI)
                 && matches!(
-                    crate::call_type::CallTypes::parse(call_type),
+                    call_type.parse::<crate::call_type::CallTypes>().ok(),
                     Some(crate::call_type::CallTypes::embedding)
                         | Some(crate::call_type::CallTypes::aembedding)
                 )
@@ -205,7 +207,9 @@ pub fn cost_per_token(
     {
         return Ok(cost);
     }
-    let provider = request.provider.and_then(LlmProviders::parse);
+    let provider = request
+        .provider
+        .and_then(|provider| provider.parse::<LlmProviders>().ok());
     if provider == Some(LlmProviders::AZURE_AI) {
         return azure_ai_cost_per_token(catalog, request, None);
     }

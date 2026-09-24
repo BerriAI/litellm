@@ -27,7 +27,20 @@ impl Rate {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    strum::Display,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
+#[strum(serialize_all = "lowercase")]
 pub enum ServiceTier {
     Auto,
     Flex,
@@ -46,188 +59,136 @@ impl ServiceTier {
     ];
 
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Flex => "flex",
-            Self::Priority => "priority",
-            Self::Fast => "fast",
-            Self::Ultrafast => "ultrafast",
-        }
+        self.into()
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    strum::Display,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
 pub enum Metric {
+    #[strum(serialize = "annotation_cost_per_page")]
     AnnotationPerPage,
+    #[strum(serialize = "cache_creation_input_audio_token_cost")]
     CacheCreationAudioToken,
+    #[strum(serialize = "cache_creation_input_token_cost")]
     CacheCreationToken,
+    #[strum(serialize = "cache_creation_input_token_cost_above_1hr")]
     CacheCreationToken1hr,
+    #[strum(serialize = "cache_read_input_audio_token_cost")]
     CacheReadAudioToken,
+    #[strum(serialize = "cache_read_input_image_token_cost")]
     CacheReadImageToken,
+    #[strum(serialize = "cache_read_input_token_cost")]
     CacheReadToken,
+    #[strum(serialize = "citation_cost_per_token")]
     CitationToken,
+    #[strum(serialize = "code_interpreter_cost_per_session")]
     CodeInterpreterPerSession,
+    #[strum(serialize = "computer_use_input_cost_per_1k_tokens")]
     ComputerUseInput1kTokens,
+    #[strum(serialize = "computer_use_output_cost_per_1k_tokens")]
     ComputerUseOutput1kTokens,
+    #[strum(serialize = "file_search_cost_per_1k_calls")]
     FileSearchPer1kCalls,
+    #[strum(serialize = "file_search_cost_per_gb_per_day")]
     FileSearchPerGbPerDay,
+    #[strum(serialize = "google_maps_grounding_cost_per_query")]
     GoogleMapsGroundingPerQuery,
+    #[strum(serialize = "input_cost_per_audio_per_second")]
     InputAudioPerSecond,
+    #[strum(serialize = "input_cost_per_audio_token")]
     InputAudioToken,
+    #[strum(serialize = "input_cost_per_character")]
     InputCharacter,
+    #[strum(serialize = "input_dbu_cost_per_token")]
     InputDbuToken,
+    #[strum(serialize = "input_cost_per_image")]
     InputPerImage,
+    #[strum(serialize = "input_cost_per_image_token")]
     InputPerImageToken,
+    #[strum(serialize = "input_cost_per_pixel")]
     InputPerPixel,
+    #[strum(serialize = "input_cost_per_query")]
     InputPerQuery,
+    #[strum(serialize = "input_cost_per_request")]
     InputPerRequest,
+    #[strum(serialize = "input_cost_per_second")]
     InputPerSecond,
+    #[strum(serialize = "input_cost_per_token")]
     InputPerToken,
+    #[strum(serialize = "input_cost_per_token_cache_hit")]
     InputPerTokenCacheHit,
+    #[strum(serialize = "input_cost_per_video_per_second")]
     InputVideoPerSecond,
+    #[strum(serialize = "input_cost_per_video_per_second_above_15s_interval")]
     InputVideoPerSecond15sInterval,
+    #[strum(serialize = "input_cost_per_video_per_second_above_8s_interval")]
     InputVideoPerSecond8sInterval,
+    #[strum(serialize = "input_cost_per_video_token")]
     InputVideoToken,
+    #[strum(serialize = "ocr_cost_per_credit")]
     OcrPerCredit,
+    #[strum(serialize = "ocr_cost_per_page")]
     OcrPerPage,
+    #[strum(serialize = "output_cost_per_audio_token")]
     OutputAudioToken,
+    #[strum(serialize = "output_cost_per_character")]
     OutputCharacter,
+    #[strum(serialize = "output_dbu_cost_per_token")]
     OutputDbuToken,
+    #[strum(serialize = "output_cost_per_image")]
     OutputPerImage,
+    #[strum(serialize = "output_cost_per_image_1024")]
     OutputPerImage1024,
+    #[strum(serialize = "output_cost_per_image_1536")]
     OutputPerImage1536,
+    #[strum(serialize = "output_cost_per_image_512")]
     OutputPerImage512,
+    #[strum(serialize = "output_cost_per_image_token")]
     OutputPerImageToken,
+    #[strum(serialize = "output_cost_per_pixel")]
     OutputPerPixel,
+    #[strum(serialize = "output_cost_per_second")]
     OutputPerSecond,
+    #[strum(serialize = "output_cost_per_second_1080p")]
     OutputPerSecond1080p,
+    #[strum(serialize = "output_cost_per_second_2k")]
     OutputPerSecond2k,
+    #[strum(serialize = "output_cost_per_second_480p")]
     OutputPerSecond480p,
+    #[strum(serialize = "output_cost_per_second_4k")]
     OutputPerSecond4k,
+    #[strum(serialize = "output_cost_per_second_720p")]
     OutputPerSecond720p,
+    #[strum(serialize = "output_cost_per_second_768p")]
     OutputPerSecond768p,
+    #[strum(serialize = "output_cost_per_token")]
     OutputPerToken,
+    #[strum(serialize = "output_cost_per_reasoning_token")]
     OutputReasoningToken,
+    #[strum(serialize = "output_cost_per_video_per_second")]
     OutputVideoPerSecond,
+    #[strum(serialize = "output_cost_per_video_token")]
     OutputVideoToken,
+    #[strum(serialize = "vector_store_cost_per_gb_per_day")]
     VectorStorePerGbPerDay,
 }
 
 impl Metric {
-    const NAMES: [(Self, &'static str); 53] = [
-        (Self::AnnotationPerPage, "annotation_cost_per_page"),
-        (
-            Self::CacheCreationAudioToken,
-            "cache_creation_input_audio_token_cost",
-        ),
-        (Self::CacheCreationToken, "cache_creation_input_token_cost"),
-        (
-            Self::CacheCreationToken1hr,
-            "cache_creation_input_token_cost_above_1hr",
-        ),
-        (
-            Self::CacheReadAudioToken,
-            "cache_read_input_audio_token_cost",
-        ),
-        (
-            Self::CacheReadImageToken,
-            "cache_read_input_image_token_cost",
-        ),
-        (Self::CacheReadToken, "cache_read_input_token_cost"),
-        (Self::CitationToken, "citation_cost_per_token"),
-        (
-            Self::CodeInterpreterPerSession,
-            "code_interpreter_cost_per_session",
-        ),
-        (
-            Self::ComputerUseInput1kTokens,
-            "computer_use_input_cost_per_1k_tokens",
-        ),
-        (
-            Self::ComputerUseOutput1kTokens,
-            "computer_use_output_cost_per_1k_tokens",
-        ),
-        (Self::FileSearchPer1kCalls, "file_search_cost_per_1k_calls"),
-        (
-            Self::FileSearchPerGbPerDay,
-            "file_search_cost_per_gb_per_day",
-        ),
-        (
-            Self::GoogleMapsGroundingPerQuery,
-            "google_maps_grounding_cost_per_query",
-        ),
-        (Self::InputAudioPerSecond, "input_cost_per_audio_per_second"),
-        (Self::InputAudioToken, "input_cost_per_audio_token"),
-        (Self::InputCharacter, "input_cost_per_character"),
-        (Self::InputDbuToken, "input_dbu_cost_per_token"),
-        (Self::InputPerImage, "input_cost_per_image"),
-        (Self::InputPerImageToken, "input_cost_per_image_token"),
-        (Self::InputPerPixel, "input_cost_per_pixel"),
-        (Self::InputPerQuery, "input_cost_per_query"),
-        (Self::InputPerRequest, "input_cost_per_request"),
-        (Self::InputPerSecond, "input_cost_per_second"),
-        (Self::InputPerToken, "input_cost_per_token"),
-        (
-            Self::InputPerTokenCacheHit,
-            "input_cost_per_token_cache_hit",
-        ),
-        (Self::InputVideoPerSecond, "input_cost_per_video_per_second"),
-        (
-            Self::InputVideoPerSecond15sInterval,
-            "input_cost_per_video_per_second_above_15s_interval",
-        ),
-        (
-            Self::InputVideoPerSecond8sInterval,
-            "input_cost_per_video_per_second_above_8s_interval",
-        ),
-        (Self::InputVideoToken, "input_cost_per_video_token"),
-        (Self::OcrPerCredit, "ocr_cost_per_credit"),
-        (Self::OcrPerPage, "ocr_cost_per_page"),
-        (Self::OutputAudioToken, "output_cost_per_audio_token"),
-        (Self::OutputCharacter, "output_cost_per_character"),
-        (Self::OutputDbuToken, "output_dbu_cost_per_token"),
-        (Self::OutputPerImage, "output_cost_per_image"),
-        (Self::OutputPerImage1024, "output_cost_per_image_1024"),
-        (Self::OutputPerImage1536, "output_cost_per_image_1536"),
-        (Self::OutputPerImage512, "output_cost_per_image_512"),
-        (Self::OutputPerImageToken, "output_cost_per_image_token"),
-        (Self::OutputPerPixel, "output_cost_per_pixel"),
-        (Self::OutputPerSecond, "output_cost_per_second"),
-        (Self::OutputPerSecond1080p, "output_cost_per_second_1080p"),
-        (Self::OutputPerSecond2k, "output_cost_per_second_2k"),
-        (Self::OutputPerSecond480p, "output_cost_per_second_480p"),
-        (Self::OutputPerSecond4k, "output_cost_per_second_4k"),
-        (Self::OutputPerSecond720p, "output_cost_per_second_720p"),
-        (Self::OutputPerSecond768p, "output_cost_per_second_768p"),
-        (Self::OutputPerToken, "output_cost_per_token"),
-        (
-            Self::OutputReasoningToken,
-            "output_cost_per_reasoning_token",
-        ),
-        (
-            Self::OutputVideoPerSecond,
-            "output_cost_per_video_per_second",
-        ),
-        (Self::OutputVideoToken, "output_cost_per_video_token"),
-        (
-            Self::VectorStorePerGbPerDay,
-            "vector_store_cost_per_gb_per_day",
-        ),
-    ];
-
-    pub fn parse(name: &str) -> Option<Self> {
-        Self::NAMES
-            .iter()
-            .find(|(_, known)| *known == name)
-            .map(|(metric, _)| *metric)
-    }
-
     pub fn as_str(self) -> &'static str {
-        Self::NAMES
-            .iter()
-            .find(|(metric, _)| *metric == self)
-            .map(|(_, name)| *name)
-            .expect("every metric carries its name")
+        self.into()
     }
 }
 
@@ -239,9 +200,11 @@ pub struct RateKey {
     pub batch: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum TokenizeError {
+    #[error("pricing key names no known metric")]
     UnrecognizedMetric,
+    #[error("pricing key threshold is not a token count")]
     BadThreshold,
 }
 
@@ -269,7 +232,9 @@ pub fn tokenize(key: &str) -> Result<RateKey, TokenizeError> {
         },
         None => (base, None),
     };
-    let metric = Metric::parse(metric_name).ok_or(TokenizeError::UnrecognizedMetric)?;
+    let metric = metric_name
+        .parse::<Metric>()
+        .map_err(|_| TokenizeError::UnrecognizedMetric)?;
     Ok(RateKey {
         metric,
         threshold,

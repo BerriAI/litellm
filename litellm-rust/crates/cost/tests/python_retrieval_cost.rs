@@ -2,12 +2,12 @@
 
 // mirrors: test_litellm/rag/test_main.py::test_aquery_billed_cost_includes_priced_vector_store_search
 
-use rstest::rstest;
-use serde_json::json;
 use litellm_cost::retrieval_cost::{
     rerank_cost, rerank_cost_from_model_info, vector_store_search_cost,
     vector_store_search_cost_from_model_info,
 };
+use rstest::rstest;
+use serde_json::json;
 
 #[rstest]
 #[case("vertex_ai", json!({"input_cost_per_query": 0.25}), json!({"search_units": 3}), (0.75, 0.0))]

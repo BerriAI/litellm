@@ -9,6 +9,7 @@ use litellm_cost::call_type::CallTypes;
 use litellm_cost::pricing::{Metric, ServiceTier, tokenize};
 use litellm_cost::provider::LlmProviders;
 use litellm_cost::wire::{RawCatalogEntry, cost_per_unit};
+use strum::VariantArray;
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!("python_fixtures.json")).expect("fixture parses")
@@ -83,7 +84,7 @@ fn batch_tier_grammar_matches_python_regex_language() {
             assert!(rate_key.batch);
             assert_eq!(
                 rate_key.metric,
-                Metric::parse(prefix).expect("known metric"),
+                prefix.parse::<Metric>().expect("known metric"),
                 "{key}"
             );
         }
@@ -184,7 +185,7 @@ fn provider_and_call_type_enums_mirror_python() {
         .iter()
         .map(|value| value.as_str().expect("provider value"))
         .collect();
-    let rust_providers: std::collections::BTreeSet<&str> = LlmProviders::VALUES
+    let rust_providers: std::collections::BTreeSet<&str> = <LlmProviders as VariantArray>::VARIANTS
         .iter()
         .map(|provider| provider.as_str())
         .collect();
@@ -193,7 +194,7 @@ fn provider_and_call_type_enums_mirror_python() {
         "every Python LlmProviders value is a Rust variant and no extras exist"
     );
     for provider in &python_providers {
-        assert!(LlmProviders::parse(provider).is_some());
+        assert!(provider.parse::<LlmProviders>().ok().is_some());
     }
     let python_calls: std::collections::BTreeSet<&str> = pinning["call_types"]
         .as_array()
@@ -201,18 +202,23 @@ fn provider_and_call_type_enums_mirror_python() {
         .iter()
         .map(|value| value.as_str().expect("call type value"))
         .collect();
-    let rust_calls: std::collections::BTreeSet<&str> =
-        CallTypes::VALUES.iter().map(|call| call.as_str()).collect();
+    let rust_calls: std::collections::BTreeSet<&str> = <CallTypes as VariantArray>::VARIANTS
+        .iter()
+        .map(|call| call.as_str())
+        .collect();
     assert_eq!(
         rust_calls, python_calls,
         "every Python CallTypes value is a Rust variant and no extras exist"
     );
     for call in &python_calls {
-        assert!(CallTypes::parse(call).is_some());
+        assert!(call.parse::<CallTypes>().ok().is_some());
     }
-    assert_eq!(CallTypes::parse("_arealtime"), Some(CallTypes::arealtime));
     assert_eq!(
-        CallTypes::parse("_aresponses_websocket"),
+        "_arealtime".parse::<CallTypes>().ok(),
+        Some(CallTypes::arealtime)
+    );
+    assert_eq!(
+        "_aresponses_websocket".parse::<CallTypes>().ok(),
         Some(CallTypes::aresponses_websocket)
     );
 }
