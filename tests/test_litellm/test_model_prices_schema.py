@@ -310,7 +310,9 @@ def test_chatgpt_rows_carry_their_openai_twin_reasoning_annotations(prices: dict
     for name, bare in twins:
         for key in REASONING_ANNOTATION_KEYS:
             if prices[name].get(key, _ABSENT) != prices[bare].get(key, _ABSENT):
-                mismatched.append(f"{name}.{key} is {prices[name].get(key)!r}, {bare}.{key} is {prices[bare][key]!r}")
+                mismatched.append(
+                    f"{name}.{key} is {prices[name].get(key)!r}, {bare}.{key} is {prices[bare].get(key)!r}"
+                )
 
     assert mismatched == [], (
         "chatgpt/* entries proxy their openai twin through ChatGPTConfig, so they must carry the "
