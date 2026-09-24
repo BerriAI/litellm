@@ -538,7 +538,15 @@ class _FakeCompleted:
 
 
 class TestResolveAllMigrationsLedger:
-    def _run(self, monkeypatch, tmp_path, partitioned, execute_fails):
+    def _run(
+        self,
+        monkeypatch,
+        tmp_path,
+        partitioned,
+        execute_fails,
+        diff_fails: bool = False,
+        execute_stderr: str = "boom",
+    ):
         import subprocess as subprocess_module
 
         import litellm_proxy_extras.utils as utils_module
@@ -555,16 +563,26 @@ class TestResolveAllMigrationsLedger:
         )
         calls = []
 
+        for migration_name in (
+            "20250326162113_baseline",
+            "20260520120000_add_mcp_env_vars",
+        ):
+            migration_dir = tmp_path / "migrations" / migration_name
+            migration_dir.mkdir(parents=True)
+            (migration_dir / "migration.sql").write_text("SELECT 1;")
+
         def fake_run(cmd, **kwargs):
             calls.append(cmd)
             if "diff" in cmd:
+                if diff_fails:
+                    raise subprocess_module.CalledProcessError(1, cmd, stderr="P1001")
                 kwargs["stdout"].write(_PARTITIONED_DRIFT_SQL)
                 return _FakeCompleted()
             if "execute" in cmd:
                 executed_sql = open(cmd[cmd.index("--file") + 1]).read()
                 calls.append(("executed_sql", executed_sql))
                 if execute_fails:
-                    raise subprocess_module.CalledProcessError(1, cmd, stderr="boom")
+                    raise subprocess_module.CalledProcessError(1, cmd, stderr=execute_stderr)
                 return _FakeCompleted()
             return _FakeCompleted()
 
@@ -598,6 +616,29 @@ class TestResolveAllMigrationsLedger:
     def test_unpartitioned_spend_logs_drift_script_is_untouched(self, monkeypatch, tmp_path):
         calls = self._run(monkeypatch, tmp_path, partitioned=False, execute_fails=False)
         assert self._executed_sql(calls) == _PARTITIONED_DRIFT_SQL
+
+    def test_failed_diff_runs_the_migration_files_directly_and_marks_them_applied(self, monkeypatch, tmp_path):
+        calls = self._run(monkeypatch, tmp_path, partitioned=False, execute_fails=False, diff_fails=True)
+        executed_files = [c[c.index("--file") + 1] for c in calls if isinstance(c, list) and "execute" in c]
+        assert executed_files == [
+            str(tmp_path / "migrations" / "20250326162113_baseline" / "migration.sql"),
+            str(tmp_path / "migrations" / "20260520120000_add_mcp_env_vars" / "migration.sql"),
+        ]
+        assert len(self._resolved(calls)) == 1
+
+    def test_failed_diff_with_already_exists_errors_still_marks_migrations_applied(self, monkeypatch, tmp_path):
+        calls = self._run(
+            monkeypatch, tmp_path, partitioned=False, execute_fails=True, diff_fails=True,
+            execute_stderr='ERROR: relation "LiteLLM_MCPUserEnvVars" already exists',
+        )
+        assert len(self._resolved(calls)) == 1
+
+    def test_failed_diff_with_a_real_execute_failure_marks_nothing_applied(self, monkeypatch, tmp_path):
+        calls = self._run(
+            monkeypatch, tmp_path, partitioned=False, execute_fails=True, diff_fails=True,
+            execute_stderr="ERROR: permission denied for schema public",
+        )
+        assert self._resolved(calls) == []
 
 
 class TestPartitionedSpendLogsPushGuard:

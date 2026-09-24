@@ -473,8 +473,10 @@ class ProxyExtrasDBManager:
                     env=_get_prisma_env(),
                 )
         except subprocess.CalledProcessError as e:
+            diff_sql_path.unlink(missing_ok=True)
             logger.warning(f"Failed to generate migration diff: {e.stderr}")
         except subprocess.TimeoutExpired:
+            diff_sql_path.unlink(missing_ok=True)
             logger.warning("Migration diff generation timed out.")
 
         # check if the migration was created
@@ -487,29 +489,12 @@ class ProxyExtrasDBManager:
             # Fall back: run each migration SQL file directly via prisma db execute.
             # This works with pooler URLs (no schema introspection needed) and is
             # safe to re-run because migrations use IF NOT EXISTS / IF EXISTS guards.
-            migration_files = sorted(Path(migrations_dir).glob("*/migration.sql"))
-            for mig_file in migration_files:
-                try:
-                    prisma_toolchain.run_prisma(
-                        [
-                            _get_prisma_command(),
-                            "db",
-                            "execute",
-                            "--file",
-                            str(mig_file),
-                            "--schema",
-                            schema_path,
-                        ],
-                        timeout=prisma_command_timeout(),
-                        env=_get_prisma_env(),
-                    )
-                    logger.info(f"Applied migration: {mig_file.parent.name}")
-                except subprocess.CalledProcessError as e:
-                    logger.warning(
-                        f"Failed to apply migration {mig_file.parent.name}: {e.stderr}"
-                    )
-                except subprocess.TimeoutExpired:
-                    logger.warning(f"Migration {mig_file.parent.name} timed out.")
+            results: Final = tuple(
+                ProxyExtrasDBManager._execute_migration_file(mig_file, schema_path)
+                for mig_file in sorted(Path(migrations_dir).glob("migrations/*/migration.sql"))
+            )
+            if mark_all_applied and all(results):
+                ProxyExtrasDBManager._mark_migrations_applied(migrations_dir)
             return
         logger.info(f"Migration diff created at {diff_sql_path}")
 
@@ -564,6 +549,32 @@ class ProxyExtrasDBManager:
             )
             return
         ProxyExtrasDBManager._mark_migrations_applied(migrations_dir)
+
+    @staticmethod
+    def _execute_migration_file(mig_file: Path, schema_path: str) -> bool:
+        try:
+            prisma_toolchain.run_prisma(
+                [
+                    _get_prisma_command(),
+                    "db",
+                    "execute",
+                    "--file",
+                    str(mig_file),
+                    "--schema",
+                    schema_path,
+                ],
+                timeout=prisma_command_timeout(),
+                env=_get_prisma_env(),
+            )
+            logger.info(f"Applied migration: {mig_file.parent.name}")
+            return True
+        except subprocess.CalledProcessError as e:
+            stderr: Final = str(e.stderr or "")  # pyright: ignore[reportAny]  # CalledProcessError.stderr is Any
+            logger.warning(f"Failed to apply migration {mig_file.parent.name}: {stderr}")
+            return ProxyExtrasDBManager._is_idempotent_error(stderr)
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Migration {mig_file.parent.name} timed out.")
+            return False
 
     @staticmethod
     def _mark_migrations_applied(migrations_dir: str) -> None:
