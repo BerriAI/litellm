@@ -552,9 +552,7 @@ def test_handler_sync_create_passes_timeout(monkeypatch):
                 request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"),
             )
 
-    monkeypatch.setattr(
-        "litellm.llms.custom_httpx.http_handler._get_httpx_client", lambda: _RecordingClient()
-    )
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._get_httpx_client", lambda: _RecordingClient())
     video = handler.video_generation(
         model="bedrock/amazon.nova-reel-v1:0",
         prompt="waves at sunset",
@@ -592,9 +590,7 @@ def test_handler_sync_get_passes_timeout(monkeypatch):
                 json={"invocationArn": TEST_ARN, "status": "InProgress", "submitTime": 1758000000.0},
             )
 
-    monkeypatch.setattr(
-        "litellm.llms.custom_httpx.http_handler._get_httpx_client", lambda: _RecordingClient()
-    )
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._get_httpx_client", lambda: _RecordingClient())
     video = handler.video_status(video_id=video_id, litellm_params={}, timeout=7.5)
     assert seen["timeout"] == 7.5
     assert video.status == "processing"
@@ -722,3 +718,45 @@ def test_get_supported_openai_params_includes_video_params():
     assert "size" in supported
     assert "output_s3_uri" in supported
     assert "parameters" not in supported
+
+
+#################################################
+# litellm_params threading into the create request
+#################################################
+
+
+def test_handler_create_threads_litellm_params_request_id_into_token(monkeypatch):
+    """video_generation must feed litellm_params into the transform so
+    metadata.request_id reaches the signed POST body as clientRequestToken."""
+    handler = BedrockVideoGeneration()
+    monkeypatch.setattr(
+        BedrockVideoGeneration,
+        "_get_boto_credentials_from_optional_params",
+        lambda self, params, model=None, bearer_token=None: _FakeCredentialsInfo(),
+    )
+    bodies: list[bytes] = []
+
+    class _RecordingClient:
+        def post(self, **kwargs):
+            bodies.append(kwargs["content"])
+            return httpx.Response(
+                200,
+                json={"invocationArn": TEST_ARN},
+                request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"),
+            )
+
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._get_httpx_client", lambda: _RecordingClient())
+    litellm_params = GenericLiteLLMParams()
+    litellm_params.metadata = {"request_id": "req/abc_123"}  # extra field allowed on GenericLiteLLMParams
+    video = handler.video_generation(
+        model="bedrock/amazon.nova-reel-v1:0",
+        prompt="waves at sunset",
+        optional_params={"output_s3_uri": "s3://bucket/out/"},
+        logging_obj=None,
+        timeout=5.0,
+        avideo_generation=False,
+        litellm_params=litellm_params,
+    )
+    assert video.status == "processing"
+    parsed = json.loads(bodies[0])
+    assert parsed["clientRequestToken"] == "req-abc-123"

@@ -270,6 +270,11 @@ def video_generation(
                 api_base=litellm_params.get("api_base"),
                 extra_headers=extra_headers,
                 api_key=kwargs.get("api_key"),
+                # Real litellm_params so metadata.request_id reaches the
+                # clientRequestToken fallback (idempotent retries); aws_* keys
+                # are already merged into bedrock_optional_params above and are
+                # never consumed from this object by the handler.
+                litellm_params=litellm_params,
             )
 
         # Call the handler with _is_async flag instead of directly calling the async handler

@@ -130,6 +130,25 @@ def _params_to_dict(litellm_params: GenericLiteLLMParams | Mapping[str, object] 
     return dict(litellm_params)  # mutable-ok: aws_* keys are popped in place downstream
 
 
+def _as_generic_litellm_params(
+    litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
+) -> GenericLiteLLMParams:
+    """Normalize handler-level litellm_params to GenericLiteLLMParams for the create transform.
+
+    Only ``metadata.request_id`` is read downstream (the clientRequestToken
+    fallback); aws_* credential keys are consumed from optional_params only, so
+    nothing passed here double-processes credentials.
+    """
+    if isinstance(litellm_params, GenericLiteLLMParams):
+        return litellm_params
+    params: Final[GenericLiteLLMParams] = GenericLiteLLMParams()
+    if litellm_params is not None:
+        metadata: Final = litellm_params.get("metadata")
+        if isinstance(metadata, dict):
+            params.metadata = metadata  # pyright: ignore[reportAttributeAccessIssue]  # metadata is an extra-allowed field on GenericLiteLLMParams
+    return params
+
+
 class BedrockVideoGeneration(BaseAWSLLM):
     """
     Bedrock video generation handler for Amazon Nova Reel models.
@@ -172,9 +191,14 @@ class BedrockVideoGeneration(BaseAWSLLM):
         extra_headers: _ExtraHeadersDict | None,
         logging_obj: LiteLLMLogging | None,
         api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None = None,
     ) -> tuple[str, AWSPreparedRequest, bytes, _LitellmParamsDict]:
         """
         Returns (endpoint_url, prepped_request, body, data) for POST /async-invoke.
+
+        litellm_params feeds only the clientRequestToken fallback
+        (metadata.request_id); aws_* credentials are consumed from
+        optional_params, never from litellm_params, so nothing is double-processed.
         """
         bearer_token: Final = bedrock_bearer_token(api_key)
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
@@ -199,7 +223,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
             prompt=prompt,
             api_base=endpoint_url,
             video_create_optional_request_params=optional_params,
-            litellm_params=GenericLiteLLMParams(),
+            litellm_params=_as_generic_litellm_params(litellm_params),
             headers={},  # mutable-ok: transform never reads headers for Nova Reel
         )
         # The transform returns the model name it was given; make sure the
@@ -270,6 +294,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
         api_base: str | None = None,
         extra_headers: _ExtraHeadersDict | None = None,
         api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None = None,
     ) -> VideoObject | Coroutine[object, object, VideoObject]:
         """Returns a VideoObject, or a coroutine resolving to one when avideo_generation is set."""
         if avideo_generation:
@@ -283,6 +308,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
                 api_base=api_base,
                 extra_headers=extra_headers,
                 api_key=api_key,
+                litellm_params=litellm_params,
             )
 
         endpoint_url, prepped, body, data = self._prepare_async_invoke_request(
@@ -293,6 +319,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
             extra_headers=extra_headers,
             logging_obj=logging_obj,
             api_key=api_key,
+            litellm_params=litellm_params,
         )
         from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
@@ -327,6 +354,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
         api_base: str | None = None,
         extra_headers: _ExtraHeadersDict | None = None,
         api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None = None,
     ) -> VideoObject:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
@@ -338,6 +366,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
             extra_headers=extra_headers,
             logging_obj=logging_obj,
             api_key=api_key,
+            litellm_params=litellm_params,
         )
         async_client: Final = (
             client
