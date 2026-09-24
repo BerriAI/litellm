@@ -1458,7 +1458,7 @@ class TeamInfoResponse(BaseModel):
 
 class TeamMemberAddBody(BaseModel):
     team_id: str
-    member: TeamMemberEntry
+    member: TeamMemberEntry | list[TeamMemberEntry]
 
 
 class TeamMemberDeleteBody(BaseModel):
