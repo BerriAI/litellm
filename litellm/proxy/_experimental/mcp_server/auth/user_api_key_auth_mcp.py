@@ -112,6 +112,22 @@ class McpToolGrant:
         return MCPRequestHandler.tool_is_granted(bare_tool_name, self.allowed) and bare_tool_name not in self.denied
 
 
+@dataclass(frozen=True, slots=True)
+class _CeilingStep:
+    """One ceiling level's narrowed allowlist plus the object_permission row it read, so the
+    denylist sees the same row without a second lookup."""
+
+    allowed: list[str] | None
+    object_permission: LiteLLM_ObjectPermissionTable | None
+
+
+@dataclass(frozen=True, slots=True)
+class _AgentOrgCeilingStep:
+    allowed: list[str] | None
+    agent_object_permission: LiteLLM_ObjectPermissionTable | None
+    org_object_permission: LiteLLM_ObjectPermissionTable | None
+
+
 def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: list[str] | None = None) -> list[str] | None:
     """Resolve the single MCP server name a cold-start passthrough bypass may
     target. Delegates parsing to
@@ -2286,8 +2302,10 @@ class MCPRequestHandler:
             if _is_mcp_admitted_user_subject(user_api_key_auth):
                 return await MCPRequestHandler._resolve_admitted_subject_grant(server_id, user_api_key_auth)
 
-            # Get key and team object permissions (already loaded in main auth flow)
-            key_obj_perm: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
+            # Get key and team object permissions (already loaded in main auth flow). The key row
+            # is hydrated once here and serves the allowlist AND the denylist union below, so the
+            # tools axis never re-reads a row the chain already loaded.
+            key_obj_perm: Final = await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth)
             team_obj_perm: Final = await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
 
             # Extract tool permissions for this server. Dict keys may be
@@ -2344,22 +2362,31 @@ class MCPRequestHandler:
                 # No team restrictions → use key restrictions
                 allowed_tools = cast(list[str], key_tools)
 
-            allowed_tools = _as_list(
-                await MCPRequestHandler._apply_end_user_tool_ceiling(allowed_tools, server_id, user_api_key_auth)
+            end_user_step: Final = await MCPRequestHandler._apply_end_user_tool_ceiling(
+                allowed_tools, server_id, user_api_key_auth
             )
+            allowed_tools = end_user_step.allowed
 
-            allowed_tools = _as_list(
-                await MCPRequestHandler._apply_user_tool_ceiling(
-                    allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
-                )
-            )
-
-            allowed_tools = await MCPRequestHandler._apply_agent_and_org_tool_ceilings(
+            user_step: Final = await MCPRequestHandler._apply_user_tool_ceiling(
                 allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
             )
+            allowed_tools = user_step.allowed
 
-            denied: Final = await MCPRequestHandler._denied_tools_for_server(
-                server_id, user_api_key_auth, keyless_source=keyless_source
+            agent_org_step: Final = await MCPRequestHandler._apply_agent_and_org_tool_ceilings(
+                allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
+            )
+            allowed_tools = agent_org_step.allowed
+
+            denied: Final = MCPRequestHandler._denied_tools_from_rows(
+                server_id,
+                (
+                    key_obj_perm,
+                    team_obj_perm,
+                    agent_org_step.agent_object_permission,
+                    agent_org_step.org_object_permission,
+                    user_step.object_permission,
+                    end_user_step.object_permission,
+                ),
             )
             return McpToolGrant(allowed=allowed_tools, denied=denied)
 
@@ -2380,36 +2407,17 @@ class MCPRequestHandler:
             return McpToolGrant(allowed=allowed_fallback, denied=frozenset())
 
     @staticmethod
-    async def _denied_tools_for_server(
+    def _denied_tools_from_rows(
         server_id: str,
-        user_api_key_auth: UserAPIKeyAuth,
-        *,
-        keyless_source: bool = False,
+        levels: tuple[LiteLLM_ObjectPermissionTable | None, ...],
     ) -> frozenset[str]:
-        """Bare tool names any level's ``mcp_tool_denied_tools`` maps to ``server_id``.
-
-        Every level the allowlist chain already consults contributes its denylist, unioned (a deny
-        anywhere wins), gated by the same ids the ceilings use. A read fault propagates to the
-        resolver's except-branch, which picks the same fail-open/fail-closed outcome an allowlist
-        fault would get."""
+        """Bare tool names any level's ``mcp_tool_denied_tools`` maps to ``server_id``, unioned over
+        the rows the allowlist chain already loaded (a deny anywhere wins). A level that placed no
+        restriction or faulted contributes no row, so its denylist cannot leak onto the result."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy.proxy_server import prisma_client
 
-        org_obj_perm: Final = await MCPRequestHandler._org_denylist_object_permission(user_api_key_auth)
-        levels: Final[tuple[LiteLLM_ObjectPermissionTable | None, ...]] = (
-            await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth),
-            await MCPRequestHandler._get_team_object_permission(user_api_key_auth),
-            await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
-            if user_api_key_auth.agent_id
-            else None,
-            org_obj_perm,
-            await MCPRequestHandler._user_denylist_object_permission(user_api_key_auth) if not keyless_source else None,
-            await MCPRequestHandler._get_end_user_object_permission(user_api_key_auth, prisma_client)
-            if user_api_key_auth.end_user_id and prisma_client is not None
-            else None,
-        )
         return frozenset(
             tool
             for object_permission in levels
@@ -2421,42 +2429,12 @@ class MCPRequestHandler:
         )
 
     @staticmethod
-    async def _user_denylist_object_permission(
-        user_api_key_auth: UserAPIKeyAuth,
-    ) -> LiteLLM_ObjectPermissionTable | None:
-        """The internal user's object_permission for denylist reads, with the same fault decision
-        as the user tool ceiling: a row that names a permission and cannot be read is a known
-        entitlement with unknown contents, so it denies rather than reads as no denylist."""
-        try:
-            return await MCPRequestHandler._get_user_object_permission(user_api_key_auth)
-        except Exception as e:  # noqa: BLE001  # mirrors the user tool ceiling's unresolvable-means-deny
-            raise UnloadableEntitlementError(
-                f"MCP user tool denylist unresolvable for user_id={user_api_key_auth.user_id!r}"
-            ) from e
-
-    @staticmethod
-    async def _org_denylist_object_permission(
-        user_api_key_auth: UserAPIKeyAuth,
-    ) -> LiteLLM_ObjectPermissionTable | None:
-        """The org's object_permission for denylist reads, with the same fault decision as the user
-        denylist level: a row that names a permission and cannot be read is a known entitlement
-        with unknown contents, so it denies rather than reads as no denylist."""
-        if not user_api_key_auth.org_id:
-            return None
-        try:
-            return await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
-        except Exception as e:  # noqa: BLE001  # an unreadable org entitlement must not fail open
-            raise UnloadableEntitlementError(
-                f"MCP org tool denylist unresolvable for org_id={user_api_key_auth.org_id!r}"
-            ) from e
-
-    @staticmethod
     async def _apply_agent_and_org_tool_ceilings(
         allowed_tools: list[str] | None,
         server_id: str,
         user_api_key_auth: UserAPIKeyAuth,
         keyless_source: bool = False,
-    ) -> list[str] | None:
+    ) -> _AgentOrgCeilingStep:
         """Narrow a key/team tool allowlist by the agent's tool permissions and the caller's org tool
         ceiling. Each level only intersects; None at a level means no restriction from it.
 
@@ -2468,9 +2446,12 @@ class MCPRequestHandler:
             global_mcp_server_manager,
         )
 
+        agent_obj_perm: Final[LiteLLM_ObjectPermissionTable | None] = (
+            await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+            if user_api_key_auth.agent_id
+            else None
+        )
         if user_api_key_auth.agent_id:
-            # Pre-fetch agent object_permission once to avoid a duplicate DB query.
-            agent_obj_perm: Final = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
             agent_tools: Final = await MCPRequestHandler._get_agent_tool_permissions_for_server(
                 server_id=server_id,
                 user_api_key_auth=user_api_key_auth,
@@ -2481,11 +2462,19 @@ class MCPRequestHandler:
                     list(set(allowed_tools) & set(agent_tools)) if allowed_tools is not None else agent_tools
                 )
 
-        if user_api_key_auth.org_id:
+        if not user_api_key_auth.org_id:
+            return _AgentOrgCeilingStep(
+                allowed=allowed_tools,
+                agent_object_permission=agent_obj_perm,
+                org_object_permission=None,
+            )
+        else:
             # _get_org_object_permission uses user_api_key_cache, so this is not a fresh DB round-trip
             # when get_allowed_mcp_servers was already called.
             try:
-                org_obj_perm: Final = await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
+                org_obj_perm: Final[
+                    LiteLLM_ObjectPermissionTable | None
+                ] = await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
             except Exception as e:  # noqa: BLE001  # unresolvable org ceiling, decided per caller shape
                 # A ceiling the org NAMES but that cannot be read denies at every caller shape; only an
                 # INDETERMINATE fault (we cannot tell whether a ceiling exists) keeps key auth open.
@@ -2496,7 +2485,11 @@ class MCPRequestHandler:
                     user_api_key_auth.org_id,
                     e,
                 )
-                return allowed_tools
+                return _AgentOrgCeilingStep(
+                    allowed=allowed_tools,
+                    agent_object_permission=agent_obj_perm,
+                    org_object_permission=None,
+                )
             org_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(org_obj_perm.mcp_tool_permissions).get(server_id)
                 if org_obj_perm and org_obj_perm.mcp_tool_permissions
@@ -2509,7 +2502,11 @@ class MCPRequestHandler:
                     list(set(allowed_tools) & set(org_tools)) if allowed_tools is not None else list(org_tools)
                 )
 
-        return allowed_tools
+        return _AgentOrgCeilingStep(
+            allowed=allowed_tools,
+            agent_object_permission=agent_obj_perm,
+            org_object_permission=org_obj_perm,
+        )
 
     @staticmethod
     def tool_is_granted(bare_tool_name: str, allowed_tool_names: list[str] | None) -> bool:
@@ -3277,7 +3274,7 @@ class MCPRequestHandler:
         user_api_key_auth: UserAPIKeyAuth | None = None,
         *,
         keyless_source: bool = False,
-    ) -> Sequence[str] | None:
+    ) -> _CeilingStep:
         """Narrow a key/team tool allowlist by the internal user's own tool entitlement.
 
         The human's entitlement can only ever narrow: a user naming tools on ``server_id`` intersects
@@ -3290,16 +3287,18 @@ class MCPRequestHandler:
         )
 
         if keyless_source:
-            return allowed_tools
+            return _CeilingStep(allowed=_as_list(allowed_tools), object_permission=None)
 
         try:
             object_permissions: Final = await MCPRequestHandler._get_user_object_permission(user_api_key_auth)
         except Exception as e:  # noqa: BLE001  # an unresolved human entitlement must deny, not widen
             verbose_logger.warning("MCP user tool ceiling unresolvable, denying tools on %r: %s", server_id, e)
-            return []
+            return _CeilingStep(
+                allowed=[], object_permission=None
+            )  # mutable-ok: deny-all sentinel; public list contract
 
         if object_permissions is None:
-            return allowed_tools
+            return _CeilingStep(allowed=_as_list(allowed_tools), object_permission=None)
 
         user_direct_tools: Final = global_mcp_server_manager.expand_tool_permissions(
             object_permissions.mcp_tool_permissions
@@ -3307,17 +3306,17 @@ class MCPRequestHandler:
         user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(object_permissions, server_id)
         user_tools: Final = MCPRequestHandler._union_tool_grants(user_direct_tools, user_toolset_tools)
         if user_tools is None:
-            return allowed_tools
+            return _CeilingStep(allowed=_as_list(allowed_tools), object_permission=object_permissions)
         if allowed_tools is None:
-            return list(user_tools)
-        return list(set(allowed_tools) & set(user_tools))
+            return _CeilingStep(allowed=list(user_tools), object_permission=object_permissions)
+        return _CeilingStep(allowed=list(set(allowed_tools) & set(user_tools)), object_permission=object_permissions)
 
     @staticmethod
     async def _apply_end_user_tool_ceiling(
         allowed_tools: Sequence[str] | None,
         server_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
-    ) -> Sequence[str] | None:
+    ) -> _CeilingStep:
         """Narrow a key/team tool allowlist by the end user's (customer's) tool entitlement."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -3325,13 +3324,13 @@ class MCPRequestHandler:
         from litellm.proxy.proxy_server import prisma_client
 
         if user_api_key_auth is None or not user_api_key_auth.end_user_id or prisma_client is None:
-            return allowed_tools
+            return _CeilingStep(allowed=_as_list(allowed_tools), object_permission=None)
 
         object_permissions: Final = await MCPRequestHandler._get_end_user_object_permission(
             user_api_key_auth, prisma_client
         )
         if object_permissions is None:
-            return allowed_tools
+            return _CeilingStep(allowed=_as_list(allowed_tools), object_permission=None)
 
         end_user_direct_tools: Final = global_mcp_server_manager.expand_tool_permissions(
             object_permissions.mcp_tool_permissions
@@ -3339,10 +3338,12 @@ class MCPRequestHandler:
         end_user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(object_permissions, server_id)
         end_user_tools: Final = MCPRequestHandler._union_tool_grants(end_user_direct_tools, end_user_toolset_tools)
         if end_user_tools is None:
-            return allowed_tools
+            return _CeilingStep(allowed=_as_list(allowed_tools), object_permission=object_permissions)
         if allowed_tools is None:
-            return list(end_user_tools)
-        return list(set(allowed_tools) & set(end_user_tools))
+            return _CeilingStep(allowed=list(end_user_tools), object_permission=object_permissions)
+        return _CeilingStep(
+            allowed=list(set(allowed_tools) & set(end_user_tools)), object_permission=object_permissions
+        )
 
     # Sentinel stored in cache when an agent has no object_permission, so we
     # don't re-query the DB on every MCP request for that agent.

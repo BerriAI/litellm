@@ -633,10 +633,13 @@ class TestMCPRequestHandler:
         assert blocked is False
         assert open_tool is True
 
-    async def test_org_denylist_read_fault_denies_the_server_tools(self):
-        """A key whose org permission row cannot be read denies every tool on the server:
-        an unreadable entitlement is a known restriction with unknown contents, not no denylist"""
-        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", org_id="org-1")
+    async def test_org_denylist_read_fault_skips_only_the_org_level(self):
+        """An indeterminate org read fault for key auth skips the org level entirely, ceiling AND
+        denylist together: a team-denied tool stays denied while an org-only-denied tool is allowed,
+        the same fail-open the org allowlist ceiling takes for the same fault"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", team_id="team-1", org_id="org-1")
+        team_object_permission = self._toolset_only_object_permission([])
+        team_object_permission.mcp_tool_denied_tools = {"server-a": ["team_blocked"]}
         mock_manager = self._mock_manager_with_toolsets({})
 
         with (
@@ -644,7 +647,7 @@ class TestMCPRequestHandler:
                 MCPRequestHandler, "_get_key_object_permission", return_value=None
             ),
             patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
-                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
             ),
             patch.object(  # test-quality-ok: stub the level's perm loader to raise on read
                 MCPRequestHandler,
@@ -662,11 +665,95 @@ class TestMCPRequestHandler:
                 mock_manager,
             ),
         ):
+            team_denied = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="team_blocked", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            open_tool = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="anything_else", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert team_denied is False
+        assert open_tool is True
+
+    async def test_org_denylist_named_fault_denies_the_server_tools(self):
+        """An org read that raises UnloadableEntitlementError denies every tool on the server: a
+        permission row the org NAMES but that cannot be read is a known restriction with unknown
+        contents, so both the ceiling and the denylist fail closed"""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            UnloadableEntitlementError,
+        )
+
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", org_id="org-1")
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader to raise on read
+                MCPRequestHandler,
+                "_get_org_object_permission",
+                AsyncMock(side_effect=UnloadableEntitlementError("org permission row unreadable")),
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
             result = await MCPRequestHandler.is_tool_allowed_for_server(
                 tool_name="anything_else", server_id="server-a", user_api_key_auth=user_api_key_auth
             )
 
         assert result is False
+
+    async def test_grant_resolution_reads_each_level_once(self):
+        """The denylist derives from the same rows the allowlist chain loads: one call to each
+        level's permission loader per resolve, never a second lookup"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="user-1", org_id="org-1")
+        org_object_permission = self._toolset_only_object_permission([])
+        org_object_permission.mcp_tool_denied_tools = {"server-a": ["org_blocked"]}
+        user_object_permission = self._toolset_only_object_permission([])
+        mock_manager = self._mock_manager_with_toolsets({})
+        org_loader = AsyncMock(return_value=org_object_permission)
+        user_loader = AsyncMock(return_value=user_object_permission)
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: spy the level's loader to count reads
+                MCPRequestHandler, "_get_org_object_permission", org_loader
+            ),
+            patch.object(  # test-quality-ok: spy the level's loader to count reads
+                MCPRequestHandler, "_get_user_object_permission", user_loader
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="org_blocked", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert result is False
+        org_loader.assert_awaited_once()
+        user_loader.assert_awaited_once()
 
     async def test_legacy_allowlist_still_denies_tools_not_listed(self):
         """mcp_tool_permissions alone keeps its exact behavior: a tool not named by
@@ -1140,9 +1227,10 @@ class TestMCPRequestHandler:
                 ["any_tool"], "server-without-toolset", user_api_key_auth
             )
 
-        assert becomes_allowlist is not None and set(becomes_allowlist) == {"tool_1", "tool_2"}
-        assert intersected == ["tool_1"]
-        assert untouched_server == ["any_tool"]
+        assert becomes_allowlist.allowed is not None and set(becomes_allowlist.allowed) == {"tool_1", "tool_2"}
+        assert intersected.allowed == ["tool_1"]
+        assert untouched_server.allowed == ["any_tool"]
+        assert intersected.object_permission is user_object_permission
 
     async def test_user_toolset_servers_count_as_entitled(self):
         """Servers reached only through the user's toolsets count toward the
@@ -8822,11 +8910,11 @@ class TestUserSubjectTeamUnion:
         assert servers == {"srv-own", "srv1"}, "healthy sources must stand when one team faults"
         assert tools == ["read"], "the healthy team's tool grant must survive the other team's fault"
 
-    async def test_key_org_tool_denylist_fault_denies_all_tools(self):
-        """An unreadable org permission row fails CLOSED on the tools axis: the same row also
-        carries the org's tool denylist, and a denylist that cannot be read is a known restriction
-        with unknown contents, so the resolver denies rather than lets a possibly-denied tool
-        through. The org ceiling's own skip-on-fault never widens either — the deny-all wins."""
+    async def test_key_org_tool_denylist_fault_keeps_key_restrictions(self):
+        """An indeterminate org permission fault is one fact for both axes on a key: the org
+        ceiling's long-standing skip-on-fault keeps the key's tools, and the org denylist is skipped
+        with it because the denylist derives from the SAME row the ceiling could not read. Only a
+        NAMED-but-unreadable entitlement raises UnloadableEntitlementError and denies."""
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
         key_auth = UserAPIKeyAuth(user_id="u", api_key="sk-hash", org_id="org-a")
@@ -8837,7 +8925,7 @@ class TestUserSubjectTeamUnion:
         with self._patch(teams_by_id={}, user_teams=[]):
             with patch.object(MCPRequestHandler, "_get_org_object_permission", boom):
                 tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", key_auth)
-        assert tools == [], "an unresolvable org denylist must deny, not pass the key's tools through"
+        assert tools == ["read"], "an indeterminate org fault skips the org level, key tools stand"
 
     async def test_team_rpm_limit_binds_only_within_that_teams_grant_scope(self):
         """A limit rides the same scope as the access it bounds. A roster team is charged ONLY for
