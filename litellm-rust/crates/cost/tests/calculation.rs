@@ -224,6 +224,12 @@ fn compile_rejects_ambiguous_rates() {
     );
     let invalid = pricing(rates(Rate::Value(f64::NAN), Rate::Value(1.0)));
     assert_eq!(compile(&invalid).err(), Some(PricingError::InvalidRate));
+    let negative = pricing(rates(Rate::Value(-1.0), Rate::Value(1.0)));
+    assert_eq!(
+        compile(&negative).err(),
+        Some(PricingError::InvalidRate),
+        "divergence: Python bills negative rates as negative costs; Rust refuses them"
+    );
 }
 
 #[test]

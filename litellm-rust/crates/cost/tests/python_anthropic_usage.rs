@@ -5,6 +5,7 @@
 use litellm_cost::anthropic_usage::{
     is_anthropic_usage_object, transform_anthropic_usage_to_chat_usage,
 };
+use litellm_cost::responses_usage::UsageError;
 use litellm_cost::{Pricing, Rate, Rates, Request, ServiceTier, ThresholdPolicy, calculate};
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -140,4 +141,25 @@ fn calculate_usage_sums_reported_reasoning_across_iterations() {
     assert_eq!(usage.completion_tokens, 300);
     assert_eq!(details.reasoning_tokens, Some(150));
     assert_eq!(details.text_tokens, Some(150));
+}
+
+#[rstest]
+fn iteration_sums_overflow_errors_where_python_yields_a_big_int() {
+    let usage = transform_anthropic_usage_to_chat_usage(
+        &json!({
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "iterations": [
+                {"input_tokens": u64::MAX, "output_tokens": 1},
+                {"input_tokens": 1, "output_tokens": 1}
+            ]
+        }),
+        None,
+        false,
+    );
+    assert_eq!(
+        usage.unwrap_err(),
+        UsageError::TokenCountOverflow,
+        "divergence: Python sums arbitrary-precision ints and returns a huge cost"
+    );
 }
