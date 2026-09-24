@@ -6075,9 +6075,6 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_above_272k_tokens_flex=_model_info.get(
                     "cache_creation_input_token_cost_above_272k_tokens_flex", None
                 ),
-                cache_creation_input_token_cost_above_272k_tokens_balanced=_model_info.get(
-                    "cache_creation_input_token_cost_above_272k_tokens_balanced", None
-                ),
                 cache_creation_input_token_cost_flex=_model_info.get("cache_creation_input_token_cost_flex", None),
                 cache_creation_input_token_cost_balanced=_model_info.get(
                     "cache_creation_input_token_cost_balanced", None
@@ -6105,9 +6102,6 @@ def _get_model_info_helper(
                 ),
                 cache_read_input_token_cost_above_272k_tokens_flex=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens_flex", None
-                ),
-                cache_read_input_token_cost_above_272k_tokens_balanced=_model_info.get(
-                    "cache_read_input_token_cost_above_272k_tokens_balanced", None
                 ),
                 cache_read_input_token_cost_above_512k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_512k_tokens", None
@@ -6140,9 +6134,6 @@ def _get_model_info_helper(
                 ),
                 input_cost_per_token_above_272k_tokens_flex=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_flex", None
-                ),
-                input_cost_per_token_above_272k_tokens_balanced=_model_info.get(
-                    "input_cost_per_token_above_272k_tokens_balanced", None
                 ),
                 input_cost_per_token_above_512k_tokens=_model_info.get("input_cost_per_token_above_512k_tokens", None),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
@@ -6206,9 +6197,6 @@ def _get_model_info_helper(
                 ),
                 output_cost_per_token_above_272k_tokens_flex=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_flex", None
-                ),
-                output_cost_per_token_above_272k_tokens_balanced=_model_info.get(
-                    "output_cost_per_token_above_272k_tokens_balanced", None
                 ),
                 output_cost_per_token_above_512k_tokens=_model_info.get(
                     "output_cost_per_token_above_512k_tokens", None

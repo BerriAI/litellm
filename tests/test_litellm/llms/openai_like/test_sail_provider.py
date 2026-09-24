@@ -517,8 +517,9 @@ class TestSailTierPricing:
             {"extra_body": {"metadata": {"completion_window": "balanced"}}},
             {"extra_body": {"metadata": {"completion_window": "flex"}}},
             {"metadata": {"completion_window": "balanced"}},
+            {"service_tier": "auto", "extra_body": {"metadata": {"completion_window": "flex"}}},
         ],
-        ids=["extra_body_balanced", "extra_body_flex", "metadata_balanced"],
+        ids=["extra_body_balanced", "extra_body_flex", "metadata_balanced", "auto_tier_flex_window"],
     )
     def test_completion_window_in_optional_params_bills_at_tier_rates(self, optional_params: dict):
         rates = litellm.model_cost[MODEL]

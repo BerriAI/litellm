@@ -276,7 +276,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_272k_tokens: float | None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
-    cache_creation_input_token_cost_above_272k_tokens_balanced: float | None
     cache_creation_input_token_cost_above_1hr: float | None
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_balanced: float | None  # balanced service tier pricing
@@ -294,7 +293,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens: float | None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None
-    cache_read_input_token_cost_above_272k_tokens_balanced: float | None
     cache_read_input_token_cost_above_512k_tokens: float | None
     cache_read_input_token_cost_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
@@ -312,7 +310,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_token_above_272k_tokens_priority: float | None
     input_cost_per_token_above_272k_tokens_flex: float | None
-    input_cost_per_token_above_272k_tokens_balanced: float | None
     input_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_query: float | None  # per-request pricing: rerank, search, and Bedrock Marengo embeddings
@@ -351,7 +348,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_token_above_272k_tokens_priority: float | None
     output_cost_per_token_above_272k_tokens_flex: float | None
-    output_cost_per_token_above_272k_tokens_balanced: float | None
     output_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_image: float | None
@@ -3724,7 +3720,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_creation_input_token_cost_above_272k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None = None
-    cache_creation_input_token_cost_above_272k_tokens_balanced: float | None = None
     cache_creation_input_token_cost_flex: float | None = None
     cache_creation_input_token_cost_balanced: float | None = None
     cache_creation_input_token_cost_priority: float | None = None
@@ -3738,7 +3733,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
-    cache_read_input_token_cost_above_272k_tokens_balanced: float | None = None
     cache_read_input_token_cost_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_creation_input_token_cost_batches: float | None = None
@@ -3753,7 +3747,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_above_200k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_flex: float | None = None
-    input_cost_per_token_above_272k_tokens_balanced: float | None = None
     input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
     input_cost_per_image: float | None = None
@@ -3779,7 +3772,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_flex: float | None = None
-    output_cost_per_token_above_272k_tokens_balanced: float | None = None
     output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
