@@ -152,6 +152,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
@@ -11104,6 +11105,40 @@ class ProxyStartupEvent:
 
 
 #### API ENDPOINTS ####
+async def _names_hidden_by_listing_callbacks(
+    user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
+) -> frozenset[str]:
+    hidden: Final = await proxy_logging_obj.hidden_by_listing_callbacks(user_api_key_dict, model_names)
+    if not hidden or llm_router is None:
+        return hidden
+    aliases: Final = llm_router.model_group_alias
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+    return hidden | frozenset(
+        alias
+        for alias in aliases
+        if (target := resolve_model_group_alias(aliases, alias)) is not None
+        and internal_to_public.get(target, target) in hidden
+    )
+
+
+async def _entries_kept_by_listing_callbacks(
+    entries: Sequence[tuple[str, str]], user_api_key_dict: UserAPIKeyAuth
+) -> tuple[tuple[str, str], ...]:
+    hidden: Final = await _names_hidden_by_listing_callbacks(
+        user_api_key_dict, tuple(response_id for response_id, _ in entries)
+    )
+    if not hidden:
+        return tuple(entries)
+    return tuple(entry for entry in entries if entry[0] not in hidden)
+
+
+async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    listed_name: Final = _translate_model_name_for_response(deployment.model_dump(exclude_none=True)).get("model_name")
+    if not isinstance(listed_name, str):
+        return False
+    return listed_name in await _names_hidden_by_listing_callbacks(user_api_key_dict, (listed_name,))
+
+
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
@@ -11254,7 +11289,9 @@ async def model_list(
         # The internal routing key drives the metadata/fallback lookup, while the
         # public name is what the client sees as the model id.
         model_data = []
-        admin_entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+        admin_entries: Final = await _entries_kept_by_listing_callbacks(
+            TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
+        )
         for response_id, lookup_id in admin_entries:
             model_info = create_model_info_response(
                 model_id=lookup_id,
@@ -11310,7 +11347,10 @@ async def model_list(
     # public name is what the client sees as the model id.
     model_data = []
     entries: Final = alias_listing_entries(
-        TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), caller_aliases
+        await _entries_kept_by_listing_callbacks(
+            TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
+        ),
+        caller_aliases,
     )
     for response_id, lookup_id in entries:
         model_info = create_model_info_response(
@@ -11404,13 +11444,24 @@ async def model_info(
         llm_router=llm_router,
     )
     hidden_names: Final = blocked_names | unhealthy_names
-    if hidden_names:
-        all_models = [m for m in all_models if m not in hidden_names]
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
+    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
+        user_api_key_dict,
+        tuple(
+            response_id
+            for response_id, _ in TeamModelNameTranslator.listing_entries(
+                tuple(m for m in all_models if m not in hidden_names), llm_router, settings
+            )
+        ),
+    )
+    if hidden_names or callback_hidden_names:
+        all_models = [
+            m for m in all_models if m not in hidden_names and internal_to_public.get(m, m) not in callback_hidden_names
+        ]
     undiscoverable_names: Final = undiscoverable_model_names(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
     )
 
-    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
     aliased_model_id: Final = alias_target(
         model_id,
         caller_alias_maps(
@@ -15730,7 +15781,7 @@ async def model_info_v1(
     if litellm_model_id is not None:
         # user is trying to get specific model from litellm router
         deployment_info: Final = llm_router.get_deployment(model_id=litellm_model_id)
-        if deployment_info is None:
+        if deployment_info is None or await _deployment_hidden_by_listing_callbacks(deployment_info, user_api_key_dict):
             raise HTTPException(
                 status_code=400,
                 detail={"error": f"Model id = {litellm_model_id} not found on litellm proxy"},
@@ -15819,9 +15870,16 @@ async def model_info_v1(
         general_settings=general_settings,
         llm_router=llm_router,
     )
-    visible_models: Final = discoverable_rows(
+    servable_rows: Final = discoverable_rows(
         (model for model in all_models if model.get("model_name") not in hidden_names),
         user_api_key_dict,
+    )
+    listed_names: Final = tuple(
+        dict.fromkeys(name for model in servable_rows if isinstance(name := model.get("model_name"), str))
+    )
+    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(user_api_key_dict, listed_names)
+    visible_models: Final = tuple(
+        model for model in servable_rows if model.get("model_name") not in callback_hidden_names
     )
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
@@ -15871,7 +15929,7 @@ async def model_deprecations(
 
 
 def _get_model_group_info(
-    llm_router: Router, all_models_str: list[str], model_group: str | None
+    llm_router: Router, all_models_str: Sequence[str], model_group: str | None
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
@@ -16104,23 +16162,34 @@ async def model_group_info(
     undiscoverable_group_names: Final = undiscoverable_model_names(
         all_models_str, llm_router, user_api_key_dict, user_api_key_dict.team_id
     )
-    model_groups: list[ModelGroupInfoProxy] = _get_model_group_info(
-        llm_router=llm_router,
-        all_models_str=[name for name in all_models_str if name not in undiscoverable_group_names],
-        model_group=model_group,
-    )
+    listed_group_names: Final = tuple(name for name in all_models_str if name not in undiscoverable_group_names)
 
     # Append A2A agents to model groups
     from litellm.proxy.agent_endpoints.model_list_helpers import (
         append_agents_to_model_group,
     )
 
-    model_groups = await append_agents_to_model_group(
-        model_groups=model_groups,
+    model_groups: Final = await append_agents_to_model_group(
+        model_groups=_get_model_group_info(
+            llm_router=llm_router, all_models_str=listed_group_names, model_group=model_group
+        ),
         user_api_key_dict=user_api_key_dict,
     )
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+    public_group_names: Final = tuple(
+        internal_to_public.get(group.model_group, group.model_group) for group in model_groups
+    )
+    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
+        user_api_key_dict, tuple(dict.fromkeys(public_group_names))
+    )
 
-    return {"data": model_groups}
+    return {
+        "data": [
+            group
+            for group, public_name in zip(model_groups, public_group_names, strict=True)
+            if public_name not in callback_hidden_names
+        ]
+    }
 
 
 @router.get(
