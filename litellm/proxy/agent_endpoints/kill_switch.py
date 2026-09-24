@@ -1,5 +1,5 @@
 from base64 import b64encode
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from types import MappingProxyType
@@ -131,7 +131,7 @@ def build_kill_switch_request(config: AgentKillSwitchConfig) -> KillSwitchReques
 
 
 class KillSwitchHttpClient(Protocol):
-    async def request(
+    def build_request(
         self,
         method: str,
         url: str,
@@ -139,7 +139,9 @@ class KillSwitchHttpClient(Protocol):
         headers: Mapping[str, str],
         json: Mapping[str, object] | None,
         timeout: float,
-    ) -> httpx.Response: ...
+    ) -> httpx.Request: ...
+
+    async def send(self, request: httpx.Request, *, stream: bool) -> httpx.Response: ...
 
 
 @lru_cache(maxsize=1)
@@ -160,13 +162,17 @@ async def fire_kill_switch(
     reported_url: Final = str(httpx.URL(request.url).copy_with(query=None))
     verbose_proxy_logger.info("Firing kill switch for agent %s: %s %s", agent_id, request.method, reported_url)
     try:
-        response: Final = await http_client.request(
-            request.method,
-            request.url,
-            headers=request.headers,
-            json=request.json_body,
-            timeout=timeout,
+        response: Final = await http_client.send(
+            http_client.build_request(
+                request.method,
+                request.url,
+                headers=request.headers,
+                json=request.json_body,
+                timeout=timeout,
+            ),
+            stream=True,
         )
+        body: Final = await _read_text_prefix(response, AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS)
     except httpx.HTTPError as exc:
         verbose_proxy_logger.warning("Kill switch for agent %s failed: %s", agent_id, type(exc).__name__)
         return AgentKillSwitchResult(
@@ -180,5 +186,21 @@ async def fire_kill_switch(
         url=reported_url,
         method=config.method,
         status_code=response.status_code,
-        response_body=response.text[:AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS],
+        response_body=body,
     )
+
+
+async def _read_text_prefix(response: httpx.Response, max_chars: int) -> str:
+    try:
+        return await _take_text(response.aiter_text(), max_chars)
+    finally:
+        await response.aclose()
+
+
+async def _take_text(chunks: AsyncIterator[str], max_chars: int) -> str:
+    taken = ""  # rebind-ok: running prefix of a stream that is abandoned once the cap is hit
+    async for chunk in chunks:
+        taken += chunk  # rebind-ok: see above
+        if len(taken) >= max_chars:
+            break
+    return taken[:max_chars]

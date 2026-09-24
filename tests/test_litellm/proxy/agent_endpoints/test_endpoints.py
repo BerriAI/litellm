@@ -1165,8 +1165,11 @@ class _FakeKillSwitchClient:
         self.calls: list[tuple[str, str, dict[str, str], object, float]] = []  # mutable-ok: test double records calls
         self._response: Final = response
 
-    async def request(self, method: str, url: str, *, headers, json, timeout: float) -> httpx.Response:
+    def build_request(self, method: str, url: str, *, headers, json, timeout: float) -> httpx.Request:
         self.calls.append((method, url, dict(headers), json, timeout))
+        return httpx.Request(method, url, headers=dict(headers), json=json)
+
+    async def send(self, request: httpx.Request, *, stream: bool) -> httpx.Response:
         return self._response
 
 

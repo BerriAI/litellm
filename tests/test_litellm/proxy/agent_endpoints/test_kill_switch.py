@@ -31,7 +31,7 @@ class _RecordingClient:
         self.sent: list[_SentRequest] = []  # mutable-ok: test double records calls
         self._respond: Final = respond
 
-    async def request(
+    def build_request(
         self,
         method: str,
         url: str,
@@ -39,11 +39,26 @@ class _RecordingClient:
         headers: Mapping[str, str],
         json: Mapping[str, object] | None,
         timeout: float,
-    ) -> httpx.Response:
+    ) -> httpx.Request:
         self.sent.append(_SentRequest(method, url, headers, json, timeout))
+        return httpx.Request(method, url, headers=dict(headers), json=json)
+
+    async def send(self, request: httpx.Request, *, stream: bool) -> httpx.Response:
         if isinstance(self._respond, httpx.HTTPError):
             raise self._respond
         return self._respond
+
+
+class _CountingStream(httpx.AsyncByteStream):
+    def __init__(self, chunk: bytes, chunks: int) -> None:
+        self.pulled: int = 0  # rebind-ok: test double counts reads
+        self._chunk: Final = chunk
+        self._chunks: Final = chunks
+
+    async def __aiter__(self):
+        for _ in range(self._chunks):
+            self.pulled += 1  # rebind-ok: test double counts reads
+            yield self._chunk
 
 
 def _config(**overrides: object) -> AgentKillSwitchConfig:
@@ -203,6 +218,17 @@ async def test_fire_reports_a_non_2xx_reply_as_failure_with_the_body() -> None:
     assert result.status_code == 503
     assert result.response_body == "x" * 2000
     assert result.error is None
+
+
+@pytest.mark.asyncio
+async def test_fire_stops_reading_the_body_at_the_cap_instead_of_buffering_the_whole_reply() -> None:
+    stream: Final = _CountingStream(b"y" * 500, chunks=100)
+    client: Final = _RecordingClient(httpx.Response(200, stream=stream))
+
+    result: Final = await fire_kill_switch(agent_id="agent-1", config=_config(), http_client=client)
+
+    assert result.response_body == "y" * 2000
+    assert stream.pulled == 4, f"read {stream.pulled} of 100 chunks for a 2000 char cap"
 
 
 @pytest.mark.asyncio

@@ -52,9 +52,8 @@ describe("buildDynamicAgentData kill switch", () => {
     const blanked: AgentFormValues = { ...baseValues, kill_switch: { ...EMPTY_KILL_SWITCH_FORM } };
 
     expect("kill_switch" in buildDynamicAgentData(blanked, langgraphInfo)).toBe(false);
-    expect(
-      buildDynamicAgentData(blanked, langgraphInfo, { kill_switch: { url: "https://old.example" } }).kill_switch,
-    ).toBeNull();
+    const stored = { kill_switch: { url: "https://old.example", method: "POST" as const } };
+    expect(buildDynamicAgentData(blanked, langgraphInfo, stored).kill_switch).toBeNull();
   });
 });
 
