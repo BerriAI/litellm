@@ -7,6 +7,7 @@ import sys
 import zlib
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
+from datetime import datetime
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Final
@@ -30,6 +31,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
+    _build_passthrough_failure_request_payload,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
     _with_trace_context,
@@ -49,8 +51,41 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
+from litellm.types.utils import CallTypes
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
+
+
+def test_build_passthrough_failure_request_payload_carries_masked_api_base():
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.pass_through.value,
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    logging_obj.pre_call(
+        input={},
+        api_key="",
+        additional_args={
+            "complete_input_dict": {},
+            "api_base": "http://upstream.example/search?api-version=1",
+            "headers": {},
+        },
+    )
+    kwargs = {"litellm_params": {"metadata": {}}}
+
+    payload = _build_passthrough_failure_request_payload(
+        parsed_body={},
+        kwargs=kwargs,
+        logging_obj=logging_obj,
+        custom_llm_provider=None,
+    )
+
+    assert payload["litellm_params"]["api_base"] == logging_obj.model_call_details["litellm_params"]["api_base"]
+    assert "api_base" not in kwargs["litellm_params"]
 
 
 def test_with_trace_context_without_opentelemetry(monkeypatch: pytest.MonkeyPatch):
@@ -369,12 +404,13 @@ async def test_pass_through_request_failure_handler():
             ) as mock_processing:
                 # Setup mock for post_call_failure_hook and pre_call_hook
                 mock_proxy_logging.post_call_failure_hook = AsyncMock()
-                mock_proxy_logging.pre_call_hook = AsyncMock()
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
 
                 # Setup mock for httpx client
                 mock_client = MagicMock()
                 mock_client.client = MagicMock()
-                mock_client.client.request = AsyncMock(side_effect=httpx.HTTPError("Request failed"))
+                mock_client.client.build_request = MagicMock(return_value=MagicMock())
+                mock_client.client.send = AsyncMock(side_effect=httpx.ConnectError("boom"))
                 mock_get_client.return_value = mock_client
 
                 # Mock headers for custom headers
@@ -407,7 +443,12 @@ async def test_pass_through_request_failure_handler():
                 # Verify the arguments to post_call_failure_hook
                 call_args = mock_proxy_logging.post_call_failure_hook.call_args[1]
                 assert call_args["user_api_key_dict"] == mock_user_api_key_dict
-                assert isinstance(call_args["original_exception"], TypeError)  # Now expecting TypeError
+                assert isinstance(call_args["original_exception"], httpx.ConnectError)
+                request_data = call_args["request_data"]
+                logging_obj = request_data["litellm_logging_obj"]
+                api_base = request_data["litellm_params"]["api_base"]
+                assert api_base == logging_obj.model_call_details["litellm_params"]["api_base"]
+                assert api_base.startswith("http://test.com")
                 assert "traceback_str" in call_args
 
 

@@ -153,13 +153,13 @@ class _ProxyDBLogger(CustomLogger):
                 )
 
         request_route: Final = user_api_key_dict.request_route
-        if (
-            _ProxyDBLogger._should_track_errors_in_db() is False
-            or request_route is not None
-            and not (
-                RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
-            )
-        ):
+        route_is_trackable: Final = (
+            request_route is None
+            or RouteChecks.is_llm_api_route(route=request_route)
+            or RouteChecks.is_info_route(route=request_route)
+            or request_data.get("call_type") == CallTypes.pass_through.value
+        )
+        if _ProxyDBLogger._should_track_errors_in_db() is False or not route_is_trackable:
             return
 
         _metadata = dict(

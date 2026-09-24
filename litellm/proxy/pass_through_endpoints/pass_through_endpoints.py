@@ -781,6 +781,11 @@ def _build_passthrough_failure_request_payload(
         request_payload.update(kwargs)
     if logging_obj is not None:
         request_payload["litellm_logging_obj"] = logging_obj
+        logging_litellm_params: Final = logging_obj.model_call_details.get("litellm_params")
+        existing_litellm_params: Final[Mapping[str, object]] = request_payload.get("litellm_params") or {}
+        api_base: Final = logging_litellm_params.get("api_base") if isinstance(logging_litellm_params, dict) else None
+        if isinstance(api_base, str) and api_base and "api_base" not in existing_litellm_params:
+            request_payload["litellm_params"] = {**existing_litellm_params, "api_base": api_base}
     if "model" not in request_payload and parsed_body and isinstance(parsed_body, dict):
         request_payload["model"] = parsed_body.get("model", "")
     if "custom_llm_provider" not in request_payload and custom_llm_provider:
@@ -1829,18 +1834,12 @@ async def pass_through_request(
         # Monitoring: Trigger post_call_failure_hook
         # for pass through endpoint failure
         #########################################################
-        request_payload: Final[dict] = _parsed_body or {}
-        # add user_api_key_dict, litellm_call_id, passthrough_logging_payloa for logging
-        if kwargs:
-            for key, value in kwargs.items():
-                request_payload[key] = value
-        if logging_obj is not None:
-            request_payload["litellm_logging_obj"] = logging_obj
-
-        if "model" not in request_payload and _parsed_body and isinstance(_parsed_body, dict):
-            request_payload["model"] = _parsed_body.get("model", "")
-        if "custom_llm_provider" not in request_payload and custom_llm_provider:
-            request_payload["custom_llm_provider"] = custom_llm_provider
+        request_payload: Final = _build_passthrough_failure_request_payload(
+            parsed_body=_parsed_body,
+            kwargs=kwargs,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         _carry_guardrail_logging_info(request_payload, post_call_guardrail_data)
 

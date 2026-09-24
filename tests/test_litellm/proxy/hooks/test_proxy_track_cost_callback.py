@@ -270,6 +270,36 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_failure_hook_tracks_config_defined_pass_through_route():
+    logger = _ProxyDBLogger()
+    api_base = "http://upstream.example/indexes/x/docs/search"
+    request_data = {
+        "model": "azure-search",
+        "call_type": CallTypes.pass_through.value,
+        "litellm_params": {"api_base": api_base, "metadata": {}},
+    }
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        request_route="/azure-search",
+    )
+
+    with patch(  # test-quality-ok: this regression asserts the spend writer receives the pass-through failure payload
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Provider error"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
+        call_args = mock_update_database.call_args
+        assert call_args.kwargs["kwargs"]["litellm_params"]["api_base"] == api_base
+        assert call_args.kwargs["kwargs"]["litellm_params"]["metadata"]["status"] == "failure"
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_releases_budget_reservation_before_route_skip():
     logger = _ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
