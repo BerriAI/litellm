@@ -4357,6 +4357,7 @@ def test_map_optional_params_verbosity_merges_into_text():
 @pytest.mark.parametrize(
     "tool_call_id,is_custom",
     [
+        (None, False),
         ("call_short_123", False),
         ("call_" + "a" * 59, False),
         ("call_" + "a" * 60, False),
@@ -4371,17 +4372,19 @@ def test_map_optional_params_verbosity_merges_into_text():
     ],
 )
 def test_convert_chat_completion_messages_to_responses_api_normalizes_overlong_tool_call_ids(
-    tool_call_id: str,
+    tool_call_id: str | None,
     is_custom: bool,
 ):
-    """Overlong tool call IDs (> 64 chars) must be deterministically normalized to <= 64 characters."""
     import hashlib
+
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
 
     expected_id: Final = (
-        tool_call_id
+        None
+        if tool_call_id is None
+        else tool_call_id
         if len(tool_call_id) <= 64
         else f"{tool_call_id[:31]}_{hashlib.sha256(tool_call_id.encode('utf-8')).hexdigest()[:32]}"
     )
@@ -4428,7 +4431,8 @@ def test_convert_chat_completion_messages_to_responses_api_normalizes_overlong_t
         call_id = func_tool_call_item.get("call_id")
 
     assert call_id == expected_id
-    assert len(str(call_id)) <= 64
+    if call_id is not None:
+        assert len(str(call_id)) <= 64
 
     if is_custom:
         custom_output_item: Final = next(
@@ -4446,7 +4450,6 @@ def test_convert_chat_completion_messages_to_responses_api_normalizes_overlong_t
 
 
 def test_convert_chat_completion_messages_to_responses_api_overlong_collision_resistance():
-    """Two distinct overlong IDs with the same prefix must not produce collision."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
@@ -4483,8 +4486,8 @@ def test_convert_chat_completion_messages_to_responses_api_overlong_collision_re
 
 
 def test_convert_chat_completion_messages_to_responses_api_mixed_custom_and_function_output_types():
-    """Mixed custom and function tool call outputs must maintain respective types without collision."""
     import hashlib
+
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
