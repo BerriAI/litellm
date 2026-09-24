@@ -76,6 +76,7 @@ fn bedrock_image_catalog() -> ModelInfoCatalog {
 #[case::stability1_max_tier("stability.sd-zz-v1", Some("1024-x-1024"), json!({"steps": 60}), Ok(0.16))]
 #[case::stability1_missing_steps("stability.sd-zz-v1", Some("1024-x-1024"), json!({}), Ok(0.08))]
 #[case::stability1_default_size("stability.sd-zz-v1", None, json!({"steps": true}), Ok(0.08))]
+#[case::stability1_empty_size_uses_the_default("stability.sd-zz-v1", Some(""), json!({}), Ok(0.08))]
 #[case::stability1_null_steps("stability.sd-zz-v1", Some("1024-x-1024"), json!({"steps": null}), Err(CostError::InvalidSteps))]
 #[case::stability1_string_steps("stability.sd-zz-v1", Some("1024-x-1024"), json!({"steps": "60"}), Err(CostError::InvalidSteps))]
 #[case::stability1_keeps_the_routing_prefix_in_the_key(

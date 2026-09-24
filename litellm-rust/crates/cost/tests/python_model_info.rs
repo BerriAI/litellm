@@ -44,6 +44,11 @@ fn catalog() -> ModelInfoCatalog {
             provider("fireworks_ai"),
         ),
         ("gpt-4.1".to_owned(), provider("openai")),
+        ("amazon.zz-model".to_owned(), provider("bedrock")),
+        (
+            "zz-guardrail".to_owned(),
+            json!({"litellm_provider": "bedrock", "mode": "guardrail"}),
+        ),
         ("Mixed-Case-ZZ".to_owned(), provider("together_ai")),
         (
             "fallback_generalizations".to_owned(),
@@ -52,10 +57,28 @@ fn catalog() -> ModelInfoCatalog {
                 {"name": "zz-cap", "pattern": "zzcap-\\d+", "model_info": {"mode": "chat", "max_tokens": 10}},
                 {"name": "zz-cap2", "pattern": "zzcap-9", "model_info": {"max_tokens": 20}},
                 {
+                    "name": "zz-bad",
+                    "pattern": "^zzbad-",
+                    "model_info": {"mode": "chat"},
+                    "fill_missing_for_providers": "openai"
+                },
+                {
+                    "name": "zz-good",
+                    "pattern": "^zzgood-",
+                    "model_info": {"mode": "chat", "max_tokens": 5},
+                    "fill_missing_for_providers": ["openai"]
+                },
+                {
                     "name": "zz-legacy",
                     "pattern": "^legacy-zz",
                     "extends": "zz-cap",
                     "model_info": {"litellm_provider": "xai", "max_tokens": 30}
+                },
+                {
+                    "name": "zz-legacy-inherits",
+                    "pattern": "^legacy-yy",
+                    "extends": "zz-cap",
+                    "model_info": {"litellm_provider": "xai"}
                 }
             ]}),
         ),
@@ -130,6 +153,9 @@ type Resolved = Result<(&'static str, Option<&'static str>, Option<u64>), CostEr
 #[case::capability_backfills_the_provider("zzcap-9", Some("openai"), Ok(("openai/zzcap-9", Some("openai"), Some(20))))]
 #[case::routing_rule_alone_has_no_capabilities("zzroute-x", None, Err(CostError::ModelNotFound))]
 #[case::legacy_rule_routes_and_extends("legacy-zz-1", None, Ok(("legacy-zz-1", Some("xai"), Some(30))))]
+#[case::legacy_rule_inherits_parent_capabilities("legacy-yy-1", None, Ok(("legacy-yy-1", Some("xai"), Some(10))))]
+#[case::malformed_fill_missing_skips_the_rule("zzbad-1", None, Err(CostError::ModelNotFound))]
+#[case::listed_fill_missing_keeps_the_rule("zzgood-1", None, Ok(("zzgood-1", None, Some(5))))]
 #[case::unmapped("nothing-matches", None, Err(CostError::ModelNotFound))]
 fn get_model_info_resolves_keys_like_python(
     #[case] model: &str,
@@ -201,6 +227,9 @@ fn capability_rules_lose_to_an_exact_key_owned_by_another_provider() {
 #[case::json_registry_provider("gmi/any", Some("gmi"))]
 #[case::static_cohere_embedding("embed-v4.0", Some("cohere"))]
 #[case::static_openai_image("dall-e-3", Some("openai"))]
+#[case::finetune_pricing_key_is_not_a_chat_model("ft:gpt-yy", None)]
+#[case::bedrock_family("amazon.zz-model", Some("bedrock"))]
+#[case::bedrock_guardrail_is_not_a_model("zz-guardrail", None)]
 #[case::unroutable("GPT-ZZ", None)]
 fn get_llm_provider_infers_like_python(#[case] model: &str, #[case] expected: Option<&str>) {
     assert_eq!(
@@ -257,6 +286,122 @@ fn unmapped_models_price_through_capability_rules(
                 response_time_ms: None,
             },
         ),
+        expected
+    );
+}
+
+fn provider_list_catalog() -> ModelInfoCatalog {
+    let providers = [
+        "openai",
+        "text-completion-openai",
+        "cohere",
+        "cohere_chat",
+        "mistral",
+        "anthropic",
+        "empower",
+        "openrouter",
+        "vertex_ai-text-models",
+        "vertex_ai-code-text-models",
+        "vertex_ai-language-models",
+        "vertex_ai-vision-models",
+        "vertex_ai-chat-models",
+        "vertex_ai-code-chat-models",
+        "vertex_ai-embedding-models",
+        "vertex_ai-llama_models",
+        "vertex_ai-mistral_models",
+        "vertex_ai-ai21_models",
+        "vertex_ai-image-models",
+        "vertex_ai-video-models",
+        "nlp_cloud",
+        "aleph_alpha",
+        "bedrock",
+        "bedrock_converse",
+        "watsonx",
+        "gradient_ai",
+        "xai",
+    ];
+    let entries = providers
+        .into_iter()
+        .map(|provider| {
+            (
+                format!("zz-{provider}"),
+                json!({"litellm_provider": provider}),
+            )
+        })
+        .chain([
+            (
+                "vertex_ai/zz-vimg".to_owned(),
+                json!({"litellm_provider": "vertex_ai-image-models"}),
+            ),
+            (
+                "zz-ai21-chat".to_owned(),
+                json!({"litellm_provider": "ai21", "mode": "chat"}),
+            ),
+            (
+                "zz-ai21-text".to_owned(),
+                json!({"litellm_provider": "ai21", "mode": "completion"}),
+            ),
+            (
+                "claude-2".to_owned(),
+                json!({"litellm_provider": "anthropic"}),
+            ),
+        ])
+        .collect();
+    ModelInfoCatalog::new(entries)
+}
+
+// expected values recorded from get_llm_provider after add_known_models() folds this catalog into the model lists
+#[rstest]
+#[case::claude_2("claude-2", Some("anthropic_text"))]
+#[case::vertex_ai_zz_vimg("vertex_ai/zz-vimg", Some("vertex_ai"))]
+#[case::zz_ai21_chat("zz-ai21-chat", Some("ai21_chat"))]
+#[case::zz_ai21_text("zz-ai21-text", Some("ai21_chat"))]
+#[case::zz_aleph_alpha("zz-aleph_alpha", Some("aleph_alpha"))]
+#[case::zz_anthropic("zz-anthropic", Some("anthropic"))]
+#[case::zz_bedrock("zz-bedrock", Some("bedrock"))]
+#[case::zz_bedrock_converse("zz-bedrock_converse", Some("bedrock"))]
+#[case::zz_cohere("zz-cohere", Some("cohere"))]
+#[case::zz_cohere_chat("zz-cohere_chat", Some("cohere_chat"))]
+#[case::zz_empower("zz-empower", Some("empower"))]
+#[case::zz_gradient_ai("zz-gradient_ai", Some("gradient_ai"))]
+#[case::zz_mistral("zz-mistral", None)]
+#[case::zz_nlp_cloud("zz-nlp_cloud", Some("nlp_cloud"))]
+#[case::zz_openai("zz-openai", Some("openai"))]
+#[case::zz_openrouter("zz-openrouter", Some("openrouter"))]
+#[case::zz_text_completion_openai("zz-text-completion-openai", Some("text-completion-openai"))]
+#[case::zz_vertex_ai_ai21_models("zz-vertex_ai-ai21_models", None)]
+#[case::zz_vertex_ai_chat_models("zz-vertex_ai-chat-models", Some("vertex_ai"))]
+#[case::zz_vertex_ai_code_chat_models("zz-vertex_ai-code-chat-models", Some("vertex_ai"))]
+#[case::zz_vertex_ai_code_text_models("zz-vertex_ai-code-text-models", Some("vertex_ai"))]
+#[case::zz_vertex_ai_embedding_models("zz-vertex_ai-embedding-models", Some("vertex_ai"))]
+#[case::zz_vertex_ai_image_models("zz-vertex_ai-image-models", Some("vertex_ai"))]
+#[case::zz_vertex_ai_language_models("zz-vertex_ai-language-models", Some("vertex_ai"))]
+#[case::zz_vertex_ai_llama_models("zz-vertex_ai-llama_models", None)]
+#[case::zz_vertex_ai_mistral_models("zz-vertex_ai-mistral_models", None)]
+#[case::zz_vertex_ai_text_models("zz-vertex_ai-text-models", Some("vertex_ai"))]
+#[case::zz_vertex_ai_video_models("zz-vertex_ai-video-models", Some("vertex_ai"))]
+#[case::zz_vertex_ai_vision_models("zz-vertex_ai-vision-models", Some("vertex_ai"))]
+#[case::zz_watsonx("zz-watsonx", Some("watsonx"))]
+#[case::zz_xai("zz-xai", None)]
+#[case::zz_vimg("zz-vimg", Some("vertex_ai"))]
+#[case::bytez_x("bytez/x", Some("bytez"))]
+#[case::amazon_nova_x("amazon_nova-x", Some("amazon_nova"))]
+#[case::sap_x("sap/x", Some("sap"))]
+#[case::gpt_image_9("gpt-image-9", Some("openai"))]
+#[case::sora_2("sora-2", Some("openai"))]
+#[case::ft_gpt_4o_o_1("ft:gpt-4o:o::1", Some("openai"))]
+#[case::ft_gpt_3_5_turbo_o_1("ft:gpt-3.5-turbo:o::1", Some("openai"))]
+#[case::replicate_64_char_version_id(&*format!("owner/m:{}b", "a".repeat(63)), Some("replicate"))]
+#[case::long_id_that_is_not_a_replicate_version(&*format!("owner/m:{}", "a".repeat(70)), None)]
+fn get_llm_provider_routes_every_model_list_like_python(
+    #[case] model: &str,
+    #[case] expected: Option<&str>,
+) {
+    assert_eq!(
+        provider_list_catalog()
+            .get_llm_provider(model)
+            .map(|resolved| resolved.custom_llm_provider)
+            .as_deref(),
         expected
     );
 }

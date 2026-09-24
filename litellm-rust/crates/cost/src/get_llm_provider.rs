@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use regex::Regex;
 use serde_json::Value;
 
 use crate::fallback_generalizations::FallbackGeneralizations;
@@ -45,10 +44,6 @@ static JSON_PROVIDERS: LazyLock<HashSet<String>> = LazyLock::new(|| {
     .collect()
 });
 
-static BEDROCK_PRICING_ONLY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^bedrock/[a-zA-Z0-9_-]+/.+$").expect("valid bedrock pricing pattern")
-});
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ModelList {
     OpenAiChatCompletion,
@@ -85,10 +80,6 @@ fn is_openai_finetune_model(key: &str) -> bool {
     key.starts_with("ft:") && key.matches(':').count() <= 1
 }
 
-fn is_bedrock_pricing_only_model(key: &str) -> bool {
-    BEDROCK_PRICING_ONLY.is_match(key)
-}
-
 fn vertex_member(key: &str) -> String {
     key.replace("vertex_ai/", "")
 }
@@ -122,7 +113,7 @@ fn model_list_membership(key: &str, info: &Value) -> Option<(ModelList, String)>
         "nlp_cloud" => ModelList::NlpCloud,
         "aleph_alpha" => ModelList::AlephAlpha,
         "bedrock" if mode == Some("guardrail") => return None,
-        "bedrock" if !is_bedrock_pricing_only_model(key) => ModelList::Bedrock,
+        "bedrock" => ModelList::Bedrock,
         "bedrock_converse" => ModelList::BedrockConverse,
         "watsonx" => ModelList::Watsonx,
         "gradient_ai" => ModelList::GradientAi,
