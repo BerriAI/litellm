@@ -6,6 +6,7 @@ from collections.abc import Coroutine, Mapping
 from typing import Final
 
 import litellm
+from litellm._internal_context import is_internal_call
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -113,9 +114,13 @@ class LiteLLMCompletionTransformationHandler:
         acompletion_args.update(litellm_completion_request)
         acompletion_args["_skip_responses_api_bridge"] = True
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **acompletion_args,
-        )
+        token: Final = is_internal_call.set(True)
+        try:
+            litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
+                **acompletion_args
+            )
+        finally:
+            is_internal_call.reset(token)
 
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (

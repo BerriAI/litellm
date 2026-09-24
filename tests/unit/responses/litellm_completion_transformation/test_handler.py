@@ -21,6 +21,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm._internal_context import is_internal_call
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
@@ -55,12 +56,13 @@ def test_sync_fallback_tags_skip_responses_api_bridge():
 
 
 @pytest.mark.asyncio
-async def test_async_fallback_tags_skip_responses_api_bridge():
+async def test_async_fallback_tags_internal_call_and_skip_responses_api_bridge():
     handler = LiteLLMCompletionTransformationHandler()
     captured: dict = {}
 
     async def fake_acompletion(**kwargs):
         captured.update(kwargs)
+        captured["is_internal_call"] = is_internal_call.get()
         raise _StopForwarding()
 
     with patch("litellm.acompletion", fake_acompletion):
@@ -75,6 +77,8 @@ async def test_async_fallback_tags_skip_responses_api_bridge():
             await coro
 
     assert captured.get("_skip_responses_api_bridge") is True
+    assert captured["is_internal_call"] is True
+    assert is_internal_call.get() is False
 
 
 _CODEX_ADDITIONAL_TOOLS_ITEM = {
