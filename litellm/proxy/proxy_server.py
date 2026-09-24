@@ -702,6 +702,7 @@ from litellm.proxy.middleware.admission_control_middleware import (
     admission_control_state,
     get_admission_control_settings,
 )
+from litellm.proxy.middleware.gunzip_request_middleware import GunzipRequestMiddleware
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -2359,6 +2360,11 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
+app.add_middleware(
+    GunzipRequestMiddleware,
+    get_max_size=lambda: general_settings.get("max_request_size_mb"),
+    is_premium=lambda: premium_user is True,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
