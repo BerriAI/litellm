@@ -48,6 +48,7 @@ import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, MetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
+import { fillMissingDates } from "@/components/UsagePage/utils/fill_missing_dates";
 import {
   fetchedRangeKey,
   selectForRange,
@@ -428,8 +429,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   );
 
   const sortedDailyResults = useMemo(
-    () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
-    [userSpendData.results],
+    () =>
+      fillMissingDates(
+        [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+        dateValue.from,
+        dateValue.to,
+      ),
+    [userSpendData.results, dateValue.from, dateValue.to],
   );
   const gatewayRequestsByRoute = useMemo(() => topGatewayRoutes(gatewayActivity), [gatewayActivity]);
   const modelMetrics = useMemo(

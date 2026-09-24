@@ -24,7 +24,8 @@ beforeAll(() => {
 });
 
 // Mock the networking module
-vi.mock("@/components/networking", () => ({
+vi.mock("@/components/networking", async (importOriginal) => ({
+  formatDate: (await importOriginal<typeof import("@/components/networking")>()).formatDate,
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
@@ -167,10 +168,14 @@ describe("UsagePage", () => {
   const mockUseCurrentUser = vi.mocked(useCurrentUser);
   const mockUseInfiniteUsers = vi.mocked(useInfiniteUsers);
 
+  const now = new Date();
+  const today = networking.formatDate(now);
+  const yesterday = networking.formatDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+
   const mockSpendData = {
     results: [
       {
-        date: "2025-01-01",
+        date: today,
         metrics: {
           spend: 125.75,
           api_requests: 1500,
@@ -548,7 +553,8 @@ describe("UsagePage", () => {
     const fills = new Set(spendBars().map((rect) => rect.getAttribute("fill")));
     expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
 
-    expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(today).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(yesterday).length).toBeGreaterThan(0);
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
   });
 
