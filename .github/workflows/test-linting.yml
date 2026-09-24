@@ -4,8 +4,6 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
 
 permissions:
@@ -129,6 +127,10 @@ jobs:
           git log --oneline -3
           echo "File content around line 43:"
           head -50 litellm/litellm_core_utils/custom_logger_registry.py | tail -10
+
+      - name: Check MCP operation boundary
+        if: steps.changes.outputs.decision != 'skip'
+        run: uv run --no-sync python scripts/check_mcp_operation_boundary.py
 
       - name: Run Ruff linting
         if: steps.changes.outputs.decision != 'skip'

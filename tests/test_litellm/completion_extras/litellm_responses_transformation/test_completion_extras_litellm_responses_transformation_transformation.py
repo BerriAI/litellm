@@ -2,7 +2,7 @@ import datetime
 import json
 import os
 import unittest
-from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
@@ -12,6 +12,7 @@ import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
+from litellm.types.llms.openai import REASONING_EFFORT
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
@@ -830,6 +831,24 @@ def test_convert_tools_to_responses_format():
     assert result[0]["name"] == "test"
 
 
+def test_convert_tools_to_responses_format_passes_flat_function_tool_through():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    flat_tool = {
+        "type": "function",
+        "name": "shell",
+        "description": "Run a shell command",
+        "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]},
+    }
+
+    converted = handler._convert_tools_to_responses_format([flat_tool])
+
+    assert converted == [flat_tool]
+
+
 def test_extract_extra_body_params_reasoning_effort_override():
     """Test that reasoning_effort from extra_body overrides top-level reasoning_effort"""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -1597,17 +1616,6 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
-
-        # Test 5: every REASONING_EFFORT level reaches the provider, and anything else (a typo, an
-        # unshipped level, "default") is dropped so the request still succeeds at the provider default
-        from litellm.types.llms.openai import Reasoning
-
-        for effort in ("max", "xhigh", "none"):
-            result_passthrough = handler._map_reasoning_effort(effort)
-            assert result_passthrough == Reasoning(effort=effort)
-        for dropped in ("ultra", "hgih", "unknown_value", "", "default"):
-            assert handler._map_reasoning_effort(dropped) is None
-        print("✓ Enumerated levels pass through and unknown ones are dropped")
 
         print(
             "✓ All reasoning_effort behaviors work correctly with flag/env var control"
@@ -2481,6 +2489,30 @@ def test_transform_request_bedrock_mantle_tools_keeps_reasoning_effort(monkeypat
     )
 
     assert result["reasoning"] == {"effort": reasoning_effort}
+
+
+@pytest.mark.parametrize(
+    "reasoning_effort",
+    [5, ["low"], "hgih", "", {"effort": 5}, {"effort": "max"}, *get_args(REASONING_EFFORT)],
+)
+def test_transform_request_never_drops_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, reasoning_effort: int | list[str] | str | dict[str, object]
+):
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    expected_effort: Final = reasoning_effort["effort"] if isinstance(reasoning_effort, dict) else reasoning_effort
+
+    result: Final = handler.transform_request(
+        model="gpt-5.4",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"reasoning_effort": reasoning_effort},
+        litellm_params={"custom_llm_provider": "openai"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert result["reasoning"]["effort"] == expected_effort
 
 
 def test_map_optional_params_tool_choice_chat_nested_to_responses_api():

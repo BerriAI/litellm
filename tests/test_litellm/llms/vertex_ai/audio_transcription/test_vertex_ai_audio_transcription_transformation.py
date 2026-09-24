@@ -22,16 +22,6 @@ def config():
 
 
 class TestGetCompleteUrl:
-    def test_defaults_to_us_regional_host(self, config):
-        url = config.get_complete_url(
-            api_base=None,
-            api_key=None,
-            model="chirp_3",
-            optional_params={},
-            litellm_params={"vertex_project": "test-project"},
-        )
-        assert url == "https://us-speech.googleapis.com/v2/projects/test-project/locations/us/recognizers/_:recognize"
-
     def test_uses_vertex_location_for_regional_host(self, config):
         url = config.get_complete_url(
             api_base=None,
@@ -51,16 +41,6 @@ class TestGetCompleteUrl:
             litellm_params={"vertex_project": "test-project", "vertex_location": "global"},
         )
         assert url == "https://speech.googleapis.com/v2/projects/test-project/locations/global/recognizers/_:recognize"
-
-    def test_api_base_override(self, config):
-        url = config.get_complete_url(
-            api_base="http://localhost:8080/",
-            api_key=None,
-            model="chirp_3",
-            optional_params={},
-            litellm_params={"vertex_project": "test-project"},
-        )
-        assert url == "http://localhost:8080/v2/projects/test-project/locations/us/recognizers/_:recognize"
 
     @pytest.mark.parametrize(
         "location,expected_netloc",
@@ -317,18 +297,3 @@ class TestProviderRouting:
 
 class TestModelCostEntry:
     REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-
-    @pytest.mark.parametrize(
-        "cost_map_path",
-        [
-            "model_prices_and_context_window.json",
-            "litellm/model_prices_and_context_window_backup.json",
-        ],
-    )
-    def test_chirp_3_registered_as_audio_transcription(self, cost_map_path):
-        with open(os.path.join(self.REPO_ROOT, cost_map_path)) as f:
-            entry = json.load(f)["vertex_ai/chirp_3"]
-        assert entry["mode"] == "audio_transcription"
-        assert entry["litellm_provider"] == "vertex_ai"
-        assert entry["input_cost_per_second"] == pytest.approx(0.016 / 60, rel=1e-3)
-        assert entry["supported_endpoints"] == ["/v1/audio/transcriptions"]

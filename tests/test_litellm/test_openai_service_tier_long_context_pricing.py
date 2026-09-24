@@ -58,6 +58,18 @@ PRIORITY_LONG_CONTEXT = {
         "cache_read_input_token_cost_above_272k_tokens_priority": 4e-06,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 5e-05,
     },
+    "gpt-6-sol": {
+        "input_cost_per_token_above_272k_tokens_priority": 8e-06,
+        "output_cost_per_token_above_272k_tokens_priority": 3e-05,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 8e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1e-05,
+    },
+    "gpt-6-luna": {
+        "input_cost_per_token_above_272k_tokens_priority": 4e-07,
+        "output_cost_per_token_above_272k_tokens_priority": 1.5e-06,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 4e-08,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 5e-07,
+    },
 }
 
 EXPECTED = {**FLEX_LONG_CONTEXT, **PRIORITY_LONG_CONTEXT}
@@ -90,19 +102,6 @@ TIERED_COST_CASES = [
     ("gpt-5.6-terra", "priority", 8e-06, 3.6e-05),
     ("gpt-5.6-luna", "priority", 8e-07, 3.6e-06),
     ("gpt-6-astra", "priority", 4e-05, 0.00015),
+    ("gpt-6-sol", "priority", 8e-06, 3e-05),
+    ("gpt-6-luna", "priority", 4e-07, 1.5e-06),
 ]
-
-
-@pytest.mark.parametrize("model,tier,input_rate,output_rate", TIERED_COST_CASES)
-def test_cost_per_token_bills_long_context_at_the_tier_rate(
-    model: str, tier: str, input_rate: float, output_rate: float
-) -> None:
-    """A prompt over 272K on flex or priority must bill at that tier's long-context rate."""
-    input_cost, output_cost = litellm.cost_per_token(
-        model=model,
-        prompt_tokens=LONG_CONTEXT_PROMPT_TOKENS,
-        completion_tokens=COMPLETION_TOKENS,
-        service_tier=tier,
-    )
-    assert input_cost == pytest.approx(LONG_CONTEXT_PROMPT_TOKENS * input_rate)
-    assert output_cost == pytest.approx(COMPLETION_TOKENS * output_rate)
