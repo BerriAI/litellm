@@ -22,6 +22,7 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
 from litellm.llms.brave.search.transformation import BraveSearchConfig
@@ -262,6 +263,7 @@ def test_prepare_fake_stream_request():
 def test_response_api_handler_streams_when_provider_transform_adds_stream():
     handler = BaseLLMHTTPHandler()
     config = Mock()
+    config.merge_extra_body = BaseResponsesAPIConfig.merge_extra_body.__get__(config)
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
     config.transform_responses_api_request.return_value = {
@@ -297,6 +299,7 @@ def test_response_api_handler_streams_when_provider_transform_adds_stream():
 def test_response_api_handler_runs_agentic_hooks_in_sync_path(monkeypatch):
     handler = BaseLLMHTTPHandler()
     config = Mock()
+    config.merge_extra_body = BaseResponsesAPIConfig.merge_extra_body.__get__(config)
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
     config.transform_responses_api_request.return_value = {
@@ -341,6 +344,7 @@ def test_response_api_handler_runs_agentic_hooks_in_sync_path(monkeypatch):
 def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
     handler = BaseLLMHTTPHandler()
     config = Mock()
+    config.merge_extra_body = BaseResponsesAPIConfig.merge_extra_body.__get__(config)
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://api.openai.com/v1/responses"
     config.sign_request.return_value = ({}, None)
@@ -405,6 +409,7 @@ def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
 async def test_async_response_api_handler_streams_when_provider_transform_adds_stream():
     handler = BaseLLMHTTPHandler()
     config = Mock()
+    config.merge_extra_body = BaseResponsesAPIConfig.merge_extra_body.__get__(config)
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
     config.async_transform_responses_api_request = AsyncMock(
@@ -443,6 +448,7 @@ async def test_async_response_api_handler_streaming_passes_logging_obj_to_post()
     test_async_responses_records_llm_api_duration below)."""
     handler = BaseLLMHTTPHandler()
     config = Mock()
+    config.merge_extra_body = BaseResponsesAPIConfig.merge_extra_body.__get__(config)
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
     config.async_transform_responses_api_request = AsyncMock(
@@ -478,6 +484,7 @@ async def test_async_response_api_handler_posts_the_async_transform_hook_result(
     overrides the async hook; the async handler has to send that result, not the sync one."""
     handler = BaseLLMHTTPHandler()
     config = Mock()
+    config.merge_extra_body = BaseResponsesAPIConfig.merge_extra_body.__get__(config)
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
     config.async_transform_responses_api_request = AsyncMock(
@@ -1732,6 +1739,7 @@ def _make_responses_handler_call(signed_body):
     from litellm.types.router import GenericLiteLLMParams
 
     provider_config = MagicMock()
+    provider_config.merge_extra_body = BaseResponsesAPIConfig.merge_extra_body.__get__(provider_config)
     provider_config.validate_environment.return_value = {}
     provider_config.get_complete_url.return_value = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
     provider_config.transform_responses_api_request.return_value = {"input": "hi"}
@@ -1788,6 +1796,7 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
     from litellm.types.router import GenericLiteLLMParams
 
     provider_config = MagicMock()
+    provider_config.merge_extra_body = BaseResponsesAPIConfig.merge_extra_body.__get__(provider_config)
     provider_config.validate_environment.return_value = {}
     provider_config.get_complete_url.return_value = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
     provider_config.transform_responses_api_request.return_value = {
@@ -1851,6 +1860,7 @@ def _make_compact_handler_call(signed_body, is_async):
 
     compact_url = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses/compact"
     provider_config = MagicMock()
+    provider_config.merge_extra_body = BaseResponsesAPIConfig.merge_extra_body.__get__(provider_config)
     provider_config.validate_environment.return_value = {}
     provider_config.get_complete_url.return_value = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
     provider_config.transform_compact_response_api_request.return_value = (
