@@ -4369,3 +4369,22 @@ def test_response_completed_carries_the_served_service_tier():
     )
 
     assert result.model_dump()["service_tier"] == "default"
+
+
+def test_every_bridged_chunk_after_response_created_carries_the_served_service_tier():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    events = [
+        {"type": "response.created", "response": {"id": "resp_1", "status": "in_progress", "service_tier": "default"}},
+        {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message"}},
+        {"type": "response.output_text.delta", "output_index": 0, "delta": "Hi"},
+        {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message"}},
+        {"type": "response.completed", "response": {"id": "resp_1", "status": "completed", "output": []}},
+    ]
+
+    relayed = [iterator.chunk_parser(event).model_dump().get("service_tier") for event in events]
+
+    assert relayed == ["default"] * len(events), relayed

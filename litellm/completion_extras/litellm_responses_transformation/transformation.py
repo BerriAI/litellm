@@ -1334,6 +1334,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._chat_completion_id: str | None = None
+        self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
 
     def _handle_string_chunk(
@@ -1645,11 +1646,27 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ModelResponseStream: OpenAI-formatted streaming chunk
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
-        return self._with_stream_scoped_id(
-            OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                chunk, tool_call_index_map=self._tool_call_index_map
+        self._remember_served_service_tier(chunk)
+        return self._with_served_service_tier(
+            self._with_stream_scoped_id(
+                OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+                    chunk, tool_call_index_map=self._tool_call_index_map
+                )
             )
         )
+
+    def _remember_served_service_tier(self, chunk: dict[str, object]) -> None:
+        response_payload: Final = chunk.get("response")
+        if not isinstance(response_payload, dict):
+            return
+        served_tier: Final = response_payload.get("service_tier")
+        if isinstance(served_tier, str) and served_tier:
+            self._served_service_tier = served_tier
+
+    def _with_served_service_tier(self, chunk: "ModelResponseStream") -> "ModelResponseStream":
+        if self._served_service_tier is not None and chunk.model_dump().get("service_tier") is None:
+            setattr(chunk, "service_tier", self._served_service_tier)  # noqa: B010  # pydantic extra, not a declared field
+        return chunk
 
     def _with_stream_scoped_id(self, chunk: "ModelResponseStream") -> "ModelResponseStream":
         if self._chat_completion_id is None:
