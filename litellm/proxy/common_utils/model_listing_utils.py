@@ -294,7 +294,7 @@ class TeamModelNameTranslator:
 
     @staticmethod
     def _response_to_lookup_map(
-        model_names: list[str],
+        model_names: Sequence[str],
         internal_to_public: dict[str, str],
     ) -> dict[str, str]:
         """Map each public response id to the first internal lookup id seen in
@@ -311,7 +311,7 @@ class TeamModelNameTranslator:
 
     @staticmethod
     def listing_entries(
-        model_names: list[str],
+        model_names: Sequence[str],
         llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> list[tuple[str, str]]:

@@ -11419,7 +11419,7 @@ async def model_info(
         frozenset(
             response_id
             for response_id, _ in TeamModelNameTranslator.listing_entries(
-                [m for m in all_models if m not in undiscoverable_names], llm_router, settings
+                tuple(m for m in all_models if m not in undiscoverable_names), llm_router, settings
             )
         ),
     )
