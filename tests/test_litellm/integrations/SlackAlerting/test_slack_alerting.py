@@ -526,3 +526,29 @@ async def test_async_send_batch_collapses_only_identical_alerts() -> None:
         {"text": f"[Num Alerts: 2]\n\n{THRESHOLD_ALERT}"},
         {"text": CROSSED_ALERT},
     )
+
+
+def _periodic_flush_tasks() -> list[asyncio.Task[object]]:
+    return [
+        t
+        for t in asyncio.all_tasks()
+        if t.get_coro() is not None and t.get_coro().__qualname__ == "SlackAlerting.periodic_flush"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_values_repeated_alerting_reload_keeps_single_periodic_flush_task() -> None:
+    slack_alerting: Final = SlackAlerting(alerting=["slack"])
+    try:
+        for _ in range(5):
+            slack_alerting.update_values(alerting=["slack"])
+        await asyncio.sleep(0)
+        flush_tasks: Final = _periodic_flush_tasks()
+        assert len(flush_tasks) == 1, f"expected 1 periodic_flush task, found {len(flush_tasks)}"
+    finally:
+        for t in _periodic_flush_tasks():
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
