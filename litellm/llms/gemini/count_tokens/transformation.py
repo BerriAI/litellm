@@ -8,6 +8,7 @@ and would drop tool_calls, tool messages, and web search tool declarations.
 """
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, cast
@@ -51,14 +52,14 @@ _ANTHROPIC_PART_TYPES: Final = frozenset(
     }
 )
 
-_ANTHROPIC_TOOL_TYPE_PREFIXES: Final = (
-    "web_search_",
-    "web_fetch_",
-    "code_execution_",
-    "computer_",
-    "text_editor_",
-    "bash_",
-    "mcp_",
+# Anthropic hosted tools are date-versioned (web_search_20250305). OpenAI
+# names like web_search_preview or computer_use must not match, so prefixes
+# are excluded unless they carry a date suffix.
+_ANTHROPIC_TOOL_TYPE_NAMES: Final = frozenset(
+    {"web_search", "web_fetch", "code_execution", "computer", "text_editor", "bash", "mcp_toolset"}
+)
+_ANTHROPIC_TOOL_TYPE_RE: Final = re.compile(
+    r"^(web_search|web_fetch|code_execution|computer|text_editor|bash|mcp_toolset)_\d{8}$"
 )
 
 # Server-side Anthropic content blocks the anthropic->openai adapter drops, so
@@ -126,7 +127,9 @@ def _has_anthropic_shape(
             if "input_schema" in tool:
                 return True
             tool_type = tool.get("type")
-            if isinstance(tool_type, str) and tool_type.startswith(_ANTHROPIC_TOOL_TYPE_PREFIXES):
+            if isinstance(tool_type, str) and (
+                tool_type in _ANTHROPIC_TOOL_TYPE_NAMES or _ANTHROPIC_TOOL_TYPE_RE.match(tool_type)
+            ):
                 return True
     return False
 
@@ -423,3 +426,61 @@ def build_count_tokens_payload(
     if _has_anthropic_shape(system=system, tools=tools, messages=messages):
         return _build_anthropic_payload(model=model, messages=messages, system=system, tools=tools)
     return _build_openai_payload(model=model, messages=messages, system=system, tools=tools)
+
+
+# Matches real inlineData blobs; a short or non-base64 `data` field (tool args,
+# function responses) stays text so the fallback count keeps its mass.
+_BASE64_BLOB_RE: Final = re.compile(r"[A-Za-z0-9+/=]{16,}")
+
+
+def _elide_data_key(obj: dict[str, object]) -> dict[str, object]:
+    """json.loads object_hook that replaces base64 blobs (inlineData.data)
+    so serialized parts stay a sane size for the local tokenizer."""
+    return {  # mutable-ok: object_hook contract returns a rebuilt object per JSON node
+        key: ("<binary>" if key == "data" and isinstance(value, str) and _BASE64_BLOB_RE.fullmatch(value) else value)
+        for key, value in obj.items()
+    }
+
+
+def _serialize_part(part: object) -> str:
+    return json.dumps(json.loads(json.dumps(part, default=str), object_hook=_elide_data_key), default=str)
+
+
+def _part_to_text(part: object) -> str:
+    if isinstance(part, Mapping) and isinstance(part.get("text"), str):
+        return part["text"]
+    return _serialize_part(part)
+
+
+def _content_parts(content: Mapping[str, object]) -> tuple[object, ...]:
+    parts: Final = content.get("parts")
+    if isinstance(parts, list):
+        return tuple(parts)
+    return (content,)
+
+
+def gemini_contents_as_chat_messages(contents: object) -> tuple[Mapping[str, object], ...] | None:
+    """Approximate gemini contents as chat messages for the local fallback
+    tokenizer. Text parts count as text; other parts count as their JSON
+    frame with base64 blobs elided."""
+    if contents is None:
+        return None
+    if isinstance(contents, list):
+        messages: Final = tuple(
+            {  # mutable-ok: transient chat-shaped message for the local tokenizer
+                "role": "assistant" if content.get("role") == "model" else "user",
+                "content": "\n".join(_part_to_text(part) for part in _content_parts(content)),
+            }
+            for content in contents
+            if isinstance(content, Mapping)
+        )
+        counted: Final = tuple(message for message in messages if message["content"])
+        if counted:
+            return counted
+    fallback: Final[tuple[Mapping[str, object], ...]] = (
+        {  # mutable-ok: transient chat-shaped message for the local tokenizer
+            "role": "user",
+            "content": _serialize_part(contents),
+        },
+    )
+    return fallback

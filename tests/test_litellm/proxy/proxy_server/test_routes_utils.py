@@ -412,9 +412,9 @@ def test_token_counter_contents_only_request_counts_text_parts(client, auth_as, 
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
     contents = [
-        {"role": "user", "parts": [{"text": "hello world"}, {"inline_data": {"data": "abc"}}]},
+        {"role": "user", "parts": [{"text": "hello world"}, {"inline_data": {"data": "QUJDREVGR0hJSktMTU5PUFFSUw=="}}]},
         {"role": "model", "parts": [{"text": "hi there"}]},
-        {"role": "user", "parts": [{"inline_data": {"data": "abc"}}]},
+        {"role": "user", "parts": [{"inline_data": {"data": "QUJDREVGR0hJSktMTU5PUFFSUw=="}}]},
     ]
 
     with auth_as():
@@ -437,8 +437,11 @@ def test_token_counter_media_only_contents_falls_back_instead_of_500(client, aut
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
     contents = [
-        {"role": "user", "parts": [{"inline_data": {"mime_type": "image/png", "data": "aGVsbG8="}}]},
-        {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {"city": "sf"}}}]},
+        {"role": "user", "parts": [{"inline_data": {"mime_type": "image/png", "data": "QUJDREVGR0hJSktMTU5PUFFSUw=="}}]},
+        {
+            "role": "model",
+            "parts": [{"function_call": {"name": "get_weather", "args": {"city": "sf", "data": "daily notes"}}}],
+        },
     ]
 
     with auth_as():
@@ -449,6 +452,9 @@ def test_token_counter_media_only_contents_falls_back_instead_of_500(client, aut
         model="claude-fable-5",
         messages=[
             {"role": "user", "content": '{"inline_data": {"mime_type": "image/png", "data": "<binary>"}}'},
-            {"role": "assistant", "content": '{"function_call": {"name": "get_weather", "args": {"city": "sf"}}}'},
+            {
+                "role": "assistant",
+                "content": '{"function_call": {"name": "get_weather", "args": {"city": "sf", "data": "daily notes"}}}',
+            },
         ],
     )

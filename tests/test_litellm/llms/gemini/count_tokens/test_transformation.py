@@ -119,6 +119,39 @@ def test_build_count_tokens_payload_maps_openai_web_search_tool():
     assert payload.tools == [{"googleSearch": {}}]
 
 
+def test_build_count_tokens_payload_routes_openai_tool_types_to_openai_path():
+    """Regression: web_search_preview and computer_use are OpenAI tool types;
+    they must not trip the anthropic shape detector (which drops tool_calls)."""
+    payload = build_count_tokens_payload(
+        model="gemini-2.5-flash",
+        messages=[
+            {"role": "user", "content": "check it"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "content": "sunny", "tool_call_id": "call_1"},
+        ],
+        system=None,
+        tools=[
+            {"type": "web_search_preview"},
+            {"type": "computer_use", "display_width": 1024, "display_height": 768},
+        ],
+    )
+
+    function_call = payload.contents[1]["parts"][0].get("function_call")
+    assert function_call == {"name": "get_weather", "args": {"city": "Paris"}}
+    function_response = payload.contents[2]["parts"][0].get("function_response")
+    assert function_response["name"] == "get_weather"
+
+
 def test_build_count_tokens_payload_wraps_responses_api_tool():
     payload = build_count_tokens_payload(
         model="gemini-2.5-flash",

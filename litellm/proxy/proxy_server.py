@@ -13333,6 +13333,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.gemini.count_tokens.transformation import gemini_contents_as_chat_messages
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -13459,58 +13460,6 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     return message
 
 
-def _elide_data_key(obj: dict[str, object]) -> dict[str, object]:
-    """json.loads object_hook that replaces base64 blobs (inlineData.data)
-    so serialized parts stay a sane size for the local tokenizer."""
-    return {  # mutable-ok: object_hook contract returns a rebuilt object per JSON node
-        key: ("<binary>" if key == "data" and isinstance(value, str) else value) for key, value in obj.items()
-    }
-
-
-def _serialize_part(part: object) -> str:
-    return json.dumps(json.loads(json.dumps(part, default=str), object_hook=_elide_data_key), default=str)
-
-
-def _part_to_text(part: object) -> str:
-    if isinstance(part, Mapping) and isinstance(part.get("text"), str):
-        return part["text"]
-    return _serialize_part(part)
-
-
-def _content_parts(content: Mapping[str, object]) -> tuple[object, ...]:
-    parts: Final = content.get("parts")
-    if isinstance(parts, list):
-        return tuple(parts)
-    return (content,)
-
-
-def _contents_as_messages(contents: object) -> tuple[Mapping[str, object], ...] | None:
-    """Approximate gemini contents as chat messages for the local fallback
-    tokenizer. Text parts count as text; other parts count as their JSON
-    frame with base64 blobs elided."""
-    if contents is None:
-        return None
-    if isinstance(contents, list):
-        messages: Final = tuple(
-            {  # mutable-ok: transient chat-shaped message for the local tokenizer
-                "role": "assistant" if content.get("role") == "model" else "user",
-                "content": "\n".join(_part_to_text(part) for part in _content_parts(content)),
-            }
-            for content in contents
-            if isinstance(content, Mapping)
-        )
-        counted: Final = tuple(message for message in messages if message["content"])
-        if counted:
-            return counted
-    fallback: Final[tuple[Mapping[str, object], ...]] = (
-        {  # mutable-ok: transient chat-shaped message for the local tokenizer
-            "role": "user",
-            "content": _serialize_part(contents),
-        },
-    )
-    return fallback
-
-
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
@@ -13614,7 +13563,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     system_message: Final = _system_message(system)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        messages if messages is not None else _contents_as_messages(contents),
+        messages if messages is not None else gemini_contents_as_chat_messages(contents),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
