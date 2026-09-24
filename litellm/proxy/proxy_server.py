@@ -3442,11 +3442,10 @@ async def _prepare_spend_counter_increment(
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
-    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
-       check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment means the worst case
-       is over-counting (conservative, blocks slightly early) rather than
-       under-counting (would allow overspend).
+    3. Seed counter via `_seed_spend_counter_from_source_cache`, so concurrent
+       cold seeds on this pod or across pods add the cached spend once instead
+       of once per seeding request, while increments that landed on the cold
+       key before any seed are kept on top of it.
     4. Increment is returned for the caller to apply via pipeline
     """
     await _ensure_spend_counter_initialized(
@@ -3549,7 +3548,33 @@ async def _ensure_spend_counter_initialized(
             # DB unavailable - fall back to in-process cache (may be stale).
             base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
             if base_spend > 0:
-                await _increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
+                await _seed_spend_counter_from_source_cache(counter_key=counter_key, base_spend=base_spend)
+
+
+def _seeded_spend(current: object, base_spend: float) -> float:
+    if not isinstance(current, (int, float)):
+        return base_spend
+    return float(current) if current >= base_spend else current + base_spend
+
+
+async def _seed_spend_counter_from_source_cache(counter_key: str, base_spend: float) -> None:
+    redis_cache: Final = spend_counter_cache.redis_cache
+    if redis_cache is None:
+        seeded: Final = _seeded_spend(
+            current=spend_counter_cache.in_memory_cache.get_cache(key=counter_key), base_spend=base_spend
+        )
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=seeded)
+        return
+    try:
+        current_value: Final = await redis_cache.async_seed_spend_counter(key=counter_key, base=base_spend)
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Atomic seed of spend counter %s failed, falling back to increment", counter_key, exc_info=True
+        )
+        await _increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
+        return
+    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=current_value)
+    record_spend_counter_value(counter_key, current_value)
 
 
 async def _get_source_cache_base_spend(
