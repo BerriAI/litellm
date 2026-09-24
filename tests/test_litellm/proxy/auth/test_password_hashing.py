@@ -72,7 +72,7 @@ class TestVerifyPasswordFormats:
         with caplog.at_level(logging.ERROR, logger=verbose_proxy_logger.name):
             assert verify_password("legacy-scrypt-pass", stored) is False
         assert "scrypt" in caplog.text
-        assert "/user/password/change" in caplog.text
+        assert "/user/update" in caplog.text
 
     def test_sha256_fallback_verifies_in_both_modes(self, monkeypatch):
         stored = hashlib.sha256(b"oldpass").hexdigest()

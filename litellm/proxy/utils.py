@@ -7097,9 +7097,8 @@ def verify_password(password: str, stored: str) -> bool:
         if is_fips_mode():
             verbose_proxy_logger.error(
                 "LITELLM_FIPS_MODE is on and this account still has a scrypt password hash, "
-                "which is not a FIPS approved primitive. Reset the password "
-                "(POST /user/password/change, or an admin POST /user/update with a new password) "
-                "so it is stored as pbkdf2 and the account can sign in"
+                "which is not a FIPS approved primitive. An admin must set a new password with "
+                "POST /user/update so it is stored as pbkdf2 and the account can sign in again"
             )
             return False
         try:
