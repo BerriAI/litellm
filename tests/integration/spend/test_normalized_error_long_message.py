@@ -151,10 +151,15 @@ def _poll_liveliness(client: httpx.Client, stop: threading.Event) -> list[float]
     return latencies
 
 
+def _cmdline(process: psutil.Process) -> str:
+    try:
+        return " ".join(process.cmdline())
+    except psutil.Error:
+        return ""
+
+
 def _worker_pids(owned: OwnedProxy) -> tuple[int, ...]:
-    return tuple(
-        child.pid for child in psutil.Process(owned.process.pid).children() if "spawn_main" in " ".join(child.cmdline())
-    )
+    return tuple(child.pid for child in psutil.Process(owned.process.pid).children() if "spawn_main" in _cmdline(child))
 
 
 def test_two_concurrent_crafted_requests_do_not_stall_liveliness_on_a_two_worker_proxy(
