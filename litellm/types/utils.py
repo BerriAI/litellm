@@ -58,16 +58,13 @@ from litellm.types.mcp import MCPServerCostInfo
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
-from .litellm_params import (  # noqa: F401  # the FIELD constants are re-exported for litellm.types.utils importers
+from .litellm_params import (  # noqa: F401  # the FIELD constants are a public re-export for out-of-tree code
     ADDRESSED_RESPONSE_ID_FIELD,
+    AGENTIC_LOOP_KWARG_NAMES,
+    BEDROCK_BATCH_KWARG_NAMES,
     KWARG_ARTIFACTS,
-    LITELLM_OWNED_ROOTS,
+    OWNED_KWARG_NAMES,
     TRUSTED_CALLBACK_VARS_FIELD,
-    AgenticLoopOptions,
-    AgenticLoopState,
-    BedrockBatchConnection,
-    owned_wire_names,
-    wire_names,
 )
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
@@ -3912,14 +3909,12 @@ def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
-agentic_loop_internal_litellm_params: Final = list(  # mutable-ok: public type stays a list
-    (*wire_names(AgenticLoopState), *wire_names(AgenticLoopOptions))
-)
+agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)  # mutable-ok: public type stays a list
 
-bedrock_batch_litellm_params: Final = wire_names(BedrockBatchConnection)
+bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
 
 all_litellm_params = [  # rebind-ok: a star import re-binds it in litellm/__init__.py  # mutable-ok: callers concat
-    *(name for root in LITELLM_OWNED_ROOTS for name in owned_wire_names(root)),
+    *OWNED_KWARG_NAMES,
     *KWARG_ARTIFACTS,
     *StandardCallbackDynamicParams.__annotations__,
     *CustomPricingLiteLLMParams.model_fields,

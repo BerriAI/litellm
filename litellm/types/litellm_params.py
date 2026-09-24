@@ -40,6 +40,9 @@ if TYPE_CHECKING:
         | httpx.Client
         | httpx.AsyncClient
     )
+    MockResponse: TypeAlias = (
+        str | Exception | Mapping[str, object] | Sequence[float] | ModelResponse | ModelResponseStream
+    )
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
@@ -152,7 +155,7 @@ class DeploymentOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SpecializedRouterOptions:
-    """Configuration for the auto, complexity, adaptive and quality routers."""
+    """Configuration for the auto, complexity, adaptive and quality routers. Read by those router strategies."""
 
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
@@ -171,20 +174,18 @@ class SpecializedRouterOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CachingOptions:
+    """Response and prompt caching controls. Read by the cache layer and the cache key builder."""
+
     caching: bool | None = None
     cache: "DynamicCacheControl | None" = None
-    ttl: int | None = None
+    ttl: float | None = None
     enable_prompt_caching: bool | None = None
-    caching_groups: Sequence[tuple[str, ...]] | None = None
+    caching_groups: Sequence[tuple[str, Sequence[str]]] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CostOptions:
-    """Cost attribution and budget controls. Read by the cost calculator and spend tracking.
-
-    Per-token and per-second prices are owned by `CustomPricingLiteLLMParams` and are not
-    repeated here.
-    """
+    """Cost attribution and budget controls. Read by the cost calculator and spend tracking."""
 
     cost_per_query: float | None = None
     base_model: str | None = None
@@ -217,11 +218,15 @@ class AgenticLoopOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GuardrailOptions:
+    """Which guardrails run on the call. Read by the guardrail hooks."""
+
     guardrails: Sequence[str] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PromptOptions:
+    """Prompt management and prompt template shaping. Read by the prompt manager and the prompt factory."""
+
     prompt_id: str | None = None
     prompt_variables: Mapping[str, object] | None = None
     prompt_version: str | None = None
@@ -243,6 +248,8 @@ class PromptOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResponseOptions:
+    """How LiteLLM shapes the response it hands back. Read by the response builders and stream wrappers."""
+
     merge_reasoning_content_in_choices: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
@@ -253,7 +260,9 @@ class ResponseOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MockOptions:
-    mock_response: "str | Exception | Mapping[str, object] | Sequence[float] | ModelResponse | ModelResponseStream | None" = None
+    """Short-circuit the provider call with a canned result. Read by the mock handlers."""
+
+    mock_response: "MockResponse | None" = None
     mock_timeout: bool | None = None
 
 
@@ -337,7 +346,7 @@ class ProxyState:
     addressed_response_id: str | None = field(default=None, metadata=wire(ADDRESSED_RESPONSE_ID_FIELD))
     strip_stream_usage: bool | None = field(default=None, metadata=wire("_litellm_strip_stream_usage"))
     client_side_timeout: bool | None = None
-    model_file_id_mapping: Mapping[str, str] | None = None
+    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -368,14 +377,17 @@ LITELLM_OWNED_ROOTS: Final = (ConnectionSettings, LiteLLMOptions, InternalState)
 
 
 def wire_names(owner: type) -> tuple[str, ...]:
-    """Kwarg names of `owner`'s own fields in declaration order: the field name unless `wire(...)` renames it."""
     return tuple(owned.metadata.get(WIRE_NAME, owned.name) for owned in fields(owner))
 
 
 def owned_wire_names(root: type) -> tuple[str, ...]:
-    """Kwarg names of every leaf object nested in `root`, in declaration order."""
     return tuple(
         name
         for leaf in fields(root)
         for name in wire_names(leaf.type)  # pyright: ignore[reportArgumentType]  # Field.type admits str
     )
+
+
+OWNED_KWARG_NAMES: Final = tuple(name for root in LITELLM_OWNED_ROOTS for name in owned_wire_names(root))
+AGENTIC_LOOP_KWARG_NAMES: Final = (*wire_names(AgenticLoopState), *wire_names(AgenticLoopOptions))
+BEDROCK_BATCH_KWARG_NAMES: Final = wire_names(BedrockBatchConnection)
