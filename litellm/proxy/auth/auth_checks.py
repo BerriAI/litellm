@@ -15,7 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter
@@ -73,6 +73,8 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
     resolve_agent_access_group_ceiling,
 )
 from litellm.proxy.agent_endpoints.auth.agent_caller import (
+    CallerTeamLoader,
+    CallerUserLoader,
     agent_caller_auth,
     load_agent_caller_team,
     load_agent_caller_user,
@@ -4374,12 +4376,6 @@ async def _check_agent_access_group_model_access(
     )
 
 
-LoadedCallerTeam: TypeAlias = LiteLLM_TeamTable | None
-LoadedCallerUser: TypeAlias = LiteLLM_UserTable | None
-CallerTeamLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerTeam]]  # mutable-ok: Callable params
-CallerUserLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerUser]]  # mutable-ok: Callable params
-
-
 async def _check_agent_caller_model_access(
     model: str | list[str] | None,  # mutable-ok: the model checks it delegates to take list[str]
     valid_token: UserAPIKeyAuth | None,
@@ -4397,7 +4393,12 @@ async def _check_agent_caller_model_access(
     caller_auth: Final = agent_caller_auth(valid_token)
     if caller_auth is None:
         return
-    caller_team: Final = await load_team(valid_token)
+    caller_team: Final = await _load_agent_caller_row_or_deny(
+        load_team, valid_token, model, ProxyErrorTypes.team_model_access_denied
+    )
+    caller_user: Final = await _load_agent_caller_row_or_deny(
+        load_user, valid_token, model, ProxyErrorTypes.user_model_access_denied
+    )
     if caller_team is not None:
         await can_team_access_model(
             model=model,
@@ -4415,10 +4416,33 @@ async def _check_agent_caller_model_access(
             proxy_logging_obj=proxy_logging_obj,
         )
         return
-    caller_user: Final = await load_user(valid_token)
     if caller_user is None:
         return
     await can_user_call_model(model=model, llm_router=llm_router, user_object=caller_user)
+
+
+CallerRowT = TypeVar("CallerRowT", LiteLLM_TeamTable | None, LiteLLM_UserTable | None)
+
+
+async def _load_agent_caller_row_or_deny(
+    load: Callable[[UserAPIKeyAuth], Awaitable[CallerRowT]],
+    valid_token: UserAPIKeyAuth,
+    model: str | list[str],  # mutable-ok: mirrors the model checks this denial stands in for
+    error_type: ProxyErrorTypes,
+) -> CallerRowT:
+    """An echoed caller id that names no row (or cannot be read) denies the model outright, since an
+    invoking identity we cannot resolve must never leave the agent key uncapped."""
+    try:
+        return await load(valid_token)
+    except Exception as error:  # noqa: BLE001  # any failure to resolve the invoking identity must deny
+        caller: Final = valid_token.agent_caller
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=model),
+            internal_message=f"Agent caller could not be resolved. Caller={caller}, Model={model}. Error={error}",
+            type=error_type,
+            param="model",
+            code=status.HTTP_403_FORBIDDEN,
+        ) from error
 
 
 def _model_in_team_aliases(model: str, team_model_aliases: dict[str, str] | None = None) -> bool:

@@ -2242,7 +2242,7 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+            return_value=(UserAPIKeyAuth(), None, ["progress_test"], None, None, None),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
@@ -2354,7 +2354,7 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+            return_value=(UserAPIKeyAuth(), None, ["progress_test"], None, None, None),
         ),
         patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
         patch(
@@ -2565,7 +2565,7 @@ async def test_mcp_routing_initialize_rejected_when_owner_at_session_cap():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+            return_value=(UserAPIKeyAuth(), None, ["progress_test"], None, None, None),
         ),
         patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
         patch(

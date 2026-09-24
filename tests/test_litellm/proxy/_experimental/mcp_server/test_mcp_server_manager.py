@@ -11903,6 +11903,171 @@ class TestSessionResourceScopeIntersect:
         assert fallback == ["granted-id"]
 
 
+class TestAgentCallerServerCeiling:
+    """LIT-8014: an agent key that echoes the invoking human's ``x-litellm-user-id`` /
+    ``x-litellm-team-id`` reaches only what that human could reach with a key of their own,
+    applied over the agent key's full union so operator-open servers do not slip past it."""
+
+    @staticmethod
+    def _agent_key_acting_for(user_id: str | None, team_id: str | None) -> UserAPIKeyAuth:
+        from litellm.types.agents import AgentCaller
+
+        agent_key: Final = UserAPIKeyAuth(api_key="agent-key", user_id="agent-owner", agent_id="agent-1")
+        agent_key.agent_caller = AgentCaller(user_id=user_id, team_id=team_id)
+        return agent_key
+
+    @staticmethod
+    def _access_by_principal(grants: dict[str, tuple[str, ...]]) -> AsyncMock:
+        """Server grants keyed by principal: the agent key (``agent_id`` set) resolves under the key
+        ``"agent"``; the synthetic caller the ceiling asks about resolves under its team, else user."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
+
+        async def resolve(user_api_key_auth: UserAPIKeyAuth | None = None, **_: object) -> MCPServerAccess:
+            assert user_api_key_auth is not None
+            principal: Final = (
+                "agent" if user_api_key_auth.agent_id else user_api_key_auth.team_id or user_api_key_auth.user_id
+            )
+            return MCPServerAccess(server_ids=grants[principal])
+
+        return AsyncMock(side_effect=resolve)
+
+    @staticmethod
+    def _known_callers(team_ids: frozenset[str], user_ids: frozenset[str]) -> AsyncMock:
+        async def resolves(user_api_key_auth: UserAPIKeyAuth) -> bool:
+            caller: Final = user_api_key_auth.agent_caller
+            if caller is None:
+                return True
+            team_known: Final = caller.team_id is None or caller.team_id in team_ids
+            user_known: Final = caller.user_id is None or caller.user_id in user_ids
+            return team_known and user_known
+
+        return AsyncMock(side_effect=resolves)
+
+    @contextlib.contextmanager
+    def _resolvers(
+        self,
+        grants: dict[str, tuple[str, ...]],
+        known_teams: frozenset[str] = frozenset(),
+        known_users: frozenset[str] = frozenset(),
+        allow_all: tuple[str, ...] = ("public",),
+    ):
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+        with (
+            patch.object(MCPServerManager, "get_allow_all_keys_server_ids", return_value=list(allow_all)),
+            patch.object(
+                MCPServerManager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(  # test-quality-ok: the level resolvers read proxy_server globals with no injection seam
+                MCPRequestHandler, "get_mcp_server_access", self._access_by_principal(grants)
+            ),
+            patch.object(  # test-quality-ok: caller row lookup hits the DB, not under test here
+                MCPRequestHandler, "_agent_caller_resolves", self._known_callers(known_teams, known_users)
+            ),
+        ):
+            yield MCPServerManager()
+
+    @pytest.mark.asyncio
+    async def test_agent_key_acting_for_a_user_is_capped_at_the_invoking_teams_servers(self):
+        agent_key: Final = self._agent_key_acting_for(user_id="alice", team_id="callers")
+        with self._resolvers(
+            {"agent": ("server_1", "server_2"), "callers": ("server_2", "server_3")},
+            known_teams=frozenset({"callers"}),
+            known_users=frozenset({"alice"}),
+        ) as manager:
+            assert set(await manager.get_allowed_mcp_servers(agent_key)) == {"server_2", "public"}
+
+    @pytest.mark.asyncio
+    async def test_agent_key_acting_for_a_teamless_user_is_capped_at_that_users_servers(self):
+        agent_key: Final = self._agent_key_acting_for(user_id="alice", team_id=None)
+        with self._resolvers(
+            {"agent": ("server_1", "server_2"), "alice": ("server_1",)}, known_users=frozenset({"alice"})
+        ) as manager:
+            assert set(await manager.get_allowed_mcp_servers(agent_key)) == {"server_1", "public"}
+
+    @pytest.mark.asyncio
+    async def test_public_server_is_capped_when_the_invoking_team_cannot_reach_it(self):
+        """The cap applies AFTER the allow_all_keys union: a public server the caller's own union
+        would not contain (a scoped caller under mcp_allow_all_keys_respects_mcp_scope, here modelled
+        by the caller resolving to no public server) stays out of the agent's reach on their behalf."""
+        agent_key: Final = self._agent_key_acting_for(user_id="alice", team_id="callers")
+        with (
+            self._resolvers(
+                {"agent": ("server_1",), "callers": ("server_1",)},
+                known_teams=frozenset({"callers"}),
+                known_users=frozenset({"alice"}),
+            ),
+            patch.object(
+                MCPServerManager,
+                "operator_open_server_ids",
+                new_callable=AsyncMock,
+                side_effect=lambda auth, **_: set() if auth.agent_id is None else {"public"},
+            ),
+        ):
+            assert await MCPServerManager().get_allowed_mcp_servers(agent_key) == ["server_1"]
+
+    @pytest.mark.asyncio
+    async def test_agent_key_acting_for_a_team_with_no_grants_reaches_only_what_that_team_can(self):
+        agent_key: Final = self._agent_key_acting_for(user_id="alice", team_id="callers")
+        with self._resolvers(
+            {"agent": ("server_1", "server_2"), "callers": ()},
+            known_teams=frozenset({"callers"}),
+            known_users=frozenset({"alice"}),
+        ) as manager:
+            assert await manager.get_allowed_mcp_servers(agent_key) == ["public"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("user_id", "team_id"),
+        [("alice", "ghost-team"), ("ghost", None), ("ghost", "callers")],
+        ids=["unknown_team", "unknown_teamless_user", "unknown_user_on_known_team"],
+    )
+    async def test_agent_key_acting_for_an_unresolvable_caller_reaches_nothing(self, user_id: str, team_id: str | None):
+        """An echoed identity the proxy cannot load is an empty ceiling: not even public servers."""
+        agent_key: Final = self._agent_key_acting_for(user_id=user_id, team_id=team_id)
+        with self._resolvers(
+            {"agent": ("server_1", "server_2")}, known_teams=frozenset({"callers"}), known_users=frozenset({"alice"})
+        ) as manager:
+            assert await manager.get_allowed_mcp_servers(agent_key) == []
+
+    @pytest.mark.asyncio
+    async def test_resolver_fault_never_widens_a_delegated_agent_past_the_caller(self):
+        """The exception fallback (allow_all + submitted) is bounded by the caller ceiling too."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+        agent_key: Final = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        async def faulting_for_agent(user_api_key_auth: UserAPIKeyAuth | None = None, **_: object):
+            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
+
+            assert user_api_key_auth is not None
+            if user_api_key_auth.agent_id:
+                raise RuntimeError("resolver down")
+            return MCPServerAccess(server_ids=("server_1",))
+
+        with (
+            self._resolvers({}, known_teams=frozenset({"callers"}), known_users=frozenset({"alice"})),
+            patch.object(MCPRequestHandler, "get_mcp_server_access", AsyncMock(side_effect=faulting_for_agent)),
+            patch.object(
+                MCPServerManager,
+                "operator_open_server_ids",
+                new_callable=AsyncMock,
+                side_effect=lambda auth, **_: set() if auth.agent_id is None else {"public"},
+            ),
+        ):
+            assert await MCPServerManager().get_allowed_mcp_servers(agent_key) == []
+
+    @pytest.mark.asyncio
+    async def test_caller_headers_do_not_cap_a_key_that_is_not_an_agent(self):
+        plain_key: Final = UserAPIKeyAuth(api_key="sk-plain", user_id="alice")
+        assert plain_key.agent_caller is None
+        with self._resolvers({"alice": ("server_1", "server_2")}) as manager:
+            assert set(await manager.get_allowed_mcp_servers(plain_key)) == {"server_1", "server_2", "public"}
+
+
 class TestClientForwardedDiscoveryFailureIsNotFatal:
     """A failed OAuth metadata discovery may only brick the flows the gateway runs itself.
 

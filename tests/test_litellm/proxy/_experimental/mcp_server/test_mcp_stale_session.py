@@ -9,6 +9,7 @@ they may send a stale `mcp-session-id` header. This test verifies that:
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp import MCPAuth
 import pytest
 
@@ -260,7 +261,7 @@ async def test_stale_mcp_session_id_is_stripped():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, None, None, None, None),
+            return_value=(UserAPIKeyAuth(), None, None, None, None, None),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
@@ -337,7 +338,7 @@ async def test_delete_stale_mcp_session_returns_success():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, None, None, None, None),
+            return_value=(UserAPIKeyAuth(), None, None, None, None, None),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
@@ -386,7 +387,7 @@ async def test_failed_delete_preserves_stateful_session_tracking():
         pytest.skip("MCP server not available")
 
     session_id = "delete-failure-session"
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.api_key = "sk-test"
     user_auth.user_id = "test-user"
     auth_context = MagicMock()
@@ -491,7 +492,7 @@ async def test_valid_mcp_session_id_is_preserved():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, None, None, None, None),
+            return_value=(UserAPIKeyAuth(), None, None, None, None, None),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
@@ -554,7 +555,7 @@ async def test_no_mcp_session_id_header_works_normally():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, None, None, None, None),
+            return_value=(UserAPIKeyAuth(), None, None, None, None, None),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
@@ -613,7 +614,7 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
     }
     receive = AsyncMock()
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = "test-user-id"
     oauth_server = MagicMock()
     oauth_server.auth_type = MCPAuth.oauth2
@@ -700,7 +701,7 @@ async def test_admitted_subject_missing_stored_token_challenged_with_resource_me
     }
     receive = AsyncMock()
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = "sso-user-42"
     user_auth.mcp_admitted_user_subject = True
     oauth_server = MagicMock()
@@ -806,7 +807,7 @@ async def test_client_credentials_server_is_not_preemptively_challenged(m2m_fiel
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = "test-user-id"
     m2m_server = MCPServer(
         server_id="m2m-server-id",
@@ -892,7 +893,7 @@ async def test_handle_streamable_http_mcp_delegated_server_surfaces_upstream_cha
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = None
     delegated_server = MagicMock()
     delegated_server.auth_type = MCPAuth.oauth2
@@ -996,7 +997,7 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = "test-user-id"
     oauth_server = MagicMock()
     oauth_server.auth_type = MCPAuth.oauth2
@@ -1092,7 +1093,7 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_returns
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = None
     delegated_server = MagicMock()
     delegated_server.auth_type = MCPAuth.oauth2
@@ -1192,7 +1193,7 @@ async def test_handle_streamable_http_mcp_token_exchange_without_subject_returns
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = None
     obo_server = MagicMock()
     obo_server.auth_type = MCPAuth.oauth2_token_exchange
@@ -1301,7 +1302,7 @@ async def test_handle_streamable_http_mcp_oauth_delegate_without_token_returns_g
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = "u1"
     od_server = _build_passthrough_mode_server("od_server", MCPAuth.oauth_delegate)
 
@@ -1366,7 +1367,7 @@ async def test_handle_streamable_http_mcp_oauth_delegate_with_forwarded_token_sk
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = "u1"
     od_server = _build_passthrough_mode_server("od_server", MCPAuth.oauth_delegate)
 
@@ -1431,7 +1432,7 @@ async def _run_passthrough_connect(
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = "u1"
     server = _build_passthrough_mode_server(server_names[0], auth_type)
 
@@ -1554,7 +1555,7 @@ async def test_handle_streamable_http_mcp_true_passthrough_without_token_surface
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = None
     tp_server = _build_passthrough_mode_server("tp_server", MCPAuth.true_passthrough)
 
@@ -1620,7 +1621,7 @@ async def test_handle_streamable_http_mcp_true_passthrough_dcr_bridge_challenges
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = None
     bridge_server = _build_passthrough_mode_server("tp_bridge_server", MCPAuth.true_passthrough).model_copy(
         update={"dcr_bridge": True}
@@ -1691,7 +1692,7 @@ async def test_handle_streamable_http_mcp_true_passthrough_with_token_skips_prob
         }
     )
     send = AsyncMock()
-    user_auth = MagicMock()
+    user_auth = UserAPIKeyAuth()
     user_auth.user_id = None
     tp_server = _build_passthrough_mode_server("tp_server", MCPAuth.true_passthrough)
 

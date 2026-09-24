@@ -22,7 +22,6 @@ from litellm.proxy._types import (
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
-from litellm.types.agents import AgentCaller
 
 
 @pytest.mark.asyncio
@@ -4200,89 +4199,6 @@ def test_agent_capped_servers_without_agent_restrictions_is_uncapped():
 @pytest.mark.asyncio
 class TestAgentMCPPermissions:
     """Test agent-level MCP server and tool permission intersection."""
-
-    @staticmethod
-    def _agent_key_acting_for(user_id: str, team_id: str | None) -> UserAPIKeyAuth:
-        agent_key = UserAPIKeyAuth(api_key="agent-key", user_id="agent-owner", team_id="agent-team", agent_id="agent-1")
-        agent_key.agent_caller = AgentCaller(user_id=user_id, team_id=team_id)
-        return agent_key
-
-    @staticmethod
-    def _team_servers(grants: dict[str, list[str]]) -> AsyncMock:
-        async def by_team(user_api_key_auth: UserAPIKeyAuth | None = None) -> list[str]:
-            assert user_api_key_auth is not None
-            return grants.get(user_api_key_auth.team_id or "", [])
-
-        return AsyncMock(side_effect=by_team)
-
-    @staticmethod
-    def _user_servers(grants: dict[str, list[str] | None]) -> AsyncMock:
-        async def by_user(user_api_key_auth: UserAPIKeyAuth | None = None) -> list[str] | None:
-            assert user_api_key_auth is not None
-            return grants.get(user_api_key_auth.user_id or "", [])
-
-        return AsyncMock(side_effect=by_user)
-
-    async def test_agent_key_acting_for_a_user_is_capped_at_the_invoking_teams_servers(self):
-        """LIT-8014: the agent's own key reaches server_1 and server_2, but the human who invoked it
-        belongs to a team granted only server_2, so on their behalf the agent reaches only server_2."""
-        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
-
-        with (
-            patch.object(  # test-quality-ok: the level resolvers read proxy_server globals with no injection seam
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server_1", "server_2"])
-            ),
-            patch.object(  # test-quality-ok: same seam, keyed by which team is being asked about
-                MCPRequestHandler,
-                "_get_allowed_mcp_servers_for_team",
-                self._team_servers({"callers": ["server_2", "server_3"]}),
-            ),
-            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
-            ),
-            patch.object(  # test-quality-ok: neither the agent's owner nor the caller has a personal grant
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({})
-            ),
-        ):
-            assert await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=agent_key) == ["server_2"]
-
-    async def test_agent_key_acting_for_a_teamless_user_is_capped_at_that_users_servers(self):
-        agent_key = self._agent_key_acting_for(user_id="alice", team_id=None)
-
-        with (
-            patch.object(  # test-quality-ok: the level resolvers read proxy_server globals with no injection seam
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server_1", "server_2"])
-            ),
-            patch.object(  # test-quality-ok: same seam
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_team", self._team_servers({})
-            ),
-            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
-            ),
-            patch.object(  # test-quality-ok: same seam, keyed by which user is being asked about
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({"alice": ["server_1"]})
-            ),
-        ):
-            assert await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=agent_key) == ["server_1"]
-
-    async def test_agent_key_acting_for_a_caller_whose_entitlement_is_unreadable_reaches_nothing(self):
-        agent_key = self._agent_key_acting_for(user_id="alice", team_id=None)
-
-        with (
-            patch.object(  # test-quality-ok: the level resolvers read proxy_server globals with no injection seam
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server_1"])
-            ),
-            patch.object(  # test-quality-ok: same seam
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_team", self._team_servers({})
-            ),
-            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
-            ),
-            patch.object(  # test-quality-ok: None is the resolver's own "entitlement unresolvable" signal
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({"alice": None})
-            ),
-        ):
-            assert await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=agent_key) == []
 
     async def test_get_allowed_mcp_servers_agent_intersection(self):
         """Key/team allow [server_1, server_2]; agent allows [server_1]. Result = [server_1]."""

@@ -3420,6 +3420,9 @@ class MCPServerManager:
 
         resolved_general_settings: Final = proxy_general_settings if general_settings is None else general_settings
         allow_all_server_ids: Final = self.get_allow_all_keys_server_ids()
+        caller_ceiling: Final = await MCPRequestHandler.agent_caller_server_ceiling(
+            user_api_key_auth, self.get_allowed_mcp_servers
+        )
 
         # A keyless admitted subject is resolved per grant source, and channel decisions that are
         # absolute for a scoped KEY credential are not absolute for it: its own opt-out silences its
@@ -3508,19 +3511,31 @@ class MCPServerManager:
                 )
             if len(combined_servers) == 0:
                 verbose_logger.debug("No allowed MCP Servers found for user api key auth.")
-            scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
-            return [server_id for server_id in combined_servers if scope is None or server_id == scope]
+            return MCPServerManager._within_ceilings(combined_servers, user_api_key_auth, caller_ceiling)
         except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to get allowed MCP servers; team-level object_permission "
                 "grants may be dropped. Falling back to global and submitted servers."
             )
-            scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
-            return [
-                server_id
-                for server_id in dict.fromkeys(allow_all_server_ids + submitted_server_ids)
-                if scope is None or server_id == scope
-            ]
+            return MCPServerManager._within_ceilings(
+                dict.fromkeys(allow_all_server_ids + submitted_server_ids), user_api_key_auth, caller_ceiling
+            )
+
+    @staticmethod
+    def _within_ceilings(
+        server_ids: Iterable[str],
+        user_api_key_auth: UserAPIKeyAuth | None,
+        caller_ceiling: frozenset[str] | None,
+    ) -> list[str]:
+        """Ceilings over the whole reachable set, applied AFTER every union (grants, operator-open,
+        submitted) and on the fallback path too: the admitted session's resource scope and the
+        invoking human's own reach when an agent key acts for one."""
+        scope: Final = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
+        return [
+            server_id
+            for server_id in server_ids
+            if (scope is None or server_id == scope) and (caller_ceiling is None or server_id in caller_ceiling)
+        ]
 
     async def resolve_toolset_tool_permissions(
         self,
