@@ -52,9 +52,7 @@ def test_chat_completions_system_block_list_carries_cache_control_to_anthropic_s
                 "messages": [
                     {
                         "role": "system",
-                        "content": [
-                            {"type": "text", "text": policy, "cache_control": {"type": "ephemeral"}}
-                        ],
+                        "content": [{"type": "text", "text": policy, "cache_control": {"type": "ephemeral"}}],
                     },
                     {"role": "user", "content": "hi"},
                 ],
@@ -112,9 +110,7 @@ def test_responses_system_input_item_carries_cache_control_to_anthropic_system(g
                 "input": [
                     {
                         "role": "system",
-                        "content": [
-                            {"type": "input_text", "text": policy, "cache_control": {"type": "ephemeral"}}
-                        ],
+                        "content": [{"type": "input_text", "text": policy, "cache_control": {"type": "ephemeral"}}],
                     },
                     {"role": "user", "content": "hi"},
                 ],
@@ -126,3 +122,67 @@ def test_responses_system_input_item_carries_cache_control_to_anthropic_system(g
         assert any(item.get("type") == "message" for item in payload.get("output", []) if isinstance(item, dict))
         assert len(wire.drain()) == 1
 
+
+def _anthropic_usage_reply(identity: str, cache_creation: int, cache_read: int) -> bytes:
+    return json.dumps(
+        {
+            "id": identity,
+            "type": "message",
+            "role": "assistant",
+            "model": _MODEL,
+            "content": [{"type": "text", "text": "done"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 1,
+                "cache_creation_input_tokens": cache_creation,
+                "cache_read_input_tokens": cache_read,
+            },
+        }
+    ).encode()
+
+
+def test_responses_usage_reports_anthropic_system_cache_write_then_read(gateway: Gateway) -> None:
+    identity: Final = f"responses-system-cache-usage-{uuid.uuid4().hex}"
+    policy: Final = f"policy {identity}"
+    replies: Final = iter(
+        (
+            _anthropic_usage_reply(identity, cache_creation=1200, cache_read=0),
+            _anthropic_usage_reply(identity, cache_creation=0, cache_read=1200),
+        )
+    )
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/v1/messages"
+        _assert_system_block(_JSON_OBJECT.validate_json(request.body), policy)
+        return Reply(body=next(replies))
+
+    def input_tokens_details(model: str, user_turn: str) -> JsonValue:
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses",
+            {
+                "model": model,
+                "input": [
+                    {
+                        "role": "system",
+                        "content": [{"type": "input_text", "text": policy, "cache_control": {"type": "ephemeral"}}],
+                    },
+                    {"role": "user", "content": user_turn},
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        usage: Final = _JSON_OBJECT.validate_json(response.content)["usage"]
+        assert isinstance(usage, dict), response.text
+        return usage["input_tokens_details"]
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
+        first: Final = input_tokens_details(model, "first turn")
+        second: Final = input_tokens_details(model, "second turn")
+        assert len(wire.drain()) == 2
+    assert isinstance(first, dict) and isinstance(second, dict), (first, second)
+    assert (first["cache_write_tokens"], first["cached_tokens"]) == (1200, 0), first
+    assert (second.get("cache_write_tokens", 0), second["cached_tokens"]) == (0, 1200), second
