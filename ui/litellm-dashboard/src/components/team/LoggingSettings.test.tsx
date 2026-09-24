@@ -231,7 +231,11 @@ describe("LoggingSettings", () => {
 
     expect(screen.queryByPlaceholderText("os.environ/LANGFUSE_SPAN_SCOPE")).not.toBeInTheDocument();
     await user.click(screen.getByRole("combobox", { name: "langfuse span scope" }));
-    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual(["full", "llm_only"]);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "full",
+      "no_internal",
+      "llm_only",
+    ]);
     await user.click(screen.getByRole("option", { name: "llm_only" }));
 
     expect(mockOnChange).toHaveBeenCalledWith([
@@ -239,7 +243,7 @@ describe("LoggingSettings", () => {
     ]);
   });
 
-  it("offers the OTEL destination internal spans as a pick between include and exclude", async () => {
+  it("offers the OTEL destination span scope as a pick between full, no_internal and llm_only", async () => {
     const user = userEvent.setup({ delay: null });
     const mockOnChange = vi.fn();
     const initialValue = [
@@ -252,13 +256,17 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
-    expect(screen.queryByPlaceholderText("os.environ/OTEL_INTERNAL_SPANS")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("combobox", { name: "otel internal spans" }));
-    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual(["include", "exclude"]);
-    await user.click(screen.getByRole("option", { name: "exclude" }));
+    expect(screen.queryByPlaceholderText("os.environ/OTEL_SPAN_SCOPE")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "otel span scope" }));
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "full",
+      "no_internal",
+      "llm_only",
+    ]);
+    await user.click(screen.getByRole("option", { name: "no_internal" }));
 
     expect(mockOnChange).toHaveBeenCalledWith([
-      expect.objectContaining({ callback_vars: expect.objectContaining({ otel_internal_spans: "exclude" }) }),
+      expect.objectContaining({ callback_vars: expect.objectContaining({ otel_span_scope: "no_internal" }) }),
     ]);
   });
 

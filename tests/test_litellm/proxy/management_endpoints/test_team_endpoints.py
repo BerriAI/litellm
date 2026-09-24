@@ -646,7 +646,7 @@ async def test_team_endpoints_reject_bogus_logging_metadata(endpoint, mock_db_cl
 
     metadata: Final = {
         "logging": [
-            {"callback_name": "langfuse_otel", "callback_vars": {"otel_internal_spans": "sometimes"}}
+            {"callback_name": "langfuse_otel", "callback_vars": {"otel_span_scope": "sometimes"}}
         ]
     }
     data: Final = (
@@ -664,7 +664,7 @@ async def test_team_endpoints_reject_bogus_logging_metadata(endpoint, mock_db_cl
         )
 
     assert str(exc_info.value.code) == "400"
-    assert "otel_internal_spans" in str(exc_info.value.message)
+    assert "otel_span_scope" in str(exc_info.value.message)
     mock_db_client.db.litellm_teamtable.create.assert_not_awaited()
     mock_db_client.db.litellm_teamtable.update.assert_not_awaited()
 

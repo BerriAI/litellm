@@ -17,11 +17,15 @@
         "description": "Arize Space ID to identify your workspace",
         "required": true
       },
-      "otel_internal_spans": {
+      "otel_span_scope": {
         "type": "select",
-        "ui_name": "Internal Spans",
-        "description": "include sends the proxy's own SERVICE and DB_CALL spans (auth, Redis, Postgres) with the trace, exclude holds them back",
-        "options": ["include", "exclude"],
+        "ui_name": "Span Scope",
+        "description": "full sends the whole request trace, no_internal drops the proxy's own auth, cache and database spans, llm_only sends just the model-call spans",
+        "options": [
+          "full",
+          "no_internal",
+          "llm_only"
+        ],
         "required": false
       }
     },
@@ -270,15 +274,23 @@
       "langfuse_span_scope": {
         "type": "select",
         "ui_name": "Span Scope",
-        "description": "full sends the whole request trace, llm_only sends just the model-call spans",
-        "options": ["full", "llm_only"],
+        "description": "full sends the whole request trace, no_internal drops the proxy's own auth, cache and database spans, llm_only sends just the model-call spans",
+        "options": [
+          "full",
+          "no_internal",
+          "llm_only"
+        ],
         "required": false
       },
-      "otel_internal_spans": {
+      "otel_span_scope": {
         "type": "select",
-        "ui_name": "Internal Spans",
-        "description": "include sends the proxy's own SERVICE and DB_CALL spans (auth, Redis, Postgres) with the trace, exclude holds them back",
-        "options": ["include", "exclude"],
+        "ui_name": "Span Scope",
+        "description": "full sends the whole request trace, no_internal drops the proxy's own auth, cache and database spans, llm_only sends just the model-call spans",
+        "options": [
+          "full",
+          "no_internal",
+          "llm_only"
+        ],
         "required": false
       }
     },
@@ -341,11 +353,15 @@
         "description": "Data center region for this team's account. Defaults to us.",
         "required": false
       },
-      "otel_internal_spans": {
+      "otel_span_scope": {
         "type": "select",
-        "ui_name": "Internal Spans",
-        "description": "include sends the proxy's own SERVICE and DB_CALL spans (auth, Redis, Postgres) with the trace, exclude holds them back",
-        "options": ["include", "exclude"],
+        "ui_name": "Span Scope",
+        "description": "full sends the whole request trace, no_internal drops the proxy's own auth, cache and database spans, llm_only sends just the model-call spans",
+        "options": [
+          "full",
+          "no_internal",
+          "llm_only"
+        ],
         "required": false
       }
     },
@@ -400,7 +416,10 @@
         "type": "select",
         "ui_name": "Export Protocol",
         "description": "OTLP wire format for trace exports. Use http/json for collectors that cannot decode protobuf",
-        "options": ["http/protobuf", "http/json"],
+        "options": [
+          "http/protobuf",
+          "http/json"
+        ],
         "required": false
       }
     },

@@ -20,9 +20,9 @@ from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
 
-from litellm.constants import OTEL_EXCLUDE_INTERNAL_SPANS, OTEL_TENANT_INTERNAL_SPANS_ENV
+from litellm.constants import OTEL_TENANT_SPAN_SCOPE_ENV
 from litellm.integrations.otel.model.semconv import HTTP
-from litellm.types.utils import OtelInternalSpans
+from litellm.types.utils import OTEL_SPAN_SCOPES, OtelSpanScope
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
@@ -402,14 +402,14 @@ def tenant_destinations_are_additive() -> bool:
     return isinstance(configured, str) and configured.strip().lower() == ADDITIVE_DESTINATION_MODE
 
 
-def tenant_internal_spans_default() -> OtelInternalSpans:
-    """The ``internal_spans`` a tenant destination gets when its own callback vars name none."""
+def tenant_span_scope_default() -> OtelSpanScope:
+    """The ``span_scope`` a tenant destination gets when its own callback vars name none."""
     import litellm
 
-    configured: Final = litellm.otel_tenant_internal_spans or os.environ.get(OTEL_TENANT_INTERNAL_SPANS_ENV)
-    if isinstance(configured, str) and configured.strip().lower() == OTEL_EXCLUDE_INTERNAL_SPANS:
-        return "exclude"
-    return "include"
+    configured: Final = litellm.otel_tenant_span_scope or os.environ.get(OTEL_TENANT_SPAN_SCOPE_ENV)
+    if isinstance(configured, str) and configured.strip().lower() in OTEL_SPAN_SCOPES:
+        return configured.strip().lower()  # pyright: ignore[reportReturnType]  # membership check narrows to the literal
+    return "full"
 
 
 def destination_backends() -> frozenset[str]:

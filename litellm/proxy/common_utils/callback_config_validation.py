@@ -16,7 +16,7 @@ _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
 _LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
-_OTEL_INTERNAL_SPANS_VAR: Final = "otel_internal_spans"
+_OTEL_SPAN_SCOPE_VAR: Final = "otel_span_scope"
 _ARIZE_CALLBACK: Final = "arize"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
@@ -34,9 +34,12 @@ def callback_config_error(callback_name: str | None, callback_vars: Mapping[str,
     )
     if langfuse_error is not None:
         return langfuse_error
-    internal_spans_error: Final = _otel_internal_spans_error(callback_name, callback_vars)
-    if internal_spans_error is not None:
-        return internal_spans_error
+    otel_scope_error: Final = _otel_span_scope_error(callback_name, callback_vars)
+    if otel_scope_error is not None:
+        return otel_scope_error
+    alias_error: Final = _alias_conflict_error(callback_vars)
+    if alias_error is not None:
+        return alias_error
     if callback_name != _NEWRELIC_CALLBACK:
         return None
     return _newrelic_config_error(callback_vars)
@@ -81,25 +84,41 @@ def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping
     return None
 
 
-def _otel_internal_spans_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
-    value: Final = callback_vars.get(_OTEL_INTERNAL_SPANS_VAR)
+def _otel_span_scope_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
+    value: Final = callback_vars.get(_OTEL_SPAN_SCOPE_VAR)
     if value is None:
         return None
     from litellm.integrations.otel.presets.destinations import destination_capable_backends
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
-        validate_otel_internal_spans_value,
+        validate_otel_span_scope_value,
     )
 
     if callback_name not in destination_capable_backends():
         return (
-            f"{_OTEL_INTERNAL_SPANS_VAR} applies to the OTEL destination callbacks only "
+            f"{_OTEL_SPAN_SCOPE_VAR} applies to the OTEL destination callbacks only "
             f"({', '.join(sorted(destination_capable_backends()))}), not {callback_name!r}"
         )
     try:
-        validate_otel_internal_spans_value(value)
+        validate_otel_span_scope_value(value)
     except ValueError as e:
         return str(e)
     return None
+
+
+def _alias_conflict_error(callback_vars: Mapping[str, str]) -> str | None:
+    """Reject one entry that names both scope aliases with different values.
+
+    ``otel_span_scope`` outranks ``langfuse_span_scope`` when they disagree, so
+    storing both would export the one and silently drop the other.
+    """
+    langfuse_scope: Final = callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
+    otel_scope: Final = callback_vars.get(_OTEL_SPAN_SCOPE_VAR)
+    if langfuse_scope is None or otel_scope is None or langfuse_scope == otel_scope:
+        return None
+    return (
+        f"{_LANGFUSE_SPAN_SCOPE_VAR} and {_OTEL_SPAN_SCOPE_VAR} name different scopes "
+        f"({langfuse_scope!r} vs {otel_scope!r}); set one of them"
+    )
 
 
 # Which credential family a dynamic variable belongs to. The families are the
@@ -199,13 +218,13 @@ def conflicting_span_scope_error(
     return _conflicting_var_error(_LANGFUSE_SPAN_SCOPE_VAR, callback_vars, stored_vars_by_entry)
 
 
-def conflicting_internal_spans_error(
+def conflicting_otel_span_scope_error(
     callback_vars: Mapping[str, str] | None,
     stored_vars_by_entry: Sequence[Mapping[str, str]],
 ) -> str | None:
     """``stored_vars_by_entry`` must hold only the entries of the same callback: the
     request merges the var per backend, so two backends may legitimately disagree."""
-    return _conflicting_var_error(_OTEL_INTERNAL_SPANS_VAR, callback_vars, stored_vars_by_entry)
+    return _conflicting_var_error(_OTEL_SPAN_SCOPE_VAR, callback_vars, stored_vars_by_entry)
 
 
 def _conflicting_var_error(
@@ -243,7 +262,7 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
                 *(_logging_entry_error(entry) for entry in entries),
                 *(conflicting_span_scope_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
                 *(
-                    conflicting_internal_spans_error(
+                    conflicting_otel_span_scope_error(
                         entry_vars[i],
                         tuple(vars_ for vars_, name in zip(entry_vars[:i], entry_names[:i]) if name == entry_names[i]),
                     )

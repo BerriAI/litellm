@@ -6,7 +6,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, assert_never
 
 from opentelemetry import _logs, baggage, metrics, trace
 from opentelemetry._logs import Logger, LoggerProvider, NoOpLoggerProvider
@@ -435,25 +435,20 @@ def is_llm_call_span(span: ReadableSpan) -> bool:
 
 
 def _in_scope(span: ReadableSpan, scope: "OtelSpanScope") -> bool:
-    return scope == "full" or is_llm_call_span(span)
-
-
-def _is_internal_span(span: ReadableSpan) -> bool:
-    """A SERVICE or DB_CALL span: neither the request root nor a tenant-owned model, MCP or guardrail span."""
-    return span.kind is not SpanKind.SERVER and not _is_tenant_owned_span(span.attributes or _NO_ATTRIBUTES)
-
-
-def _forwarded(span: ReadableSpan, destination: "OtelDestination") -> bool:
-    if not _in_scope(span, destination.span_scope):
-        return False
-    return destination.internal_spans == "include" or not _is_internal_span(span)
+    if scope == "full":
+        return True
+    if scope == "no_internal":
+        return span.kind is SpanKind.SERVER or _is_tenant_owned_span(span.attributes or _NO_ATTRIBUTES)
+    if scope == "llm_only":
+        return is_llm_call_span(span)
+    return assert_never(scope)
 
 
 def _scoped(span: ReadableSpan, scope: "OtelSpanScope") -> ReadableSpan:
     """Under ``llm_only`` the model call is the only span the exporter gets, so it goes out as the
     trace's root (its parent is the request span that is held back) and, unless the caller named the
     trace, its own name doubles as ``langfuse.trace.name`` so Langfuse does not show "Unnamed trace"."""
-    if scope == "full":
+    if scope != "llm_only":
         return span
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     named: Final = (
@@ -579,7 +574,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
     def on_end(self, span: ReadableSpan) -> None:
         suppressed: Final = suppressed_backends()
         for destination in request_destinations():
-            if self._operator_already_writes(span, destination, suppressed) or not _forwarded(span, destination):
+            if self._operator_already_writes(span, destination, suppressed) or not _in_scope(
+                span, destination.span_scope
+            ):
                 continue
             processor = self._acquire(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
             if processor is None:
@@ -1225,8 +1222,11 @@ def _operator_scope(config: OpenTelemetryV2Config, spec: ExporterSpec) -> "OtelS
     return config.langfuse_span_scope if spec.owner is ExporterOwner.LANGFUSE_OTEL else "full"
 
 
+_SCOPE_RANK: Final[tuple["OtelSpanScope", ...]] = ("full", "no_internal", "llm_only")
+
+
 def _widest(scopes: "Iterable[OtelSpanScope]") -> "OtelSpanScope":
-    return "full" if any(scope == "full" for scope in scopes) else "llm_only"
+    return min(scopes, key=_SCOPE_RANK.index)
 
 
 def _exports_to_the_wire(spec: ExporterSpec) -> bool:

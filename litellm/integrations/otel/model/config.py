@@ -168,6 +168,7 @@ class OpenTelemetryV2Config(BaseSettings):
         default="full",
         validation_alias=AliasChoices("langfuse_span_scope", "LITELLM_OTEL_LANGFUSE_SPAN_SCOPE"),
         description=(
+            "``no_internal`` holds back the proxy's own auth, cache and database spans while "
             "``llm_only`` keeps just the model-call spans on the operator's own Langfuse "
             "exporter (the spec whose owner is ``langfuse_otel``). Other exporters and "
             "key/team destinations are not affected."
