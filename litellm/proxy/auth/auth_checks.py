@@ -5606,7 +5606,7 @@ def _is_valid_alert_threshold_pct(pct: str) -> bool:
 
 
 def _alert_recipients(raw: object) -> Sequence[str] | None:
-    if isinstance(raw, str) or isinstance(raw, Sequence):
+    if isinstance(raw, (str, Sequence)):
         return _parse_email_list(raw)
     return None
 
