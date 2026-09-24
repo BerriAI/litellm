@@ -3171,13 +3171,16 @@ async def search_user_daily_activity_keys(
     try:
         entity_id: Final = _resolve_user_daily_activity_entity_id(user_api_key_dict, user_id)
 
-        where: Final[KeyActivitySearchWhere] = {
-            "OR": (
-                {"token": search},
-                {"key_alias": {"contains": search, "mode": "insensitive"}},
-                {"user_id": {"contains": search, "mode": "insensitive"}},
-            )
-        }
+        search_or: Final = (
+            {"token": search},  # mutable-ok: prisma serializes where clauses, keep plain dicts
+            {"key_alias": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
+            {"user_id": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
+        )
+        where: Final[KeyActivitySearchWhere] = (
+            {"OR": search_or}  # mutable-ok: prisma where clause root
+            if entity_id is None
+            else {"user_id": entity_id, "OR": search_or}  # mutable-ok: prisma where clause root
+        )
         matched_keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
             where=where,
             take=USAGE_TOP_API_KEYS_LIMIT,
