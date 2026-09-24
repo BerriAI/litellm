@@ -75,7 +75,7 @@ def _next_sync_or_exhausted(it: Any) -> object:
 def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming_response: ModelResponse) -> None:
     served_tier: Final = complete_streaming_response.model_dump().get("service_tier")
     if isinstance(served_tier, str) and served_tier:
-        setattr(response, "service_tier", served_tier)
+        setattr(response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
 
 
 def is_async_iterable(obj: object) -> bool:

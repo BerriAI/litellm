@@ -408,7 +408,11 @@ class ChunkProcessor:
                 "created": created,
                 "model": model,
                 "system_fingerprint": system_fingerprint,
-                **({"service_tier": service_tier} if service_tier is not None else {}),
+                **(
+                    MappingProxyType({"service_tier": service_tier})
+                    if service_tier is not None
+                    else MappingProxyType({})
+                ),
                 "choices": [
                     {
                         "index": 0,

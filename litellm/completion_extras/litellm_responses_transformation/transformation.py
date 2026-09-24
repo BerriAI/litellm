@@ -1612,7 +1612,11 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 ],
                 usage=usage,
                 provider_specific_fields=dict(provider_metadata) or None,  # mutable-ok: field is typed dict
-                **({"service_tier": served_service_tier} if isinstance(served_service_tier, str) else {}),
+                **(
+                    MappingProxyType({"service_tier": served_service_tier})
+                    if isinstance(served_service_tier, str)
+                    else MappingProxyType({})
+                ),
             )
         else:
             pass
