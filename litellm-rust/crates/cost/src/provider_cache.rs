@@ -1,5 +1,7 @@
 use serde_json::{Number, Value};
 
+use crate::provider::LlmProviders;
+
 fn rate(value: Option<&Value>) -> Option<f64> {
     match value? {
         Value::Number(value) => value.as_f64(),
@@ -61,7 +63,7 @@ pub fn with_default_cache_read_rate(model_info: &Value) -> Value {
 }
 
 pub fn apply_provider_cache_read_default(model_info: &Value, provider: Option<&str>) -> Value {
-    if provider == Some("fireworks_ai") {
+    if LlmProviders::FIREWORKS_AI.matches(provider) {
         with_default_cache_read_rate(model_info)
     } else {
         model_info.clone()

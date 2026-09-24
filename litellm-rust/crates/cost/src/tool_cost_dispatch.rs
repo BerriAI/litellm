@@ -6,6 +6,7 @@ use crate::anthropic_cost::{
 };
 use crate::gemini_cost::{cost_per_google_maps_grounding_request, cost_per_web_search_request};
 use crate::groq_cost::cost_per_web_search_request as groq_web_search_cost;
+use crate::provider::LlmProviders;
 use crate::responses_usage::ChatUsage;
 use crate::tool_call_cost_tracking::{
     DefaultToolRates, ResponseKind, count_web_search_calls, extract_file_search_params,
@@ -115,7 +116,7 @@ fn provider_web_search_cost(
 }
 
 fn maps_cost(request: BuiltInToolCostRequest<'_>, model_info: Option<&Value>) -> f64 {
-    let supports_maps = matches!(request.provider, Some("gemini"))
+    let supports_maps = LlmProviders::GEMINI.matches(request.provider)
         || request
             .provider
             .is_some_and(|provider| provider.starts_with("vertex_ai"));
@@ -149,7 +150,7 @@ fn file_search_cost(request: BuiltInToolCostRequest<'_>, model_info: Option<&Val
 }
 
 fn azure_assistant_cost(request: BuiltInToolCostRequest<'_>, model_info: Option<&Value>) -> f64 {
-    if request.provider != Some("azure") {
+    if !LlmProviders::AZURE.matches(request.provider) {
         return 0.0;
     }
     let vector = request

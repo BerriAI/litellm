@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::provider::LlmProviders;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DefaultToolRates {
     pub file_search_per_call: f64,
@@ -212,7 +214,7 @@ pub fn get_cost_for_file_search(
         return 0.0;
     }
     let storage = storage_gb.unwrap_or(0.0) * days.unwrap_or(0.0);
-    if provider == Some("azure")
+    if LlmProviders::AZURE.matches(provider)
         && let Some(rate) =
             model_info.and_then(|info| number(info.get("file_search_cost_per_gb_per_day")))
     {
@@ -223,7 +225,7 @@ pub fn get_cost_for_file_search(
     {
         return rate;
     }
-    if provider == Some("azure") {
+    if LlmProviders::AZURE.matches(provider) {
         return storage * defaults.azure_file_search_per_gb_day;
     }
     defaults.file_search_per_call
@@ -243,7 +245,9 @@ pub fn get_cost_for_vector_store(
     let rate = model_info.and_then(|info| number(info.get("vector_store_cost_per_gb_per_day")));
     match rate {
         Some(rate) => storage * rate,
-        None if provider == Some("azure") => storage * defaults.azure_vector_store_per_gb_day,
+        None if LlmProviders::AZURE.matches(provider) => {
+            storage * defaults.azure_vector_store_per_gb_day
+        }
         None => 0.0,
     }
 }
@@ -255,7 +259,7 @@ pub fn get_cost_for_computer_use(
     model_info: Option<&Value>,
     defaults: DefaultToolRates,
 ) -> f64 {
-    if provider != Some("azure") {
+    if !LlmProviders::AZURE.matches(provider) {
         return 0.0;
     }
     let input_rate = model_info

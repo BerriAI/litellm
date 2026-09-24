@@ -6,6 +6,7 @@ use crate::error::CostError;
 use crate::model_selection::{
     ModelSelectionRequest, get_response_model, select_model_name_for_cost_calc,
 };
+use crate::provider::LlmProviders;
 use crate::responses_usage::ChatUsage;
 use crate::usage_dispatch::get_usage_object;
 
@@ -111,7 +112,7 @@ pub fn prepare_completion_input(
         infer_call_type(request.call_type, request.response_kind).unwrap_or("completion");
     let model = if matches!(call_type, "image_generation" | "aimage_generation")
         && request.model_selection.model == Some("")
-        && request.model_selection.provider == Some("azure")
+        && LlmProviders::AZURE.matches(request.model_selection.provider)
     {
         Some("dall-e-2")
     } else {

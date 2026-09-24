@@ -24,6 +24,7 @@ use crate::image_cost_router::{
 };
 use crate::mcp_cost::calculate_mcp_tool_call_cost;
 use crate::per_second::{DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND, get_replicate_completion_pricing};
+use crate::provider::LlmProviders;
 use crate::realtime_cost::{
     collect_and_combine_usage_from_realtime_stream_results, combine_usage_objects, event_usage,
     partition_results_by_service_tier,
@@ -410,7 +411,7 @@ fn unregistered_replicate_cost(
     provider: Option<&str>,
 ) -> Option<(String, f64)> {
     let model = prepared.model_candidates.iter().flatten().next()?;
-    if !(provider == Some("replicate") || model.contains("replicate"))
+    if !(LlmProviders::REPLICATE.matches(provider) || model.contains("replicate"))
         || catalog.contains_exact_model(model)
     {
         return None;
@@ -768,7 +769,7 @@ pub fn completion_cost_from_response(
             .filter(|model| !model.is_empty())
             .or_else(|| hidden.get("litellm_model_name").and_then(Value::as_str))
     });
-    let request_model = if provider == Some("azure_ai") {
+    let request_model = if LlmProviders::AZURE_AI.matches(provider) {
         hidden_model
             .filter(|model| is_azure_model_router(model))
             .or(request.request_model)
@@ -790,7 +791,7 @@ pub fn completion_cost_from_response(
         ),
         |model| {
             let token_request_model =
-                if provider == Some("azure_ai") && !is_azure_model_router(model) {
+                if LlmProviders::AZURE_AI.matches(provider) && !is_azure_model_router(model) {
                     None
                 } else {
                     request_model
@@ -819,10 +820,11 @@ pub fn completion_cost_from_response(
             cost_per_token_for_call(catalog, cost_request, call)
         },
     )?;
-    let router_fee = (!is_search && provider == Some("azure_ai") && !is_azure_model_router(&model))
-        .then(|| azure_ai_router_fee(catalog, &model, request_model, usage.prompt_tokens))
-        .and_then(Result::ok)
-        .flatten();
+    let router_fee =
+        (!is_search && LlmProviders::AZURE_AI.matches(provider) && !is_azure_model_router(&model))
+            .then(|| azure_ai_router_fee(catalog, &model, request_model, usage.prompt_tokens))
+            .and_then(Result::ok)
+            .flatten();
     let supplied_additional_costs = if is_search {
         &[]
     } else {

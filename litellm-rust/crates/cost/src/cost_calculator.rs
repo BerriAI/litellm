@@ -241,7 +241,7 @@ pub fn cost_per_token(
         None => catalog.select_model_key(request.model, request.provider, request.region),
     }
     .or_else(|| {
-        (request.provider == Some("fireworks_ai"))
+        (provider == Some(LlmProviders::FIREWORKS_AI))
             .then(|| get_base_model_for_pricing(request.model, FireworksThresholds::default()))
             .and_then(|category| {
                 catalog.select_model_key(category, request.provider, request.region)
@@ -354,8 +354,13 @@ pub fn speech_cost(
     let model_info = catalog
         .entry(request.model, request.provider, request.region)
         .ok_or(CostError::ModelNotFound)?;
-    if matches!(request.provider, Some("vertex_ai" | "vertex_ai_beta"))
-        && let Some(cost) = lyria_generation_cost(model_info)
+    let provider = request
+        .provider
+        .and_then(|provider| provider.parse::<LlmProviders>().ok());
+    if matches!(
+        provider,
+        Some(LlmProviders::VERTEX_AI | LlmProviders::VERTEX_AI_BETA)
+    ) && let Some(cost) = lyria_generation_cost(model_info)
     {
         return Ok((0.0, cost));
     }

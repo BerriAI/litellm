@@ -340,4 +340,8 @@ impl LlmProviders {
     pub fn as_str(self) -> &'static str {
         self.into()
     }
+
+    pub fn matches(self, name: Option<&str>) -> bool {
+        name == Some(self.as_str())
+    }
 }
