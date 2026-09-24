@@ -3343,9 +3343,7 @@ class Router:
                     yield item
             except MidStreamFallbackError as e:
                 if has_forwarded_output:
-                    if e.original_exception is not None:
-                        raise e.original_exception from e
-                    raise
+                    raise e.original_exception or e
                 partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
                 try:
                     model_group: Final = cast(str, initial_kwargs.get("model"))
