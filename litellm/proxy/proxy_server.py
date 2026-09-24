@@ -11395,20 +11395,20 @@ async def model_info(
     )
 
     # Mirror /v1/models' visibility filter so first-occurrence resolution
-    # cannot land on a deployment the listing had hidden.
+    # cannot land on a deployment the listing had hidden. Undiscoverable
+    # models stay retrievable by id, they only drop out of the alias guard.
     blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
     unhealthy_names: Final = await get_hidden_unhealthy_model_names(
         healthy_only=healthy_only,
         general_settings=settings,
         llm_router=llm_router,
     )
-    hidden_names: Final = (
-        blocked_names
-        | unhealthy_names
-        | undiscoverable_model_names(all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id)
-    )
+    hidden_names: Final = blocked_names | unhealthy_names
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
+    undiscoverable_names: Final = undiscoverable_model_names(
+        all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+    )
 
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
     aliased_model_id: Final = alias_target(
@@ -11417,7 +11417,10 @@ async def model_info(
             user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
         ),
         frozenset(
-            response_id for response_id, _ in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+            response_id
+            for response_id, _ in TeamModelNameTranslator.listing_entries(
+                [m for m in all_models if m not in undiscoverable_names], llm_router, settings
+            )
         ),
     )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
