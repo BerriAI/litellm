@@ -203,7 +203,6 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
                 key: request_kwargs[key] for key in passthrough_keys if key in request_kwargs
             },
         }
-        validate_caller_completion_window(request_kwargs, self._provider, model if isinstance(model, str) else "")
         translated: Final = apply_service_tier_as_completion_window(
             merged, self._provider, model if isinstance(model, str) else ""
         )

@@ -82,35 +82,27 @@ def apply_service_tier_as_completion_window(
         _SERVICE_TIER_TO_COMPLETION_WINDOW.get(service_tier.lower()) if isinstance(service_tier, str) else None
     )
     validate_caller_completion_window(body, provider, model)
-    raw_metadata: Final = body.get("metadata")
-    metadata: Final[Mapping[str, object]] = raw_metadata if isinstance(raw_metadata, dict) else MappingProxyType({})
-    raw_extra_body: Final = body.get("extra_body")
-    extra_body: Final[Mapping[str, object]] = (
-        raw_extra_body if isinstance(raw_extra_body, dict) else MappingProxyType({})
-    )
-    raw_extra_metadata: Final = extra_body.get("metadata")
-    extra_metadata: Final[Mapping[str, object]] = (
-        raw_extra_metadata if isinstance(raw_extra_metadata, dict) else MappingProxyType({})
-    )
+    metadata, extra_metadata = _completion_window_metadata_maps(body)
     caller_window_present: Final = "completion_window" in extra_metadata or "completion_window" in metadata
-    caller_window: Final = (
-        extra_metadata.get("completion_window")
-        if "completion_window" in extra_metadata
-        else metadata.get("completion_window")
-    )
+    caller_window: Final = _caller_completion_window(body)
     window: Final = caller_window if caller_window_present else mapped_window
     new_body: Final = MappingProxyType({key: value for key, value in body.items() if key != "service_tier"})
     if window is None:
         return dict(new_body)  # mutable-ok: transform_request returns a plain dict
     windowed_metadata: Final = {**metadata, "completion_window": window}  # mutable-ok: nested wire dict
     merged: Final = {**new_body, "metadata": windowed_metadata}  # mutable-ok: transform_request returns a plain dict
-    if isinstance(raw_extra_metadata, dict) and "completion_window" not in extra_metadata:
+    raw_extra_body: Final = body.get("extra_body")
+    if (
+        "completion_window" not in extra_metadata
+        and isinstance(raw_extra_body, dict)
+        and isinstance(raw_extra_body.get("metadata"), dict)
+    ):
         windowed_extra_metadata: Final = {  # mutable-ok: nested wire dict
             **extra_metadata,
             "completion_window": window,
         }
         extra_body_with_window: Final = {  # mutable-ok: nested wire dict
-            **extra_body,
+            **raw_extra_body,
             "metadata": windowed_extra_metadata,
         }
         return {**merged, "extra_body": extra_body_with_window}  # mutable-ok: SDK merges extra_body into the wire body
@@ -307,8 +299,6 @@ def create_config_class(provider: SimpleProviderConfig):
             drop_service_tier: Final = service_tier_completion_window_drop(
                 provider, non_default_params.get("service_tier"), model, drop_params
             )
-            if service_tier_as_completion_window_enabled(provider):
-                validate_caller_completion_window(non_default_params, provider, model)
             params_to_map: Final = (
                 {  # mutable-ok: drop_params strips the tier into a fresh dict
                     key: value for key, value in non_default_params.items() if key != "service_tier"
@@ -404,8 +394,6 @@ def _json_responses_map_params(
     mapped: Final = OpenAILikeResponsesConfig.map_openai_params(
         config, response_api_optional_params=params, model=model, drop_params=drop_params
     )
-    if service_tier_as_completion_window_enabled(provider):
-        validate_caller_completion_window(params, provider, model)
     if service_tier_completion_window_drop(provider, params.get("service_tier"), model, drop_params):
         return {  # mutable-ok: drop_params strips the tier into a fresh dict
             key: value for key, value in mapped.items() if key != "service_tier"
