@@ -462,6 +462,39 @@ def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
     assert custom_model_id not in (selected_model_no_custom or "")
 
 
+def test_completion_cost_keeps_custom_pricing_provider_when_hidden_provider_differs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    deployment_id = "azure-ai-custom-pricing-provider-test"
+    input_rate = 0.0004
+    output_rate = 0.0011
+    monkeypatch.setitem(
+        litellm.model_cost,
+        deployment_id,
+        {
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+            "litellm_provider": "azure_ai",
+        },
+    )
+
+    response = ModelResponse(
+        model="azure_ai/neutral-test-model",
+        usage=Usage(prompt_tokens=2, completion_tokens=3, total_tokens=5),
+    )
+    response._hidden_params = {"custom_llm_provider": "openai"}
+
+    cost = completion_cost(
+        completion_response=response,
+        model="azure_ai/neutral-test-model",
+        custom_llm_provider="azure_ai",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+    )
+
+    assert cost == 2 * input_rate + 3 * output_rate
+
+
 def test_per_request_custom_pricing_with_router():
     """When custom pricing is passed as per-request kwargs (not in model_list),
     _select_model_name_for_cost_calc should fall back to the model name

@@ -790,6 +790,23 @@ def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None
     return value if isinstance(value, str) and value else None
 
 
+def _router_model_id_has_pricing(router_model_id: str | None) -> bool:
+    if router_model_id is None:
+        return False
+    entry: Final = litellm.model_cost.get(router_model_id)
+    if entry is None:
+        return False
+    return any(
+        entry.get(cost_key) is not None
+        for cost_key in (
+            "input_cost_per_token",
+            "input_cost_per_second",
+            "input_cost_per_query",
+            "tiered_pricing",
+        )
+    )
+
+
 def _select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -826,17 +843,8 @@ def _select_model_name_for_cost_calc(
     )
 
     if custom_pricing is True:
-        if router_model_id is not None and router_model_id in litellm.model_cost:
-            entry: Final = litellm.model_cost[router_model_id]
-            if (
-                entry.get("input_cost_per_token") is not None
-                or entry.get("input_cost_per_second") is not None
-                or entry.get("input_cost_per_query") is not None
-                or entry.get("tiered_pricing") is not None
-            ):
-                return_model = router_model_id
-            else:
-                return_model = model
+        if _router_model_id_has_pricing(router_model_id):
+            return_model = router_model_id
         else:
             return_model = model
 
@@ -1476,7 +1484,8 @@ def completion_cost(
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
-                        custom_llm_provider = hidden_params.get("custom_llm_provider", custom_llm_provider or None)
+                        if not (custom_pricing is True and _router_model_id_has_pricing(router_model_id)):
+                            custom_llm_provider = hidden_params.get("custom_llm_provider", custom_llm_provider or None)
                         region_name = hidden_params.get("region_name", region_name)
 
                         # For Gemini/Vertex AI responses, trafficType is stored in
