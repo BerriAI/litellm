@@ -68565,6 +68565,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "vertex_ai/gemini-2.5-flash-native-audio": {
+        "deprecation_date": "2026-12-13",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "vertex_ai",
@@ -68611,7 +68612,9 @@
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "vertex_ai",
         "mode": "chat",
+        "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
+        "output_cost_per_video_token": 1.75e-05,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/gemini-omni-1.1-flash-preview": {
@@ -69773,6 +69776,7 @@
         "cache_creation_input_audio_token_cost": 4e-07,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
+        "deprecation_date": "2026-10-31",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -69804,6 +69808,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-live-1": {
+        "deprecation_date": "2027-09-10",
         "input_cost_per_second": 0.000833333333333,
         "litellm_provider": "azure",
         "mode": "realtime",
@@ -69821,6 +69826,7 @@
         "supports_function_calling": true
     },
     "azure/gpt-live-transcribe": {
+        "deprecation_date": "2028-02-01",
         "input_cost_per_second": 0.000283333333333,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,
@@ -69842,6 +69848,7 @@
         "supports_audio_input": true
     },
     "azure/gpt-transcribe": {
+        "deprecation_date": "2028-02-01",
         "input_cost_per_second": 7.5e-05,
         "litellm_provider": "azure",
         "mode": "audio_transcription",
@@ -69860,6 +69867,7 @@
         "supports_audio_input": true
     },
     "azure/gpt-realtime-translate": {
+        "deprecation_date": "2027-05-06",
         "input_cost_per_second": 0.000566666666667,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,

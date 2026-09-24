@@ -1,7 +1,11 @@
-use serde_json::json;
-
-use super::*;
-use crate::base_llm::chat::transformation::Error;
+use litellm_llms::{
+    anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
+    base_llm::chat::transformation::{
+        BaseConfig, Error, ProviderChatResponseData, RequestAuth, Unsupported,
+    },
+};
+use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use serde_json::{Map, Value, json};
 
 fn messages(value: Value) -> Vec<ChatMessage> {
     serde_json::from_value(value).expect("valid messages")
@@ -205,7 +209,8 @@ fn declines_tool_calls_tool_results_and_multimodal_content() {
     );
     assert_eq!(
         reason(
-            json!([{"role": "user", "content": [
+            json!([
+            {"role": "user", "content": [
                 {"type": "image_url", "image_url": {"url": "https://x/y.png"}}
             ]}]),
             json!({})
@@ -214,7 +219,8 @@ fn declines_tool_calls_tool_results_and_multimodal_content() {
     );
     assert_eq!(
         reason(
-            json!([{"role": "user", "content": [
+            json!([
+            {"role": "user", "content": [
                 {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}
             ]}]),
             json!({})
