@@ -142,4 +142,44 @@ describe("KeyActivityPanel", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Key search failed");
     expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-alice");
   });
+
+  it("shows no Load more keys button without the prop", () => {
+    render(<KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3 }} />);
+    expect(screen.queryByRole("button", { name: "Load more keys" })).not.toBeInTheDocument();
+  });
+
+  it("calls loadMoreKeys when the button is clicked", async () => {
+    const loadMoreKeys = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    render(
+      <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3 }} loadMoreKeys={loadMoreKeys} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
+
+    expect(loadMoreKeys).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("button", { name: "Load more keys" })).toBeEnabled();
+  });
+
+  it("shows a pending status while loadMoreKeys is in flight", async () => {
+    const loadMoreKeys = vi.fn<() => Promise<void>>().mockReturnValue(new Promise(() => {}));
+    render(
+      <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3 }} loadMoreKeys={loadMoreKeys} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Loading more keys...");
+    expect(screen.getByRole("button", { name: "Load more keys" })).toBeDisabled();
+  });
+
+  it("reports a failed key page load", async () => {
+    const loadMoreKeys = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("boom"));
+    render(
+      <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3 }} loadMoreKeys={loadMoreKeys} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Loading more keys failed");
+  });
 });

@@ -664,7 +664,59 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText("Key Activity"));
     });
 
-    expect(await screen.findByRole("note")).toHaveTextContent("Only the 100 highest-spend keys of 3,000 are loaded");
+    // processActivityData is mocked to a single-entry record here, so the loaded count reads 1
+    expect(await screen.findByRole("note")).toHaveTextContent("Only the 1 highest-spend keys of 3,000 are loaded");
+  });
+
+  it("loads the next key page through the metadata cursor and clears the button when the cursor runs out", async () => {
+    mockTeamDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            api_keys: { "hash-a": createKeyMetrics(0.5, { key_alias: "loaded-a", team_id: null }) },
+          },
+        },
+      ],
+      metadata: { ...mockSpendData.metadata, api_key_limit: 1, total_api_keys: 2, next_cursor: "cursor-1" },
+    });
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+    act(() => {
+      fireEvent.click(screen.getByText("Key Activity"));
+    });
+
+    mockTeamDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            api_keys: { "hash-b": createKeyMetrics(0.01, { key_alias: "needle-b", team_id: null }) },
+          },
+        },
+      ],
+      metadata: { ...mockSpendData.metadata, next_cursor: null },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Load more keys" }));
+
+    expect(mockTeamDailyActivityAggregatedCall).toHaveBeenLastCalledWith(
+      "test-token",
+      expect.anything(),
+      expect.anything(),
+      null,
+      "cursor-1",
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Load more keys" })).not.toBeInTheDocument();
+    });
   });
 
   // An inactive tab panel is marked aria-selected="false" by one tab library and hidden by the

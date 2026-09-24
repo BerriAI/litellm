@@ -111,6 +111,10 @@ class DailySpendMetadata(BaseModel):
         description="Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key "
         "lists are truncated to the highest-spend keys.",
     )
+    next_cursor: str | None = Field(
+        default=None,
+        description="Opaque cursor for the next page of api_keys; None when every key is loaded",
+    )
 
 
 class SpendAnalyticsPaginatedResponse(BaseModel):
