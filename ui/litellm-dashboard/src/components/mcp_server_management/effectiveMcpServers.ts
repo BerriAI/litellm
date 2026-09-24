@@ -201,7 +201,14 @@ export const applyToolDenyWrite = ({
   const deniedKeys = mcpToolPermissionKeysFor(entry.server, deniedTools, allServers).filter((key) =>
     mcpKeyNamesOneServerOnly(allServers, key),
   );
-  const denied = fetchedTools.filter((tool) => !checked.includes(tool) && !(entry.toolsetTools ?? []).includes(tool));
+  // A denied tool the upstream is not listing right now must stay denied: only fetched tools are
+  // re-decided by the checkboxes, so names absent from fetchedTools are carried over untouched.
+  const denied = [
+    ...new Set([
+      ...fetchedTools.filter((tool) => !checked.includes(tool) && !(entry.toolsetTools ?? []).includes(tool)),
+      ...(entry.deniedTools ?? []).filter((name) => !fetchedTools.includes(name)),
+    ]),
+  ];
   const kept = Object.fromEntries(Object.entries(deniedTools).filter(([key]) => !deniedKeys.includes(key)));
   const nextDenied = denied.length === 0 ? kept : { ...kept, [entry.permissionKey]: denied };
   return {

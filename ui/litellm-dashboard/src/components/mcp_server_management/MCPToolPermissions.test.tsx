@@ -343,7 +343,9 @@ describe("MCPToolPermissions", () => {
       const [listIssues, deleteIssue] = screen.getAllByRole("checkbox");
       expect(listIssues).toBeChecked();
       expect(listIssues).toBeDisabled();
-      expect(deleteIssue).toBeChecked();
+      // A server reached only through a toolset grants just that toolset's tools, matching the
+      // backend's union over (keyed, toolset); every other fetched tool stays unchecked.
+      expect(deleteIssue).not.toBeChecked();
 
       await userEvent.click(listIssues);
       expect(mockOnChange).not.toHaveBeenCalled();
@@ -584,6 +586,32 @@ describe("MCPToolPermissions", () => {
       const [listIssues, deleteIssue] = screen.getAllByRole("checkbox");
       expect(listIssues).toBeChecked();
       expect(deleteIssue).toBeChecked();
+    });
+
+    // No allowlist and no toolset narrows the server, so every fetched tool is checked except the
+    // ones the denylist names; a tool the upstream adds later renders checked too.
+    it("checks every fetched tool but the denied ones on an otherwise unrestricted server", async () => {
+      const directServer = { server_id: "srv-direct-1", server_name: "Direct Server", alias: "Direct Server" };
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([directServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[directServer.server_id]}
+          toolPermissions={{}}
+          deniedTools={{ [directServer.server_id]: ["delete_issue"] }}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+
+      await userEvent.click(screen.getByText("Flat List"));
+      const [listIssues, deleteIssue] = screen.getAllByRole("checkbox");
+      expect(listIssues).toBeChecked();
+      expect(deleteIssue).not.toBeChecked();
     });
 
     it("shows a server that only a stale tool-permission entry still entitles", async () => {

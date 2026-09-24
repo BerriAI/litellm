@@ -658,6 +658,30 @@ describe("applyToolDenyWrite", () => {
     expect(written.deniedTools["github_mcp"]).toEqual(["delete_issue"]);
     expect(written.deniedTools["uuid-1"]).toEqual(["delete_issue"]);
   });
+
+  it("keeps a denied tool the upstream is not currently listing", () => {
+    const deniedTools = { "uuid-1": ["gone_tool", "list_issues"] };
+    const entry = entryFor({}, deniedTools);
+    const input = writeInput(entry, ["list_issues", "create_issue"], { deniedTools });
+
+    expect(applyToolDenyWrite(input).deniedTools["uuid-1"]).toEqual(["delete_issue", "gone_tool"]);
+  });
+
+  it("keeps the denylist entry when a stale denied name survives a Select All", () => {
+    const deniedTools = { "uuid-1": ["gone_tool"] };
+    const entry = entryFor({}, deniedTools);
+    const input = writeInput(entry, fetched, { deniedTools });
+
+    expect(applyToolDenyWrite(input).deniedTools).toEqual({ "uuid-1": ["gone_tool"] });
+  });
+
+  it("removes the denylist entry when nothing remains denied", () => {
+    const deniedTools = { "uuid-1": ["list_issues"] };
+    const entry = entryFor({}, deniedTools);
+    const input = writeInput(entry, fetched, { deniedTools });
+
+    expect(applyToolDenyWrite(input).deniedTools).toEqual({});
+  });
 });
 
 describe("resolveEffectiveMcpServers denylist", () => {
