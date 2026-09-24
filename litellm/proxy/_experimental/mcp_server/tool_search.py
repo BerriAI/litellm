@@ -103,7 +103,7 @@ def _tool_result(tool: Tool) -> ToolSearchResult:
         "name": tool.name,
         "description": tool.description or "",
         "inputSchema": tool.input_schema,
-    }  # mutable-ok: wire schema payload
+    }
 
 
 def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
@@ -112,7 +112,7 @@ def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
         "description": tool.description or "",
         "inputSchema": tool.input_schema,
         "score": score,
-    }  # mutable-ok: wire schema payload
+    }
 
 
 _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
@@ -120,7 +120,7 @@ _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
 
 def with_mcp_proxy_identity(tool: Tool, server_id: str) -> Tool:
     identity: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool.name}
-    return tool.model_copy(  # mutable-ok: Pydantic requires mutable update and metadata mappings
+    return tool.model_copy(
         update={  # mutable-ok: Pydantic update payload
             "meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}  # mutable-ok: metadata mapping
         }
