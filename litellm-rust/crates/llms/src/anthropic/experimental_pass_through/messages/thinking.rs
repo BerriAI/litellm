@@ -476,6 +476,7 @@ mod tests {
     #[case::max(opus_4_7(), "max", "max")]
     #[case::minimal_maps_to_low_on_4_6(sonnet_4_6(), "minimal", "low")]
     #[case::low_on_4_6(sonnet_4_6(), "low", "low")]
+    #[case::max_on_4_6(sonnet_4_6(), "max", "max")]
     #[case::max_without_max_tier_is_allowed_on_adaptive_models(newfamily_6(), "max", "max")]
     fn reasoning_effort_on_adaptive_model_becomes_summarized_adaptive_thinking_and_effort(
         #[case] capabilities: AnthropicModelCapabilities,

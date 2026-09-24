@@ -1,22 +1,27 @@
-use std::sync::Arc;
-use std::task::Poll;
+use std::{sync::Arc, task::Poll};
 
 use futures_util::future::{AbortHandle, Abortable};
-use litellm_host::event::{FailureOrigin, Timing, epoch_seconds};
-use litellm_host::host::{Demand, HostOp, HostResult, HostStep};
-use litellm_host::machine::{HostFailure, Machine, MachineStep};
-use litellm_host::route::Route;
-use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use litellm_host::{
+    event::{FailureOrigin, Timing, epoch_seconds},
+    host::{Demand, HostOp, HostResult, HostStep},
+    machine::{HostFailure, Machine, MachineStep},
+    route::Route,
+};
+use pyo3::{
+    exceptions::{PyBaseException, PyException, PyRuntimeError},
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    types::PyDict,
+};
 use tokio::sync::Mutex;
 
-use crate::adapter::{
-    InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
+use crate::{
+    adapter::{
+        InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
+    },
+    execution::{poll_async_value, run_async_value, run_sync_value},
+    handle::{Execution, ExecutionBody, ExecutionStep},
 };
-use crate::execution::{poll_async_value, run_async_value, run_sync_value};
-use crate::handle::{Execution, ExecutionBody, ExecutionStep};
 
 type RouteOf<H> = <H as RouteHost>::Route;
 type ErrorOf<H> = <RouteOf<H> as Route>::Error;
@@ -528,10 +533,14 @@ where
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use litellm_host::event::{MachineEvent, RequestContext, WireRequest};
-    use litellm_host::machine::{Interrupted, Step};
-    use pyo3::exceptions::{PyBaseException, PyValueError};
-    use pyo3::types::PyDict;
+    use litellm_host::{
+        event::{MachineEvent, RequestContext, WireRequest},
+        machine::{Interrupted, Step},
+    };
+    use pyo3::{
+        exceptions::{PyBaseException, PyValueError},
+        types::PyDict,
+    };
 
     use super::*;
 
@@ -792,6 +801,9 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 LifecycleEvent::Started { .. } => "started".into(),
                 LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
                     format!("response:{}", raw.body)
+                }
+                LifecycleEvent::Machine(MachineEvent::RequestResent { body }) => {
+                    format!("resent:{body}")
                 }
                 LifecycleEvent::Succeeded { response, .. } => {
                     format!("succeeded:{}", response.bind(py))

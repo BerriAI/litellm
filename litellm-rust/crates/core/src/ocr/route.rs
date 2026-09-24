@@ -410,9 +410,9 @@ mod azure_ai_tests {
     use litellm_llms::base_llm::ocr::error::Error;
     use serde_json::{Value, json};
 
-    use crate::ocr::route::LocalOcrHost;
-    use crate::ocr::test_support::{
-        MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request,
+    use crate::ocr::{
+        route::LocalOcrHost,
+        test_support::{MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request},
     };
 
     #[tokio::test]
@@ -712,8 +712,8 @@ mod azure_document_intelligence_tests {
     use rstest::rstest;
     use serde_json::{Value, json};
 
-    use crate::ocr::route::LocalOcrHost;
     use crate::ocr::{
+        route::LocalOcrHost,
         test_support::{
             MockResponse, mock_server, ocr_client, perform_ocr, perform_ocr_with, wire_request,
         },
@@ -1715,9 +1715,9 @@ mod reducto_tests {
     use rstest::rstest;
     use serde_json::{Value, json};
 
-    use crate::ocr::route::LocalOcrHost;
-    use crate::ocr::test_support::{
-        MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request,
+    use crate::ocr::{
+        route::LocalOcrHost,
+        test_support::{MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request},
     };
 
     fn request_body(request: &str) -> Value {
@@ -2776,8 +2776,8 @@ pub(crate) mod tests {
     use rstest::rstest;
     use serde_json::{Value, json};
 
-    use crate::ocr::route::{LocalOcrHost, OcrOp, OcrOpResult, ocr_machine};
     use crate::ocr::{
+        route::{LocalOcrHost, OcrOp, OcrOpResult, ocr_machine},
         test_support::{
             MockResponse, mock_server, ocr_client, perform_ocr, perform_ocr_with, wire_request,
         },
@@ -3059,6 +3059,7 @@ pub(crate) mod tests {
         match event {
             CallEvent::Started { .. } => "started",
             CallEvent::Machine(MachineEvent::ResponseReceived { .. }) => "response",
+            CallEvent::Machine(MachineEvent::RequestResent { .. }) => "resent",
             CallEvent::Succeeded { .. } => "success",
             CallEvent::Failed { .. } => "failure",
         }

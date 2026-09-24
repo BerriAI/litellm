@@ -190,11 +190,13 @@ class _RouterCall(Protocol):
     def __call__(self, **params: object) -> Awaitable[object]: ...  # kwargs-ok: the request body is passed as keywords
 
 
-def litellm_executed_provider_of(credentials: Mapping[str, object]) -> str | None:
+def deployment_provider_of(credentials: Mapping[str, object]) -> str | None:
     explicit_provider: Final = credentials.get("custom_llm_provider")
-    provider: Final = (
-        explicit_provider if isinstance(explicit_provider, str) else _provider_of(credentials.get("model"))
-    )
+    return explicit_provider if isinstance(explicit_provider, str) else _provider_of(credentials.get("model"))
+
+
+def litellm_executed_provider_of(credentials: Mapping[str, object]) -> str | None:
+    provider: Final = deployment_provider_of(credentials)
     return provider if provider in LITELLM_EXECUTED_BATCH_PROVIDERS else None
 
 

@@ -15,13 +15,18 @@ import contextvars
 import os
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, NoReturn, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.batches.dispatch import (
+    AnthropicConnection,
+    create_anthropic_batch,
+    retrieve_anthropic_batch,
+)
 from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
@@ -108,7 +113,7 @@ async def acreate_batch(
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses", "/v1/ocr"],
     input_file_id: str,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral"
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral", "anthropic"
     ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
@@ -154,18 +159,32 @@ async def acreate_batch(
         raise e
 
 
+def _raise_create_batch_unsupported(custom_llm_provider: str) -> NoReturn:
+    raise litellm.exceptions.BadRequestError(
+        message=f"LiteLLM doesn't support custom_llm_provider={custom_llm_provider} for 'create_batch'",
+        model="n/a",
+        llm_provider=custom_llm_provider,
+        response=httpx.Response(
+            status_code=400,
+            content="Unsupported provider",
+            request=httpx.Request(method="create_batch", url="https://github.com/BerriAI/litellm"),
+        ),
+    )
+
+
 @client
 def create_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses", "/v1/ocr"],
     input_file_id: str,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral"
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral", "anthropic"
     ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     output_expires_after: dict[str, Any] | None = None,
+    litellm_batch_input_content: str | None = None,
     **kwargs,
 ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
     """
@@ -325,17 +344,21 @@ def create_batch(
                 create_batch_data=_create_batch_request,
                 custom_endpoint=optional_params.get("custom_endpoint"),
             )
-        else:
-            raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support custom_llm_provider={custom_llm_provider} for 'create_batch'",
-                model="n/a",
-                llm_provider=custom_llm_provider,
-                response=httpx.Response(
-                    status_code=400,
-                    content="Unsupported provider",
-                    request=httpx.Request(method="create_batch", url="https://github.com/BerriAI/litellm"),
+        elif custom_llm_provider == "anthropic":
+            response = create_anthropic_batch(
+                is_async=_is_async,
+                input_jsonl=litellm_batch_input_content,
+                model=model if isinstance(model, str) else None,
+                connection=AnthropicConnection(
+                    api_key=optional_params.api_key or litellm.api_key,
+                    api_base=optional_params.api_base or litellm.api_base,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
                 ),
+                python=lambda: _raise_create_batch_unsupported(custom_llm_provider),
             )
+        else:
+            _raise_create_batch_unsupported(custom_llm_provider)
         return response
     except Exception as e:
         raise e
@@ -488,13 +511,23 @@ def _handle_retrieve_batch_providers_without_provider_config(
         )
         api_key = optional_params.api_key or litellm.api_key or litellm.azure_key or get_secret_str("ANTHROPIC_API_KEY")
 
-        response = anthropic_batches_instance.retrieve_batch(
-            _is_async=_is_async,
+        response = retrieve_anthropic_batch(
+            is_async=_is_async,
             batch_id=batch_id,
-            api_base=api_base,
-            api_key=api_key,
-            timeout=timeout,
-            max_retries=optional_params.max_retries,
+            connection=AnthropicConnection(
+                api_key=optional_params.api_key or litellm.api_key,
+                api_base=optional_params.api_base or litellm.api_base,
+                extra_headers=_retrieve_batch_request.get("extra_headers"),
+                timeout=timeout,
+            ),
+            python=lambda: anthropic_batches_instance.retrieve_batch(
+                _is_async=_is_async,
+                batch_id=batch_id,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            ),
         )
     else:
         raise litellm.exceptions.BadRequestError(

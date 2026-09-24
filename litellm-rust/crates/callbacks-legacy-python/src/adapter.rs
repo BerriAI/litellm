@@ -367,6 +367,15 @@ impl PythonLifecycle for LegacyLogging {
     fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep> {
         match event {
             LifecycleEvent::Started { .. } => Ok(LifecycleStep::Done),
+            LifecycleEvent::Machine(MachineEvent::RequestResent { body }) => {
+                self.body = Some(
+                    to_py(py, body)?
+                        .into_bound(py)
+                        .cast_into::<PyDict>()?
+                        .unbind(),
+                );
+                Ok(LifecycleStep::Done)
+            }
             LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
                 let api_key = self
                     .context
@@ -492,9 +501,7 @@ mod deployment_hooks_tests {
 
     use litellm_host::event::{FailureOrigin, Timing};
     use litellm_host_python::{LifecycleEvent, LifecycleStep, PythonLifecycle};
-    use pyo3::exceptions::asyncio::CancelledError;
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
+    use pyo3::{exceptions::asyncio::CancelledError, prelude::*, types::PyDict};
     use rstest::rstest;
 
     use super::LegacyLogging;
@@ -787,8 +794,10 @@ mod payload_tests {
     use serde_json::{Map, Value, json};
 
     use super::LegacyLogging;
-    use crate::PythonLogger;
-    use crate::test_support::{legacy_call, local, namespace, run};
+    use crate::{
+        PythonLogger,
+        test_support::{legacy_call, local, namespace, run},
+    };
 
     /// The payload phases of `Logging` on top of `StubLogger`, with `pre_call` handing the
     /// payload to the case's `on_pre_call`.
@@ -837,7 +846,7 @@ check = lambda: None
         body: Value,
         secret_fields: &[&str],
     ) -> WireRequest {
-        before_send_bound(&[], script, optional_params, body, secret_fields)
+        before_send_bound(&[], script, optional_params, body, secret_fields, None)
     }
 
     /// [`before_send_with_secrets`] with `bindings` placed in the namespace before `script` runs.
@@ -847,6 +856,7 @@ check = lambda: None
         optional_params: Value,
         body: Value,
         secret_fields: &[&str],
+        resent: Option<Value>,
     ) -> WireRequest {
         Python::initialize();
         Python::attach(|py| {
@@ -872,6 +882,13 @@ check = lambda: None
                 body,
             };
             let step = logging.before_send(py, Box::new(wire), &context).unwrap();
+            if let Some(body) = resent {
+                let resent = MachineEvent::RequestResent { body };
+                assert!(matches!(
+                    logging.emit(py, LifecycleEvent::Machine(&resent)).unwrap(),
+                    LifecycleStep::Done
+                ));
+            }
             let raw = MachineEvent::ResponseReceived {
                 raw: RawResponse {
                     body: "raw response".into(),
@@ -1128,6 +1145,23 @@ def check():
     }
 
     #[test]
+    fn post_call_logs_the_body_of_a_resent_request() {
+        before_send_bound(
+            &[],
+            c"
+def check():
+    _, _, additional_args = logger.post
+    assert additional_args['complete_input_dict'] == {'messages': []}, additional_args
+    assert logger.pre['complete_input_dict'] == {'messages': [{'role': 'user'}], 'thinking': {}}, logger.pre
+",
+            json!({}),
+            json!({"messages": [{"role": "user"}], "thinking": {}}),
+            &[],
+            Some(json!({"messages": []})),
+        );
+    }
+
+    #[test]
     fn every_request_runs_the_full_pre_call_and_post_call() {
         let wire = before_send(
             c"
@@ -1293,6 +1327,7 @@ def check():
                 json!({}),
                 Value::Object(body.clone()),
                 &[],
+                None,
             );
 
             prop_assert_eq!(wire.body, edit.sent(&body));
@@ -1307,15 +1342,18 @@ mod terminal_tests {
 
     use litellm_host::event::{FailureOrigin, Timing};
     use litellm_host_python::{LifecycleEvent, LifecycleStep, PythonLifecycle};
-    use pyo3::exceptions::PyRuntimeError;
-    use pyo3::exceptions::asyncio::CancelledError;
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
+    use pyo3::{
+        exceptions::{PyRuntimeError, asyncio::CancelledError},
+        prelude::*,
+        types::PyDict,
+    };
     use rstest::rstest;
 
     use super::LegacyLogging;
-    use crate::PythonLogger;
-    use crate::test_support::{legacy_call, local, namespace, run};
+    use crate::{
+        PythonLogger,
+        test_support::{legacy_call, local, namespace, run},
+    };
 
     const TIMING: Timing = Timing {
         start_time: 0.0,

@@ -232,6 +232,20 @@ fn retain_blocks(
         .collect()
 }
 
+pub fn is_anthropic_invalid_thinking_block_error(error_text: &str) -> bool {
+    let lower = error_text.to_lowercase();
+    lower.contains("thinking")
+        && ((lower.contains("signature")
+            && (lower.contains("invalid") || lower.contains("valid string")))
+            || lower.contains("must contain thinking"))
+}
+
+pub fn strip_thinking_blocks(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
+    retain_blocks(messages, |block| {
+        !block.is_type("thinking") && !block.is_type("redacted_thinking")
+    })
+}
+
 pub fn strip_empty_content_blocks(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
     retain_blocks(messages, |block| {
         !is_empty_text_block(block) && !is_empty_thinking_block(block)
@@ -1222,8 +1236,76 @@ mod tests {
     }
 
     #[rstest]
+    #[case::anthropic_invalid_signature(
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"messages.3.content.3: Invalid `signature` in `thinking` block"},"request_id":"req_1"}"#
+    )]
+    #[case::bedrock_signature_not_a_string(
+        r#"{"message":"messages.2.content.0.thinking.signature.str: Input should be a valid string"}"#
+    )]
+    #[case::vertex_signature_not_a_string(
+        "messages.4.content.1.thinking.signature.str: Input should be a valid string"
+    )]
+    #[case::empty_thinking_text(
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0.thinking: each thinking block must contain thinking"}}"#
+    )]
+    #[case::shouting("MESSAGES.0.CONTENT.0: INVALID `SIGNATURE` IN `THINKING` BLOCK")]
+    fn invalid_thinking_block_errors_are_recognized(#[case] error_text: &str) {
+        assert!(is_anthropic_invalid_thinking_block_error(error_text));
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::rate_limit("rate limit exceeded")]
+    #[case::unrelated_invalid_request("invalid_request_error: model not found")]
+    #[case::signature_without_invalid("thinking signature is malformed")]
+    #[case::invalid_signature_without_thinking(
+        "messages.0.content.0: Invalid `signature` in `tool_use` block"
+    )]
+    #[case::must_contain_without_thinking("each text block must contain text")]
+    fn other_errors_are_not_invalid_thinking_block_errors(#[case] error_text: &str) {
+        assert!(!is_anthropic_invalid_thinking_block_error(error_text));
+    }
+
+    #[rstest]
+    #[case::thinking_beside_text(
+        json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "plan", "signature": "sig"},
+                {"type": "text", "text": "hello"}
+            ]}
+        ]),
+        json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}
+        ])
+    )]
+    #[case::redacted_thinking_beside_tool_use(
+        json!([{"role": "assistant", "content": [
+            {"type": "redacted_thinking", "data": "opaque"},
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}
+        ]}]),
+        json!([{"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]}])
+    )]
+    #[case::message_left_without_blocks_is_dropped(
+        json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "plan", "signature": "sig"}]}
+        ]),
+        json!([{"role": "user", "content": "hi"}])
+    )]
+    #[case::history_without_thinking_is_kept(
+        json!([{"role": "assistant", "content": [{"type": "text", "text": "hello"}]}]),
+        json!([{"role": "assistant", "content": [{"type": "text", "text": "hello"}]}])
+    )]
+    fn strip_thinking_blocks_rewrites(#[case] input: Value, #[case] expected: Value) {
+        assert_eq!(apply(strip_thinking_blocks, input), expected);
+    }
+
+    #[rstest]
     #[case::with_results(json!([{"type": "web_search_result", "url": "u", "title": "Rome", "snippet": "s", "page_age": null}]))]
     #[case::without_results(json!([]))]
+    #[case::failed_search(json!({"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"}))]
     fn flatten_unencrypted_web_search_results_is_idempotent(#[case] results: Value) {
         let input = replayed_search_turn(results);
         let once = apply(flatten_unencrypted_web_search_results, input.clone());

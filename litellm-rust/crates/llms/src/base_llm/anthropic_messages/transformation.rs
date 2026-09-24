@@ -4,7 +4,10 @@ use litellm_types::llms::anthropic_messages::{
 };
 
 use crate::{
-    anthropic::experimental_pass_through::messages::thinking::ThinkingContext,
+    anthropic::{
+        common_utils::{is_anthropic_invalid_thinking_block_error, strip_thinking_blocks},
+        experimental_pass_through::messages::thinking::ThinkingContext,
+    },
     base_llm::chat::transformation::Error,
 };
 
@@ -102,6 +105,21 @@ pub trait BaseAnthropicMessagesConfig: Sync {
 
     fn request_headers(&self, headers: Headers, _request: &AnthropicMessagesRequest) -> Headers {
         headers
+    }
+
+    fn request_after_http_error(
+        &self,
+        status: u16,
+        error_body: &str,
+        request: AnthropicMessagesRequest,
+    ) -> Option<AnthropicMessagesRequest> {
+        (status == 400 && is_anthropic_invalid_thinking_block_error(error_body)).then(|| {
+            AnthropicMessagesRequest {
+                thinking: None,
+                messages: strip_thinking_blocks(request.messages),
+                ..request
+            }
+        })
     }
 }
 
@@ -291,5 +309,59 @@ mod tests {
             accepts_bearer,
         };
         assert_eq!(config.authenticate(forwarded, api_key, &|_| None), expected);
+    }
+
+    const INVALID_SIGNATURE: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: Invalid `signature` in `thinking` block"}}"#;
+
+    fn replayed_thinking_request() -> AnthropicMessagesRequest {
+        serde_json::from_value(serde_json::json!({
+            "model": "claude",
+            "max_tokens": 2048,
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "output_config": {"effort": "high"},
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": "stale"},
+                    {"type": "text", "text": "hello"}
+                ]},
+                {"role": "user", "content": "again"}
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn invalid_thinking_signature_is_retried_without_thinking() {
+        let retried = DefaultsConfig
+            .request_after_http_error(400, INVALID_SIGNATURE, replayed_thinking_request())
+            .map(|request| serde_json::to_value(request).unwrap());
+        assert_eq!(
+            retried,
+            Some(serde_json::json!({
+                "model": "claude",
+                "max_tokens": 2048,
+                "output_config": {"effort": "high"},
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+                    {"role": "user", "content": "again"}
+                ]
+            }))
+        );
+    }
+
+    #[rstest]
+    #[case::server_error_with_the_same_text(500, INVALID_SIGNATURE)]
+    #[case::unrelated_bad_request(400, "rate limit exceeded")]
+    fn other_http_errors_are_not_retried(#[case] status: u16, #[case] error_body: &str) {
+        assert_eq!(
+            DefaultsConfig.request_after_http_error(
+                status,
+                error_body,
+                replayed_thinking_request()
+            ),
+            None
+        );
     }
 }
