@@ -1886,17 +1886,29 @@ async def test_can_key_call_model_honors_key_alias():
     assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
 
 
-def test_can_object_call_model_global_alias_wins_over_key_alias(monkeypatch):
-    """The global alias rewrite wins at dispatch, so a colliding key alias must not grant access."""
+def test_can_object_call_model_key_alias_applies_before_global_alias(monkeypatch):
+    """The key alias rewrite precedes the global one at dispatch, so the key target is authorized."""
     from litellm.proxy.auth.auth_checks import _can_object_call_model
 
     monkeypatch.setattr(litellm, "model_alias_map", {"foo": "bar"})
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"foo": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
 
     with pytest.raises(ProxyException) as exc_info:
         _can_object_call_model(
             model="foo",
             llm_router=None,
-            models=["baz"],
+            models=["bar"],
             key_model_aliases={"foo": "baz"},
             object_type="key",
             fallback_depth=0,
@@ -1982,6 +1994,55 @@ def test_can_object_call_model_key_alias_name_alone_is_not_enough():
         )
         is True
     )
+
+
+def test_can_object_call_model_team_alias_applies_before_key_alias():
+    """A key alias on the raw name loses to the team alias that rewrites it first at dispatch."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            team_model_aliases={"foo": "bar"},
+            key_model_aliases={"foo": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_key_alias_on_team_alias_target():
+    """A key alias on the team-rewritten name resolves like the dispatch chain does."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            team_model_aliases={"foo": "bar"},
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            team_model_aliases={"foo": "bar"},
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
 
 
 @pytest.mark.asyncio

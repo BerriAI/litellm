@@ -4403,12 +4403,18 @@ def _can_object_call_model(
             else None
         )
     )
-    key_alias_target: Final = (
-        key_model_aliases.get(litellm.model_alias_map.get(model, model)) if key_model_aliases is not None else None
+    after_team_alias: Final = team_model_aliases.get(model, model) if team_model_aliases else model
+    after_key_alias: Final = (
+        key_model_aliases.get(after_team_alias, after_team_alias) if key_model_aliases else after_team_alias
     )
+    after_global_alias: Final = litellm.model_alias_map.get(after_key_alias, after_key_alias)
+    dispatched_model: Final = (
+        key_model_aliases.get(after_global_alias, after_global_alias) if key_model_aliases else after_global_alias
+    )
+    key_alias_applied: Final = after_key_alias != after_team_alias or dispatched_model != after_global_alias
     potential_models: Final = (
-        (key_alias_target,)
-        if key_alias_target is not None
+        (dispatched_model,)
+        if key_alias_applied
         else (
             *((model, compaction_parent) if compaction_parent is not None else (model,)),
             *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
