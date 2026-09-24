@@ -180,3 +180,29 @@ fn inclusive_threshold_providers_stay_pinned_to_the_python_set() {
         assert!(!uses_inclusive_token_thresholds(provider));
     }
 }
+
+#[rstest]
+#[case::threshold_key_without_tokens_suffix(json!({"input_cost_per_token_above_50": 3e-6}), None, 3e-6, 4e-6)]
+#[case::tiered_request_builds_the_tokens_key(json!({"input_cost_per_token_above_50": 3e-6, "input_cost_per_token_above_50_tokens_priority": 5e-6}), Some("priority"), 5e-6, 4e-6)]
+#[case::unparseable_threshold_is_ignored(json!({"input_cost_per_token_above_abc_tokens": 3e-6}), None, 2e-6, 4e-6)]
+fn get_token_base_cost_reads_threshold_keys_like_python_split(
+    #[case] extra: Value,
+    #[case] service_tier: Option<&str>,
+    #[case] expected_input: f64,
+    #[case] expected_output: f64,
+) {
+    let model_info = Value::Object(
+        json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 4e-6})
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain(extra.as_object().unwrap().clone())
+            .collect(),
+    );
+    let rates = get_token_base_cost_without_off_peak(&model_info, 100, service_tier, false);
+    assert_eq!(
+        (rates.input, rates.output),
+        (expected_input, expected_output)
+    );
+}

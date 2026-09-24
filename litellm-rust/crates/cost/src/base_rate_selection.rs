@@ -95,8 +95,17 @@ fn tiered_base_rates(model_info: &Value, prompt_tokens: u64) -> Option<TokenBase
     })
 }
 
+fn threshold_text(key: &str) -> Option<&str> {
+    let above = key.split_once("_above_")?.1;
+    Some(
+        above
+            .split_once("_tokens")
+            .map_or(above, |(threshold, _)| threshold),
+    )
+}
+
 fn threshold_number(key: &str) -> Option<f64> {
-    let threshold = key.split_once("_above_")?.1.split_once("_tokens")?.0;
+    let threshold = threshold_text(key)?;
     let number = threshold.replace('k', "").parse::<f64>().ok()?;
     Some(number * if threshold.contains('k') { 1000.0 } else { 1.0 })
 }
@@ -173,19 +182,17 @@ fn select_base_rates(
     );
     let selected =
         crossed_threshold(model_info, prompt_tokens, threshold_inclusive).map(|(key, _)| {
-            let threshold = key
-                .split_once("_above_")
-                .unwrap()
-                .1
-                .split_once("_tokens")
-                .unwrap()
-                .0;
+            let threshold = threshold_text(key).unwrap_or_default();
             let rate_key = |prefix: &str| {
                 tier_key(&format!("{prefix}_above_{threshold}_tokens"), service_tier)
             };
+            let input_key = if service_tier.is_some_and(|tier| !tier.is_empty()) {
+                rate_key("input_cost_per_token")
+            } else {
+                key.to_owned()
+            };
             (
-                get_cost_per_unit(model_info, &rate_key("input_cost_per_token"), Some(input))
-                    .unwrap_or(input),
+                get_cost_per_unit(model_info, &input_key, Some(input)).unwrap_or(input),
                 get_cost_per_unit(model_info, &rate_key("output_cost_per_token"), Some(output))
                     .unwrap_or(output),
                 get_cost_per_unit(
