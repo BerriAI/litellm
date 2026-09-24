@@ -11413,8 +11413,7 @@ async def model_info(
             user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
         ),
         frozenset(
-            response_id
-            for response_id, _ in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+            response_id for response_id, _ in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
         ),
     )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
