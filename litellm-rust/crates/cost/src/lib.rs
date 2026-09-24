@@ -30,6 +30,8 @@ pub mod completion_input;
 pub mod completion_response;
 pub mod cost_breakdown;
 #[allow(clippy::disallowed_types)]
+pub mod cost_calculator;
+#[allow(clippy::disallowed_types)]
 pub mod custom_pricing;
 #[allow(clippy::disallowed_types)]
 pub mod dashscope_cost;

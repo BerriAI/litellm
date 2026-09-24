@@ -1,6 +1,7 @@
 #![allow(clippy::disallowed_types)]
 // mirrors: test_litellm/llms/openai/test_cost_calculation.py::test_shipped_per_second_models_bill_a_non_zero_cost
 // mirrors: test_litellm/llms/databricks/test_databricks_cost_calculator.py
+use litellm_cost::cost_calculator::cost_per_token;
 use litellm_cost::lemonade_cost::lemonade_cost_per_token;
 
 use std::collections::HashMap;
@@ -52,15 +53,15 @@ fn azure_provider_output_seconds_override_token_rates_when_present() {
         get_usage_object(&json!({"usage": {"prompt_tokens": 100, "completion_tokens": 20}}))
             .unwrap()
             .unwrap();
-    let seconds = catalog
-        .cost_per_token(ModelCostRequest {
+    let seconds = cost_per_token(
+        &catalog,
+        ModelCostRequest {
             response_time_ms: Some(1500.0),
             ..request("speech", "azure", &usage)
-        })
-        .unwrap();
-    let tokens = catalog
-        .cost_per_token(request("speech", "azure", &usage))
-        .unwrap();
+        },
+    )
+    .unwrap();
+    let tokens = cost_per_token(&catalog, request("speech", "azure", &usage)).unwrap();
     assert_eq!(seconds, (0.0, 0.03));
     assert_eq!(tokens, (0.1, 0.04));
 }
@@ -92,15 +93,19 @@ fn databricks_provider_uses_legacy_registry_price_and_preserves_original_duratio
         get_usage_object(&json!({"usage": {"prompt_tokens": 100, "completion_tokens": 20}}))
             .unwrap()
             .unwrap();
-    let alias = catalog
-        .cost_per_token(request("dbrx-instruct-slow", "databricks", &usage))
-        .unwrap();
-    let duration = catalog
-        .cost_per_token(ModelCostRequest {
+    let alias = cost_per_token(
+        &catalog,
+        request("dbrx-instruct-slow", "databricks", &usage),
+    )
+    .unwrap();
+    let duration = cost_per_token(
+        &catalog,
+        ModelCostRequest {
             response_time_ms: Some(2000.0),
             ..request("dbrx-instruct-fast", "databricks", &usage)
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert_eq!(alias, (0.2, 0.06));
     assert_eq!(duration, (0.1, 0.0));
 }
@@ -122,26 +127,24 @@ fn lemonade_provider_is_free_for_unmapped_and_token_priced_models() {
             .unwrap()
             .unwrap();
     assert_eq!(
-        catalog
-            .cost_per_token(request("unknown", "lemonade", &usage))
-            .unwrap(),
+        cost_per_token(&catalog, request("unknown", "lemonade", &usage)).unwrap(),
         (0.0, 0.0)
     );
     assert_eq!(
-        catalog
-            .cost_per_token(request("priced", "lemonade", &usage))
-            .unwrap(),
+        cost_per_token(&catalog, request("priced", "lemonade", &usage)).unwrap(),
         (0.0, 0.0)
     );
     assert_eq!(
         lemonade_cost_per_token(&catalog, request("duration", "lemonade", &usage)),
         (0.0, 0.0)
     );
-    let elapsed = catalog
-        .cost_per_token(ModelCostRequest {
+    let elapsed = cost_per_token(
+        &catalog,
+        ModelCostRequest {
             response_time_ms: Some(2000.0),
             ..request("duration", "lemonade", &usage)
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert_eq!(elapsed, (0.1, 0.0));
 }

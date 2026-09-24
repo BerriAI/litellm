@@ -1,5 +1,6 @@
 #![allow(clippy::disallowed_types)]
 // mirrors: test_litellm/test_cost_calculator.py::test_cost_per_token_duplicate_openai_prefix_matches_model_cost
+use litellm_cost::cost_calculator::{cost_per_token, cost_per_token_for_call};
 use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
@@ -90,22 +91,22 @@ fn cost_per_token_resolves_model_key_in_python_order(
 #[rstest]
 fn cost_per_token_uses_the_selected_regional_prices() {
     let usage = usage();
-    let (input, output) = catalog()
-        .cost_per_token_for_call(
-            request(
-                "bedrock_mantle/model",
-                Some("bedrock_mantle"),
-                Some("us-gov-west-1"),
-                &usage,
-            ),
-            litellm_cost::catalog::CostCall::Token {
-                call_type: "completion",
-                prompt_characters: None,
-                completion_characters: None,
-                request_model: None,
-            },
-        )
-        .unwrap();
+    let (input, output) = cost_per_token_for_call(
+        &catalog(),
+        request(
+            "bedrock_mantle/model",
+            Some("bedrock_mantle"),
+            Some("us-gov-west-1"),
+            &usage,
+        ),
+        litellm_cost::catalog::CostCall::Token {
+            call_type: "completion",
+            prompt_characters: None,
+            completion_characters: None,
+            request_model: None,
+        },
+    )
+    .unwrap();
     assert!((input - 100.0 * 5e-6).abs() < 1e-12);
     assert!((output - 50.0 * 6e-6).abs() < 1e-12);
 }
@@ -113,7 +114,10 @@ fn cost_per_token_uses_the_selected_regional_prices() {
 #[rstest]
 fn cost_per_token_reports_an_unmapped_model() {
     assert_eq!(
-        catalog().cost_per_token(request("missing", Some("openai"), None, &usage())),
+        cost_per_token(
+            &catalog(),
+            request("missing", Some("openai"), None, &usage())
+        ),
         Err(CostError::ModelNotFound)
     );
 }
@@ -149,8 +153,9 @@ fn model_info_catalog_prices_selected_model_with_off_peak_and_region() {
     .unwrap()
     .unwrap();
     let at: Timestamp = "2026-01-01T18:00Z".parse().unwrap();
-    let actual = catalog
-        .cost_per_token(ModelCostRequest {
+    let actual = cost_per_token(
+        &catalog,
+        ModelCostRequest {
             model: "openai/openai/model",
             provider: Some("openai"),
             region: None,
@@ -160,8 +165,9 @@ fn model_info_catalog_prices_selected_model_with_off_peak_and_region() {
             vertex_location: None,
             at,
             response_time_ms: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert!((actual.0 - (80.0 * 1e-6 + 20.0 * 0.25e-6) * 1.2).abs() < 1e-12);
     assert!((actual.1 - 50.0 * 2e-6 * 1.2).abs() < 1e-12);
 }
@@ -185,8 +191,9 @@ fn model_info_catalog_applies_xai_inclusive_threshold_policy() {
     .unwrap()
     .unwrap();
     let at: Timestamp = "2026-01-01T18:00Z".parse().unwrap();
-    let actual = catalog
-        .cost_per_token(ModelCostRequest {
+    let actual = cost_per_token(
+        &catalog,
+        ModelCostRequest {
             model: "model",
             provider: Some("xai"),
             region: None,
@@ -196,8 +203,9 @@ fn model_info_catalog_applies_xai_inclusive_threshold_policy() {
             vertex_location: None,
             at,
             response_time_ms: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert!((actual.0 - 128_000.0 * 5e-6).abs() < 1e-12);
     assert!((actual.1 - 10.0 * 7e-6).abs() < 1e-12);
 }

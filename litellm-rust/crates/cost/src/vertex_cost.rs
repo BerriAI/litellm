@@ -2,6 +2,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::catalog::{ModelCostRequest, ModelInfoCatalog};
+use crate::cost_calculator::cost_per_token as catalog_cost_per_token;
 use crate::error::CostError;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::per_second::per_second_pricing_cost;
@@ -141,7 +142,7 @@ pub fn vertex_cost(
     }
     if cost_router(request.model, request.provider.unwrap_or(""), call_type) == CostRoute::PerToken
     {
-        return catalog.cost_per_token(request);
+        return catalog_cost_per_token(catalog, request);
     }
     let entry = catalog
         .entry(request.model, request.provider, request.region)

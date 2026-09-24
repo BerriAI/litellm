@@ -1,5 +1,6 @@
 #![allow(clippy::disallowed_types)]
 // mirrors: local_testing/test_completion_cost.py::test_together_ai_qwen_completion_cost
+use litellm_cost::cost_calculator::cost_per_token;
 use litellm_cost::error::CostError;
 use litellm_cost::together_cost::together_ai_cost_per_token;
 
@@ -131,7 +132,7 @@ fn catalog_uses_exact_price_or_chat_category(
         ),
     ]));
     let usage = usage();
-    let (prompt, completion) = catalog.cost_per_token(request("model-7b", &usage)).unwrap();
+    let (prompt, completion) = cost_per_token(&catalog, request("model-7b", &usage)).unwrap();
     assert!((prompt - 100.0 * expected_input_rate).abs() < 1e-12);
     let output_rate = if exact_has_input_rate { 6e-6 } else { 3e-6 };
     assert!((completion - 20.0 * output_rate).abs() < 1e-12);
@@ -158,7 +159,7 @@ fn catalog_does_not_price_metadata_only_exact_row_when_category_is_missing() {
     )]));
     let usage = usage();
     assert_eq!(
-        catalog.cost_per_token(request("model-7b", &usage)),
+        cost_per_token(&catalog, request("model-7b", &usage)),
         Err(CostError::ModelNotFound)
     );
 }

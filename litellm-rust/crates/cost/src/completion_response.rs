@@ -12,6 +12,7 @@ use crate::completion_cost::{
     CompletionCost, completion_cost, get_response_cost_from_hidden_params,
 };
 use crate::completion_input::{CompletionInputRequest, PreparedCompletionInput, ResponseKind};
+use crate::cost_calculator::{cost_per_token, cost_per_token_for_call};
 use crate::custom_pricing::{CustomPricing, cost_from_chat_usage};
 use crate::error::CostError;
 use crate::image_cost_router::{
@@ -553,17 +554,20 @@ fn price_responses_websocket(
                     request.response_time_ms,
                 ),
                 |model| {
-                    catalog.cost_per_token(ModelCostRequest {
-                        model,
-                        provider,
-                        region,
-                        usage,
-                        service_tier: tier,
-                        data_residency: request.data_residency,
-                        vertex_location: request.vertex_location,
-                        at: request.at,
-                        response_time_ms: None,
-                    })
+                    cost_per_token(
+                        catalog,
+                        ModelCostRequest {
+                            model,
+                            provider,
+                            region,
+                            usage,
+                            service_tier: tier,
+                            data_residency: request.data_residency,
+                            vertex_location: request.vertex_location,
+                            at: request.at,
+                            response_time_ms: None,
+                        },
+                    )
                 },
             )?;
             let built_in = if index == 0 {
@@ -806,7 +810,7 @@ pub fn completion_cost_from_response(
                     request.response_time_ms,
                 ),
             };
-            catalog.cost_per_token_for_call(cost_request, call)
+            cost_per_token_for_call(catalog, cost_request, call)
         },
     )?;
     let router_fee = (!is_search && provider == Some("azure_ai") && !is_azure_model_router(&model))

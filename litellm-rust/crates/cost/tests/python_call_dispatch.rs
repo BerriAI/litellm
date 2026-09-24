@@ -1,5 +1,6 @@
 #![allow(clippy::disallowed_types)]
 // mirrors: test_litellm/test_cost_calculator.py::test_per_query_priced_rerank_deployment_completion_cost_is_nonzero
+use litellm_cost::cost_calculator::cost_per_token_for_call;
 use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
@@ -61,34 +62,34 @@ fn token_call_routes_vertex_character_and_preserves_wall_clock_priority() {
     ]));
     let usage = usage();
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("character", Some("vertex_ai"), &usage),
-                CostCall::Token {
-                    call_type: "completion",
-                    prompt_characters: Some(10.0),
-                    completion_characters: Some(20.0),
-                    request_model: None,
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("character", Some("vertex_ai"), &usage),
+            CostCall::Token {
+                call_type: "completion",
+                prompt_characters: Some(10.0),
+                completion_characters: Some(20.0),
+                request_model: None,
+            },
+        )
+        .unwrap(),
         (0.02, 0.06)
     );
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                ModelCostRequest {
-                    response_time_ms: Some(2000.0),
-                    ..request("duration", Some("vertex_ai"), &usage)
-                },
-                CostCall::Token {
-                    call_type: "completion",
-                    prompt_characters: Some(10.0),
-                    completion_characters: Some(20.0),
-                    request_model: None,
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            ModelCostRequest {
+                response_time_ms: Some(2000.0),
+                ..request("duration", Some("vertex_ai"), &usage)
+            },
+            CostCall::Token {
+                call_type: "completion",
+                prompt_characters: Some(10.0),
+                completion_characters: Some(20.0),
+                request_model: None,
+            },
+        )
+        .unwrap(),
         (1.0, 0.0)
     );
 }
@@ -111,20 +112,20 @@ fn token_call_routes_together_embedding_and_azure_router() {
     ]));
     let usage = usage();
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("model-200m", Some("together_ai"), &usage),
-                token("aembedding", None),
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("model-200m", Some("together_ai"), &usage),
+            token("aembedding", None),
+        )
+        .unwrap(),
         (4e-6, 0.0)
     );
-    let (prompt, completion) = catalog
-        .cost_per_token_for_call(
-            request("routed", Some("azure_ai"), &usage),
-            token("completion", Some("azure_ai/model_router")),
-        )
-        .unwrap();
+    let (prompt, completion) = cost_per_token_for_call(
+        &catalog,
+        request("routed", Some("azure_ai"), &usage),
+        token("completion", Some("azure_ai/model_router")),
+    )
+    .unwrap();
     assert!((prompt - 0.3).abs() < 1e-12);
     assert!((completion - 0.06).abs() < 1e-12);
 }
@@ -143,36 +144,36 @@ fn speech_and_transcription_calls_select_character_token_or_duration_rates() {
     ]));
     let usage = usage();
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("speech", Some("openai"), &usage),
-                CostCall::Speech {
-                    prompt_characters: Some(5.0),
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("speech", Some("openai"), &usage),
+            CostCall::Speech {
+                prompt_characters: Some(5.0),
+            },
+        )
+        .unwrap(),
         (0.01, 0.0)
     );
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("transcribe", Some("openai"), &usage),
-                CostCall::Transcription {
-                    duration_seconds: 2.0,
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("transcribe", Some("openai"), &usage),
+            CostCall::Transcription {
+                duration_seconds: 2.0,
+            },
+        )
+        .unwrap(),
         (0.3, 0.08)
     );
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("transcribe", Some("openai"), &ChatUsage::default()),
-                CostCall::Transcription {
-                    duration_seconds: 2.0,
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("transcribe", Some("openai"), &ChatUsage::default()),
+            CostCall::Transcription {
+                duration_seconds: 2.0,
+            },
+        )
+        .unwrap(),
         (0.02, 0.0)
     );
 }
@@ -195,41 +196,42 @@ fn retrieval_and_search_calls_use_their_reported_units() {
     ]));
     let usage = usage();
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("rerank", Some("cohere"), &usage),
-                CostCall::Rerank {
-                    billed_units: Some(&json!({"search_units": 3})),
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("rerank", Some("cohere"), &usage),
+            CostCall::Rerank {
+                billed_units: Some(&json!({"search_units": 3})),
+            },
+        )
+        .unwrap(),
         (0.75, 0.0)
     );
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("search_api", Some("vertex_ai"), &usage),
-                CostCall::VectorStoreSearch {
-                    api_type: Some("search_api"),
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("search_api", Some("vertex_ai"), &usage),
+            CostCall::VectorStoreSearch {
+                api_type: Some("search_api"),
+            },
+        )
+        .unwrap(),
         (0.4, 0.0)
     );
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("search", Some("exa_ai"), &usage),
-                CostCall::Search {
-                    number_of_queries: Some(0),
-                    optional_params: &json!({}),
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("search", Some("exa_ai"), &usage),
+            CostCall::Search {
+                number_of_queries: Some(0),
+                optional_params: &json!({}),
+            },
+        )
+        .unwrap(),
         (0.003, 0.0)
     );
     assert_eq!(
-        catalog.cost_per_token_for_call(
+        cost_per_token_for_call(
+            &catalog,
             request("rerank", None, &usage),
             CostCall::Rerank { billed_units: None },
         ),
@@ -255,30 +257,30 @@ fn ocr_call_layers_deployment_and_published_rates_with_credit_priority() {
         "pages_processed_annotation": 2
     }});
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("ocr", Some("mistral"), &usage),
-                CostCall::Ocr {
-                    response: &credit_response,
-                    deployment_info: Some(&deployment),
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("ocr", Some("mistral"), &usage),
+            CostCall::Ocr {
+                response: &credit_response,
+                deployment_info: Some(&deployment),
+            },
+        )
+        .unwrap(),
         (1.0, 0.0)
     );
     let page_response = json!({"usage_info": {
         "pages_processed": 3,
         "pages_processed_annotation": 2
     }});
-    let (prompt, completion) = catalog
-        .cost_per_token_for_call(
-            request("ocr", Some("mistral"), &usage),
-            CostCall::Ocr {
-                response: &page_response,
-                deployment_info: Some(&deployment),
-            },
-        )
-        .unwrap();
+    let (prompt, completion) = cost_per_token_for_call(
+        &catalog,
+        request("ocr", Some("mistral"), &usage),
+        CostCall::Ocr {
+            response: &page_response,
+            deployment_info: Some(&deployment),
+        },
+    )
+    .unwrap();
     assert!((prompt - 0.17).abs() < 1e-12);
     assert_eq!(completion, 0.0);
 }
@@ -292,7 +294,8 @@ fn ocr_call_distinguishes_missing_pages_from_unpriced_usage() {
     let usage = usage();
     let missing_pages = json!({"usage_info": {}});
     assert_eq!(
-        catalog.cost_per_token_for_call(
+        cost_per_token_for_call(
+            &catalog,
             request("priced", Some("mistral"), &usage),
             CostCall::Ocr {
                 response: &missing_pages,
@@ -302,19 +305,20 @@ fn ocr_call_distinguishes_missing_pages_from_unpriced_usage() {
         Err(CostError::MissingPages)
     );
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("unpriced", Some("mistral"), &usage),
-                CostCall::Ocr {
-                    response: &missing_pages,
-                    deployment_info: None,
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("unpriced", Some("mistral"), &usage),
+            CostCall::Ocr {
+                response: &missing_pages,
+                deployment_info: None,
+            },
+        )
+        .unwrap(),
         (0.0, 0.0)
     );
     assert_eq!(
-        catalog.cost_per_token_for_call(
+        cost_per_token_for_call(
+            &catalog,
             request("priced", Some("mistral"), &usage),
             CostCall::Ocr {
                 response: &json!({}),
@@ -346,17 +350,17 @@ fn batch_call_selects_independent_thresholds_modalities_and_region() {
     }}))
     .unwrap()
     .unwrap();
-    let (prompt, completion) = catalog
-        .cost_per_token_for_call(
-            ModelCostRequest {
-                data_residency: Some("eu"),
-                ..request("batch", Some("openai"), &usage)
-            },
-            CostCall::Batch {
-                deployment_info: None,
-            },
-        )
-        .unwrap();
+    let (prompt, completion) = cost_per_token_for_call(
+        &catalog,
+        ModelCostRequest {
+            data_residency: Some("eu"),
+            ..request("batch", Some("openai"), &usage)
+        },
+        CostCall::Batch {
+            deployment_info: None,
+        },
+    )
+    .unwrap();
     assert!((prompt - (90.0 * 2e-6 + 10.0 * 5e-6 + 20.0 * 0.4e-6) * 1.1).abs() < 1e-12);
     assert!((completion - 30.0 * 3e-6 * 1.1).abs() < 1e-12);
 }
@@ -378,25 +382,25 @@ fn batch_call_falls_back_from_unpriced_deployment_and_uses_inclusive_xai_tier() 
     .unwrap()
     .unwrap();
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("batch", Some("xai"), &usage),
-                CostCall::Batch {
-                    deployment_info: Some(&json!({"id": "deployment"})),
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("batch", Some("xai"), &usage),
+            CostCall::Batch {
+                deployment_info: Some(&json!({"id": "deployment"})),
+            },
+        )
+        .unwrap(),
         (100.0 * 2e-6, 20.0 * 3e-6)
     );
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("unknown", Some("xai"), &usage),
-                CostCall::Batch {
-                    deployment_info: None,
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("unknown", Some("xai"), &usage),
+            CostCall::Batch {
+                deployment_info: None,
+            },
+        )
+        .unwrap(),
         (0.0, 0.0)
     );
 }
@@ -417,14 +421,14 @@ fn batch_call_parses_k_threshold_and_numeric_string_rate() {
     }}))
     .unwrap()
     .unwrap();
-    let (prompt, completion) = catalog
-        .cost_per_token_for_call(
-            request("batch", Some("openai"), &usage),
-            CostCall::Batch {
-                deployment_info: None,
-            },
-        )
-        .unwrap();
+    let (prompt, completion) = cost_per_token_for_call(
+        &catalog,
+        request("batch", Some("openai"), &usage),
+        CostCall::Batch {
+            deployment_info: None,
+        },
+    )
+    .unwrap();
     assert!((prompt - 100_001.0 * 2e-6).abs() < 1e-12);
     assert!((completion - 2.0 * 3e-6).abs() < 1e-12);
 }
@@ -446,14 +450,14 @@ fn batch_call_invalid_highest_tier_falls_back_to_flat_rate() {
     .unwrap()
     .unwrap();
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("batch", Some("openai"), &usage),
-                CostCall::Batch {
-                    deployment_info: None,
-                },
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("batch", Some("openai"), &usage),
+            CostCall::Batch {
+                deployment_info: None,
+            },
+        )
+        .unwrap(),
         (201.0 * 1e-6, 0.0)
     );
 }
@@ -473,21 +477,21 @@ fn generic_token_cost_is_gated_on_token_or_tiered_pricing() {
     .unwrap()
     .unwrap();
     assert_eq!(
-        catalog
-            .cost_per_token_for_call(
-                request("audio-only/model", Some("mistral"), &usage),
-                token("completion", None),
-            )
-            .unwrap(),
+        cost_per_token_for_call(
+            &catalog,
+            request("audio-only/model", Some("mistral"), &usage),
+            token("completion", None),
+        )
+        .unwrap(),
         (0.0, 0.0),
         "providers without a dedicated calculator bill zero when no token or tiered pricing exists"
     );
-    let (input, output) = catalog
-        .cost_per_token_for_call(
-            request("audio-only/model", Some("anthropic"), &usage),
-            token("completion", None),
-        )
-        .unwrap();
+    let (input, output) = cost_per_token_for_call(
+        &catalog,
+        request("audio-only/model", Some("anthropic"), &usage),
+        token("completion", None),
+    )
+    .unwrap();
     assert!(
         (input - 100.0 * 1e-5).abs() < 1e-12 && (output - 20.0 * 2e-5).abs() < 1e-12,
         "anthropic dispatches before the gate in Python and still bills modality rates"
@@ -511,12 +515,12 @@ fn anthropic_totals_apply_the_geo_multiplier_other_providers_do_not() {
     }}))
     .unwrap()
     .unwrap();
-    let (input, output) = catalog
-        .cost_per_token_for_call(
-            request("model", Some("anthropic"), &usage),
-            token("completion", None),
-        )
-        .unwrap();
+    let (input, output) = cost_per_token_for_call(
+        &catalog,
+        request("model", Some("anthropic"), &usage),
+        token("completion", None),
+    )
+    .unwrap();
     assert!((input - 100.0 * 2e-6 * 1.4).abs() < 1e-12);
     assert!((output - 50.0 * 4e-6 * 1.4).abs() < 1e-12);
     let catalog = ModelInfoCatalog::new(HashMap::from([(
@@ -527,12 +531,12 @@ fn anthropic_totals_apply_the_geo_multiplier_other_providers_do_not() {
             "provider_specific_entry": {"us": 1.4}
         }),
     )]));
-    let (input, output) = catalog
-        .cost_per_token_for_call(
-            request("model", Some("openai"), &usage),
-            token("completion", None),
-        )
-        .unwrap();
+    let (input, output) = cost_per_token_for_call(
+        &catalog,
+        request("model", Some("openai"), &usage),
+        token("completion", None),
+    )
+    .unwrap();
     assert!((input - 100.0 * 2e-6).abs() < 1e-12);
     assert!((output - 50.0 * 4e-6).abs() < 1e-12);
 }

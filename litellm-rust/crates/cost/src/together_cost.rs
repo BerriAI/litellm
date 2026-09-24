@@ -1,4 +1,5 @@
 use crate::catalog::{ModelCostRequest, ModelInfoCatalog};
+use crate::cost_calculator::cost_per_token;
 use crate::error::CostError;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -92,13 +93,16 @@ pub fn together_ai_cost_per_token(
     call_type: &str,
 ) -> Result<(f64, f64), CostError> {
     if has_together_registry_pricing(request.model, catalog.entries()) {
-        return catalog.cost_per_token(request);
+        return cost_per_token(catalog, request);
     }
     let category =
         get_model_params_and_category(request.model, call_type, TogetherThresholds::default());
-    catalog.cost_per_token(ModelCostRequest {
-        model: &category,
-        provider: Some("together_ai"),
-        ..request
-    })
+    cost_per_token(
+        catalog,
+        ModelCostRequest {
+            model: &category,
+            provider: Some("together_ai"),
+            ..request
+        },
+    )
 }

@@ -3,14 +3,9 @@ use std::collections::HashMap;
 use jiff::Timestamp;
 use serde_json::Value;
 
-use crate::anthropic_cost::fast_speed_multiplier;
-use crate::azure_ai_cost::azure_ai_cost_per_token;
 use crate::azure_ai_image_cost::{
     AzureAiImageRequest, cost_calculator as azure_ai_image_cost_calculator,
 };
-use crate::azure_cost::output_per_second_cost;
-use crate::base_rate_selection::uses_inclusive_token_thresholds;
-use crate::batch::batch_cost_from_model_info;
 use crate::bedrock_image_cost::cost_calculator as bedrock_image_cost_calculator;
 use crate::billed_token_rates::{
     BilledRatesRequest, BilledTokenRates, TokenTypeCostBreakdown,
@@ -23,16 +18,12 @@ use crate::completion_cost::{
 use crate::completion_input::{
     CompletionInputRequest, PreparedCompletionInput, prepare_completion_input,
 };
-use crate::custom_pricing::{CustomPricing, CustomTokenRates, cost_from_chat_usage};
-use crate::dashscope_cost::cost_per_token as dashscope_cost_per_token;
-use crate::databricks_cost::databricks_cost_per_token;
+use crate::cost_calculator::cost_per_token;
+use crate::custom_pricing::CustomTokenRates;
 use crate::error::CostError;
 use crate::fal_ai_image_cost::{
     cost_calculator as fal_ai_image_cost_calculator,
     fal_ai_passthrough_cost as calculate_fal_ai_passthrough_cost,
-};
-use crate::fireworks_cost::{
-    FireworksThresholds, cost_per_token as fireworks_cost_per_token, get_base_model_for_pricing,
 };
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::image_response_cost::{
@@ -40,26 +31,19 @@ use crate::image_response_cost::{
     gemini_image_generation_cost, resolve_image_model_info, vertex_image_edit_cost,
     vertex_image_generation_cost,
 };
-use crate::lemonade_cost::lemonade_cost_per_token;
 use crate::model_selection::{
     ModelSelectionRequest, get_provider_for_cost_calc, select_model_name_for_cost_calc,
 };
 use crate::non_token::{ImageRates, ImageUsage, calculate_image};
-use crate::ocr_cost::ocr_cost;
 use crate::openai_cost::video_generation_cost as calculate_video_generation_cost;
 use crate::openai_image_cost::cost_calculator as openai_image_cost_calculator;
-use crate::per_second::{has_token_or_tiered_pricing, per_second_pricing_cost};
-use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
 use crate::prompt_caching_savings::{
     PromptCachingSavingsRequest, calculate_prompt_caching_savings,
 };
-use crate::provider::LlmProviders;
-use crate::provider_cache::apply_provider_cache_read_default;
 use crate::realtime_cost::{
     combine_usage_objects, event_usage, get_transcription_model_name_from_results,
     partition_results_by_service_tier, transcription_usage_cost,
 };
-use crate::regional_uplift::get_provider_specific_geo_multiplier;
 use crate::responses_usage::ChatUsage;
 use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use crate::search_cost::{
@@ -70,13 +54,7 @@ use crate::speech_cost::{
     SpeechCostMetric, cost_per_second, generic_cost_per_character, lyria_generation_cost,
     select_cost_metric_for_model, transcription_usage_has_token_details,
 };
-use crate::together_cost::{
-    TogetherThresholds, get_model_params_and_category, has_together_registry_pricing,
-    together_ai_cost_per_token,
-};
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
-use crate::vertex_cost::{cost_per_token as vertex_cost_per_token, vertex_cost};
-use crate::xai_cost::{cost_per_token as xai_cost_per_token, reported_cost as xai_reported_cost};
 
 #[derive(Clone, Debug, Default)]
 pub struct ModelInfoCatalog {
@@ -329,130 +307,6 @@ impl ModelInfoCatalog {
         prepare_completion_input(request, &self.entries)
     }
 
-    pub fn cost_per_token_with_custom(
-        &self,
-        request: ModelCostRequest<'_>,
-        pricing: CustomPricing,
-    ) -> Result<(f64, f64), CostError> {
-        match cost_from_chat_usage(request.usage, pricing, request.response_time_ms)? {
-            Some(cost) => Ok((cost.input, cost.output)),
-            None => self.cost_per_token(request),
-        }
-    }
-
-    pub fn cost_per_token_for_call_with_custom(
-        &self,
-        request: ModelCostRequest<'_>,
-        call: CostCall<'_>,
-        pricing: CustomPricing,
-    ) -> Result<(f64, f64), CostError> {
-        match cost_from_chat_usage(request.usage, pricing, request.response_time_ms)? {
-            Some(cost) => Ok((cost.input, cost.output)),
-            None => self.cost_per_token_for_call(request, call),
-        }
-    }
-
-    pub fn cost_per_token_for_call(
-        &self,
-        request: ModelCostRequest<'_>,
-        call: CostCall<'_>,
-    ) -> Result<(f64, f64), CostError> {
-        let provider = request.provider.and_then(LlmProviders::parse);
-        match call {
-            CostCall::Token {
-                call_type,
-                prompt_characters,
-                completion_characters,
-                request_model,
-            } => {
-                if provider == Some(LlmProviders::VERTEX_AI) {
-                    return vertex_cost(
-                        self,
-                        request,
-                        call_type,
-                        prompt_characters,
-                        completion_characters,
-                    );
-                }
-                if provider == Some(LlmProviders::TOGETHER_AI)
-                    && matches!(
-                        crate::call_type::CallTypes::parse(call_type),
-                        Some(crate::call_type::CallTypes::embedding)
-                            | Some(crate::call_type::CallTypes::aembedding)
-                    )
-                {
-                    return together_ai_cost_per_token(self, request, call_type);
-                }
-                if provider == Some(LlmProviders::AZURE_AI) {
-                    return azure_ai_cost_per_token(self, request, request_model);
-                }
-                Ok(self.cost_per_token(request)?)
-            }
-            CostCall::Speech { prompt_characters } => {
-                Ok(self.speech_cost(request, prompt_characters)?)
-            }
-            CostCall::Transcription { duration_seconds } => {
-                Ok(self.transcription_cost(request, duration_seconds)?)
-            }
-            CostCall::Rerank { billed_units } => {
-                let provider = request.provider.ok_or(CostError::MissingProvider)?;
-                Ok(self.rerank_cost(request.model, provider, request.region, billed_units))
-            }
-            CostCall::VectorStoreSearch { api_type } => {
-                let provider = request.provider.ok_or(CostError::MissingProvider)?;
-                Ok(self.vector_store_search_cost(provider, api_type))
-            }
-            CostCall::Search {
-                number_of_queries,
-                optional_params,
-            } => Ok(self.search_provider_cost_per_query(
-                request.model,
-                request.provider,
-                number_of_queries.filter(|count| *count > 0).unwrap_or(1),
-                optional_params,
-            )?),
-            CostCall::Ocr {
-                response,
-                deployment_info,
-            } => {
-                let published = self
-                    .select_model_key(request.model, request.provider, request.region)
-                    .and_then(|key| self.entries.get(key));
-                Ok(ocr_cost(response, deployment_info, published)?)
-            }
-            CostCall::Batch { deployment_info } => {
-                let published = self
-                    .select_model_key(request.model, request.provider, request.region)
-                    .and_then(|key| self.entries.get(key));
-                let has_deployment_rates = deployment_info.is_some_and(|info| {
-                    [
-                        "input_cost_per_token_batches",
-                        "input_cost_per_token",
-                        "output_cost_per_token_batches",
-                        "output_cost_per_token",
-                    ]
-                    .into_iter()
-                    .any(|key| info.get(key).is_some_and(|value| !value.is_null()))
-                });
-                let info = if has_deployment_rates {
-                    deployment_info
-                } else {
-                    published.or(deployment_info)
-                };
-                let Some(info) = info else {
-                    return Ok((0.0, 0.0));
-                };
-                let cost = batch_cost_from_model_info(
-                    info,
-                    request.usage,
-                    request.provider,
-                    request.data_residency,
-                )?;
-                Ok((cost.prompt, cost.completion))
-            }
-        }
-    }
-
     pub fn speech_cost(
         &self,
         request: ModelCostRequest<'_>,
@@ -477,7 +331,7 @@ impl ModelInfoCatalog {
                     completion.unwrap_or(0.0),
                 ))
             }
-            SpeechCostMetric::PerToken => Ok(self.cost_per_token(request)?),
+            SpeechCostMetric::PerToken => Ok(cost_per_token(self, request)?),
         }
     }
 
@@ -594,168 +448,23 @@ impl ModelInfoCatalog {
                         .map(event_usage)
                         .collect::<Result<Vec<_>, _>>()?,
                 )?;
-                let (prompt, completion) = self.cost_per_token(ModelCostRequest {
-                    model,
-                    provider,
-                    region,
-                    usage: &usage,
-                    service_tier,
-                    data_residency,
-                    vertex_location: None,
-                    at,
-                    response_time_ms: None,
-                })?;
+                let (prompt, completion) = cost_per_token(
+                    self,
+                    ModelCostRequest {
+                        model,
+                        provider,
+                        region,
+                        usage: &usage,
+                        service_tier,
+                        data_residency,
+                        vertex_location: None,
+                        at,
+                        response_time_ms: None,
+                    },
+                )?;
                 Ok(prompt + completion)
             })
             .sum()
-    }
-
-    pub fn cost_per_token(&self, request: ModelCostRequest<'_>) -> Result<(f64, f64), CostError> {
-        if let Some(cost) = self
-            .select_model_key(request.model, request.provider, request.region)
-            .and_then(|key| self.entries.get(key))
-            .and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
-        {
-            return Ok(cost);
-        }
-        let provider = request.provider.and_then(LlmProviders::parse);
-        if provider == Some(LlmProviders::AZURE_AI) {
-            return azure_ai_cost_per_token(self, request, None);
-        }
-        if provider == Some(LlmProviders::DATABRICKS) {
-            return databricks_cost_per_token(self, request);
-        }
-        if provider == Some(LlmProviders::LEMONADE) {
-            return Ok(lemonade_cost_per_token(self, request));
-        }
-        if provider == Some(LlmProviders::PERPLEXITY)
-            && let Some(cost) = request.usage.cost
-        {
-            return Ok((0.0, cost));
-        }
-        if provider == Some(LlmProviders::XAI)
-            && let Some(cost) = xai_reported_cost(request.usage)
-        {
-            return Ok((0.0, cost));
-        }
-        let needs_together_fallback = (provider == Some(LlmProviders::TOGETHER_AI)
-            || request.model.contains("togethercomputer")
-            || request.model.contains("together_ai"))
-            && !has_together_registry_pricing(request.model, &self.entries);
-        let together_fallback = needs_together_fallback.then(|| {
-            get_model_params_and_category(
-                request.model,
-                "completion",
-                TogetherThresholds::default(),
-            )
-        });
-        let key = match together_fallback.as_deref() {
-            Some(category) => self.select_model_key(category, None, request.region),
-            None => self.select_model_key(request.model, request.provider, request.region),
-        }
-        .or_else(|| {
-            (request.provider == Some("fireworks_ai"))
-                .then(|| get_base_model_for_pricing(request.model, FireworksThresholds::default()))
-                .and_then(|category| {
-                    self.select_model_key(category, request.provider, request.region)
-                })
-        })
-        .ok_or(CostError::ModelNotFound)?;
-        let model_info = apply_provider_cache_read_default(&self.entries[key], request.provider);
-        if let Some(cost) = per_second_pricing_cost(&model_info, request.response_time_ms) {
-            return Ok(cost);
-        }
-        if provider == Some(LlmProviders::AZURE)
-            && let Some(cost) = output_per_second_cost(&model_info, request.response_time_ms)
-        {
-            return Ok(cost);
-        }
-        match provider {
-            Some(LlmProviders::PERPLEXITY) => {
-                return Ok(perplexity_cost_per_token(
-                    request.usage,
-                    &model_info,
-                    request.at,
-                ));
-            }
-            Some(LlmProviders::XAI) => {
-                return Ok(xai_cost_per_token(request.usage, &model_info, request.at));
-            }
-            Some(
-                LlmProviders::DASHSCOPE | LlmProviders::QWENCLOUD | LlmProviders::QWEN_AI_PLATFORM,
-            ) => {
-                return Ok(dashscope_cost_per_token(
-                    request.usage,
-                    &model_info,
-                    request.at,
-                ));
-            }
-            Some(LlmProviders::FIREWORKS_AI) => {
-                return Ok(fireworks_cost_per_token(
-                    request.usage,
-                    &self.entries[key],
-                    request.at,
-                ));
-            }
-            Some(LlmProviders::VERTEX_AI) => {
-                return Ok(vertex_cost_per_token(
-                    request.usage,
-                    &model_info,
-                    request.service_tier,
-                    request.vertex_location,
-                    request.at,
-                ));
-            }
-            _ => {}
-        }
-        let dispatches_before_the_gate = matches!(
-            provider,
-            Some(
-                LlmProviders::VERTEX_AI
-                    | LlmProviders::ANTHROPIC
-                    | LlmProviders::BEDROCK
-                    | LlmProviders::OPENAI
-                    | LlmProviders::DATABRICKS
-                    | LlmProviders::FIREWORKS_AI
-                    | LlmProviders::AZURE
-                    | LlmProviders::GEMINI
-                    | LlmProviders::DEEPSEEK
-                    | LlmProviders::TENCENT
-                    | LlmProviders::PERPLEXITY
-                    | LlmProviders::XAI
-                    | LlmProviders::LEMONADE
-                    | LlmProviders::DASHSCOPE
-                    | LlmProviders::QWENCLOUD
-                    | LlmProviders::QWEN_AI_PLATFORM
-                    | LlmProviders::AZURE_AI
-            )
-        );
-        if !dispatches_before_the_gate && !has_token_or_tiered_pricing(&model_info) {
-            return Ok((0.0, 0.0));
-        }
-        let cost = calculate_generic_cost_from_model_info_with_region(
-            request.usage,
-            &model_info,
-            request.service_tier,
-            uses_inclusive_token_thresholds(request.provider),
-            request.data_residency,
-            request.vertex_location,
-            request.at,
-        );
-        let speed = if provider == Some(LlmProviders::ANTHROPIC) {
-            fast_speed_multiplier(&model_info, request.usage)
-                * get_provider_specific_geo_multiplier(
-                    &model_info,
-                    request
-                        .usage
-                        .extra
-                        .get("inference_geo")
-                        .and_then(Value::as_str),
-                )
-        } else {
-            1.0
-        };
-        Ok((cost.0 * speed, cost.1 * speed))
     }
 
     pub fn get_billed_token_rates(
@@ -1150,7 +859,7 @@ impl ModelInfoCatalog {
         &self,
         request: CompletionCostRequest<'_>,
     ) -> Result<CompletionCost, CostError> {
-        let (prompt, output) = self.cost_per_token(request.token)?;
+        let (prompt, output) = cost_per_token(self, request.token)?;
         let built_in_tools = match request.built_in_tools {
             BuiltInToolCharge::Provided(cost) => cost,
             BuiltInToolCharge::FromResponse(tool_request) => self.built_in_tool_cost(

@@ -1,5 +1,8 @@
 #![allow(clippy::disallowed_types)]
 // mirrors: test_litellm/test_cost_calculator.py::test_custom_pricing_anthropic_style_cache_tokens_not_double_counted
+use litellm_cost::cost_calculator::{
+    cost_per_token_for_call_with_custom, cost_per_token_with_custom,
+};
 use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
@@ -203,30 +206,28 @@ fn catalog_custom_rates_override_lookup_and_call_dispatch() {
         token: Some(rates(0.01, 0.02, Some(0.001), Some(0.03))),
         per_second: Some(1.0),
     };
-    let direct = catalog
-        .cost_per_token_with_custom(request, pricing)
-        .unwrap();
-    let dispatched = catalog
-        .cost_per_token_for_call_with_custom(
-            request,
-            CostCall::Speech {
-                prompt_characters: None,
-            },
-            pricing,
-        )
-        .unwrap();
+    let direct = cost_per_token_with_custom(&catalog, request, pricing).unwrap();
+    let dispatched = cost_per_token_for_call_with_custom(
+        &catalog,
+        request,
+        CostCall::Speech {
+            prompt_characters: None,
+        },
+        pricing,
+    )
+    .unwrap();
     assert!((direct.0 - 0.104).abs() < 1e-12);
     assert!((direct.1 - 0.06).abs() < 1e-12);
     assert_eq!(direct, dispatched);
-    let seconds = catalog
-        .cost_per_token_with_custom(
-            request,
-            CustomPricing {
-                token: None,
-                per_second: Some(0.08),
-            },
-        )
-        .unwrap();
+    let seconds = cost_per_token_with_custom(
+        &catalog,
+        request,
+        CustomPricing {
+            token: None,
+            per_second: Some(0.08),
+        },
+    )
+    .unwrap();
     assert_eq!(seconds.0, 0.0);
     assert!((seconds.1 - 0.2).abs() < 1e-12);
 }
@@ -249,13 +250,12 @@ fn catalog_custom_pricing_falls_back_and_rejects_invalid_rates() {
         at: "2026-01-01T12:00Z".parse().unwrap(),
         response_time_ms: None,
     };
-    let fallback = catalog
-        .cost_per_token_with_custom(request, CustomPricing::NONE)
-        .unwrap();
+    let fallback = cost_per_token_with_custom(&catalog, request, CustomPricing::NONE).unwrap();
     assert!((fallback.0 - 0.1).abs() < 1e-12);
     assert!((fallback.1 - 0.06).abs() < 1e-12);
     assert_eq!(
-        catalog.cost_per_token_with_custom(
+        cost_per_token_with_custom(
+            &catalog,
             request,
             CustomPricing {
                 token: Some(rates(-0.01, 0.02, None, None)),

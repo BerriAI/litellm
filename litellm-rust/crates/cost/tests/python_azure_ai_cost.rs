@@ -1,6 +1,7 @@
 #![allow(clippy::disallowed_types)]
 // mirrors: test_litellm/llms/azure_ai/test_azure_ai_cost_calculator.py::TestAzureModelRouterFlatCost
 use litellm_cost::azure_ai_cost::azure_ai_cost_per_token;
+use litellm_cost::cost_calculator::cost_per_token;
 use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
@@ -124,9 +125,7 @@ fn azure_ai_cost_per_token_adds_fee_for_routed_response_model_only_once() {
             .unwrap()
             .unwrap();
     let catalog = catalog();
-    let response_only = catalog
-        .cost_per_token(request("routed", &usage, None))
-        .unwrap();
+    let response_only = cost_per_token(&catalog, request("routed", &usage, None)).unwrap();
     assert_eq!(response_only, (0.2, 0.06));
     let routed = azure_ai_cost_per_token(
         &catalog,
