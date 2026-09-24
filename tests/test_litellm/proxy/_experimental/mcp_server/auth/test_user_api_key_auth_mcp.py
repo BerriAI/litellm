@@ -8822,11 +8822,11 @@ class TestUserSubjectTeamUnion:
         assert servers == {"srv-own", "srv1"}, "healthy sources must stand when one team faults"
         assert tools == ["read"], "the healthy team's tool grant must survive the other team's fault"
 
-    async def test_key_org_tool_ceiling_fault_keeps_key_restrictions(self):
-        """Virtual-key tools axis mirrors its servers axis on an unresolvable org ceiling: the org
-        intersect is SKIPPED and the key's own tool restrictions stand. Letting the fault escape
-        collapsed the whole resolution to None (allow-all), which is fail-open WIDER than before the
-        fault — key restrictions must never be dropped by an org lookup blip."""
+    async def test_key_org_tool_denylist_fault_denies_all_tools(self):
+        """An unreadable org permission row fails CLOSED on the tools axis: the same row also
+        carries the org's tool denylist, and a denylist that cannot be read is a known restriction
+        with unknown contents, so the resolver denies rather than lets a possibly-denied tool
+        through. The org ceiling's own skip-on-fault never widens either — the deny-all wins."""
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
         key_auth = UserAPIKeyAuth(user_id="u", api_key="sk-hash", org_id="org-a")
@@ -8837,7 +8837,7 @@ class TestUserSubjectTeamUnion:
         with self._patch(teams_by_id={}, user_teams=[]):
             with patch.object(MCPRequestHandler, "_get_org_object_permission", boom):
                 tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", key_auth)
-        assert tools == ["read"], "key tool restrictions must survive an unresolvable org ceiling"
+        assert tools == [], "an unresolvable org denylist must deny, not pass the key's tools through"
 
     async def test_team_rpm_limit_binds_only_within_that_teams_grant_scope(self):
         """A limit rides the same scope as the access it bounds. A roster team is charged ONLY for
