@@ -53,7 +53,8 @@ def client_no_auth():
     config_fp = (
         repo_root
         / "tests"
-        / "proxy_unit_tests"
+        / "unit"
+        / "proxy"
         / "test_configs"
         / "test_config_no_auth.yaml"
     )
