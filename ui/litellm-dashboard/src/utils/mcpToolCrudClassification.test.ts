@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import { classifyToolOp, groupToolsByCrud } from "./mcpToolCrudClassification";
 
@@ -59,5 +60,15 @@ describe("groupToolsByCrud", () => {
     expect(groups.delete).toHaveLength(1);
     expect(groups.update).toHaveLength(1);
     expect(groups.unknown).toHaveLength(1);
+  });
+});
+
+describe("classifyToolOp shared fixture parity", () => {
+  // Mirrors tests/test_litellm/proxy/_experimental/mcp_server/test_tool_op_classification.py.
+  const fixture: Array<{ name: string; description: string; expected: string }> = JSON.parse(
+    readFileSync(new URL("./mcpToolCrudClassification.fixture.json", import.meta.url), "utf-8"),
+  );
+  it.each(fixture)("classifies %j -> %s", ({ name, description, expected }) => {
+    expect(classifyToolOp(name, description)).toBe(expected);
   });
 });

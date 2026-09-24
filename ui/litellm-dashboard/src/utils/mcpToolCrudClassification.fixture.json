@@ -1,0 +1,97 @@
+[
+  {
+    "name": "get_removed_entries",
+    "description": "",
+    "expected": "unknown"
+  },
+  {
+    "name": "list_deleted_items",
+    "description": "",
+    "expected": "unknown"
+  },
+  {
+    "name": "delete_user",
+    "description": "",
+    "expected": "unknown"
+  },
+  {
+    "name": "remove-item",
+    "description": "",
+    "expected": "delete"
+  },
+  {
+    "name": "delete_link",
+    "description": "",
+    "expected": "unknown"
+  },
+  {
+    "name": "delete_link",
+    "description": "Delete a link",
+    "expected": "delete"
+  },
+  {
+    "name": "execute",
+    "description": "",
+    "expected": "unknown"
+  },
+  {
+    "name": "execute",
+    "description": "Delete the selected record",
+    "expected": "delete"
+  },
+  {
+    "name": "remove_noise_filter",
+    "description": "",
+    "expected": "unknown"
+  },
+  {
+    "name": "create_ticket",
+    "description": "",
+    "expected": "unknown"
+  },
+  {
+    "name": "update_record",
+    "description": "",
+    "expected": "unknown"
+  },
+  {
+    "name": "DELETE_ALL",
+    "description": "",
+    "expected": "unknown"
+  },
+  {
+    "name": "run",
+    "description": "purge cache",
+    "expected": "delete"
+  },
+  {
+    "name": "foo",
+    "description": "",
+    "expected": "unknown"
+  },
+  {
+    "name": "delete user",
+    "description": "",
+    "expected": "delete"
+  },
+  {
+    "name": "purge cache",
+    "description": "",
+    "expected": "delete"
+  },
+  {
+    "name": "list issues",
+    "description": "",
+    "expected": "read"
+  },
+  {
+    "name": "update record",
+    "description": "",
+    "expected": "update"
+  },
+  {
+    "name": "create ticket",
+    "description": "",
+    "expected": "create"
+  }
+]
