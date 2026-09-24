@@ -2,7 +2,6 @@ import uuid
 from pathlib import Path
 from typing import Final
 
-import pytest
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.mcp import (
@@ -118,16 +117,67 @@ def test_delete_removes_listing_calls_and_database_row(gateway: Gateway) -> None
 
 
 def test_duplicate_alias_is_rejected_so_tool_prefixes_cannot_collide(gateway: Gateway) -> None:
+    import concurrent.futures
+
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "mgmt" + uuid.uuid4().hex[:8]
-        register_mcp(scenario, peer, alias)
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+
         duplicate: Final = gateway.request(
             "POST", "/v1/mcp/server", {"server_name": alias, "alias": alias, **peer.registration()}
         )
-        if duplicate.status_code == 201:
-            scenario.cleanups.callback(forget_mcp, gateway, duplicate.json()["server_id"])
-            pytest.skip("BUG: POST /v1/mcp/server accepts a duplicate alias, so two servers share one tool prefix")
         assert duplicate.status_code == 400, duplicate.text
+        assert alias in duplicate.json()["detail"]["error"], duplicate.text
+
+        same_alias: Final = gateway.request(
+            "POST", "/v1/mcp/server", {"server_name": alias + "other", "alias": alias, **peer.registration()}
+        )
+        assert same_alias.status_code == 400, same_alias.text
+        assert alias in same_alias.json()["detail"]["error"], same_alias.text
+
+        case_variant: Final = gateway.request(
+            "POST", "/v1/mcp/server", {"server_name": alias.upper(), "alias": alias.upper(), **peer.registration()}
+        )
+        assert case_variant.status_code == 400, case_variant.text
+
+        same_name_no_alias: Final = gateway.request(
+            "POST", "/v1/mcp/server", {"server_name": alias, **peer.registration()}
+        )
+        assert same_name_no_alias.status_code == 400, same_name_no_alias.text
+
+        second_alias: Final = alias + "2"
+        second_identity: Final = register_mcp(scenario, peer, second_alias)
+        colliding_rename: Final = gateway.request(
+            "PUT", "/v1/mcp/server", {"server_id": second_identity, "alias": alias}
+        )
+        assert colliding_rename.status_code == 400, colliding_rename.text
+
+        cleared_alias: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": second_identity, "alias": None})
+        assert cleared_alias.status_code == 202, cleared_alias.text
+
+        name: Final = tool_names(gateway, key, identity)["add"]
+        response: Final = call_tool(gateway, key, identity, name, ADD)
+        assert response.status_code == 200, response.text
+        assert response.json()["content"][0]["text"] == "9", response.text
+
+        racing_alias: Final = "race" + uuid.uuid4().hex[:8]
+
+        def try_register() -> int:
+            response: Final = gateway.request(
+                "POST", "/v1/mcp/server", {"server_name": racing_alias, "alias": racing_alias, **peer.registration()}
+            )
+            return response.status_code
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            statuses: Final = tuple(pool.map(lambda _i: try_register(), range(8)))
+
+        assert statuses.count(201) == 1, statuses
+        assert statuses.count(400) == 7, statuses
+        winner: Final = next(
+            server["server_id"] for server in _servers(gateway).values() if server["alias"] == racing_alias
+        )
+        scenario.cleanups.callback(forget_mcp, gateway, winner)
 
 
 def test_invalid_registrations_are_rejected(gateway: Gateway) -> None:
