@@ -1432,8 +1432,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     yield chunk
             if passthrough_due_to_unknown_stream_shape:
                 verbose_proxy_logger.warning(
-                    "Presidio apply_to_output: streaming response contained unknown event objects "
-                    "(e.g. /v1/responses events). Output PII masking was skipped for this response."
+                    "Presidio apply_to_output: streaming response was not a parsed chat completion stream "
+                    "(raw non-Anthropic SSE passthrough or /v1/responses events). "
+                    "Output PII masking was skipped for this response."
                 )
                 return
             if not all_chunks:

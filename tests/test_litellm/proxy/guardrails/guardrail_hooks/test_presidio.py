@@ -2261,7 +2261,7 @@ async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
         assert mock_logger.warning.call_count == 2
         warning_messages = [call.args[0] for call in mock_logger.warning.call_args_list]
         assert any("mixed stream detected" in msg for msg in warning_messages)
-        assert any("unknown event objects" in msg for msg in warning_messages)
+        assert any("Output PII masking was skipped" in msg for msg in warning_messages)
 
 
 # ---------------------------------------------------------------------------
