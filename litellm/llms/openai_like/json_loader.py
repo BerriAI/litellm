@@ -22,6 +22,7 @@ class SimpleProviderConfig:
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
         self.supported_endpoints = data.get("supported_endpoints", [])
+        self.unsupported_params: Final = tuple(data.get("unsupported_params", ()))
 
 
 class JSONProviderRegistry:

@@ -208,6 +208,7 @@
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"],
     "param_mappings": {
       "max_tokens": "max_completion_tokens"
-    }
+    },
+    "unsupported_params": ["stop", "seed", "frequency_penalty", "presence_penalty", "logit_bias", "logprobs", "top_logprobs"]
   }
 }

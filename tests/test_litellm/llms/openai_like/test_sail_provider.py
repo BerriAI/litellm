@@ -250,6 +250,39 @@ class TestSailRequestShape:
 
         assert not route.called
 
+    @pytest.mark.respx()
+    def test_sail_unsupported_params_dropped_with_drop_params(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_CHAT_COMPLETIONS).respond(json=_chat_completion_payload())
+
+        litellm.completion(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            stop=["x"],
+            seed=1,
+            frequency_penalty=0.5,
+            drop_params=True,
+        )
+
+        body = json.loads(respx_mock.calls[0].request.content)
+        assert "stop" not in body
+        assert "seed" not in body
+        assert "frequency_penalty" not in body
+        assert body["model"] == "zai-org/GLM-5.3"
+        assert body["messages"] == [{"role": "user", "content": "hi"}]
+
+    @pytest.mark.respx(assert_all_called=False)
+    def test_sail_unsupported_params_raise_without_drop_params(self, respx_mock: respx.Router):
+        route = respx_mock.post(SAIL_CHAT_COMPLETIONS)
+
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.completion(
+                model=MODEL,
+                messages=[{"role": "user", "content": "hi"}],
+                stop=["x"],
+            )
+
+        assert not route.called
+
     @pytest.mark.asyncio
     @pytest.mark.respx()
     async def test_sail_anthropic_messages_posts_to_messages_endpoint(self, respx_mock: respx.Router):

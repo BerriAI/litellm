@@ -94,7 +94,11 @@ def create_config_class(provider: SimpleProviderConfig):
             that don't support function calling."""
             from litellm.utils import supports_function_calling, supports_reasoning
 
-            supported_params: Final = super().get_supported_openai_params(model=model)
+            supported_params: Final = [
+                param
+                for param in super().get_supported_openai_params(model=model)
+                if param not in provider.unsupported_params
+            ]
 
             _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 
