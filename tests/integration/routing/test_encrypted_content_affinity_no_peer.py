@@ -8,6 +8,7 @@ sibling deployments in the same group are healthy: when the origin cannot serve 
 its encrypted reasoning should be stripped and the request dispatched to a sibling.
 """
 
+import json
 import uuid
 from typing import Final
 
@@ -51,15 +52,45 @@ def _responses_payload() -> dict[str, JsonValue]:
 
 def _enable_affinity_check(scenario: Scenario) -> None:
     gateway: Final = scenario.gateway
-    current: Final = object_value(gateway.get("/router/settings")["current_values"]).get("optional_pre_call_checks")
+    settings: Final = object_value(gateway.get("/router/settings")["current_values"])
+    current: Final = settings.get("optional_pre_call_checks")
     original: Final = list(current) if isinstance(current, list) else []
+    original_retries: Final = settings.get("num_retries")
     scenario.cleanups.callback(
-        lambda: gateway.post("/config/update", {"router_settings": {"optional_pre_call_checks": original}})
+        lambda: gateway.post(
+            "/config/update",
+            {"router_settings": {"optional_pre_call_checks": original, "num_retries": original_retries}},
+        )
     )
     gateway.post(
         "/config/update",
         {"router_settings": {"optional_pre_call_checks": [*original, AFFINITY_CHECK], "num_retries": 0}},
     )
+
+
+def _last_group_request_body(gateway: Gateway, group: str) -> dict[str, JsonValue]:
+    """The request body the upstream last saw for this group, to prove the strip reached the wire."""
+    with httpx.Client(base_url=gateway.upstream_url, trust_env=False) as upstream:
+        requests: Final = object_value(upstream.get("/__observations").json()).get("requests")
+    assert isinstance(requests, list)
+    bodies: Final = [
+        object_value(request).get("body")
+        for request in requests
+        if str(object_value(request).get("path")).startswith(f"/{group}-")
+    ]
+    assert bodies, f"upstream saw no requests for {group}: {requests}"
+    body: Final = bodies[-1]
+    assert isinstance(body, dict), f"upstream request body is not an object: {body}"
+    return body
+
+
+def _assert_no_encrypted_reasoning_reached_upstream(gateway: Gateway, group: str) -> None:
+    body: Final = _last_group_request_body(gateway, group)
+    items: Final = body.get("input")
+    assert isinstance(items, list), f"upstream request carried no input list: {body}"
+    assert not any(
+        isinstance(item, dict) and ("encrypted_content" in item or "litellm_enc" in json.dumps(item)) for item in items
+    ), f"undecryptable reasoning reached the sibling: {body}"
 
 
 def _multi_region_group(scenario: Scenario) -> tuple[str, tuple[str, ...]]:
@@ -180,6 +211,7 @@ def test_replayed_encrypted_content_serves_from_sibling_when_origin_blocked(gate
             f"turn two served by {response.headers.get('x-litellm-model-id')}, "
             f"expected a sibling of blocked origin {origin}: {response.text}"
         )
+        _assert_no_encrypted_reasoning_reached_upstream(gateway, group)
 
 
 def test_replayed_encrypted_content_serves_from_sibling_when_origin_deleted(gateway: Gateway) -> None:
@@ -205,3 +237,4 @@ def test_replayed_encrypted_content_serves_from_sibling_when_origin_deleted(gate
             f"turn two served by {response.headers.get('x-litellm-model-id')}, "
             f"expected a sibling of deleted origin {origin}: {response.text}"
         )
+        _assert_no_encrypted_reasoning_reached_upstream(gateway, group)

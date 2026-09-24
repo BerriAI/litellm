@@ -328,7 +328,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         verbose_router_logger.warning(
             "EncryptedContentAffinityCheck: model_id=%s cannot serve group %s and no deployment on the same "
             "encryption boundary is configured; forwarding without its encrypted reasoning",
-            model_id,
+            model_id[:64],
             model,
         )
         ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(request_input)
