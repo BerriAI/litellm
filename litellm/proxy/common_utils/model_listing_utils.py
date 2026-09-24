@@ -13,11 +13,8 @@ from __future__ import annotations
 import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass
-from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
-
-from pydantic import TypeAdapter, ValidationError
 
 import litellm
 
@@ -31,8 +28,6 @@ CLAUDE_CODE_CLIENT: Final = "claude-code"
 _CLAUDE_CODE_ALIAS_PREFIX: Final = "claude-router-"
 _ONE_MILLION_SUFFIX: Final = "[1m]"
 _ONE_MILLION_TOKENS: Final = 1_000_000
-_ALIAS_ENTRIES: Final = TypeAdapter(Mapping[object, object])
-_NO_ALIASES: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def configured_display_names(
@@ -157,77 +152,6 @@ class ClaudeCodeRoutingNames:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class CallerAliases:
-    """`own` are the caller's key and team alias maps, the names `/v1/models` lists for it.
-    `rewrite` are the maps `/chat/completions` rewrites its model through, in the order it
-    applies them: the team's, the key's in `add_litellm_data_to_request`, then the global
-    `model_alias_map` and the key's again in `common_processing_pre_call_logic`."""
-
-    own: tuple[object, ...]
-    rewrite: tuple[object, ...]
-
-
-def caller_alias_maps(
-    key_aliases: object,
-    team_aliases: object,
-    key_team_id: str | None,
-    listed_team_id: str | None,
-) -> CallerAliases:
-    """Team aliases count only when listing the team the key authenticated as."""
-    if listed_team_id is not None and listed_team_id != key_team_id:
-        return CallerAliases((key_aliases,), (key_aliases, litellm.model_alias_map, key_aliases))
-    return CallerAliases((team_aliases, key_aliases), (team_aliases, key_aliases, litellm.model_alias_map, key_aliases))
-
-
-def _alias_map(aliases: object) -> Mapping[str, str]:
-    try:
-        entries: Final = _ALIAS_ENTRIES.validate_python(aliases, strict=True)
-    except ValidationError:
-        return _NO_ALIASES
-    return MappingProxyType(
-        {alias: target for alias, target in entries.items() if isinstance(alias, str) and isinstance(target, str)}
-    )
-
-
-def _alias_names(alias_maps: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(alias for aliases in alias_maps for alias in aliases))
-
-
-def _rewrite(model_id: str, alias_maps: Sequence[Mapping[str, str]]) -> str | None:
-    target: Final = reduce(lambda name, aliases: aliases.get(name, name), alias_maps, model_id)
-    return None if target == model_id else target
-
-
-def alias_target(model_id: str, aliases: CallerAliases, listed: Container[str] = frozenset()) -> str | None:
-    """The model group `/chat/completions` rewrites `model_id` to, else None. A `model_id`
-    already `listed` keeps its own row, so it is never rewritten."""
-    if model_id in listed:
-        return None
-    return _rewrite(model_id, tuple(_alias_map(alias_map) for alias_map in aliases.rewrite))
-
-
-def alias_listing_entries(
-    entries: Sequence[tuple[str, str]],
-    aliases: CallerAliases,
-) -> tuple[tuple[str, str], ...]:
-    """`entries` plus one `(alias, lookup_id)` row per key or team alias whose target is
-    listed. An alias colliding with a listed id keeps the listed entry."""
-    maps: Final = tuple(_alias_map(alias_map) for alias_map in aliases.rewrite)
-    own: Final = tuple(_alias_map(alias_map) for alias_map in aliases.own)
-    lookup_by_response: Final = MappingProxyType(dict(entries))
-    lookup_ids: Final = frozenset(lookup_by_response.values())
-    targets: Final = MappingProxyType(
-        {alias: _rewrite(alias, maps) for alias in _alias_names(own) if alias not in lookup_by_response}
-    )
-    added: Final = tuple(
-        (alias, lookup_by_response.get(target, target))
-        for alias, target in targets.items()
-        if target is not None and (target in lookup_by_response or target in lookup_ids)
-    )
-    return (*entries, *added)
-
-
 def claude_code_requested_group(
     requested: str,
     llm_router: Router,
@@ -294,7 +218,7 @@ class TeamModelNameTranslator:
 
     @staticmethod
     def _response_to_lookup_map(
-        model_names: Sequence[str],
+        model_names: list[str],
         internal_to_public: dict[str, str],
     ) -> dict[str, str]:
         """Map each public response id to the first internal lookup id seen in
@@ -311,7 +235,7 @@ class TeamModelNameTranslator:
 
     @staticmethod
     def listing_entries(
-        model_names: Sequence[str],
+        model_names: list[str],
         llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> list[tuple[str, str]]:
