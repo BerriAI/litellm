@@ -3,7 +3,6 @@
 import io
 import json
 import wave
-from typing import Final
 
 import pytest
 import respx
@@ -243,17 +242,25 @@ class TestSailRequestShape:
     def test_sail_transcription_rejected_without_hitting_sail(self, respx_mock: respx.Router):
         route = respx_mock.post(f"{SAIL_BASE_URL}/audio/transcriptions")
 
-        wav: Final = io.BytesIO()
-        with wave.open(wav, "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(8000)
-            wav_file.writeframes(b"\x00" * 1600)
-        wav.seek(0)
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            litellm.transcription(model=MODEL, file=_wav_file())
 
-        with pytest.raises(ValueError, match="Unmapped provider"):
-            litellm.transcription(model=MODEL, file=wav)
+        assert exc_info.value.status_code == 400
+        assert str(exc_info.value) == (
+            f"litellm.BadRequestError: sail does not support audio transcription. Model: {MODEL.split('/', 1)[1]}"
+        )
+        assert not route.called
 
+    @pytest.mark.respx(assert_all_called=False)
+    @pytest.mark.asyncio
+    async def test_sail_atranscription_rejected_without_hitting_sail(self, respx_mock: respx.Router):
+        route = respx_mock.post(f"{SAIL_BASE_URL}/audio/transcriptions")
+
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            await litellm.atranscription(model=MODEL, file=_wav_file())
+
+        assert exc_info.value.status_code == 400
+        assert "sail does not support audio transcription" in str(exc_info.value)
         assert not route.called
 
     @pytest.mark.respx()
@@ -358,6 +365,17 @@ class TestSailCostTracking:
 
 
 _MESSAGES = [{"role": "user", "content": "hi"}]
+
+
+def _wav_file() -> io.BytesIO:
+    wav = io.BytesIO()
+    with wave.open(wav, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(8000)
+        wav_file.writeframes(b"\x00" * 1600)
+    wav.seek(0)
+    return wav
 
 
 def _sail_chat_body(optional_params: dict) -> dict:
