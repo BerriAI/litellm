@@ -4,7 +4,7 @@ Tests for the encrypted-at-rest persistence of MCP user credentials.
 The ``LiteLLM_MCPUserCredentials.credential_b64`` column previously stored
 both BYOK API keys and OAuth2 access tokens as plain ``urlsafe_b64encode``
 of the raw value, leaving credentials readable from any DB read. The fix
-runs every write through ``encrypt_value_helper`` (nacl SecretBox) and
+runs every write through ``encrypt_value_helper`` (AES-256-GCM by default) and
 keeps a plain-base64 fallback on read so existing rows continue to work.
 """
 

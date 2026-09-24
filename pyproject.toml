@@ -256,6 +256,7 @@ proxy-dev = [
     "opentelemetry-instrumentation-fastapi==0.49b0",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
+    "pynacl>=1.6.2,<2.0",
 ]
 ci = [
     # These are lazily imported at call sites; keep them out of core deps to
