@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use crate::catalog::ModelInfoCatalog;
 use crate::image_response_cost::resolve_image_model_info;
 
 pub const PIXELS_PER_MEGAPIXEL: u64 = 1_048_576;
@@ -102,7 +103,21 @@ pub fn flat_cost_per_image(
     pixel_rate * PIXELS_PER_MEGAPIXEL as f64 * megapixels as f64
 }
 
-pub fn fal_ai_passthrough_cost(model_info: Option<&Value>, request_body: &Value) -> Option<f64> {
+pub fn fal_ai_passthrough_cost(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    request_body: &Value,
+) -> Option<f64> {
+    fal_ai_passthrough_cost_from_model_info(
+        catalog.entries().get(&format!("fal_ai/{model}")),
+        request_body,
+    )
+}
+
+pub fn fal_ai_passthrough_cost_from_model_info(
+    model_info: Option<&Value>,
+    request_body: &Value,
+) -> Option<f64> {
     let info = model_info?;
     let resolution = request_body
         .get("resolution")

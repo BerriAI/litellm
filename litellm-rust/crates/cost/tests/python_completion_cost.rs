@@ -5,13 +5,13 @@ use litellm_cost::error::CostError;
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use litellm_cost::catalog::{
-    BuiltInToolCharge, CompletionCostRequest, ModelCostRequest, ModelInfoCatalog,
-    ResponseCostRequest,
-};
+use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::completion_cost::{
     apply_cost_discount, apply_cost_margin, completion_cost, get_response_cost_from_hidden_params,
     response_cost_calculator,
+};
+use litellm_cost::cost_calculator::{
+    BuiltInToolCharge, CompletionCostRequest, ResponseCostRequest,
 };
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
@@ -123,26 +123,32 @@ fn model_info_catalog_completion_and_response_cost_use_selected_metadata() {
         discount_config: &discount,
         margin_config: &margin,
     };
-    let calculated = catalog.completion_cost(completion).unwrap();
+    let calculated = litellm_cost::cost_calculator::completion_cost(&catalog, completion).unwrap();
     assert_eq!(calculated.built_in_tools, 0.01);
     assert_eq!(calculated.additional, 0.02);
     assert!((calculated.input + calculated.output - 0.0004).abs() < 1e-12);
     assert!((calculated.original - 0.0304).abs() < 1e-12);
     assert!((calculated.total - 0.033832).abs() < 1e-12);
     assert_eq!(
-        catalog.response_cost_calculator(ResponseCostRequest {
-            completion,
-            cache_hit: false,
-            hidden_params: &json!({}),
-        }),
+        litellm_cost::cost_calculator::response_cost_calculator(
+            &catalog,
+            ResponseCostRequest {
+                completion,
+                cache_hit: false,
+                hidden_params: &json!({}),
+            }
+        ),
         Ok(calculated.total)
     );
     assert_eq!(
-        catalog.response_cost_calculator(ResponseCostRequest {
-            completion,
-            cache_hit: true,
-            hidden_params: &json!({}),
-        }),
+        litellm_cost::cost_calculator::response_cost_calculator(
+            &catalog,
+            ResponseCostRequest {
+                completion,
+                cache_hit: true,
+                hidden_params: &json!({}),
+            }
+        ),
         Ok(0.0)
     );
 }

@@ -87,19 +87,29 @@ fn speech_cost_selects_character_or_token_pricing_and_requires_characters() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        catalog
-            .speech_cost(request("character", "openai", &usage), Some(5.0))
-            .unwrap(),
+        litellm_cost::cost_calculator::speech_cost(
+            &catalog,
+            request("character", "openai", &usage),
+            Some(5.0)
+        )
+        .unwrap(),
         (0.01, 0.0)
     );
     assert_eq!(
-        catalog
-            .speech_cost(request("token", "openai", &usage), None)
-            .unwrap(),
+        litellm_cost::cost_calculator::speech_cost(
+            &catalog,
+            request("token", "openai", &usage),
+            None
+        )
+        .unwrap(),
         (0.03, 0.008)
     );
     assert_eq!(
-        catalog.speech_cost(request("character", "openai", &usage), None),
+        litellm_cost::cost_calculator::speech_cost(
+            &catalog,
+            request("character", "openai", &usage),
+            None
+        ),
         Err(CostError::MissingPromptCharacters)
     );
 }
@@ -113,9 +123,12 @@ fn speech_cost_uses_lyria_generation_price_before_character_or_token_rates() {
     )]));
     assert_eq!(lyria_generation_cost(&info), Some(0.08));
     assert_eq!(
-        catalog
-            .speech_cost(request("lyria", "vertex_ai", &ChatUsage::default()), None)
-            .unwrap(),
+        litellm_cost::cost_calculator::speech_cost(
+            &catalog,
+            request("lyria", "vertex_ai", &ChatUsage::default()),
+            None
+        )
+        .unwrap(),
         (0.0, 0.08)
     );
     assert_eq!(
@@ -143,15 +156,21 @@ fn transcription_cost_selects_token_usage_or_duration_pricing() {
     assert!(transcription_usage_has_token_details(&audio_detail_usage));
     assert!(!transcription_usage_has_token_details(&duration_usage));
     assert_eq!(
-        catalog
-            .transcription_cost(request("transcribe", "openai", &token_usage), 5.0)
-            .unwrap(),
+        litellm_cost::cost_calculator::transcription_cost(
+            &catalog,
+            request("transcribe", "openai", &token_usage),
+            5.0
+        )
+        .unwrap(),
         (0.02, 0.006)
     );
     assert_eq!(
-        catalog
-            .transcription_cost(request("transcribe", "openai", &duration_usage), 5.0)
-            .unwrap(),
+        litellm_cost::cost_calculator::transcription_cost(
+            &catalog,
+            request("transcribe", "openai", &duration_usage),
+            5.0
+        )
+        .unwrap(),
         (0.05, 0.0)
     );
 }

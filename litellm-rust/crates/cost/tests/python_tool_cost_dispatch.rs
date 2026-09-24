@@ -196,8 +196,9 @@ fn model_info_catalog_completion_cost_dispatches_built_in_tools() {
     let discount = json!({});
     let margin = json!({});
     let at: Timestamp = "2026-01-01T18:00Z".parse().unwrap();
-    let actual = catalog
-        .completion_cost(CompletionCostRequest {
+    let actual = litellm_cost::cost_calculator::completion_cost(
+        &catalog,
+        CompletionCostRequest {
             token: ModelCostRequest {
                 model: "model",
                 provider: Some("openai"),
@@ -220,13 +221,13 @@ fn model_info_catalog_completion_cost_dispatches_built_in_tools() {
             additional_costs: &[],
             discount_config: &discount,
             margin_config: &margin,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert!((actual.total - (100.0 * 2e-6 + 50.0 * 4e-6 + 2.0 * 0.01)).abs() < 1e-12);
 }
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use litellm_cost::catalog::{
-    BuiltInToolCharge, CompletionCostRequest, ModelCostRequest, ModelInfoCatalog,
-};
+use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
+use litellm_cost::cost_calculator::{BuiltInToolCharge, CompletionCostRequest};

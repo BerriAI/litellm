@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::search_cost::{
     ParallelAiPricing, effective_max_results, effective_mode, parallel_ai_search_cost,
-    provider_usage, search_provider_cost_per_query, usage_count,
+    provider_usage, search_provider_cost_from_model_info, search_provider_cost_per_query,
+    usage_count,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -29,7 +30,7 @@ fn search_provider_cost_per_query_selects_inclusive_result_tier_and_last_fallbac
         ]
     });
     assert_eq!(
-        search_provider_cost_per_query(&model_info, 3, &json!({"max_results": max_results})),
+        search_provider_cost_from_model_info(&model_info, 3, &json!({"max_results": max_results})),
         (3.0 * expected_rate, 0.0)
     );
 }
@@ -41,9 +42,7 @@ fn search_provider_cost_per_query_uses_flat_rate_without_tiers() {
         json!({"input_cost_per_query": 0.003}),
     )]));
     assert_eq!(
-        catalog
-            .search_provider_cost_per_query("search", Some("exa_ai"), 4, &json!({}))
-            .unwrap(),
+        search_provider_cost_per_query(&catalog, "search", Some("exa_ai"), 4, &json!({})).unwrap(),
         (0.012, 0.0)
     );
 }
@@ -122,8 +121,7 @@ fn parallel_ai_catalog_selects_mode_price_and_zero_additional_results_for_usage_
         "_parallel_ai_usage": [{"name": "unrelated_sku", "count": 5}]
     });
     assert_eq!(
-        catalog
-            .search_provider_cost_per_query("ignored", Some("parallel_ai"), 9, &params)
+        search_provider_cost_per_query(&catalog, "ignored", Some("parallel_ai"), 9, &params)
             .unwrap(),
         (0.03, 0.0)
     );

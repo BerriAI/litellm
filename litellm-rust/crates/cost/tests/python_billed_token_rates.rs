@@ -5,7 +5,10 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use litellm_cost::billed_token_rates::{BilledRatesRequest, get_token_type_cost_breakdown};
+use litellm_cost::billed_token_rates::{
+    BilledRatesRequest, calculate_token_type_cost_breakdown, get_billed_token_rates,
+    get_token_type_cost_breakdown,
+};
 use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::custom_pricing::CustomTokenRates;
 use litellm_cost::usage_dispatch::get_usage_object;
@@ -45,7 +48,7 @@ fn get_token_type_cost_breakdown_uses_off_peak_reasoning_and_cache_write_rates(
     }}))
     .unwrap()
     .unwrap();
-    let breakdown = get_token_type_cost_breakdown(BilledRatesRequest {
+    let breakdown = calculate_token_type_cost_breakdown(BilledRatesRequest {
         model_info: Some(&model_info),
         usage: &usage,
         provider: Some("openai"),
@@ -93,15 +96,15 @@ fn get_token_type_cost_breakdown_uses_flat_custom_rates_without_model_metadata()
         cache_read: Some(1e-7),
         cache_creation: None,
     };
-    let breakdown = catalog.get_token_type_cost_breakdown(request, Some(custom));
+    let breakdown = get_token_type_cost_breakdown(&catalog, request, Some(custom));
     assert!((breakdown.cache_read_cost - 800.0 * 1e-7).abs() < 1e-12);
     assert!((breakdown.cache_creation_cost - 100.0 * 1e-6).abs() < 1e-12);
     assert!((breakdown.reasoning_cost - 200.0 * 2e-6).abs() < 1e-12);
     assert_eq!(
-        catalog.get_billed_token_rates(request, Some(custom)),
+        get_billed_token_rates(&catalog, request, Some(custom)),
         breakdown.rates
     );
-    assert_eq!(catalog.get_billed_token_rates(request, None), None);
+    assert_eq!(get_billed_token_rates(&catalog, request, None), None);
 }
 
 #[rstest]
@@ -139,8 +142,8 @@ fn get_billed_token_rates_follows_selected_threshold_tier() {
         at: at("2026-01-01T18:00Z"),
         response_time_ms: None,
     };
-    let rates = catalog.get_billed_token_rates(request, None).unwrap();
-    let breakdown = catalog.get_token_type_cost_breakdown(request, None);
+    let rates = get_billed_token_rates(&catalog, request, None).unwrap();
+    let breakdown = get_token_type_cost_breakdown(&catalog, request, None);
     assert_eq!(rates.input_cost_per_token, 6e-6);
     assert_eq!(rates.output_cost_per_token, 3e-5);
     assert_eq!(rates.cache_read_input_token_cost, 6e-7);
@@ -180,7 +183,7 @@ fn get_token_type_cost_breakdown_scales_cache_audio_and_ttl_with_region() {
     }}))
     .unwrap()
     .unwrap();
-    let breakdown = get_token_type_cost_breakdown(BilledRatesRequest {
+    let breakdown = calculate_token_type_cost_breakdown(BilledRatesRequest {
         model_info: Some(&model_info),
         usage: &usage,
         provider: Some("openai"),
@@ -216,7 +219,8 @@ fn token_type_cost_breakdown_is_provider_agnostic_for_perplexity() {
     }}))
     .unwrap()
     .unwrap();
-    let breakdown = catalog.get_token_type_cost_breakdown(
+    let breakdown = get_token_type_cost_breakdown(
+        &catalog,
         ModelCostRequest {
             model: "perplexity/sonar-reasoning",
             provider: Some("perplexity"),

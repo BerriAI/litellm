@@ -1,8 +1,8 @@
 use jiff::Timestamp;
 use serde_json::Value;
 
-use crate::base_rate_selection::uses_inclusive_token_thresholds;
-use crate::base_rate_selection::{get_token_base_cost, tier_key};
+use crate::base_rate_selection::{get_token_base_cost, tier_key, uses_inclusive_token_thresholds};
+use crate::catalog::{ModelCostRequest, ModelInfoCatalog};
 use crate::custom_pricing::CustomTokenRates;
 use crate::generic_cost::resolve_billed_reasoning_rate;
 use crate::generic_input::{calculate_cache_writing_cost, get_cost_per_unit};
@@ -72,7 +72,7 @@ fn custom_pricing_rates(custom: CustomTokenRates) -> BilledTokenRates {
     }
 }
 
-pub fn get_billed_token_rates(request: BilledRatesRequest<'_>) -> Option<BilledTokenRates> {
+pub fn calculate_billed_token_rates(request: BilledRatesRequest<'_>) -> Option<BilledTokenRates> {
     if let Some(custom) = request.custom_cost_per_token {
         return Some(custom_pricing_rates(custom));
     }
@@ -125,8 +125,10 @@ fn count(value: Option<&Value>) -> u64 {
     value.and_then(Value::as_u64).unwrap_or(0)
 }
 
-pub fn get_token_type_cost_breakdown(request: BilledRatesRequest<'_>) -> TokenTypeCostBreakdown {
-    let Some(rates) = get_billed_token_rates(request) else {
+pub fn calculate_token_type_cost_breakdown(
+    request: BilledRatesRequest<'_>,
+) -> TokenTypeCostBreakdown {
+    let Some(rates) = calculate_billed_token_rates(request) else {
         return TokenTypeCostBreakdown {
             reasoning_cost: 0.0,
             cache_read_cost: 0.0,
@@ -179,4 +181,45 @@ pub fn get_token_type_cost_breakdown(request: BilledRatesRequest<'_>) -> TokenTy
         cache_creation_cost,
         rates: Some(rates),
     }
+}
+
+fn billed_rates_request<'a>(
+    catalog: &'a ModelInfoCatalog,
+    request: ModelCostRequest<'a>,
+    custom_cost_per_token: Option<CustomTokenRates>,
+) -> BilledRatesRequest<'a> {
+    BilledRatesRequest {
+        model_info: catalog.entry(request.model, request.provider, request.region),
+        usage: request.usage,
+        provider: request.provider,
+        service_tier: request.service_tier,
+        data_residency: request.data_residency,
+        vertex_location: request.vertex_location,
+        at: request.at,
+        custom_cost_per_token,
+    }
+}
+
+pub fn get_billed_token_rates(
+    catalog: &ModelInfoCatalog,
+    request: ModelCostRequest<'_>,
+    custom_cost_per_token: Option<CustomTokenRates>,
+) -> Option<BilledTokenRates> {
+    calculate_billed_token_rates(billed_rates_request(
+        catalog,
+        request,
+        custom_cost_per_token,
+    ))
+}
+
+pub fn get_token_type_cost_breakdown(
+    catalog: &ModelInfoCatalog,
+    request: ModelCostRequest<'_>,
+    custom_cost_per_token: Option<CustomTokenRates>,
+) -> TokenTypeCostBreakdown {
+    calculate_token_type_cost_breakdown(billed_rates_request(
+        catalog,
+        request,
+        custom_cost_per_token,
+    ))
 }

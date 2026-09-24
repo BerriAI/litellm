@@ -75,11 +75,21 @@ fn handle_realtime_transcription_cost_calculation_uses_session_model_and_complet
         json!({"type": "conversation.item.input_audio_transcription.completed", "usage": {"type": "duration", "seconds": 3.0}}),
     ];
     assert_eq!(
-        catalog.handle_realtime_transcription_cost_calculation(&events, "openai", "requested"),
+        litellm_cost::cost_calculator::handle_realtime_transcription_cost_calculation(
+            &catalog,
+            &events,
+            "openai",
+            "requested"
+        ),
         5.0 * 0.02
     );
     assert_eq!(
-        catalog.handle_realtime_transcription_cost_calculation(&events[..1], "openai", "requested"),
+        litellm_cost::cost_calculator::handle_realtime_transcription_cost_calculation(
+            &catalog,
+            &events[..1],
+            "openai",
+            "requested"
+        ),
         0.0
     );
 }
@@ -154,9 +164,16 @@ fn responses_ws_token_cost_prices_each_tier_at_its_returned_rate() {
         json!({"type": "response.failed", "response": {"service_tier": "priority", "usage": {"input_tokens": 1000, "output_tokens": 1000}}}),
     ];
     let at: Timestamp = "2026-09-22T12:00:00Z".parse().unwrap();
-    let actual = catalog
-        .responses_ws_token_cost_by_tier(&events, "model", Some("openai"), None, None, at)
-        .unwrap();
+    let actual = litellm_cost::cost_calculator::responses_ws_token_cost_by_tier(
+        &catalog,
+        &events,
+        "model",
+        Some("openai"),
+        None,
+        None,
+        at,
+    )
+    .unwrap();
     let expected = 100.0 * 0.002 + 40.0 * 0.003 + 60.0 * 0.005 + 10.0 * 0.007;
     assert!((actual - expected).abs() < 1e-12);
     assert!((actual - (160.0 * 0.002 + 50.0 * 0.003)).abs() > 1e-9);
@@ -182,7 +199,8 @@ fn handle_realtime_stream_cost_calculation_falls_through_only_for_priceless_sess
     ];
     let usage = collect_and_combine_usage_from_realtime_stream_results(&events).unwrap();
     let at: Timestamp = "2026-09-22T12:00:00Z".parse().unwrap();
-    let actual = catalog.handle_realtime_stream_cost_calculation(
+    let actual = litellm_cost::cost_calculator::handle_realtime_stream_cost_calculation(
+        &catalog,
         &events,
         &usage,
         "openai",
@@ -212,7 +230,8 @@ fn handle_realtime_stream_cost_calculation_adds_transcription_events() {
     ];
     let usage = collect_and_combine_usage_from_realtime_stream_results(&events).unwrap();
     let at: Timestamp = "2026-09-22T12:00:00Z".parse().unwrap();
-    let actual = catalog.handle_realtime_stream_cost_calculation(
+    let actual = litellm_cost::cost_calculator::handle_realtime_stream_cost_calculation(
+        &catalog,
         &events,
         &usage,
         "openai",

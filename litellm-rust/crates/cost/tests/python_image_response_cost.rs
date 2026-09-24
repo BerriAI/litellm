@@ -61,23 +61,9 @@ fn calculate_image_response_cost_from_usage_prices_image_input_and_output_detail
         "input_tokens_details": {"text_tokens": 19, "image_tokens": 512},
         "output_tokens_details": output_details
     }});
-    let direct =
+    let cost =
         calculate_image_response_cost_from_usage(&response, &model_info(), Some("openai"), at());
-    assert!((direct.unwrap() - expected).abs() < 1e-12);
-    let catalog = ModelInfoCatalog::new(HashMap::from([(
-        "openai/image-model".to_owned(),
-        model_info(),
-    )]));
-    assert_eq!(
-        catalog.calculate_image_response_cost_from_usage(
-            "image-model",
-            Some("openai"),
-            None,
-            &response,
-            at(),
-        ),
-        direct
-    );
+    assert!((cost.unwrap() - expected).abs() < 1e-12);
 }
 
 #[rstest]
@@ -171,9 +157,15 @@ fn google_image_generation_prefers_token_usage_and_adds_web_search(#[case] provi
     assert!((direct - (3.0 * 0.001 + 2.0 * 0.003 + 2.0 * 0.02)).abs() < 1e-12);
     let catalog = ModelInfoCatalog::new(HashMap::from([(format!("{provider}/image-model"), info)]));
     assert_eq!(
-        catalog
-            .google_image_generation_cost("image-model", provider, &response, None, at())
-            .unwrap(),
+        litellm_cost::image_cost_router::google_image_generation_cost(
+            &catalog,
+            "image-model",
+            provider,
+            &response,
+            None,
+            at()
+        )
+        .unwrap(),
         direct
     );
 }
@@ -194,9 +186,15 @@ fn google_image_generation_falls_back_to_images_and_preserves_supplied_prices() 
         "vertex_ai/image-model".to_owned(),
         shared,
     )]));
-    let cost = catalog
-        .google_image_generation_cost("image-model", "vertex_ai", &response, Some(&supplied), at())
-        .unwrap();
+    let cost = litellm_cost::image_cost_router::google_image_generation_cost(
+        &catalog,
+        "image-model",
+        "vertex_ai",
+        &response,
+        Some(&supplied),
+        at(),
+    )
+    .unwrap();
     assert!((cost - 0.52).abs() < 1e-12);
 }
 
@@ -217,9 +215,15 @@ fn gemini_image_edit_shares_generation_token_and_search_billing() {
     assert_eq!(gemini_image_edit_cost(&response, &info, at()), generation);
     let catalog = ModelInfoCatalog::new(HashMap::from([("gemini/image-model".to_owned(), info)]));
     assert_eq!(
-        catalog
-            .google_image_edit_cost("image-model", "gemini", &response, None, at())
-            .unwrap(),
+        litellm_cost::image_cost_router::google_image_edit_cost(
+            &catalog,
+            "image-model",
+            "gemini",
+            &response,
+            None,
+            at()
+        )
+        .unwrap(),
         generation
     );
 }
@@ -234,15 +238,15 @@ fn vertex_image_edit_uses_flat_shared_rate_even_with_token_usage() {
     let catalog =
         ModelInfoCatalog::new(HashMap::from([("vertex_ai/image-model".to_owned(), info)]));
     assert_eq!(
-        catalog
-            .google_image_edit_cost(
-                "image-model",
-                "vertex_ai",
-                &response,
-                Some(&json!({"output_cost_per_image": 10.0})),
-                at()
-            )
-            .unwrap(),
+        litellm_cost::image_cost_router::google_image_edit_cost(
+            &catalog,
+            "image-model",
+            "vertex_ai",
+            &response,
+            Some(&json!({"output_cost_per_image": 10.0})),
+            at()
+        )
+        .unwrap(),
         0.5
     );
 }

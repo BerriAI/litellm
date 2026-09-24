@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use jiff::Timestamp;
 use litellm_cost::catalog::ModelInfoCatalog;
 use litellm_cost::fal_ai_image_cost::{
-    PIXELS_PER_MEGAPIXEL, cost_calculator, fal_ai_passthrough_cost, flat_cost_per_image,
-    image_dimensions, keyed_cost_per_image, keyed_quality, keyed_rows, keyed_size,
-    parse_keyed_dimensions,
+    PIXELS_PER_MEGAPIXEL, cost_calculator, fal_ai_passthrough_cost,
+    fal_ai_passthrough_cost_from_model_info, flat_cost_per_image, image_dimensions,
+    keyed_cost_per_image, keyed_quality, keyed_rows, keyed_size, parse_keyed_dimensions,
 };
 use litellm_cost::image_cost_router::{
     ImageCostRouteRequest, route_image_generation_cost_calculator,
@@ -179,25 +179,33 @@ fn catalog_fal_image_route_uses_keyed_row_for_image_edit() {
 fn fal_passthrough_selects_resolution_rate_and_falls_back_to_base() {
     let info = json!({"output_cost_per_image": 0.3, "output_cost_per_image_512": 0.25});
     assert_eq!(
-        fal_ai_passthrough_cost(Some(&info), &json!({"resolution": 512})),
+        fal_ai_passthrough_cost_from_model_info(Some(&info), &json!({"resolution": 512})),
         Some(0.25)
     );
     assert_eq!(
-        fal_ai_passthrough_cost(Some(&info), &json!({"resolution": "512"})),
+        fal_ai_passthrough_cost_from_model_info(Some(&info), &json!({"resolution": "512"})),
         Some(0.25)
     );
     assert_eq!(
-        fal_ai_passthrough_cost(Some(&info), &json!({"resolution": true})),
+        fal_ai_passthrough_cost_from_model_info(Some(&info), &json!({"resolution": true})),
         Some(0.3)
     );
     assert_eq!(
-        fal_ai_passthrough_cost(Some(&info), &json!({"resolution": 512.0})),
+        fal_ai_passthrough_cost_from_model_info(Some(&info), &json!({"resolution": 512.0})),
         Some(0.3)
     );
     let catalog =
         ModelInfoCatalog::new(HashMap::from([("fal_ai/fal-ai/trellis".to_owned(), info)]));
     assert_eq!(
-        catalog.fal_ai_passthrough_cost("fal-ai/trellis", &json!({"resolution": 512})),
+        fal_ai_passthrough_cost(&catalog, "fal-ai/trellis", &json!({"resolution": 512})),
         Some(0.25)
+    );
+    assert_eq!(
+        fal_ai_passthrough_cost(
+            &catalog,
+            "fal_ai/fal-ai/trellis",
+            &json!({"resolution": 512})
+        ),
+        None
     );
 }

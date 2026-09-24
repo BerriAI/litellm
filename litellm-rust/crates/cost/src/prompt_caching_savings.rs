@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::base_rate_selection::get_token_base_cost;
 use crate::base_rate_selection::uses_inclusive_token_thresholds;
+use crate::catalog::{ModelCostRequest, ModelInfoCatalog};
 use crate::generic_input::calculate_cache_writing_cost;
 use crate::generic_usage::parse_prompt_tokens_details;
 use crate::provider_cache::apply_provider_cache_read_default;
@@ -50,4 +51,22 @@ pub fn calculate_prompt_caching_savings(request: PromptCachingSavingsRequest<'_>
     let uplift = get_regional_uplift_multiplier(request.model_info, request.data_residency)
         * get_vertex_regional_endpoint_uplift(request.model_info, request.vertex_location);
     (read_discount - write_premium) * uplift
+}
+
+pub fn prompt_caching_savings_for_model(
+    catalog: &ModelInfoCatalog,
+    request: ModelCostRequest<'_>,
+) -> Option<f64> {
+    let model_info = catalog.entry(request.model, request.provider, request.region)?;
+    Some(calculate_prompt_caching_savings(
+        PromptCachingSavingsRequest {
+            model_info,
+            usage: request.usage,
+            provider: request.provider,
+            service_tier: request.service_tier,
+            data_residency: request.data_residency,
+            vertex_location: request.vertex_location,
+            at: request.at,
+        },
+    ))
 }

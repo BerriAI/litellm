@@ -9,7 +9,7 @@ use litellm_cost::Rate;
 use litellm_cost::anthropic_usage::transform_anthropic_usage_to_chat_usage;
 use litellm_cost::base_rate_selection::uses_inclusive_token_thresholds;
 use litellm_cost::batch::batch_cost_rates_from_model_info;
-use litellm_cost::billed_token_rates::{BilledRatesRequest, get_billed_token_rates};
+use litellm_cost::billed_token_rates::{BilledRatesRequest, calculate_billed_token_rates};
 use litellm_cost::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use litellm_cost::off_peak::is_off_peak;
 use litellm_cost::prompt_caching_savings::{
@@ -93,7 +93,7 @@ fn billed_token_rates_match_executed_python_fixtures() {
         let provider = opt_str(row, "custom_llm_provider");
         let at = opt_str(row, "current_time")
             .map_or_else(|| "2026-03-12T00:00:00Z".parse().unwrap(), instant);
-        let rates = get_billed_token_rates(BilledRatesRequest {
+        let rates = calculate_billed_token_rates(BilledRatesRequest {
             model_info: Some(row.get("model_info").unwrap()),
             usage: &usage,
             provider,

@@ -9,7 +9,8 @@ use jiff::Timestamp;
 use litellm_cost::azure_ai_image_cost::{
     AzureAiImageRequest, cost_calculator, input_cost_per_pixel,
 };
-use litellm_cost::catalog::{AzureAiImageCatalogRequest, ModelInfoCatalog};
+use litellm_cost::catalog::ModelInfoCatalog;
+use litellm_cost::image_cost_router::AzureAiImageCatalogRequest;
 use rstest::rstest;
 use serde_json::{Value, json};
 
@@ -107,8 +108,9 @@ fn catalog_azure_image_cost_uses_deployment_pixel_rate_for_unlisted_model() {
     let catalog = ModelInfoCatalog::default();
     let response = json!({"data": [{}, {}], "size": "3x4"});
     let supplied = json!({"input_cost_per_pixel": 0.02});
-    let cost = catalog
-        .azure_ai_image_generation_cost(AzureAiImageCatalogRequest {
+    let cost = litellm_cost::image_cost_router::azure_ai_image_generation_cost(
+        &catalog,
+        AzureAiImageCatalogRequest {
             model: "unlisted",
             image_response: &response,
             size: None,
@@ -116,8 +118,9 @@ fn catalog_azure_image_cost_uses_deployment_pixel_rate_for_unlisted_model() {
             optional_params: &json!({"width": 5, "height": 6}),
             supplied_model_info: Some(&supplied),
             at: at(),
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert!((cost - 2.0 * 5.0 * 6.0 * 0.02).abs() < 1e-12);
 }
 
@@ -144,15 +147,19 @@ fn catalog_azure_image_cost_uses_shared_flat_rate_and_zero_when_unpriced() {
         at: at(),
     };
     assert_eq!(
-        catalog
-            .azure_ai_image_generation_cost(for_model("flat"))
-            .unwrap(),
+        litellm_cost::image_cost_router::azure_ai_image_generation_cost(
+            &catalog,
+            for_model("flat")
+        )
+        .unwrap(),
         0.6
     );
     assert_eq!(
-        catalog
-            .azure_ai_image_generation_cost(for_model("free"))
-            .unwrap(),
+        litellm_cost::image_cost_router::azure_ai_image_generation_cost(
+            &catalog,
+            for_model("free")
+        )
+        .unwrap(),
         0.0
     );
 }

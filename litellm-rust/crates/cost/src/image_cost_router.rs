@@ -1,9 +1,21 @@
-use crate::error::CostError;
 use jiff::Timestamp;
 use serde_json::Value;
 
-use crate::catalog::{AzureAiImageCatalogRequest, DefaultImageCostRequest, ModelInfoCatalog};
+use crate::azure_ai_image_cost::{
+    AzureAiImageRequest, cost_calculator as azure_ai_image_cost_calculator,
+};
+use crate::bedrock_image_cost::cost_calculator as bedrock_image_cost_calculator;
+use crate::catalog::ModelInfoCatalog;
+use crate::error::CostError;
+use crate::fal_ai_image_cost::cost_calculator as fal_ai_image_cost_calculator;
 use crate::generic_input::get_cost_per_unit;
+use crate::image_response_cost::{
+    flat_image_cost, gemini_image_edit_cost, gemini_image_generation_cost,
+    resolve_image_model_info, vertex_image_edit_cost, vertex_image_generation_cost,
+};
+use crate::non_token::{ImageRates, ImageUsage, calculate_image};
+use crate::openai_image_cost::cost_calculator as openai_image_cost_calculator;
+use crate::pricing::Rate;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ImageCostRouteRequest<'a> {
@@ -17,6 +29,27 @@ pub struct ImageCostRouteRequest<'a> {
     pub optional_params: &'a Value,
     pub supplied_model_info: Option<&'a Value>,
     pub at: Timestamp,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AzureAiImageCatalogRequest<'a> {
+    pub model: &'a str,
+    pub image_response: &'a Value,
+    pub size: Option<&'a str>,
+    pub n: Option<u64>,
+    pub optional_params: &'a Value,
+    pub supplied_model_info: Option<&'a Value>,
+    pub at: Timestamp,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DefaultImageCostRequest<'a> {
+    pub model: &'a str,
+    pub provider: Option<&'a str>,
+    pub quality: Option<&'a str>,
+    pub n: Option<u64>,
+    pub size: Option<&'a str>,
+    pub supplied_model_info: Option<&'a Value>,
 }
 
 pub fn call_type_has_image_response(call_type: &str) -> bool {
@@ -197,30 +230,34 @@ pub fn route_image_generation_cost_calculator(
             .map(|data| data.len() as u64)
     });
     match request.provider {
-        Some("vertex_ai") => Ok(catalog.google_image_generation_cost(
+        Some("vertex_ai") => google_image_generation_cost(
+            catalog,
             request.model,
             "vertex_ai",
             request.image_response,
             pricing.as_ref(),
             request.at,
-        )?),
+        ),
         Some("gemini") if matches!(request.call_type, Some("image_edit" | "aimage_edit")) => {
-            Ok(catalog.google_image_edit_cost(
+            google_image_edit_cost(
+                catalog,
                 request.model,
                 "gemini",
                 request.image_response,
                 pricing.as_ref(),
                 request.at,
-            )?)
+            )
         }
-        Some("gemini") => Ok(catalog.google_image_generation_cost(
+        Some("gemini") => google_image_generation_cost(
+            catalog,
             request.model,
             "gemini",
             request.image_response,
             pricing.as_ref(),
             request.at,
-        )?),
-        Some("azure_ai") => Ok(catalog.azure_ai_image_generation_cost(
+        ),
+        Some("azure_ai") => azure_ai_image_generation_cost(
+            catalog,
             AzureAiImageCatalogRequest {
                 model: request.model,
                 image_response: request.image_response,
@@ -230,46 +267,236 @@ pub fn route_image_generation_cost_calculator(
                 supplied_model_info: pricing.as_ref(),
                 at: request.at,
             },
-        )?),
-        Some(provider @ ("recraft" | "aiml" | "cometapi" | "runwayml")) => Ok(catalog
-            .flat_image_generation_cost(
+        ),
+        Some(provider @ ("recraft" | "aiml" | "cometapi" | "runwayml")) => {
+            flat_image_generation_cost(
+                catalog,
                 request.model,
                 provider,
                 request.image_response,
                 pricing.as_ref(),
-            )?),
-        Some("fal_ai") => Ok(catalog.fal_ai_image_generation_cost(
+            )
+        }
+        Some("fal_ai") => fal_ai_image_cost_calculator(
             request.model,
             request.image_response,
             request.optional_params,
             pricing.as_ref(),
-        )?),
-        Some("bedrock") => Ok(catalog.bedrock_image_generation_cost(
+            catalog.entries(),
+        )
+        .ok_or(CostError::ModelNotFound),
+        Some("bedrock") => bedrock_image_cost_calculator(
             request.model,
             request.image_response,
             resolved_size,
             request.optional_params,
-        )?),
+            catalog.entries(),
+        )
+        .ok_or(CostError::ModelNotFound),
         Some(provider @ ("openai" | "azure"))
             if request.model.to_ascii_lowercase().contains("gpt-image") =>
         {
-            Ok(catalog.openai_image_generation_cost(
+            openai_image_generation_cost(
+                catalog,
                 request.model,
                 provider,
                 request.image_response,
                 pricing.as_ref(),
                 request.at,
-            )?)
+            )
         }
-        _ => Ok(
-            catalog.default_image_cost_calculator(DefaultImageCostRequest {
+        _ => default_image_cost_calculator(
+            catalog,
+            DefaultImageCostRequest {
                 model: request.model,
                 provider: request.provider,
                 quality: resolved_quality,
                 n: resolved_n,
                 size: resolved_size,
                 supplied_model_info: pricing.as_ref(),
-            })?,
+            },
         ),
     }
+}
+
+fn resolved_model_info(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    provider: &str,
+    supplied_model_info: Option<&Value>,
+) -> Result<Value, CostError> {
+    resolve_image_model_info(
+        catalog.entry(model, Some(provider), None),
+        supplied_model_info,
+    )
+    .ok_or(CostError::ModelNotFound)
+}
+
+pub fn google_image_generation_cost(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    provider: &str,
+    image_response: &Value,
+    supplied_model_info: Option<&Value>,
+    at: Timestamp,
+) -> Result<f64, CostError> {
+    let model_info = resolved_model_info(catalog, model, provider, supplied_model_info)?;
+    match provider {
+        "gemini" => Ok(gemini_image_generation_cost(
+            image_response,
+            &model_info,
+            at,
+        )),
+        "vertex_ai" => Ok(vertex_image_generation_cost(
+            image_response,
+            &model_info,
+            at,
+        )),
+        _ => Err(CostError::ModelNotFound),
+    }
+}
+
+pub fn google_image_edit_cost(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    provider: &str,
+    image_response: &Value,
+    supplied_model_info: Option<&Value>,
+    at: Timestamp,
+) -> Result<f64, CostError> {
+    match provider {
+        "gemini" => {
+            let model_info = resolved_model_info(catalog, model, provider, supplied_model_info)?;
+            Ok(gemini_image_edit_cost(image_response, &model_info, at))
+        }
+        "vertex_ai" => catalog
+            .entry(model, Some(provider), None)
+            .map(|model_info| vertex_image_edit_cost(image_response, model_info))
+            .ok_or(CostError::ModelNotFound),
+        _ => Err(CostError::ModelNotFound),
+    }
+}
+
+pub fn azure_ai_image_generation_cost(
+    catalog: &ModelInfoCatalog,
+    request: AzureAiImageCatalogRequest<'_>,
+) -> Result<f64, CostError> {
+    let shared = catalog.entry(request.model, Some("azure_ai"), None);
+    let model_info = resolve_image_model_info(shared, request.supplied_model_info)
+        .ok_or(CostError::ModelNotFound)?;
+    let shared_pricing = model_info
+        .get("key")
+        .and_then(Value::as_str)
+        .and_then(|key| catalog.entries().get(key))
+        .or(shared);
+    azure_ai_image_cost_calculator(AzureAiImageRequest {
+        image_response: request.image_response,
+        model_info: &model_info,
+        supplied_model_info: request.supplied_model_info,
+        shared_pricing,
+        size: request.size,
+        n: request.n,
+        optional_params: request.optional_params,
+        at: request.at,
+    })
+}
+
+pub fn flat_image_generation_cost(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    provider: &str,
+    image_response: &Value,
+    supplied_model_info: Option<&Value>,
+) -> Result<f64, CostError> {
+    let model_info = resolved_model_info(catalog, model, provider, supplied_model_info)?;
+    Ok(flat_image_cost(image_response, &model_info))
+}
+
+pub fn openai_image_generation_cost(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    provider: &str,
+    image_response: &Value,
+    supplied_model_info: Option<&Value>,
+    at: Timestamp,
+) -> Result<f64, CostError> {
+    let model_info = resolved_model_info(catalog, model, provider, supplied_model_info)?;
+    openai_image_cost_calculator(image_response, &model_info, provider, at)
+}
+
+fn image_dimensions(size: &str) -> Result<(u32, u32), CostError> {
+    let (height, width) = size.split_once("-x-").ok_or(CostError::InvalidQuantity)?;
+    let parse = |value: &str| value.parse::<u32>().map_err(|_| CostError::InvalidQuantity);
+    Ok((parse(height)?, parse(width)?))
+}
+
+pub fn default_image_cost_calculator(
+    catalog: &ModelInfoCatalog,
+    request: DefaultImageCostRequest<'_>,
+) -> Result<f64, CostError> {
+    let raw_size = request.size.unwrap_or("1024-x-1024");
+    let size = if raw_size.contains("-x-") {
+        raw_size.to_owned()
+    } else {
+        raw_size.replace('x', "-x-")
+    };
+    let (height, width) = image_dimensions(&size)?;
+    let provider_prefix = request.provider.map(|provider| format!("{provider}/"));
+    let without_provider = provider_prefix
+        .as_deref()
+        .and_then(|prefix| request.model.strip_prefix(prefix));
+    let base = match (request.provider, without_provider) {
+        (Some(provider), Some(model)) => format!("{provider}/{size}/{model}"),
+        _ => format!("{size}/{}", request.model),
+    };
+    let model_tail = request.model.rsplit('/').next().unwrap_or(request.model);
+    let without_prefix = format!("{size}/{model_tail}");
+    let candidates = [
+        request.quality.map(|quality| format!("{quality}/{base}")),
+        request
+            .provider
+            .zip(request.quality)
+            .map(|(provider, quality)| {
+                format!(
+                    "{provider}/{quality}/{size}/{}",
+                    without_provider.unwrap_or(request.model)
+                )
+            }),
+        Some(base.clone()),
+        Some(format!("high/{base}")),
+        request
+            .quality
+            .map(|quality| format!("{quality}/{without_prefix}")),
+        Some(without_prefix),
+        Some(request.model.to_owned()),
+        without_provider.map(str::to_owned),
+    ];
+    let shared = candidates
+        .iter()
+        .flatten()
+        .find_map(|candidate| catalog.entries().get(candidate));
+    if shared.is_none() && request.supplied_model_info.is_none() {
+        return Err(CostError::ModelNotFound);
+    }
+    let rate = |info: &Value, key: &str| {
+        get_cost_per_unit(info, key, None).map_or(Rate::Missing, Rate::Value)
+    };
+    let tables = [request.supplied_model_info, shared]
+        .into_iter()
+        .flatten()
+        .map(|info| ImageRates {
+            input_per_image: rate(info, "input_cost_per_image"),
+            output_per_image: rate(info, "output_cost_per_image"),
+            input_per_pixel: rate(info, "input_cost_per_pixel"),
+        })
+        .collect::<Vec<_>>();
+    Ok(calculate_image(
+        &tables,
+        ImageUsage {
+            count: request.n.unwrap_or(1),
+            width,
+            height,
+        },
+    )?
+    .total)
 }

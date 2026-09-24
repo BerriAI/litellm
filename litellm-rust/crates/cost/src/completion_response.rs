@@ -6,13 +6,16 @@ use serde_json::Value;
 
 use crate::a2a_cost::calculate_a2a_cost;
 use crate::azure_ai_cost::{azure_ai_router_fee, is_azure_model_router};
-use crate::billed_token_rates::TokenTypeCostBreakdown;
+use crate::billed_token_rates::{TokenTypeCostBreakdown, get_token_type_cost_breakdown};
 use crate::catalog::{CostCall, ModelCostRequest, ModelInfoCatalog};
 use crate::completion_cost::{
     CompletionCost, completion_cost, get_response_cost_from_hidden_params,
 };
 use crate::completion_input::{CompletionInputRequest, PreparedCompletionInput, ResponseKind};
-use crate::cost_calculator::{cost_per_token, cost_per_token_for_call};
+use crate::cost_calculator::{
+    built_in_tool_cost, cost_per_token, cost_per_token_for_call, default_video_cost_calculator,
+    handle_realtime_stream_cost_calculation,
+};
 use crate::custom_pricing::{CustomPricing, cost_from_chat_usage};
 use crate::error::CostError;
 use crate::image_cost_router::{
@@ -382,15 +385,15 @@ fn price_video_response(
         .and_then(Value::as_str)
         .map(|value| value.trim().to_ascii_lowercase());
     let (model, total) = price_candidates(&prepared.model_candidates, |model| {
-        catalog
-            .video_generation_cost(
-                model,
-                provider,
-                deployment_info,
-                duration,
-                resolution.as_deref(),
-            )
-            .map(|cost| cost * count as f64)
+        default_video_cost_calculator(
+            catalog,
+            model,
+            duration,
+            provider,
+            deployment_info,
+            resolution.as_deref(),
+        )
+        .map(|cost| cost * count as f64)
     })
     .map_err(|error| match error {
         CandidatePriceError::MissingModel => CostError::MissingModel,
@@ -460,7 +463,8 @@ fn price_realtime_response(
         .next()
         .ok_or(CostError::MissingModel)?
         .clone();
-    let total = catalog.handle_realtime_stream_cost_calculation(
+    let total = handle_realtime_stream_cost_calculation(
+        catalog,
         results,
         &combined,
         provider,
@@ -502,7 +506,8 @@ fn config_driven_tool_cost(
     let Some(response) = request.input.model_selection.response else {
         return 0.0;
     };
-    catalog.built_in_tool_cost(
+    built_in_tool_cost(
+        catalog,
         model,
         provider,
         region,
@@ -842,7 +847,8 @@ pub fn completion_cost_from_response(
         request.margin_config,
     );
     let token_breakdown = prepared.usage.as_ref().map(|response_usage| {
-        catalog.get_token_type_cost_breakdown(
+        get_token_type_cost_breakdown(
+            catalog,
             ModelCostRequest {
                 model: &model,
                 provider,

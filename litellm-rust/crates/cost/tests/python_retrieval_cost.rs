@@ -2,9 +2,12 @@
 
 // mirrors: test_litellm/rag/test_main.py::test_aquery_billed_cost_includes_priced_vector_store_search
 
-use litellm_cost::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use rstest::rstest;
 use serde_json::json;
+use litellm_cost::retrieval_cost::{
+    rerank_cost, rerank_cost_from_model_info, vector_store_search_cost,
+    vector_store_search_cost_from_model_info,
+};
 
 #[rstest]
 #[case("vertex_ai", json!({"input_cost_per_query": 0.25}), json!({"search_units": 3}), (0.75, 0.0))]
@@ -19,7 +22,7 @@ fn rerank_cost_uses_provider_billing_units(
     #[case] billed_units: serde_json::Value,
     #[case] expected: (f64, f64),
 ) {
-    let actual = rerank_cost(provider, Some(&model_info), Some(&billed_units));
+    let actual = rerank_cost_from_model_info(provider, Some(&model_info), Some(&billed_units));
     assert!((actual.0 - expected.0).abs() < 1e-12);
     assert_eq!(actual.1, expected.1);
 }
@@ -27,15 +30,15 @@ fn rerank_cost_uses_provider_billing_units(
 #[rstest]
 fn rerank_cost_returns_zero_when_pricing_or_units_are_missing() {
     assert_eq!(
-        rerank_cost("cohere", None, Some(&json!({"search_units": 2}))),
+        rerank_cost_from_model_info("cohere", None, Some(&json!({"search_units": 2}))),
         (0.0, 0.0)
     );
     assert_eq!(
-        rerank_cost("cohere", Some(&json!({"input_cost_per_query": 0.25})), None),
+        rerank_cost_from_model_info("cohere", Some(&json!({"input_cost_per_query": 0.25})), None),
         (0.0, 0.0)
     );
     assert_eq!(
-        rerank_cost(
+        rerank_cost_from_model_info(
             "cohere",
             Some(&json!({"input_cost_per_query": 0.25})),
             Some(&json!({}))
@@ -55,7 +58,7 @@ fn vector_store_search_cost_only_prices_vertex_search_api(
     #[case] expected: f64,
 ) {
     assert_eq!(
-        vector_store_search_cost(
+        vector_store_search_cost_from_model_info(
             provider,
             api_type,
             Some(&json!({"input_cost_per_query": 0.25}))
@@ -81,7 +84,8 @@ fn model_info_catalog_routes_retrieval_costs_from_selected_metadata() {
         ),
     ]));
     assert_eq!(
-        catalog.rerank_cost(
+        rerank_cost(
+            &catalog,
             "model",
             "vertex_ai",
             None,
@@ -90,15 +94,22 @@ fn model_info_catalog_routes_retrieval_costs_from_selected_metadata() {
         (0.75, 0.0)
     );
     assert_eq!(
-        catalog.rerank_cost("model", "jina_ai", None, Some(&json!({"total_tokens": 30}))),
+        rerank_cost(
+            &catalog,
+            "model",
+            "jina_ai",
+            None,
+            Some(&json!({"total_tokens": 30}))
+        ),
         (0.3, 0.0)
     );
     assert_eq!(
-        catalog.vector_store_search_cost("vertex_ai", Some("search_api")),
+        vector_store_search_cost(&catalog, "vertex_ai", Some("search_api")),
         (0.4, 0.0)
     );
     assert_eq!(
-        catalog.rerank_cost(
+        rerank_cost(
+            &catalog,
             "missing",
             "vertex_ai",
             None,

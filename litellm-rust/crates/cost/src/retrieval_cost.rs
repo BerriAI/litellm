@@ -1,6 +1,8 @@
 use serde_json::Value;
 
-pub fn rerank_cost(
+use crate::catalog::ModelInfoCatalog;
+
+pub fn rerank_cost_from_model_info(
     provider: &str,
     model_info: Option<&Value>,
     billed_units: Option<&Value>,
@@ -21,7 +23,7 @@ pub fn rerank_cost(
     (rate * units as f64, 0.0)
 }
 
-pub fn vector_store_search_cost(
+pub fn vector_store_search_cost_from_model_info(
     provider: &str,
     api_type: Option<&str>,
     search_api_model_info: Option<&Value>,
@@ -34,4 +36,30 @@ pub fn vector_store_search_cost(
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
     (rate, 0.0)
+}
+
+pub fn rerank_cost(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    provider: &str,
+    region: Option<&str>,
+    billed_units: Option<&Value>,
+) -> (f64, f64) {
+    rerank_cost_from_model_info(
+        provider,
+        catalog.entry(model, Some(provider), region),
+        billed_units,
+    )
+}
+
+pub fn vector_store_search_cost(
+    catalog: &ModelInfoCatalog,
+    provider: &str,
+    api_type: Option<&str>,
+) -> (f64, f64) {
+    vector_store_search_cost_from_model_info(
+        provider,
+        api_type,
+        catalog.entries().get("vertex_ai/search_api"),
+    )
 }

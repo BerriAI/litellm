@@ -1,5 +1,8 @@
 use serde_json::Value;
 
+use crate::catalog::ModelInfoCatalog;
+use crate::error::CostError;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParallelAiPricing {
     pub request_cost: f64,
@@ -68,7 +71,7 @@ fn rate(value: Option<&Value>) -> f64 {
     }
 }
 
-pub fn search_provider_cost_per_query(
+pub fn search_provider_cost_from_model_info(
     model_info: &Value,
     number_of_queries: u64,
     optional_params: &Value,
@@ -106,4 +109,41 @@ pub fn provider_usage(optional_params: &Value) -> Option<&[Value]> {
         .and_then(Value::as_array)
         .filter(|usage| usage.iter().all(Value::is_object))
         .map(Vec::as_slice)
+}
+
+pub fn search_provider_cost_per_query(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    provider: Option<&str>,
+    number_of_queries: u64,
+    optional_params: &Value,
+) -> Result<(f64, f64), CostError> {
+    if provider == Some("parallel_ai") {
+        let pricing_model = match effective_mode(optional_params) {
+            "fast" => "parallel_ai/search-fast",
+            "turbo" => "parallel_ai/search-turbo",
+            _ => "parallel_ai/search",
+        };
+        let model_info = catalog
+            .entries()
+            .get(pricing_model)
+            .ok_or(CostError::ModelNotFound)?;
+        let pricing = ParallelAiPricing {
+            request_cost: rate(model_info.get("input_cost_per_query")),
+            default_results: 10,
+            additional_result_cost: 0.001,
+        };
+        return Ok((
+            parallel_ai_search_cost(optional_params, provider_usage(optional_params), pricing),
+            0.0,
+        ));
+    }
+    let model_info = catalog
+        .entry(model, provider, None)
+        .ok_or(CostError::ModelNotFound)?;
+    Ok(search_provider_cost_from_model_info(
+        model_info,
+        number_of_queries,
+        optional_params,
+    ))
 }

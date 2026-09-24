@@ -1,5 +1,6 @@
 //! The public cost entry points mirroring litellm/cost_calculator.py.
 
+use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::anthropic_cost::fast_speed_multiplier;
@@ -8,6 +9,10 @@ use crate::azure_cost::output_per_second_cost;
 use crate::base_rate_selection::uses_inclusive_token_thresholds;
 use crate::batch::batch_cost_from_model_info;
 use crate::catalog::{CostCall, ModelCostRequest, ModelInfoCatalog};
+use crate::completion_cost::{
+    CompletionCost, completion_cost as apply_completion_cost_adjustments,
+    get_response_cost_from_hidden_params,
+};
 use crate::custom_pricing::{CustomPricing, cost_from_chat_usage};
 use crate::dashscope_cost::cost_per_token as dashscope_cost_per_token;
 use crate::databricks_cost::databricks_cost_per_token;
@@ -18,17 +23,52 @@ use crate::fireworks_cost::{
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use crate::lemonade_cost::lemonade_cost_per_token;
 use crate::ocr_cost::ocr_cost;
+use crate::openai_cost::video_generation_cost;
 use crate::per_second::{has_token_or_tiered_pricing, per_second_pricing_cost};
 use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
 use crate::provider::LlmProviders;
 use crate::provider_cache::apply_provider_cache_read_default;
+use crate::realtime_cost::{
+    combine_usage_objects, event_usage, get_transcription_model_name_from_results,
+    partition_results_by_service_tier, transcription_usage_cost,
+};
 use crate::regional_uplift::get_provider_specific_geo_multiplier;
+use crate::responses_usage::ChatUsage;
+use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
+use crate::search_cost::search_provider_cost_per_query;
+use crate::speech_cost::{
+    SpeechCostMetric, cost_per_second, generic_cost_per_character, lyria_generation_cost,
+    select_cost_metric_for_model, transcription_usage_has_token_details,
+};
 use crate::together_cost::{
     TogetherThresholds, get_model_params_and_category, has_together_registry_pricing,
     together_ai_cost_per_token,
 };
+use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
 use crate::vertex_cost::{cost_per_token as vertex_cost_per_token, vertex_cost};
 use crate::xai_cost::{cost_per_token as xai_cost_per_token, reported_cost as xai_reported_cost};
+
+#[derive(Clone, Copy, Debug)]
+pub struct CompletionCostRequest<'a> {
+    pub token: ModelCostRequest<'a>,
+    pub built_in_tools: BuiltInToolCharge<'a>,
+    pub additional_costs: &'a [f64],
+    pub discount_config: &'a Value,
+    pub margin_config: &'a Value,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum BuiltInToolCharge<'a> {
+    Provided(f64),
+    FromResponse(BuiltInToolCostRequest<'a>),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ResponseCostRequest<'a> {
+    pub completion: CompletionCostRequest<'a>,
+    pub cache_hit: bool,
+    pub hidden_params: &'a Value,
+}
 
 pub fn cost_per_token_with_custom(
     catalog: &ModelInfoCatalog,
@@ -89,29 +129,34 @@ pub fn cost_per_token_for_call(
             }
             Ok(cost_per_token(catalog, request)?)
         }
-        CostCall::Speech { prompt_characters } => {
-            Ok(catalog.speech_cost(request, prompt_characters)?)
-        }
+        CostCall::Speech { prompt_characters } => speech_cost(catalog, request, prompt_characters),
         CostCall::Transcription { duration_seconds } => {
-            Ok(catalog.transcription_cost(request, duration_seconds)?)
+            transcription_cost(catalog, request, duration_seconds)
         }
         CostCall::Rerank { billed_units } => {
             let provider = request.provider.ok_or(CostError::MissingProvider)?;
-            Ok(catalog.rerank_cost(request.model, provider, request.region, billed_units))
+            Ok(rerank_cost(
+                catalog,
+                request.model,
+                provider,
+                request.region,
+                billed_units,
+            ))
         }
         CostCall::VectorStoreSearch { api_type } => {
             let provider = request.provider.ok_or(CostError::MissingProvider)?;
-            Ok(catalog.vector_store_search_cost(provider, api_type))
+            Ok(vector_store_search_cost(catalog, provider, api_type))
         }
         CostCall::Search {
             number_of_queries,
             optional_params,
-        } => Ok(catalog.search_provider_cost_per_query(
+        } => search_provider_cost_per_query(
+            catalog,
             request.model,
             request.provider,
             number_of_queries.filter(|count| *count > 0).unwrap_or(1),
             optional_params,
-        )?),
+        ),
         CostCall::Ocr {
             response,
             deployment_info,
@@ -295,4 +340,254 @@ pub fn cost_per_token(
         1.0
     };
     Ok((cost.0 * speed, cost.1 * speed))
+}
+
+pub fn speech_cost(
+    catalog: &ModelInfoCatalog,
+    request: ModelCostRequest<'_>,
+    prompt_characters: Option<f64>,
+) -> Result<(f64, f64), CostError> {
+    let model_info = catalog
+        .entry(request.model, request.provider, request.region)
+        .ok_or(CostError::ModelNotFound)?;
+    if matches!(request.provider, Some("vertex_ai" | "vertex_ai_beta"))
+        && let Some(cost) = lyria_generation_cost(model_info)
+    {
+        return Ok((0.0, cost));
+    }
+    match select_cost_metric_for_model(model_info)? {
+        SpeechCostMetric::PerCharacter => {
+            let characters = prompt_characters.ok_or(CostError::MissingPromptCharacters)?;
+            let (prompt, completion) =
+                generic_cost_per_character(model_info, characters, 0.0, None, Some(0.0));
+            Ok((
+                prompt.ok_or(CostError::MissingInputCharacterRate)?,
+                completion.unwrap_or(0.0),
+            ))
+        }
+        SpeechCostMetric::PerToken => cost_per_token(catalog, request),
+    }
+}
+
+pub fn transcription_cost(
+    catalog: &ModelInfoCatalog,
+    request: ModelCostRequest<'_>,
+    duration_seconds: f64,
+) -> Result<(f64, f64), CostError> {
+    let model_info = catalog
+        .entry(request.model, request.provider, request.region)
+        .ok_or(CostError::ModelNotFound)?;
+    if transcription_usage_has_token_details(request.usage) {
+        return Ok(calculate_generic_cost_from_model_info_with_region(
+            request.usage,
+            model_info,
+            request.service_tier,
+            false,
+            request.data_residency,
+            request.vertex_location,
+            request.at,
+        ));
+    }
+    Ok(cost_per_second(model_info, duration_seconds))
+}
+
+pub fn handle_realtime_transcription_cost_calculation(
+    catalog: &ModelInfoCatalog,
+    results: &[Value],
+    provider: &str,
+    requested_model: &str,
+) -> f64 {
+    let model = get_transcription_model_name_from_results(results).unwrap_or(requested_model);
+    let model_info = catalog.entry(model, Some(provider), None);
+    results
+        .iter()
+        .filter(|event| {
+            event.get("type").and_then(Value::as_str)
+                == Some("conversation.item.input_audio_transcription.completed")
+        })
+        .map(|event| transcription_usage_cost(&event["usage"], model_info))
+        .sum()
+}
+
+fn cost_map_entry_declares_pricing(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    provider: &str,
+) -> bool {
+    [
+        catalog.entries().get(model),
+        catalog.entries().get(&format!("{provider}/{model}")),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_object)
+    .any(|fields| {
+        fields
+            .iter()
+            .any(|(field, value)| field.contains("cost_per") && !value.is_null())
+    })
+}
+
+pub fn handle_realtime_stream_cost_calculation(
+    catalog: &ModelInfoCatalog,
+    results: &[Value],
+    combined_usage: &ChatUsage,
+    provider: &str,
+    requested_model: &str,
+    data_residency: Option<&str>,
+    at: Timestamp,
+) -> f64 {
+    let (prompt, completion) = results
+        .iter()
+        .filter(|event| event.get("type").and_then(Value::as_str) == Some("session.created"))
+        .filter_map(|event| event.pointer("/session/model").and_then(Value::as_str))
+        .chain(std::iter::once(requested_model))
+        .find_map(|model| {
+            let model_info = catalog.entry(model, Some(provider), None)?;
+            let cost = calculate_generic_cost_from_model_info_with_region(
+                combined_usage,
+                model_info,
+                None,
+                false,
+                data_residency,
+                None,
+                at,
+            );
+            (cost.0 + cost.1 > 0.0 || cost_map_entry_declares_pricing(catalog, model, provider))
+                .then_some(cost)
+        })
+        .unwrap_or((0.0, 0.0));
+    prompt
+        + completion
+        + handle_realtime_transcription_cost_calculation(
+            catalog,
+            results,
+            provider,
+            requested_model,
+        )
+}
+
+pub fn responses_ws_token_cost_by_tier(
+    catalog: &ModelInfoCatalog,
+    results: &[Value],
+    model: &str,
+    provider: Option<&str>,
+    region: Option<&str>,
+    data_residency: Option<&str>,
+    at: Timestamp,
+) -> Result<f64, CostError> {
+    partition_results_by_service_tier(results)
+        .into_iter()
+        .map(|(service_tier, events)| {
+            let usage = combine_usage_objects(
+                events
+                    .into_iter()
+                    .map(event_usage)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?;
+            let (prompt, completion) = cost_per_token(
+                catalog,
+                ModelCostRequest {
+                    model,
+                    provider,
+                    region,
+                    usage: &usage,
+                    service_tier,
+                    data_residency,
+                    vertex_location: None,
+                    at,
+                    response_time_ms: None,
+                },
+            )?;
+            Ok(prompt + completion)
+        })
+        .sum()
+}
+
+pub fn built_in_tool_cost(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    provider: Option<&str>,
+    region: Option<&str>,
+    request: BuiltInToolCostRequest<'_>,
+) -> f64 {
+    get_cost_for_built_in_tools(request, catalog.entry(model, provider, region))
+}
+
+pub fn completion_cost(
+    catalog: &ModelInfoCatalog,
+    request: CompletionCostRequest<'_>,
+) -> Result<CompletionCost, CostError> {
+    let (prompt, output) = cost_per_token(catalog, request.token)?;
+    let built_in_tools = match request.built_in_tools {
+        BuiltInToolCharge::Provided(cost) => cost,
+        BuiltInToolCharge::FromResponse(tool_request) => built_in_tool_cost(
+            catalog,
+            request.token.model,
+            request.token.provider,
+            request.token.region,
+            tool_request,
+        ),
+    };
+    Ok(apply_completion_cost_adjustments(
+        prompt,
+        output,
+        built_in_tools,
+        request.additional_costs,
+        request.token.provider,
+        request.discount_config,
+        request.margin_config,
+    ))
+}
+
+pub fn response_cost_calculator(
+    catalog: &ModelInfoCatalog,
+    request: ResponseCostRequest<'_>,
+) -> Result<f64, CostError> {
+    if request.cache_hit {
+        return Ok(0.0);
+    }
+    if let Some(reported) = get_response_cost_from_hidden_params(request.hidden_params)? {
+        return Ok(reported);
+    }
+    Ok(completion_cost(catalog, request.completion)?.total)
+}
+
+pub fn default_video_cost_calculator(
+    catalog: &ModelInfoCatalog,
+    model: &str,
+    duration_seconds: f64,
+    provider: Option<&str>,
+    deployment_info: Option<&Value>,
+    video_resolution: Option<&str>,
+) -> Result<f64, CostError> {
+    let model_info = match deployment_info {
+        Some(info) => info,
+        None => {
+            let without_provider = provider.and_then(|provider| {
+                model
+                    .strip_prefix(provider)
+                    .and_then(|rest| rest.strip_prefix('/'))
+            });
+            let base_model = match (provider, without_provider) {
+                (Some(provider), Some(bare)) => format!("{provider}/{bare}"),
+                _ => model.to_owned(),
+            };
+            let model_tail = model.rsplit('/').next().unwrap_or(model);
+            [
+                Some(base_model.as_str()),
+                Some(model),
+                Some(model_tail),
+                without_provider,
+            ]
+            .into_iter()
+            .flatten()
+            .find_map(|candidate| catalog.entries().get(candidate))
+            .or_else(|| {
+                provider.and_then(|provider| catalog.entries().get(&format!("{provider}/{model}")))
+            })
+            .ok_or(CostError::ModelNotFound)?
+        }
+    };
+    video_generation_cost(model_info, duration_seconds, video_resolution)
 }

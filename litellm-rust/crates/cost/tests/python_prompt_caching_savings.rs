@@ -108,17 +108,20 @@ fn calculate_prompt_caching_savings_matches_uncached_bill_minus_cached_bill(
     assert!((savings - expected).abs() < 1e-12);
     let catalog = ModelInfoCatalog::new(HashMap::from([("openai/model".to_owned(), model_info)]));
     assert_eq!(
-        catalog.calculate_prompt_caching_savings(ModelCostRequest {
-            model: "model",
-            provider: Some("openai"),
-            region: None,
-            usage: &cached,
-            service_tier,
-            data_residency,
-            vertex_location,
-            at: billed_at,
-            response_time_ms: None,
-        }),
+        litellm_cost::prompt_caching_savings::prompt_caching_savings_for_model(
+            &catalog,
+            ModelCostRequest {
+                model: "model",
+                provider: Some("openai"),
+                region: None,
+                usage: &cached,
+                service_tier,
+                data_residency,
+                vertex_location,
+                at: billed_at,
+                response_time_ms: None,
+            }
+        ),
         Some(savings)
     );
 }

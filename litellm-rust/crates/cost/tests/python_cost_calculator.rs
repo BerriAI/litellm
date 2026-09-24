@@ -2,6 +2,7 @@
 
 // mirrors: test_litellm/test_cost_calculator.py::test_default_image_cost_calculator
 // mirrors: integration/pricing/test_ocr_page_pricing.py
+// mirrors: test_litellm/test_video_generation.py::TestVideoGeneration::test_default_video_cost_calculator
 
 use std::collections::HashMap;
 
@@ -11,7 +12,10 @@ use litellm_cost::batch::{
     BatchCostRates, BatchPricing, BatchTier, BatchUsage, ModalityRates, batch_cost_calculator,
     batch_cost_from_model_info, get_batch_cost_rates,
 };
-use litellm_cost::catalog::{DefaultImageCostRequest, ModelInfoCatalog};
+use litellm_cost::catalog::ModelInfoCatalog;
+use litellm_cost::cost_calculator::default_video_cost_calculator;
+use litellm_cost::error::CostError;
+use litellm_cost::image_cost_router::DefaultImageCostRequest;
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, Unit, VideoRates, calculate_image,
     calculate_ocr_batch, calculate_ocr_with_tables, calculate_video,
@@ -584,16 +588,18 @@ fn default_image_cost_calculator_selects_quality_and_normalized_size(
             json!({"input_cost_per_image": 0.08}),
         ),
     ]));
-    let cost = catalog
-        .default_image_cost_calculator(DefaultImageCostRequest {
+    let cost = litellm_cost::image_cost_router::default_image_cost_calculator(
+        &catalog,
+        DefaultImageCostRequest {
             model: "xai/model",
             provider: Some("xai"),
             quality,
             n: Some(1),
             size,
             supplied_model_info: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert!((cost - expected).abs() < 1e-12);
 }
 
@@ -605,16 +611,18 @@ fn default_image_cost_calculator_prefers_deployment_rate_and_explicit_zero() {
     )]));
     for (rate, expected) in [(0.07, 0.14), (0.0, 0.0)] {
         let supplied = json!({"input_cost_per_image": rate});
-        let cost = catalog
-            .default_image_cost_calculator(DefaultImageCostRequest {
+        let cost = litellm_cost::image_cost_router::default_image_cost_calculator(
+            &catalog,
+            DefaultImageCostRequest {
                 model: "dall-e",
                 provider: Some("openai"),
                 quality: Some("standard"),
                 n: Some(2),
                 size: Some("1024x1024"),
                 supplied_model_info: Some(&supplied),
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert_eq!(cost, expected);
     }
 }
@@ -625,16 +633,18 @@ fn default_image_cost_calculator_prices_pixels_after_image_rates() {
         "provider/model".to_owned(),
         json!({"input_cost_per_pixel": 0.0001}),
     )]));
-    let cost = catalog
-        .default_image_cost_calculator(DefaultImageCostRequest {
+    let cost = litellm_cost::image_cost_router::default_image_cost_calculator(
+        &catalog,
+        DefaultImageCostRequest {
             model: "provider/model",
             provider: Some("provider"),
             quality: None,
             n: Some(2),
             size: Some("20x10"),
             supplied_model_info: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert!((cost - 2.0 * 20.0 * 10.0 * 0.0001).abs() < 1e-12);
 }
 
@@ -678,16 +688,18 @@ fn default_image_cost_calculator_tries_provider_first_quality_candidate() {
         "openai/high/1024-x-1024/gpt-image-1".to_owned(),
         json!({"input_cost_per_image": 0.07}),
     )]));
-    let cost = catalog
-        .default_image_cost_calculator(DefaultImageCostRequest {
+    let cost = litellm_cost::image_cost_router::default_image_cost_calculator(
+        &catalog,
+        DefaultImageCostRequest {
             model: "gpt-image-1",
             provider: Some("openai"),
             quality: Some("high"),
             n: Some(1),
             size: Some("1024x1024"),
             supplied_model_info: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert!((cost - 0.07).abs() < 1e-12);
     let both = ModelInfoCatalog::new(HashMap::from([
         (
@@ -699,18 +711,70 @@ fn default_image_cost_calculator_tries_provider_first_quality_candidate() {
             json!({"input_cost_per_image": 0.07}),
         ),
     ]));
-    let cost = both
-        .default_image_cost_calculator(DefaultImageCostRequest {
+    let cost = litellm_cost::image_cost_router::default_image_cost_calculator(
+        &both,
+        DefaultImageCostRequest {
             model: "gpt-image-1",
             provider: Some("openai"),
             quality: Some("high"),
             n: Some(1),
             size: Some("1024x1024"),
             supplied_model_info: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert!(
         (cost - 0.04).abs() < 1e-12,
         "quality-prefixed candidate is checked before the provider-first one"
     );
+}
+
+fn video_catalog() -> ModelInfoCatalog {
+    ModelInfoCatalog::new(HashMap::from([
+        (
+            "model".to_owned(),
+            json!({"output_cost_per_video_per_second": 0.1}),
+        ),
+        (
+            "prov/model".to_owned(),
+            json!({"output_cost_per_video_per_second": 0.2}),
+        ),
+        (
+            "prov/other".to_owned(),
+            json!({"output_cost_per_video_per_second": 0.3}),
+        ),
+    ]))
+}
+
+#[rstest]
+#[case::bare_model_before_provider_prefix("model", Some("prov"), Ok(0.2))]
+#[case::already_prefixed_model("prov/model", Some("prov"), Ok(0.4))]
+#[case::last_path_segment("a/b/model", None, Ok(0.2))]
+#[case::provider_prefix_is_the_last_resort("other", Some("prov"), Ok(0.6))]
+#[case::unknown_model("missing", Some("prov"), Err(CostError::ModelNotFound))]
+fn default_video_cost_calculator_follows_python_lookup_order(
+    #[case] model: &str,
+    #[case] provider: Option<&str>,
+    #[case] expected: Result<f64, CostError>,
+) {
+    let cost = default_video_cost_calculator(&video_catalog(), model, 2.0, provider, None, None);
+    match (cost, expected) {
+        (Ok(cost), Ok(expected)) => assert!((cost - expected).abs() < 1e-12),
+        (cost, expected) => assert_eq!(cost, expected),
+    }
+}
+
+#[rstest]
+fn default_video_cost_calculator_prefers_deployment_pricing_over_the_cost_map() {
+    let deployment = json!({"output_cost_per_second": 0.5});
+    let cost = default_video_cost_calculator(
+        &video_catalog(),
+        "model",
+        2.0,
+        Some("prov"),
+        Some(&deployment),
+        None,
+    )
+    .unwrap();
+    assert!((cost - 1.0).abs() < 1e-12);
 }
