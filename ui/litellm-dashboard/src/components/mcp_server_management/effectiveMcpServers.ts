@@ -201,12 +201,9 @@ export const applyToolDenyWrite = ({
   const deniedKeys = mcpToolPermissionKeysFor(entry.server, deniedTools, allServers).filter((key) =>
     mcpKeyNamesOneServerOnly(allServers, key),
   );
-  const denied = fetchedTools.filter(
-    (tool) => !checked.includes(tool) && !(entry.toolsetTools ?? []).includes(tool),
-  );
+  const denied = fetchedTools.filter((tool) => !checked.includes(tool) && !(entry.toolsetTools ?? []).includes(tool));
   const kept = Object.fromEntries(Object.entries(deniedTools).filter(([key]) => !deniedKeys.includes(key)));
-  const nextDenied =
-    denied.length === 0 ? kept : { ...kept, [entry.permissionKey]: denied };
+  const nextDenied = denied.length === 0 ? kept : { ...kept, [entry.permissionKey]: denied };
   return {
     toolPermissions: nextPermissions as Record<string, string[]>,
     deniedTools: nextDenied as Record<string, string[]>,

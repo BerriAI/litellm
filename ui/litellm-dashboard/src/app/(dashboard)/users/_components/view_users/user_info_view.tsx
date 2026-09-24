@@ -325,9 +325,7 @@ export default function UserInfoView({
       const userFields = Object.fromEntries(
         Object.entries(formValues).filter(
           ([field]) =>
-            field !== "mcp_servers_and_groups" &&
-            field !== "mcp_tool_permissions" &&
-            field !== "mcp_tool_denied_tools",
+            field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions" && field !== "mcp_tool_denied_tools",
         ),
       );
 

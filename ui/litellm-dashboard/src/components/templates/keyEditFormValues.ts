@@ -224,10 +224,7 @@ export const toSubmittedValues = (
 });
 
 export const writeMcpToolPermissionFields = (
-  setValue: (
-    name: "mcp_tool_permissions" | "mcp_tool_denied_tools",
-    value: Record<string, string[]>,
-  ) => void,
+  setValue: (name: "mcp_tool_permissions" | "mcp_tool_denied_tools", value: Record<string, string[]>) => void,
   { toolPermissions, deniedTools }: McpToolPermissionWrite,
 ): void => {
   setValue("mcp_tool_permissions", toolPermissions);

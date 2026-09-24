@@ -147,10 +147,11 @@ export function KeyEditView({
   const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
   const allowedRoutes = parseAllowedRoutes(allowedRoutesValue);
   const isModelsDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
-  const mcpSelection = form.watch("mcp_servers_and_groups") as
-    | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
-    | undefined;
-  const [mcpToolPermissions, mcpToolDeniedTools] = form.watch(["mcp_tool_permissions", "mcp_tool_denied_tools"]);
+  const [mcpSelection, mcpToolPermissions, mcpToolDeniedTools] = form.watch([
+    "mcp_servers_and_groups",
+    "mcp_tool_permissions",
+    "mcp_tool_denied_tools",
+  ]);
 
   useEffect(() => {
     const fetchModels = async () => {

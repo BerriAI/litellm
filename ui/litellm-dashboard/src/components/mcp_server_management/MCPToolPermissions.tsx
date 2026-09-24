@@ -223,9 +223,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         // otherwise every fetched tool is allowed unless the denylist names it. Either way a name
         // the denylist carries renders unchecked.
         const denied = new Set(entry.deniedTools ?? []);
-        const checkedPool = [
-          ...new Set([...(entry.keyedTools ?? tools.map((t) => t.name)), ...toolsetTools]),
-        ];
+        const checkedPool = [...new Set([...(entry.keyedTools ?? tools.map((t) => t.name)), ...toolsetTools])];
         const selectedTools = checkedPool.filter((name) => !denied.has(name));
 
         return (

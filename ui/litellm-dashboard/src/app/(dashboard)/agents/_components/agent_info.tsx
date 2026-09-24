@@ -432,14 +432,12 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                       Object.keys(agent.object_permission.mcp_tool_denied_tools).length > 0 && (
                         <DetailItem label="Denied tools per server">
                           <div className="space-y-1">
-                            {Object.entries(agent.object_permission.mcp_tool_denied_tools).map(
-                              ([serverId, tools]) => (
-                                <div key={serverId}>
-                                  <span className="font-medium">{mcpServerLabel(serverId)}:</span>{" "}
-                                  {Array.isArray(tools) ? tools.join(", ") : String(tools)}
-                                </div>
-                              ),
-                            )}
+                            {Object.entries(agent.object_permission.mcp_tool_denied_tools).map(([serverId, tools]) => (
+                              <div key={serverId}>
+                                <span className="font-medium">{mcpServerLabel(serverId)}:</span>{" "}
+                                {Array.isArray(tools) ? tools.join(", ") : String(tools)}
+                              </div>
+                            ))}
                           </div>
                         </DetailItem>
                       )}
