@@ -651,7 +651,7 @@ class OpenTelemetryV2(CustomLogger):
         # gets a live phase span instead). Those still feed Prometheus/Datadog via
         # their own hooks; they just never enter the trace.
         role: Final = span_role_for_service(data.service_name)
-        if role is None:
+        if role is None or data.service_name == "batch_write_to_db":
             return None
         # A metrics-only ping with neither timing nor a parent (in-memory queue
         # gauges) is not a traceable operation; a span for it would be a
