@@ -1848,6 +1848,44 @@ async def test_can_team_access_model_honors_key_alias():
     assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
 
 
+@pytest.mark.asyncio
+async def test_can_key_call_model_honors_key_alias():
+    """The real key entry point resolves a key alias to its target before the allowlist check."""
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    allowed_token = UserAPIKeyAuth(
+        api_key="sk-test",
+        models=["gpt-4o-mini"],
+        aliases={"mistral-7b": "gpt-4o-mini"},
+    )
+
+    assert (
+        await can_key_call_model(
+            model="mistral-7b",
+            llm_model_list=None,
+            valid_token=allowed_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+    denied_token = UserAPIKeyAuth(
+        api_key="sk-test",
+        models=["gpt-4o-mini"],
+        aliases={"mistral-7b": "gpt-4"},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_key_call_model(
+            model="mistral-7b",
+            llm_model_list=None,
+            valid_token=denied_token,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
 def test_can_object_call_model_access_via_underlying_model_only():
     """
     Test that a key can access a model via underlying model even when using an alias.
