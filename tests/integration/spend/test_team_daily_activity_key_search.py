@@ -87,3 +87,42 @@ def test_team_key_search_is_scoped_to_the_teams_the_caller_belongs_to(gateway: G
             "GET", _SEARCH_PATH, params={"team_ids": team, **params}, key=outsider_key
         )
         assert foreign_team_view.status_code == 404, foreign_team_view.text
+
+
+def test_team_key_search_excludes_teams_inside_the_where(gateway: Gateway) -> None:
+    """The dashboard always sends exclude_team_ids; a matching key in an excluded
+    team with higher spend must not consume a take slot nor appear in the result."""
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        team_keep: Final = scenario.team(models=[model])
+        team_drop: Final = scenario.team(models=[model])
+        shared_alias: Final = f"needle-{uuid.uuid4().hex}"
+        keep: Final = scenario.key(team_id=team_keep, models=[model], key_alias=f"{shared_alias}-keep")
+        drop: Final = scenario.key(team_id=team_drop, models=[model], key_alias=f"{shared_alias}-drop")
+        keep_digest: Final = sha256(keep.encode()).hexdigest()
+        drop_digest: Final = sha256(drop.encode()).hexdigest()
+        for _ in range(2):
+            reply: Final = gateway.chat(model, key=drop, text=f"key search {uuid.uuid4().hex}")
+            assert object_value(reply["usage"])["total_tokens"] == 40, reply
+        reply = gateway.chat(model, key=keep, text=f"key search {uuid.uuid4().hex}")
+        assert object_value(reply["usage"])["total_tokens"] == 40, reply
+        eventually(
+            lambda: read_rows(
+                'SELECT api_key, spend FROM "LiteLLM_DailyTeamSpend" WHERE team_id IN (%s, %s)',
+                (team_keep, team_drop),
+            ),
+            lambda values: sorted(row["api_key"] for row in values) == sorted((keep_digest, drop_digest)),
+            seconds=70,
+        )
+        response: Final = gateway.request(
+            "GET",
+            _SEARCH_PATH,
+            params={"search": shared_alias, "exclude_team_ids": team_drop, **_range_around_today()},
+        )
+        assert response.status_code == 200, response.text
+        body: Final = object_value(response.json())
+        results: Final = body["results"]
+        assert isinstance(results, list) and len(results) == 1, body
+        entities: Final = object_value(object_value(object_value(results[0])["breakdown"])["entities"])
+        assert set(entities) == {team_keep}, response.text
+        assert set(_team_key_breakdown(body, team_keep)) == {keep_digest}, response.text

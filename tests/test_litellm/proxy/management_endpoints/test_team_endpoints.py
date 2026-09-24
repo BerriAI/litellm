@@ -14739,6 +14739,48 @@ async def test_search_team_daily_activity_keys_no_match_returns_empty_without_ag
         mock_aggregated.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_search_team_daily_activity_keys_excludes_teams_in_where(mock_db_client):
+    """The dashboard always sends exclude_team_ids=litellm-dashboard; if that
+    filter stayed out of the where, matching keys in excluded teams could fill
+    the take=N slice and push visible matches out."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        search_team_daily_activity_keys,
+    )
+
+    matched = MagicMock()
+    matched.token = "h1"
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[matched])
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_aggregated:
+        mock_aggregated.return_value = MagicMock()
+
+        await search_team_daily_activity_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            search="Needle",
+            team_ids=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_team_ids="litellm-dashboard",
+            timezone=None,
+        )
+
+        search_kwargs = mock_db_client.db.litellm_verificationtoken.find_many.call_args[1]
+        assert search_kwargs["where"] == {
+            "team_id": {"notIn": ("litellm-dashboard",)},
+            "OR": (
+                {"token": "Needle"},
+                {"key_alias": {"contains": "Needle", "mode": "insensitive"}},
+                {"user_id": {"contains": "Needle", "mode": "insensitive"}},
+            ),
+        }
+        assert mock_aggregated.call_args[1]["exclude_entity_ids"] == ["litellm-dashboard"]
+
+
 def _wire_new_team_prisma(mock_db_client):
     mock_db_client.jsonify_team_object = lambda db_data: db_data
     mock_db_client.get_data = AsyncMock(return_value=None)

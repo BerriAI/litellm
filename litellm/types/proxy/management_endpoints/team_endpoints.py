@@ -19,11 +19,17 @@ from litellm.types.proxy.management_endpoints.management_v1 import ResourceRespo
 TeamIdSearchMatch = Literal["exact", "prefix"]
 
 
+TeamIdSearchFilter = TypedDict(
+    "TeamIdSearchFilter",
+    {"in": NotRequired[ReadOnly[Sequence[str]]], "notIn": NotRequired[ReadOnly[Sequence[str]]]},
+)
+
+
 class TeamKeyActivitySearchWhere(TypedDict):
     """Prisma filter behind `/team/daily/activity/aggregated/search`: exact token hash, or key alias
     or user id containing the term, case-insensitive, narrowed to the teams and keys the caller may see."""
 
-    team_id: NotRequired[ReadOnly[Mapping[Literal["in"], Sequence[str]]]]
+    team_id: NotRequired[ReadOnly[TeamIdSearchFilter]]
     token: NotRequired[ReadOnly[Mapping[Literal["in"], Sequence[str]]]]
     OR: ReadOnly[
         tuple[Mapping[Literal["token"], str] | Mapping[Literal["key_alias", "user_id"], InsensitiveContains], ...]

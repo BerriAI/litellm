@@ -205,6 +205,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkUpdateTeamMemberPermissionsRequest,
     BulkUpdateTeamMemberPermissionsResponse,
     GetTeamMemberPermissionsResponse,
+    TeamIdSearchFilter,
     TeamIdSearchMatch,
     TeamKeyActivitySearchWhere,
     TeamListItem,
@@ -6805,15 +6806,27 @@ def _team_key_search_where(*, search: str, scope: _TeamDailyActivityScope) -> Te
         {"user_id": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
     )
     own_keys: Final = tuple(scope.api_key_filter) if isinstance(scope.api_key_filter, list) else None
-    if scope.team_ids is None and own_keys is None:
+    team_filter: Final[TeamIdSearchFilter | None] = (
+        {  # mutable-ok: prisma where clause leaf
+            "in": tuple(scope.team_ids),
+            "notIn": tuple(scope.exclude_team_ids),
+        }
+        if scope.team_ids is not None and scope.exclude_team_ids is not None
+        else {"in": tuple(scope.team_ids)}  # mutable-ok: prisma where clause leaf
+        if scope.team_ids is not None
+        else {"notIn": tuple(scope.exclude_team_ids)}  # mutable-ok: prisma where clause leaf
+        if scope.exclude_team_ids is not None
+        else None
+    )
+    if team_filter is None and own_keys is None:
         return {"OR": search_or}  # mutable-ok: prisma where clause root
-    if scope.team_ids is None and own_keys is not None:
+    if team_filter is None and own_keys is not None:
         return {"token": {"in": own_keys}, "OR": search_or}  # mutable-ok: prisma where clause root
-    if scope.team_ids is not None and own_keys is None:
-        return {"team_id": {"in": tuple(scope.team_ids)}, "OR": search_or}  # mutable-ok: prisma where clause root
-    assert scope.team_ids is not None and own_keys is not None
+    if team_filter is not None and own_keys is None:
+        return {"team_id": team_filter, "OR": search_or}  # mutable-ok: prisma where clause root
+    assert team_filter is not None and own_keys is not None
     return {  # mutable-ok: prisma where clause root
-        "team_id": {"in": tuple(scope.team_ids)},  # mutable-ok: prisma where clause leaf
+        "team_id": team_filter,
         "token": {"in": own_keys},  # mutable-ok: prisma where clause leaf
         "OR": search_or,
     }
