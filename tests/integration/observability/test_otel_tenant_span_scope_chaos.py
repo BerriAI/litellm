@@ -16,7 +16,7 @@ from integration._support.process import owned_proxy, owned_proxy_process
 from pydantic import JsonValue
 
 AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
-INTERNAL_SPANS_VAR: Final = "otel_internal_spans"
+SPAN_SCOPE_VAR: Final = "otel_span_scope"
 
 
 @pytest.fixture(scope="module")
@@ -102,7 +102,7 @@ def test_frozen_tenant_sink_receives_every_span_after_resume(gateway: Gateway, a
         model: Final = scenario.model(model="openai/audit-chat", api_base=f"{gateway.upstream_url}/v1")
         team_id: Final = scenario.team()
         callback: Final = gateway.request(
-            "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**langfuse_vars, INTERNAL_SPANS_VAR: "exclude"}}
+            "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**langfuse_vars, SPAN_SCOPE_VAR: "no_internal"}}
         )
         assert callback.status_code == 200, callback.text
         key: Final = scenario.key(team_id=team_id)
@@ -130,7 +130,7 @@ def test_sink_outage_keeps_diagnostics_green_and_recovers(gateway: Gateway, audi
         model: Final = scenario.model(model="openai/audit-chat", api_base=f"{gateway.upstream_url}/v1")
         team_id: Final = scenario.team()
         callback: Final = gateway.request(
-            "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**langfuse_vars, INTERNAL_SPANS_VAR: "exclude"}}
+            "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**langfuse_vars, SPAN_SCOPE_VAR: "no_internal"}}
         )
         assert callback.status_code == 200, callback.text
         key: Final = scenario.key(team_id=team_id)
@@ -166,7 +166,7 @@ def test_slow_tenant_sink_exports_each_span_once(gateway: Gateway, audit_sinks: 
             model: Final = scenario.model(model="openai/audit-chat", api_base=f"{gateway.upstream_url}/v1")
             team_id: Final = scenario.team()
             callback: Final = gateway.request(
-                "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**langfuse_vars, INTERNAL_SPANS_VAR: "exclude"}}
+                "POST", f"/team/{team_id}/callback", {"callback_name": "langfuse_otel", "callback_vars": {**langfuse_vars, SPAN_SCOPE_VAR: "no_internal"}}
             )
             assert callback.status_code == 200, callback.text
             key: Final = scenario.key(team_id=team_id)
