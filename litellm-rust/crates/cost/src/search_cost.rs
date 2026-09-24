@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use crate::catalog::ModelInfoCatalog;
 use crate::error::CostError;
-use crate::wire::py_float;
+use crate::wire::{py_float, py_real};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParallelAiPricing {
@@ -82,16 +82,18 @@ pub fn search_provider_cost_from_model_info(
         |tiers| {
             let max_results = optional_params
                 .get("max_results")
-                .and_then(Value::as_i64)
-                .unwrap_or(10);
+                .map_or(Some(10.0), py_real);
             let tier = tiers
                 .iter()
                 .find(|tier| {
-                    tier.get("max_results_range")
-                        .and_then(Value::as_array)
-                        .is_some_and(|bounds| {
-                            matches!(bounds.as_slice(), [min, max] if min.as_i64().is_some_and(|min| min <= max_results) && max.as_i64().is_some_and(|max| max_results <= max))
-                        })
+                    let bounds = tier.get("max_results_range").and_then(Value::as_array);
+                    match (bounds.map(Vec::as_slice), max_results) {
+                        (Some([min, max]), Some(max_results)) => {
+                            py_real(min).is_some_and(|min| min <= max_results)
+                                && py_real(max).is_some_and(|max| max_results <= max)
+                        }
+                        _ => false,
+                    }
                 })
                 .or_else(|| tiers.last());
             rate(tier.and_then(|tier| tier.get("input_cost_per_query")))

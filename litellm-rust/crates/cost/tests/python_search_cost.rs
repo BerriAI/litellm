@@ -142,3 +142,24 @@ fn parallel_ai_invalid_usage_falls_back_to_requested_results(#[case] params: Val
         0.02
     );
 }
+
+#[rstest]
+#[case::float_max_results(json!({"max_results": 50.0}), 0.025)]
+#[case::float_tier_bounds_match_integer_request(json!({"max_results": 30}), 0.025)]
+#[case::default_ten_results(json!({}), 0.005)]
+#[case::boolean_is_one_result(json!({"max_results": true}), 0.005)]
+fn search_provider_cost_compares_result_tiers_as_python_numbers(
+    #[case] params: Value,
+    #[case] expected_rate: f64,
+) {
+    let model_info = json!({
+        "tiered_pricing": [
+            {"max_results_range": [0, 25], "input_cost_per_query": 0.005},
+            {"max_results_range": [26.0, 100.0], "input_cost_per_query": 0.025}
+        ]
+    });
+    assert_eq!(
+        search_provider_cost_from_model_info(&model_info, 1, &params),
+        (expected_rate, 0.0)
+    );
+}

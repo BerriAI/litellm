@@ -1,13 +1,7 @@
 use crate::error::CostError;
 use serde_json::Value;
 
-use crate::wire::py_float;
-
-fn python_real(value: &Value) -> Option<f64> {
-    (value.is_number() || value.is_boolean())
-        .then(|| py_float(value))
-        .flatten()
-}
+use crate::wire::{py_float, py_real};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CompletionCost {
@@ -33,7 +27,7 @@ pub fn apply_cost_discount(
     let percent = provider
         .filter(|provider| !provider.is_empty())
         .and_then(|provider| config.get(provider))
-        .and_then(python_real)
+        .and_then(py_real)
         .unwrap_or(0.0);
     let amount = base_cost * percent;
     (base_cost - amount, percent, amount)
@@ -53,7 +47,7 @@ pub fn apply_cost_margin(
             config.get("percentage").and_then(py_float).unwrap_or(0.0),
             config.get("fixed_amount").and_then(py_float).unwrap_or(0.0),
         ),
-        Some(value) => (python_real(value).unwrap_or(0.0), 0.0),
+        Some(value) => (py_real(value).unwrap_or(0.0), 0.0),
         None => (0.0, 0.0),
     };
     let total = base_cost * percent + fixed;

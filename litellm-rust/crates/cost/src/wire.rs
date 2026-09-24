@@ -96,6 +96,12 @@ pub fn py_float(value: &Value) -> Option<f64> {
     number::float(&python_value(value)).ok()
 }
 
+pub fn py_real(value: &Value) -> Option<f64> {
+    (value.is_number() || value.is_boolean())
+        .then(|| py_float(value))
+        .flatten()
+}
+
 pub fn py_float_unless_bool(value: &Value) -> Option<f64> {
     (!value.is_boolean()).then(|| py_float(value)).flatten()
 }
