@@ -135,7 +135,9 @@ _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS: Final[Mapping[str, str]] = MappingProxyTyp
 _TOOL_OUTPUT_ATTACHMENT_TYPES: Final[frozenset[str]] = frozenset(
     ("input_file", "file", "document", "input_image", "image", "image_url", "video_url", "input_audio")
 )
-_TOOL_OUTPUT_METADATA_KEYS: Final[frozenset[str]] = frozenset(("type", "name", "filename"))
+_TOOL_OUTPUT_PAYLOAD_KEYS: Final[frozenset[str]] = frozenset(
+    ("file", "file_data", "file_id", "file_url", "image_url", "url", "source", "data", "video_url", "input_audio")
+)
 _NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
@@ -734,7 +736,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return
         for part in _serialized_tool_output_parts(content):
             if part.get("type") in _TOOL_OUTPUT_ATTACHMENT_TYPES and any(
-                part.get(key) for key in part.keys() - _TOOL_OUTPUT_METADATA_KEYS
+                part.get(key) for key in _TOOL_OUTPUT_PAYLOAD_KEYS
             ):
                 self._handle_unscannable_attachment(reason="a tool output attachment cannot be scanned")
 

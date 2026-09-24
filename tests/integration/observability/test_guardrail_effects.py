@@ -1246,3 +1246,74 @@ def test_non_bedrock_policy_forwards_non_string_image_url(gateway: Gateway, tmp_
             )
             assert response.status_code == 500, response.text
             assert "input_value=5" in response.text, response.text
+
+
+@pytest.mark.covers("other.observability.guardrails.bedrock_during_call_tool_output_metadata_passes_as_text")
+def test_bedrock_during_call_tool_output_without_payload_keys_scans_as_text(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    tool_output: Final = json.dumps(
+        [
+            {"type": "file", "name": "README.md", "path": "README.md", "size": 1200},
+            {"type": "dir", "name": "src", "path": "src"},
+        ]
+    )
+
+    def guardrail(request: Request) -> Reply:
+        body: Final = json.loads(request.body)
+        texts: Final = [item["text"]["text"] for item in body["content"] if "text" in item]
+        assert tool_output in texts, body
+        return Reply(body=b'{"action":"NONE","outputs":[],"assessments":[]}')
+
+    def chat_reply(request: Request) -> Reply:
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "chatcmpl-wire",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "done"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+            ).encode()
+        )
+
+    with wire_server(guardrail) as policy, wire_server(chat_reply) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        bedrock_params: Final = _bedrock_policy(policy.url)
+        bedrock_params["mode"] = "during_call"
+        config["guardrails"] = [
+            {"guardrail_name": "bedrock-during-" + uuid.uuid4().hex, "litellm_params": bedrock_params}
+        ]
+        path: Final = tmp_path / "bedrock-tool-json.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=upstream.url)
+            response: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [
+                        {"role": "user", "content": "list files"},
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {"id": "t1", "type": "function", "function": {"name": "ls", "arguments": "{}"}}
+                            ],
+                        },
+                        {"role": "tool", "tool_call_id": "t1", "content": tool_output},
+                    ],
+                },
+            )
+            assert response.status_code == 200, response.text
+            eventually(lambda: policy.drain(), lambda values: len(values) == 1, seconds=10)
+            assert len(upstream.drain()) == 1

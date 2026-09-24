@@ -7502,3 +7502,51 @@ async def test_during_call_hook_refuses_input_file_part_with_file_id_only():
 
     assert exc_info.value.status_code == 400
     mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_tool_output_metadata_only_parts_scan_as_text():
+    """Serialized tool output whose parts carry only metadata keys is not an attachment;
+    it reaches ApplyGuardrail as plain text like the rest of the tool message."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-output-metadata",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    tool_output = json.dumps(
+        [
+            {"type": "file", "name": "README.md", "path": "README.md", "size": 1200},
+            {"type": "dir", "name": "src", "path": "src"},
+        ]
+    )
+    data = {
+        "messages": [
+            {"role": "tool", "tool_call_id": "t1", "content": tool_output},
+            {"role": "user", "content": "summarize"},
+        ]
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert tool_output in sent_texts
