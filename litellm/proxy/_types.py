@@ -1586,7 +1586,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
     @field_validator("credentials")
     @classmethod
-    def check_client_assertion_signing_alg(cls, credentials):
+    def check_client_assertion_signing_alg(cls, credentials: MCPCredentials | None) -> MCPCredentials | None:
         return _validated_client_assertion_signing_alg(credentials)
 
     @model_validator(mode="before")
@@ -1690,7 +1690,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
 
     @field_validator("credentials")
     @classmethod
-    def check_client_assertion_signing_alg(cls, credentials):
+    def check_client_assertion_signing_alg(cls, credentials: MCPCredentials | None) -> MCPCredentials | None:
         return _validated_client_assertion_signing_alg(credentials)
 
     @model_validator(mode="before")

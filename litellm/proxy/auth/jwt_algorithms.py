@@ -20,7 +20,8 @@ def allowed_jwt_algorithms(fips_mode: bool) -> tuple[str, ...]:
 def jwks_keys_for(
     keys: Sequence[Mapping[str, object]], algorithms: Collection[str]
 ) -> tuple[Mapping[str, object], ...]:
-    """Keep keys whose declared alg is allowed; keys without alg are kept only when their kty can sign with an allowed algorithm."""
+    """Keep keys whose declared alg is allowed; keys without alg are kept only when their kty can sign with an
+    allowed algorithm."""
     return tuple(key for key in keys if _key_allowed(key, frozenset(algorithms)))
 
 

@@ -85,4 +85,3 @@ async def test_the_hook_drops_the_slot_only_once_the_origin_changes() -> None:
     foreign = httpx.Request("GET", "https://attacker.example.com/x", headers={"esb-oauth": "Bearer x"})
     await hook(foreign)
     assert "esb-oauth" not in foreign.headers
-
