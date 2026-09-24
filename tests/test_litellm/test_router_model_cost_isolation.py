@@ -2142,7 +2142,7 @@ def test_an_incomplete_reservation_is_refused_rather_than_served(dropped):
 @pytest.mark.parametrize(
     "dropped, expected",
     [
-        ("team_id", "team_id is required when PTU fields are set (one model maps to one team)"),
+        ("team_id", "team_id or ptu_shares is required when PTU fields are set"),
         ("cost_per_ptu_per_hour", "ptu_count and cost_per_ptu_per_hour must be set together"),
     ],
     ids=["no team_id", "count without rate"],

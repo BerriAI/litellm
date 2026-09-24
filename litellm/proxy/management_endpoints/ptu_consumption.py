@@ -9,7 +9,7 @@ from collections.abc import Callable
 from types import MappingProxyType
 from typing import Final
 
-from litellm.litellm_core_utils.azure_ptu_capacity import PTUCapacity, normalized_tokens, ptu_hours
+from litellm.llms.azure.ptu_capacity import PTUCapacity, normalized_tokens, ptu_hours
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendData,
     MetricWithMetadata,

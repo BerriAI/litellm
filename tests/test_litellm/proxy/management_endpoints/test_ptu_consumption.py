@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 
-from litellm.litellm_core_utils.azure_ptu_capacity import PTUCapacity
+from litellm.llms.azure.ptu_capacity import PTUCapacity
 from litellm.proxy.management_endpoints.ptu_consumption import attach_ptu_hours
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,

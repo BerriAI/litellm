@@ -2,7 +2,7 @@
 
 from typing import Final
 
-from litellm.litellm_core_utils.azure_ptu_capacity import AZURE_PTU_CAPACITY
+from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.router_utils.ptu_shares import (
     PTUTeamCeiling,
     filter_ptu_shared_deployments,
@@ -144,3 +144,24 @@ def test_a_sized_reservation_and_an_unreserved_deployment_raise_no_warning():
     assert ptu_capacity_warning("gpt-4.1-ptu", _single_team()) is None
     unsized_open: Final = {**_OPEN, "litellm_params": {"model": "azure/my-ptu-deployment"}}
     assert ptu_capacity_warning("gpt-4.1-ptu", unsized_open) is None
+
+
+def test_an_unsized_single_team_azure_reservation_is_warned_about_its_ptu_hours_only():
+    warning: Final = ptu_capacity_warning("gpt-4.1-ptu", _single_team(model="azure/my-ptu-deployment"))
+    assert warning is not None
+    assert "PTU hours" in warning
+    assert "ceiling" not in warning
+
+
+def test_an_unsized_single_team_reservation_on_another_provider_is_not_warned_about():
+    assert ptu_capacity_warning("claude-ptu", _single_team(model="anthropic/claude-sonnet-4-5")) is None
+
+
+def test_a_bare_model_name_counts_as_azure_through_custom_llm_provider():
+    deployment: Final = {
+        **_single_team(model="my-ptu-deployment"),
+        "litellm_params": {"model": "my-ptu-deployment", "custom_llm_provider": "azure"},
+    }
+    warning: Final = ptu_capacity_warning("gpt-4.1-ptu", deployment)
+    assert warning is not None
+    assert "PTU hours" in warning

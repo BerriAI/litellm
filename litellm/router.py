@@ -12793,8 +12793,6 @@ class Router:
                 model=model,
                 llm_provider="",
             )
-        if not is_ptu_cost_attribution_enabled():
-            return result.deployments
         shared: Final = filter_ptu_shared_deployments(result.deployments, request_team_id)
         if shared.withheld and len(shared.deployments) == 0:
             raise litellm.BadRequestError(

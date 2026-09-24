@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 
-from litellm.litellm_core_utils.azure_ptu_capacity import (
+from litellm.llms.azure.ptu_capacity import (
     AZURE_PTU_CAPACITY,
     PTUCapacity,
     azure_ptu_capacity,

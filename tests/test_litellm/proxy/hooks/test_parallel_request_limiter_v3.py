@@ -21,7 +21,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
-from litellm.litellm_core_utils.azure_ptu_capacity import AZURE_PTU_CAPACITY
+from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -4500,7 +4500,7 @@ async def test_tpm_over_limit_rejection_releases_parallel_slot_v3(monkeypatch):
     )
     counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
 
-    async def over_limit_reservation(descriptors, estimated_tokens, parent_otel_span=None):
+    async def over_limit_reservation(descriptors, estimated_tokens, parent_otel_span=None, **_kwargs):
         return {
             "overall_code": "OVER_LIMIT",
             "statuses": [
@@ -7179,7 +7179,7 @@ def _ptu_request(model: str = "test-model") -> dict:
 @pytest.mark.asyncio
 async def test_a_teams_ptu_share_is_a_hard_tpm_ceiling_on_the_shared_model():
     cache = DualCache()
-    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=2000, ratio=4.0)
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
     )
@@ -7252,7 +7252,55 @@ def _shared_ptu_router(model_group: str) -> Router:
 
 
 def _two_thirds_of_a_ptu_minute() -> dict:
-    return {**_ptu_request(), "max_tokens": AZURE_PTU_CAPACITY["gpt-4.1"].input_tpm_per_ptu * 2 // 3}
+    """An output budget worth two thirds of a gpt-4.1 PTU minute once weighted at the model's
+    output-to-input ratio, the way the ceiling counts it."""
+    capacity = AZURE_PTU_CAPACITY["gpt-4.1"]
+    return {**_ptu_request(), "max_tokens": int(capacity.input_tpm_per_ptu * 2 / 3 / capacity.output_to_input_ratio)}
+
+
+@pytest.mark.asyncio
+async def test_the_reservation_weighs_output_the_way_the_ceiling_does():
+    """300 output tokens are 1200 normalized tokens at 4:1, over a 1000-token ceiling the raw
+    301-token estimate would clear; the same request at 1:1 is admitted."""
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+    unweighted_cache = DualCache()
+    unweighted = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(unweighted_cache),
+        ptu_team_ceiling_resolver=_ptu_ceiling_for("t", "test-model", tpm_limit=1000, ratio=1.0)[0],
+    )
+    await unweighted.async_pre_call_hook(
+        user_api_key_dict=key, cache=unweighted_cache, data=_ptu_request(), call_type="acompletion"
+    )
+
+    weighted_cache = DualCache()
+    weighted = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(weighted_cache),
+        ptu_team_ceiling_resolver=_ptu_ceiling_for("t", "test-model", tpm_limit=1000, ratio=4.0)[0],
+    )
+    with pytest.raises(HTTPException) as rejected:
+        await weighted.async_pre_call_hook(
+            user_api_key_dict=key, cache=weighted_cache, data=_ptu_request(), call_type="acompletion"
+        )
+    assert rejected.value.status_code == 429
+    assert "model_per_team_ptu" in str(rejected.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_the_ptu_counter_holds_the_normalized_reservation_beside_the_raw_one():
+    cache = DualCache()
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=2000, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+    )
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+
+    await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=_ptu_request(), call_type="acompletion")
+
+    stash = get_request_stash()
+    assert stash is not None
+    assert stash.ptu_reserved_tokens == stash.reserved_tokens + 3 * 300
+    ptu_key = handler.create_rate_limit_keys("model_per_team_ptu", "t:test-model", "tokens")
+    assert int(await cache.async_get_cache(key=ptu_key) or 0) == stash.ptu_reserved_tokens
 
 
 @pytest.mark.asyncio
@@ -7386,7 +7434,7 @@ async def test_a_reservation_is_settled_even_after_the_teams_share_is_gone():
     """The share can be removed between admission and completion; the reserved tokens still
     come off the counter instead of standing in the window."""
     ceiling: dict[str, PTUTeamCeiling | None] = {
-        "current": PTUTeamCeiling(tpm_limit=500, output_to_input_ratio=4.0, cached_input_ratio=0.0)
+        "current": PTUTeamCeiling(tpm_limit=2000, output_to_input_ratio=4.0, cached_input_ratio=0.0)
     }
     cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
@@ -7399,7 +7447,7 @@ async def test_a_reservation_is_settled_even_after_the_teams_share_is_gone():
     stash = get_request_stash()
     assert stash is not None
     assert ("model_per_team_ptu", "t:test-model") in stash.reserved_scopes
-    assert stash.reserved_tokens > 150
+    assert stash.ptu_reserved_tokens > stash.reserved_tokens > 150
 
     ceiling["current"] = None
     ops = handler._build_success_event_pipeline_operations(
@@ -7408,7 +7456,61 @@ async def test_a_reservation_is_settled_even_after_the_teams_share_is_gone():
         rate_limit_type="total",
     )
 
-    assert _ptu_increment(handler, ops) == 150 - stash.reserved_tokens
+    assert _ptu_increment(handler, ops) == 300 - stash.ptu_reserved_tokens
+
+
+async def _reserve_a_ptu_minute(cache: DualCache, call_id: str) -> tuple[_PROXY_MaxParallelRequestsHandler, str]:
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=2000, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+    )
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+    await handler.async_pre_call_hook(
+        user_api_key_dict=key,
+        cache=cache,
+        data={**_ptu_request(), "litellm_call_id": call_id},
+        call_type="acompletion",
+    )
+    stash = get_request_stash()
+    assert stash is not None and stash.ptu_reserved_tokens > 0
+    return handler, handler.create_rate_limit_keys("model_per_team_ptu", "t:test-model", "tokens")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_stream_settles_the_ptu_counter_in_normalized_tokens():
+    """The partial usage a failed stream recovered is 20 input and 7 output tokens: 48 normalized
+    at 4:1, which is what stays in the window instead of the raw 27 or the whole reservation."""
+    cache = DualCache()
+    handler, ptu_key = await _reserve_a_ptu_minute(cache, "ptu-partial")
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "ptu-partial",
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": hash_token("sk-ptu"), "user_api_key_team_id": "t"}
+            },
+            "combined_usage_object": Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(await cache.async_get_cache(key=ptu_key) or 0) == 20 + 4 * 7
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_side_rejection_refunds_the_whole_normalized_ptu_reservation():
+    cache = DualCache()
+    handler, ptu_key = await _reserve_a_ptu_minute(cache, "ptu-rejected")
+
+    await handler.async_post_call_failure_hook(
+        request_data={**_ptu_request(), "litellm_call_id": "ptu-rejected"},
+        original_exception=Exception("guardrail rejected the request"),
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t"),
+    )
+
+    assert int(await cache.async_get_cache(key=ptu_key) or 0) == 0
 
 
 def test_usage_that_only_reports_a_total_charges_that_total_to_the_ptu_counter():

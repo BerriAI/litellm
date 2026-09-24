@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.azure_ptu_capacity import AZURE_PTU_CAPACITY
+from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,

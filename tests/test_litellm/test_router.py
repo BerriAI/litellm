@@ -17915,14 +17915,17 @@ def test_ptu_shares_raise_when_only_shared_deployments_remain(monkeypatch):
     assert [d["model_info"]["id"] for d in deployments] == ["shared-deployment"]
 
 
-def test_ptu_shares_do_not_filter_while_the_feature_is_off(monkeypatch):
+def test_ptu_shares_hide_the_shared_deployment_even_while_the_feature_is_off(monkeypatch):
+    """The flag switches cost attribution on; a declared split is an access rule and holds
+    without it, so a team never reaches a deployment reserved for others while the flag is
+    off."""
     monkeypatch.delenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", raising=False)
     router = Router(model_list=_shared_ptu_model_list())
     _, deployments = router._common_checks_available_deployment(
         model="gpt-4.1-ptu",
         request_kwargs={"metadata": {"user_api_key_team_id": "team-c"}},
     )
-    assert {d["model_info"]["id"] for d in deployments} == {"shared-deployment", "open-deployment"}
+    assert [d["model_info"]["id"] for d in deployments] == ["open-deployment"]
 
 
 def test_a_shared_ptu_deployment_whose_shares_do_not_add_up_is_refused_at_registration(monkeypatch):
