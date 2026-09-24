@@ -149,7 +149,8 @@ class MistralConfig(OpenAIGPTConfig):
             case str():
                 return "any"
             case _:
-                return None
+                pass
+        return None
 
     @staticmethod
     def _get_mistral_reasoning_system_prompt() -> str:
