@@ -2928,12 +2928,12 @@ describe("TeamInfo MCP permission retention", () => {
       isError: false,
     } as ReturnType<typeof useMCPServers>);
     mockUseMCPToolsets.mockReturnValue({
-      data: [],
+      data: [] as NonNullable<ReturnType<typeof useMCPToolsets>["data"]>,
       isLoading: false,
       isError: false,
     } as ReturnType<typeof useMCPToolsets>);
     mockUseAccessGroups.mockReturnValue({
-      data: [],
+      data: [] as NonNullable<ReturnType<typeof useAccessGroups>["data"]>,
       isLoading: false,
       isError: false,
     } as ReturnType<typeof useAccessGroups>);
