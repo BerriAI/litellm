@@ -68,7 +68,7 @@ class _PrismaTeamDb(_TeamTables, Protocol):
 
 class _PrismaClientView(Protocol):
     @property
-    def replica_db(self) -> _PrismaTeamDb: ...
+    def db(self) -> _PrismaTeamDb: ...
 
 
 _MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
@@ -88,7 +88,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     @property
     def _db(self) -> _PrismaTeamDb:
         client: Final[_PrismaClientView] = self.prisma_client
-        return client.replica_db
+        return client.db
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_TeamTable"]:
