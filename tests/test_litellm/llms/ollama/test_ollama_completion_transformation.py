@@ -412,8 +412,6 @@ class TestOllamaConfig:
 
 class TestOllamaConfigTransformRequest:
     def test_transform_request_custom_prompt_missing_initial_and_final_value(self):
-        """A custom prompt template that only sets `roles` (initial/final prompt
-        values omitted, as the docs say is allowed) must not raise KeyError."""
         config = OllamaConfig()
 
         litellm_params = {
@@ -438,7 +436,6 @@ class TestOllamaConfigTransformRequest:
         assert "[INST] hello [/INST]" in result["prompt"]
 
     def test_transform_request_custom_prompt_with_initial_and_final_value(self):
-        """Existing behavior: explicit initial/final prompt values still apply."""
         config = OllamaConfig()
 
         litellm_params = {
