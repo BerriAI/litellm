@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import io
 import os
 import pathlib
 import ssl
@@ -405,10 +406,8 @@ async def test_async_handler_with_shared_session():
 async def test_get_async_httpx_client_with_shared_session():
     """Test get_async_httpx_client with shared session"""
     from litellm.llms.custom_httpx.http_handler import (
-        AsyncHTTPHandler as AsyncHTTPHandlerReload,
-    )
-    from litellm.llms.custom_httpx.http_handler import (
         get_async_httpx_client,
+        AsyncHTTPHandler as AsyncHTTPHandlerReload,
     )
     from litellm.types.utils import LlmProviders
 
@@ -431,10 +430,8 @@ async def test_get_async_httpx_client_with_shared_session():
 async def test_get_async_httpx_client_without_shared_session():
     """Test get_async_httpx_client without shared session (backward compatibility)"""
     from litellm.llms.custom_httpx.http_handler import (
-        AsyncHTTPHandler as AsyncHTTPHandlerReload,
-    )
-    from litellm.llms.custom_httpx.http_handler import (
         get_async_httpx_client,
+        AsyncHTTPHandler as AsyncHTTPHandlerReload,
     )
     from litellm.types.utils import LlmProviders
 
@@ -471,7 +468,6 @@ async def test_session_reuse_chain():
 def test_shared_session_parameter_in_acompletion():
     """Test that acompletion function accepts shared_session parameter"""
     import inspect
-
     from litellm.main import acompletion
 
     # Get the function signature
@@ -489,7 +485,6 @@ def test_shared_session_parameter_in_acompletion():
 def test_shared_session_parameter_in_completion():
     """Test that completion function accepts shared_session parameter"""
     import inspect
-
     from litellm.main import completion
 
     # Get the function signature
@@ -508,10 +503,8 @@ def test_shared_session_parameter_in_completion():
 async def test_session_reuse_integration():
     """Integration test for session reuse functionality"""
     from litellm.llms.custom_httpx.http_handler import (
-        AsyncHTTPHandler as AsyncHTTPHandlerReload,
-    )
-    from litellm.llms.custom_httpx.http_handler import (
         get_async_httpx_client,
+        AsyncHTTPHandler as AsyncHTTPHandlerReload,
     )
     from litellm.types.utils import LlmProviders
 
@@ -1485,6 +1478,7 @@ async def test_connection_error_retry_forwards_content(method: str):
         await handler.close()
 
 
+
 @pytest.fixture
 def forward_proxy_server():
     """Plain HTTP forward proxy that records the absolute URIs it is asked to fetch."""
@@ -1615,7 +1609,9 @@ def private_ca_tls_upstream(tmp_path: pathlib.Path):
     ca_pem.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     key_pem = tmp_path / "key.pem"
     key_pem.write_bytes(
-        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
     )
 
     class OkTlsHandler(BaseHTTPRequestHandler):
@@ -1790,11 +1786,8 @@ async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_
     handler = AsyncHTTPHandler()
     try:
         response = await handler.get(
-            "https://example.com/spec.json?original=1",
-            max_response_bytes=100,
-            follow_redirects=True,
-            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"},
-            timeout=2.0,
+            "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
+            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
         )
     finally:
         await handler.close()
