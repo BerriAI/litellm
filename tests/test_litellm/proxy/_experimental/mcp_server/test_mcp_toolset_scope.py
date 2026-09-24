@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+    McpToolGrant,
+)
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
@@ -311,8 +314,8 @@ class TestToolsetPrefixResolution:
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server."
-                "MCPRequestHandler.get_allowed_tools_for_server",
-                new=AsyncMock(return_value=allowed),
+                "MCPRequestHandler.resolve_tool_grant_for_server",
+                new=AsyncMock(return_value=McpToolGrant(allowed=allowed, denied=frozenset())),
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server."
@@ -329,6 +332,58 @@ class TestToolsetPrefixResolution:
         assert sorted(t.name for t in result) == sorted(
             add_server_prefix_to_name(name, prefix)
             for name in ("read_wiki_contents", "read_wiki_structure")
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
+    async def test_filter_hides_denied_tool_and_shows_new_tool(
+        self, alias, server_name, server_id
+    ):
+        """A denied name disappears from the listing and a tool no map names — one
+        the upstream added after the denylist was written — stays listed."""
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_key_team_permissions,
+        )
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+            get_server_prefix,
+        )
+
+        server = self._server(alias, server_name, server_id)
+        prefix = get_server_prefix(server)
+        live_tools = [
+            MCPTool(
+                name=add_server_prefix_to_name(name, prefix),
+                inputSchema={"type": "object"},
+            )
+            for name in ("read_wiki_contents", "delete_everything", "brand_new_tool")
+        ]
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server."
+                "MCPRequestHandler.resolve_tool_grant_for_server",
+                new=AsyncMock(
+                    return_value=McpToolGrant(allowed=None, denied=frozenset({"delete_everything"}))
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server."
+                "global_mcp_server_manager.get_mcp_server_by_id",
+                return_value=server,
+            ),
+        ):
+            result = await filter_tools_by_key_team_permissions(
+                tools=live_tools,
+                server_id=server_id,
+                user_api_key_auth=_make_auth(),
+            )
+
+        assert sorted(t.name for t in result) == sorted(
+            add_server_prefix_to_name(name, prefix)
+            for name in ("read_wiki_contents", "brand_new_tool")
         )
 
     @pytest.mark.asyncio
@@ -438,8 +493,10 @@ class TestToolsetPrefixResolution:
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server."
-                "MCPRequestHandler.get_allowed_tools_for_server",
-                new=AsyncMock(return_value=resolved["srv-collide"]),
+                "MCPRequestHandler.resolve_tool_grant_for_server",
+                new=AsyncMock(
+                    return_value=McpToolGrant(allowed=resolved["srv-collide"], denied=frozenset())
+                ),
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server."
@@ -495,8 +552,10 @@ class TestToolsetPrefixResolution:
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server."
-                "MCPRequestHandler.get_allowed_tools_for_server",
-                new=AsyncMock(return_value=resolved["srv-lonely"]),
+                "MCPRequestHandler.resolve_tool_grant_for_server",
+                new=AsyncMock(
+                    return_value=McpToolGrant(allowed=resolved["srv-lonely"], denied=frozenset())
+                ),
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server."

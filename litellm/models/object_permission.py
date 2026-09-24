@@ -15,6 +15,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     mcp_servers: list[str] | None = []
     mcp_access_groups: list[str] | None = []
     mcp_tool_permissions: dict[str, list[str]] | None = None
+    mcp_tool_denied_tools: dict[str, list[str]] | None = None
     vector_stores: list[str] | None = []
     agents: list[str] | None = []
     agent_access_groups: list[str] | None = []

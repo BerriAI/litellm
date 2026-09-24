@@ -1491,6 +1491,128 @@ async def test_stored_ambiguous_tool_permission_key_is_grandfathered_until_chang
     assert exc_info.value.status_code == 400
 
 
+@pytest.mark.asyncio
+async def test_set_object_permission_serializes_mcp_tool_denied_tools():
+    """mcp_tool_denied_tools must persist exactly like mcp_tool_permissions: JSON
+    serialized into the create payload so Prisma stores the map, not a repr."""
+    mock_prisma_client = MagicMock()
+    mock_created_permission = MagicMock()
+    mock_created_permission.object_permission_id = "perm_id"
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=mock_created_permission
+    )
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+
+    data_json = {
+        "object_permission": {
+            "mcp_servers": ["server_a"],
+            "mcp_tool_denied_tools": {"server_a": ["tool1", "tool2"]},
+        },
+    }
+
+    await _set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
+
+    created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+    assert isinstance(created_data["mcp_tool_denied_tools"], str)
+    assert json.loads(created_data["mcp_tool_denied_tools"]) == {"server_a": ["tool1", "tool2"]}
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager(),  # empty registry — all IDs are stale
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_stale_ids_in_mcp_tool_denied_tools_silently_dropped(
+    mock_access_groups, mock_allow_all
+):
+    """A denylist key naming a deleted server is silently stripped like an
+    allowlist key, not rejected with a 403."""
+    team_obj = _make_team_obj(mcp_servers=["s3", "s4"])
+    object_permission = {"mcp_tool_denied_tools": {"s1-stale": ["tool1"]}}
+    await validate_key_mcp_servers_against_team(
+        object_permission=object_permission,
+        team_obj=team_obj,
+    )  # Must not raise
+    assert object_permission["mcp_tool_denied_tools"] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identifier, colliding_ids",
+    [("wiki", ("wiki-a-id", "wiki-b-id")), ("github", ("gh-a-id", "gh-b-id"))],
+)
+async def test_set_object_permission_rejects_shared_alias_denied_tool_key(identifier, colliding_ids):
+    """A shared alias or server_name cannot key mcp_tool_denied_tools either: the
+    write is rejected with 400 naming the field and both servers."""
+    mock_prisma = _make_ambiguity_prisma()
+    data_json = {"object_permission": {"mcp_tool_denied_tools": {identifier: ["delete_tool"]}}}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _set_object_permission(data_json=data_json, prisma_client=mock_prisma)
+
+    assert exc_info.value.status_code == 400
+    assert "mcp_tool_denied_tools" in str(exc_info.value.detail)
+    assert all(server_id in str(exc_info.value.detail) for server_id in colliding_ids)
+    mock_prisma.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prepare_object_permission_upsert_rejects_shared_alias_denied_tool_key():
+    """The update seam rejects a new shared-alias denylist key when the existing
+    row does not already hold it, naming mcp_tool_denied_tools in the error."""
+    mock_prisma = _make_ambiguity_prisma()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await prepare_object_permission_upsert(
+            new_object_permission={"mcp_tool_denied_tools": {"wiki": ["delete_tool"]}},
+            existing_object_permission_id="perm-id",
+            prisma_client=mock_prisma,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "mcp_tool_denied_tools" in str(exc_info.value.detail)
+    assert "'wiki'" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("server-outside"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_denied_tool_keys_are_validated_against_team_scope(
+    mock_access_groups, mock_allow_all
+):
+    """A denylist key naming a server outside the team's scope fails the same
+    write validation an allowlist key does, since the key still scopes this
+    subject's grants to that server."""
+    team_obj = _make_team_obj(mcp_servers=["server-1"])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_tool_denied_tools": {"server-outside": ["tool1"]}},
+            team_obj=team_obj,
+        )
+    assert exc_info.value.status_code == 403
+    assert "server-outside" in str(exc_info.value.detail)
+
+
 def test_object_permission_dict_mirrors_pydantic_model():
     """ObjectPermissionDict must stay field-for-field aligned with
     LiteLLM_ObjectPermissionBase. If a new field is added to the Pydantic

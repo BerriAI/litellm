@@ -10088,6 +10088,7 @@ class TestListFiltersHonorThePrefixBoundary:
 
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
+            McpToolGrant,
         )
         from litellm.proxy._experimental.mcp_server.server import (
             filter_tools_by_key_team_permissions,
@@ -10104,7 +10105,11 @@ class TestListFiltersHonorThePrefixBoundary:
         auth = UserAPIKeyAuth(api_key="sk-test")
 
         with (
-            patch.object(MCPRequestHandler, "get_allowed_tools_for_server", AsyncMock(return_value=grants)),
+            patch.object(
+                MCPRequestHandler,
+                "resolve_tool_grant_for_server",
+                AsyncMock(return_value=McpToolGrant(allowed=grants, denied=frozenset())),
+            ),
             patch("litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager") as mock_manager,
         ):
             mock_manager.get_mcp_server_by_id.return_value = server

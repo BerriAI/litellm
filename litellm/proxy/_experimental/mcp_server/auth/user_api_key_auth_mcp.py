@@ -94,6 +94,27 @@ class UnloadableEntitlementError(Exception):
     it places no ceiling; denying there would refuse MCP to every caller during a cold-cache fault."""
 
 
+@dataclass(frozen=True, slots=True)
+class McpToolGrant:
+    """One caller's effective tool grant on one MCP server.
+
+    ``allowed`` is the resolved allowlist (``None`` = unrestricted); ``denied``
+    is the union of bare tool names every level's ``mcp_tool_denied_tools`` maps
+    to this server. A tool is granted iff the allowlist chain grants it AND no
+    denylist at any level names it. Denylists are additive restrictions only:
+    unlike ``mcp_tool_permissions`` keys, their server keys never count as a
+    server grant anywhere."""
+
+    allowed: list[str] | None
+    denied: frozenset[str]
+
+    def grants(self, bare_tool_name: str) -> bool:
+        return (
+            MCPRequestHandler.tool_is_granted(bare_tool_name, self.allowed)
+            and bare_tool_name not in self.denied
+        )
+
+
 def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: list[str] | None = None) -> list[str] | None:
     """Resolve the single MCP server name a cold-start passthrough bypass may
     target. Delegates parsing to
@@ -2006,14 +2027,14 @@ class MCPRequestHandler:
         return min((source for source, _ in granting), key=lambda s: s.team_id or "")
 
     @staticmethod
-    async def _resolve_admitted_subject_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str] | None:
-        """Effective tool allowlist on ``server_id`` for an admitted subject, as the union over the
+    async def _resolve_admitted_subject_grant(server_id: str, auth: UserAPIKeyAuth) -> McpToolGrant:
+        """Effective tool grant on ``server_id`` for an admitted subject, as the union over the
         sources that actually grant that server.
 
         A source that does not grant the server contributes nothing, so its tool rules cannot leak
         onto a server reached through a different source. A source that grants the server with no
         tool restriction means the user can use every tool on it, so allow-all wins the union. When
-        no source grants the server the result is ``[]`` — deny all, fail closed."""
+        no source grants the server the result denies all, fail closed."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -2027,17 +2048,41 @@ class MCPRequestHandler:
             auth
         ) or await MCPRequestHandler.admin_view_unscoped(auth)
 
-        allowed: Final[set[str]] = set()
+        source_grants: Final[list[McpToolGrant]] = []
         for source, granted in await MCPRequestHandler.admitted_source_grants(auth):
             # The open channel is evaluated against the user's OWN source (team_id is None), so that
             # source's restrictions apply to it; a team's rules never ride an open-channel server.
             if server_id not in granted and not (reachable_via_open_channel and source.team_id is None):
                 continue
-            tools = await MCPRequestHandler.get_allowed_tools_for_server(server_id, source, keyless_source=True)
-            if tools is None:
-                return None
-            allowed.update(tools)
-        return sorted(allowed)
+            source_grants.append(
+                await MCPRequestHandler.resolve_tool_grant_for_server(server_id, source, keyless_source=True)
+            )
+
+        if not source_grants:
+            return McpToolGrant(allowed=[], denied=frozenset())
+
+        # A tool is granted when ANY granting source grants it (its allowlist reaches it and its own
+        # denylist does not name it). Unrestricted sources cannot enumerate their tools, so the grant
+        # reports allowed=None and a tool survives a denylist only when EVERY unrestricted source
+        # denies it and no enumerated source allows it.
+        enumerated_allowed: Final[frozenset[str]] = frozenset(
+            tool
+            for grant in source_grants
+            if grant.allowed is not None
+            for tool in grant.allowed
+            if tool not in grant.denied
+        )
+        unrestricted_denied: Final = [grant.denied for grant in source_grants if grant.allowed is None]
+        if unrestricted_denied:
+            return McpToolGrant(
+                allowed=None,
+                denied=frozenset.intersection(*unrestricted_denied) - enumerated_allowed,
+            )
+        return McpToolGrant(allowed=sorted(enumerated_allowed), denied=frozenset())
+
+    @staticmethod
+    async def _resolve_admitted_subject_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str] | None:
+        return (await MCPRequestHandler._resolve_admitted_subject_grant(server_id, auth)).allowed
 
     @staticmethod
     def _get_key_object_permission(
@@ -2211,15 +2256,31 @@ class MCPRequestHandler:
         Returns:
             List[str] if restrictions exist, None if no restrictions (allow all)
         """
+        return (
+            await MCPRequestHandler.resolve_tool_grant_for_server(
+                server_id, user_api_key_auth, keyless_source=keyless_source
+            )
+        ).allowed
+
+    @staticmethod
+    async def resolve_tool_grant_for_server(
+        server_id: str,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        *,
+        keyless_source: bool = False,
+    ) -> McpToolGrant:
+        """The caller's effective tool grant on one server: the resolved allowlist plus the union of
+        every level's ``mcp_tool_denied_tools``, computed in one pass so tool listing and tools/call
+        cannot disagree."""
         if not user_api_key_auth:
-            return None
+            return McpToolGrant(allowed=None, denied=frozenset())
 
         try:
             # FIRST statement, mirroring get_allowed_mcp_servers: a keyless admitted subject resolves per
             # source and shares nothing with the single-credential prelude below. Ordering is the invariant:
             # sat after the prelude, a fault in a lookup the subject never uses denied tools its teams grant.
             if _is_mcp_admitted_user_subject(user_api_key_auth):
-                return await MCPRequestHandler._resolve_admitted_subject_tools(server_id, user_api_key_auth)
+                return await MCPRequestHandler._resolve_admitted_subject_grant(server_id, user_api_key_auth)
 
             # Get key and team object permissions (already loaded in main auth flow)
             key_obj_perm: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
@@ -2289,9 +2350,14 @@ class MCPRequestHandler:
                 )
             )
 
-            return await MCPRequestHandler._apply_agent_and_org_tool_ceilings(
+            allowed_tools = await MCPRequestHandler._apply_agent_and_org_tool_ceilings(
                 allowed_tools, server_id, user_api_key_auth, keyless_source=keyless_source
             )
+
+            denied: Final = await MCPRequestHandler._denied_tools_for_server(
+                server_id, user_api_key_auth, keyless_source=keyless_source
+            )
+            return McpToolGrant(allowed=allowed_tools, denied=denied)
 
         except Exception as e:
             # An entitlement known to exist but unreadable denies for BOTH caller shapes, so [] rather
@@ -2306,7 +2372,89 @@ class MCPRequestHandler:
             # keyless_source AND the marker are needed: each source resolves through an UNMARKED auth, so
             # without keyless_source a fault under a source returns None and wins the union as allow-all.
             deny_all = unreadable_entitlement or keyless_source or _is_mcp_admitted_user_subject(user_api_key_auth)
-            return [] if deny_all else None
+            return McpToolGrant(allowed=[] if deny_all else None, denied=frozenset())
+
+    @staticmethod
+    async def _denied_tools_for_server(
+        server_id: str,
+        user_api_key_auth: UserAPIKeyAuth,
+        *,
+        keyless_source: bool = False,
+    ) -> frozenset[str]:
+        """Bare tool names any level's ``mcp_tool_denied_tools`` maps to ``server_id``.
+
+        Every level the allowlist chain already consults contributes its denylist, unioned (a deny
+        anywhere wins), gated by the same ids the ceilings use. A read fault propagates to the
+        resolver's except-branch, which picks the same fail-open/fail-closed outcome an allowlist
+        fault would get."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        org_obj_perm: Final = await MCPRequestHandler._org_denylist_object_permission(
+            user_api_key_auth, keyless_source=keyless_source
+        )
+        levels: Final[tuple[LiteLLM_ObjectPermissionTable | None, ...]] = (
+            await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth),
+            await MCPRequestHandler._get_team_object_permission(user_api_key_auth),
+            await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+            if user_api_key_auth.agent_id
+            else None,
+            org_obj_perm,
+            await MCPRequestHandler._user_denylist_object_permission(user_api_key_auth)
+            if not keyless_source
+            else None,
+            await MCPRequestHandler._get_end_user_object_permission(user_api_key_auth, prisma_client)
+            if user_api_key_auth.end_user_id and prisma_client is not None
+            else None,
+        )
+        return frozenset(
+            tool
+            for object_permission in levels
+            if object_permission is not None and isinstance(object_permission.mcp_tool_denied_tools, dict)
+            for tool in global_mcp_server_manager.expand_tool_permissions(
+                object_permission.mcp_tool_denied_tools
+            ).get(server_id)
+            or ()
+        )
+
+    @staticmethod
+    async def _user_denylist_object_permission(
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        """The internal user's object_permission for denylist reads, with the same fault decision
+        as the user tool ceiling: a row that names a permission and cannot be read is a known
+        entitlement with unknown contents, so it denies rather than reads as no denylist."""
+        try:
+            return await MCPRequestHandler._get_user_object_permission(user_api_key_auth)
+        except Exception as e:  # noqa: BLE001  # mirrors the user tool ceiling's unresolvable-means-deny
+            raise UnloadableEntitlementError(
+                f"MCP user tool denylist unresolvable for user_id={user_api_key_auth.user_id!r}"
+            ) from e
+
+    @staticmethod
+    async def _org_denylist_object_permission(
+        user_api_key_auth: UserAPIKeyAuth,
+        *,
+        keyless_source: bool = False,
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        """The org's object_permission for denylist reads, with the same per-shape fault decision as
+        the org tool ceiling: an unreadable NAMED entitlement re-raises everywhere, an indeterminate
+        fault re-raises only for a keyless source and reads as no denylist for a key."""
+        if not user_api_key_auth.org_id:
+            return None
+        try:
+            return await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
+        except Exception as e:  # noqa: BLE001  # same per-shape decision as the org tool ceiling
+            if keyless_source or isinstance(e, UnloadableEntitlementError):
+                raise
+            verbose_logger.warning(
+                "MCP org tool denylist unresolvable for org_id=%r; skipping org denylist: %s",
+                user_api_key_auth.org_id,
+                e,
+            )
+            return None
 
     @staticmethod
     async def _apply_agent_and_org_tool_ceilings(
@@ -2398,11 +2546,11 @@ class MCPRequestHandler:
         Returns:
             True if allowed, False if blocked
         """
-        allowed_tools: Final = await MCPRequestHandler.get_allowed_tools_for_server(
+        grant: Final = await MCPRequestHandler.resolve_tool_grant_for_server(
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
-        return MCPRequestHandler.tool_is_granted(tool_name, allowed_tools)
+        return grant.grants(tool_name)
 
     @staticmethod
     def is_tool_allowed(

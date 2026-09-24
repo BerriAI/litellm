@@ -174,6 +174,7 @@ class AgentObjectPermission(TypedDict, total=False):
     mcp_access_groups: list[str] | None
     mcp_toolsets: ReadOnly[Sequence[str] | None]
     mcp_tool_permissions: dict[str, list[str]] | None
+    mcp_tool_denied_tools: dict[str, list[str]] | None
     models: list[str] | None
     agents: list[str] | None
 

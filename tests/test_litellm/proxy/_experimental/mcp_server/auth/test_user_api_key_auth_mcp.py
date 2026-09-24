@@ -11,6 +11,7 @@ from starlette.datastructures import Headers
 
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
+    McpToolGrant,
     UnloadableEntitlementError,
     _agent_capped_servers,
     _is_mcp_admitted_user_subject,
@@ -506,6 +507,281 @@ class TestMCPRequestHandler:
             )
 
         assert result is None
+
+    # ------------------------------------------------------------------
+    # mcp_tool_denied_tools: an additive per-server denylist at every level;
+    # a deny anywhere wins, and no denylist entry narrows an allow-all grant
+    # ------------------------------------------------------------------
+
+    async def test_key_tool_denylist_denies_named_tools_and_lets_new_tools_through(self):
+        """A key with mcp_tool_denied_tools and no allowlist keeps every tool
+        allowed except the denied names, including tools the upstream adds after
+        the denylist was written"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_denied_tools = {"server-a": ["delete_everything"]}
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=None)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            denied_tool = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="delete_everything", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            kept_tool = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="search_channels", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            new_upstream_tool = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="brand_new_tool", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert allowed is None
+        assert denied_tool is False
+        assert kept_tool is True
+        assert new_upstream_tool is True
+
+    async def test_key_denylist_narrows_team_allowlist(self):
+        """Team allowlist grants [a, b]; the key's denylist naming a wins, so only
+        b is callable even though the team grants it"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", team_id="team-1")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_denied_tools = {"server-a": ["tool_a"]}
+        team_object_permission = self._toolset_only_object_permission([])
+        team_object_permission.mcp_tool_permissions = {"server-a": ["tool_a", "tool_b"]}
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=None)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            denied = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="tool_a", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            kept = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="tool_b", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert allowed is not None and set(allowed) == {"tool_a", "tool_b"}
+        assert denied is False
+        assert kept is True
+
+    async def test_org_tool_denylist_narrows_unrestricted_key(self):
+        """An org's denylist blocks its tools for a key with no restriction of its
+        own: a deny at any level wins over allow-all"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", org_id="org-1")
+        org_object_permission = self._toolset_only_object_permission([])
+        org_object_permission.mcp_tool_denied_tools = {"server-a": ["org_blocked"]}
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_org_object_permission", AsyncMock(return_value=org_object_permission)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            blocked = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="org_blocked", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            open_tool = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="anything_else", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert blocked is False
+        assert open_tool is True
+
+    async def test_legacy_allowlist_still_denies_tools_not_listed(self):
+        """mcp_tool_permissions alone keeps its exact behavior: a tool not named by
+        the allowlist stays denied even when no denylist exists"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_permissions = {"server-a": ["tool_a"]}
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=None)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            granted = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="tool_a", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            unlisted = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="new_upstream_tool", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert granted is True
+        assert unlisted is False
+
+    async def test_admitted_subject_denies_tool_only_when_every_unrestricted_source_denies_it(self):
+        """Keyless union, unrestricted sources: a tool survives the merge when at
+        least one unrestricted source does NOT deny it — the denylist intersection,
+        not the union, wins"""
+        auth = UserAPIKeyAuth(user_id="sso-user")
+        auth.mcp_admitted_user_subject = True
+        source_one = UserAPIKeyAuth(team_id="team-1")
+        source_two = UserAPIKeyAuth(user_id="sso-user")
+        grants = {
+            id(source_one): McpToolGrant(allowed=None, denied=frozenset({"t1", "t2"})),
+            id(source_two): McpToolGrant(allowed=None, denied=frozenset({"t2", "t3"})),
+        }
+
+        mock_manager = MagicMock()
+        mock_manager.operator_open_server_ids = AsyncMock(return_value=set())
+
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "admitted_source_grants",
+                AsyncMock(return_value=[(source_one, {"server-a"}), (source_two, {"server-a"})]),
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "resolve_tool_grant_for_server",
+                AsyncMock(side_effect=lambda server_id, source, **kw: grants[id(source)]),
+            ),
+            patch.object(MCPRequestHandler, "admin_view_unscoped", AsyncMock(return_value=False)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            grant = await MCPRequestHandler._resolve_admitted_subject_grant("server-a", auth)
+
+        assert grant.allowed is None
+        assert grant.grants("t1") is True
+        assert grant.grants("t2") is False
+        assert grant.grants("brand_new_tool") is True
+
+    async def test_admitted_subject_enumerated_source_revives_denied_tool(self):
+        """A tool every unrestricted source denies is still granted when an
+        enumerated (allowlisted) source names it: allow-wins within the union"""
+        auth = UserAPIKeyAuth(user_id="sso-user")
+        auth.mcp_admitted_user_subject = True
+        unrestricted = UserAPIKeyAuth(team_id="team-1")
+        enumerated = UserAPIKeyAuth(team_id="team-2")
+        grants = {
+            id(unrestricted): McpToolGrant(allowed=None, denied=frozenset({"denied_tool"})),
+            id(enumerated): McpToolGrant(allowed=["denied_tool", "other"], denied=frozenset()),
+        }
+
+        mock_manager = MagicMock()
+        mock_manager.operator_open_server_ids = AsyncMock(return_value=set())
+
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "admitted_source_grants",
+                AsyncMock(return_value=[(unrestricted, {"server-a"}), (enumerated, {"server-a"})]),
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "resolve_tool_grant_for_server",
+                AsyncMock(side_effect=lambda server_id, source, **kw: grants[id(source)]),
+            ),
+            patch.object(MCPRequestHandler, "admin_view_unscoped", AsyncMock(return_value=False)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            grant = await MCPRequestHandler._resolve_admitted_subject_grant("server-a", auth)
+
+        assert grant.allowed is None
+        assert grant.grants("denied_tool") is True
+
+    async def test_admitted_subject_all_enumerated_sources_apply_own_denylist(self):
+        """Keyless union with only enumerated sources: each source's own denylist
+        removes its tools before the union, so a denied tool stays denied even
+        when a sibling source's allowlist happens to carry it"""
+        auth = UserAPIKeyAuth(user_id="sso-user")
+        auth.mcp_admitted_user_subject = True
+        source_one = UserAPIKeyAuth(team_id="team-1")
+        source_two = UserAPIKeyAuth(team_id="team-2")
+        grants = {
+            id(source_one): McpToolGrant(allowed=["a", "b"], denied=frozenset({"b"})),
+            id(source_two): McpToolGrant(allowed=["b", "c"], denied=frozenset()),
+        }
+
+        mock_manager = MagicMock()
+        mock_manager.operator_open_server_ids = AsyncMock(return_value=set())
+
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "admitted_source_grants",
+                AsyncMock(return_value=[(source_one, {"server-a"}), (source_two, {"server-a"})]),
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "resolve_tool_grant_for_server",
+                AsyncMock(side_effect=lambda server_id, source, **kw: grants[id(source)]),
+            ),
+            patch.object(MCPRequestHandler, "admin_view_unscoped", AsyncMock(return_value=False)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            grant = await MCPRequestHandler._resolve_admitted_subject_grant("server-a", auth)
+
+        assert grant.allowed is not None and set(grant.allowed) == {"a", "b", "c"}
+        assert grant.grants("a") is True
+        assert grant.grants("b") is True
+        assert grant.grants("unrelated") is False
 
     # ------------------------------------------------------------------
     # LIT-5749: toolsets attached to a TEAM, ORG, or internal USER must be

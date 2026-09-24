@@ -346,6 +346,7 @@ async def new_end_user(
         * mcp_servers: List[str] - List of allowed MCP server IDs
         * mcp_access_groups: List[str] - List of MCP access group names
         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names (e.g., {"server_1": ["tool_a", "tool_b"]})
+        * mcp_tool_denied_tools: Dict[str, List[str]] - Map of server ID to denied tool names; a denied tool is blocked even when an allowlist or a new upstream tool would grant it
         * vector_stores: List[str] - List of allowed vector store IDs
         * agents: List[str] - List of allowed agent IDs
         * agent_access_groups: List[str] - List of agent access group names
@@ -584,6 +585,7 @@ async def update_end_user(
         * mcp_servers: List[str] - List of allowed MCP server IDs
         * mcp_access_groups: List[str] - List of MCP access group names
         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
+        * mcp_tool_denied_tools: Dict[str, List[str]] - Map of server ID to denied tool names; a denied tool is blocked even when an allowlist or a new upstream tool would grant it
         * vector_stores: List[str] - List of allowed vector store IDs
         * agents: List[str] - List of allowed agent IDs
         * agent_access_groups: List[str] - List of agent access group names
