@@ -1,15 +1,22 @@
+mod capabilities;
 mod catalog;
 mod error;
+mod fallback;
 mod model_info;
+mod pricing;
 #[cfg(feature = "schema")]
 mod schema;
 
+pub use capabilities::{
+    AudioFormat, InputModality, Mode, OutputModality, ReasoningEffort, VertexAiAudioApi,
+};
 pub use catalog::{AliasIssue, Catalog, IntegrityLimits, ModelEntry, ModelMatch, Provenance};
 pub use error::Error;
-pub use model_info::{
-    AudioFormat, FallbackGeneralizations, FallbackRule, InputModality, Mode, ModelInfo,
-    OffPeakPricing, OffPeakWindow, OutputModality, ReasoningEffort, SearchContextCostPerQuery,
-    TieredRate, UtcHours, VertexAiAudioApi, WebSearchBillingUnit, Weekday,
+pub use fallback::{FallbackGeneralizations, FallbackRule};
+pub use model_info::ModelInfo;
+pub use pricing::{
+    OffPeakPricing, OffPeakWindow, SearchContextCostPerQuery, TieredRate, UtcHours,
+    WebSearchBillingUnit, Weekday,
 };
 
 #[cfg(feature = "schema")]
