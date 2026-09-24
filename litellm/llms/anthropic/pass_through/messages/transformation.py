@@ -458,14 +458,33 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         with pinned sampling values (e.g. the safety classifier uses
         ``temperature=0`` for determinism). Preserving the thinking the caller asked
         for wins over an unhonorable sampling value, so drop the offending params and
-        let the API defaults apply. This used to early-return for adaptive (4.6+)
-        models on the assumption they own the relationship natively, but Anthropic
-        applies the same constraints there, so a pinned value still 400s.
+        let the API defaults apply. On the first-party API this covers adaptive (4.6+)
+        models too: this used to early-return for them on the assumption they own the
+        relationship natively, but the same constraints apply there, so a pinned value
+        still 400s.
         """
         thinking: Final = optional_params.get("thinking")
         output_config: Final = optional_params.get("output_config")
-        thinking_active: Final = (isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive")) or (
-            isinstance(output_config, dict) and output_config.get("effort") is not None
+        thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
+        effort_set: Final = isinstance(output_config, dict) and output_config.get("effort") is not None
+
+        # ``adaptive`` thinking and a bare ``output_config.effort`` are first-party
+        # Anthropic interfaces. The backends that inherit this transform (Bedrock
+        # Invoke, Vertex AI, Azure AI Foundry, DeepSeek) do not take on the first-party
+        # sampling restriction: Bedrock Invoke forwards ``output_config.effort`` on an
+        # adaptive model and still honours a pinned ``temperature`` (see
+        # ``test_bedrock_messages_allowlist_filters_anthropic_only_fields``, which the
+        # provider-wide drop of these two keys regressed), so they keep the behaviour
+        # this helper had before adaptive models were covered here -- only a legacy
+        # ``enabled`` block makes a pinned sampling value unhonorable for them.
+        if custom_llm_provider != "anthropic" and AnthropicModelInfo._is_adaptive_thinking_model(
+            model, custom_llm_provider
+        ):
+            return
+
+        first_party: Final = custom_llm_provider == "anthropic"
+        thinking_active: Final = (
+            thinking_type == "enabled" or (first_party and thinking_type == "adaptive") or effort_set
         )
         if not thinking_active:
             return

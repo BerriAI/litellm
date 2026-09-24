@@ -446,6 +446,29 @@ def test_top_p_top_k_not_stripped_on_other_anthropic_compatible_backend():
     assert result["top_k"] == 5
 
 
+def test_bedrock_invoke_keeps_pinned_temperature_on_adaptive_effort():
+    """Cross-backend regression: ``AmazonAnthropicClaudeMessagesConfig`` inherits this
+    transform, and Bedrock Invoke honours a pinned ``temperature`` alongside
+    ``output_config.effort`` on an adaptive model. Treating the bare effort level as
+    active thinking for every provider silently dropped that temperature, which broke
+    ``test_bedrock_messages_allowlist_filters_anthropic_only_fields``."""
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+    from litellm.types.router import GenericLiteLLMParams
+
+    params = {"max_tokens": 4096, "temperature": 0.5, "output_config": {"effort": "low"}}
+    result = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=dict(params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["temperature"] == 0.5
+
+
 def test_non_numeric_top_p_forwarded_under_thinking():
     """A non-numeric top_p (e.g. a serialized string from an upstream gateway) must not
     raise a TypeError during the comparison; it is left for Anthropic to validate."""
