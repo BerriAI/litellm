@@ -215,11 +215,35 @@ def _message_has_cache_control(message: Mapping[str, object]) -> bool:
 
 
 def _cached_prefix_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
-    last_breakpoint: Final = max(
-        (index for index, msg in enumerate(messages) if _message_has_cache_control(msg)),
-        default=-1,
+    """Indices covered by the Anthropic prompt-cache prefix that must not be rewritten.
+
+    A ``cache_control`` breakpoint pins the provider's cache prefix to the exact
+    bytes of every row up to it. Mid-history breakpoints therefore protect that
+    prefix from compression.
+
+    A breakpoint on the *final* message is different: clients such as Claude Code
+    put one on the trailing turn on every request as a write marker for the *next*
+    call. Treating that trailing marker as the prefix end protects the entire
+    conversation (``protected == len(messages)``), leaves nothing compressible,
+    and makes the Headroom guardrail a silent no-op (#42939). When the trailing
+    row is marked, use the previous breakpoint if one exists; if it is the only
+    breakpoint, it does not establish a stable cached prefix yet, so return empty.
+    """
+    breakpoints: Final = [
+        index for index, msg in enumerate(messages) if _message_has_cache_control(msg)
+    ]
+    if not breakpoints:
+        return ()
+    prefix_end: Final = (
+        breakpoints[-2]
+        if breakpoints[-1] == len(messages) - 1 and len(breakpoints) >= 2
+        else -1
+        if breakpoints[-1] == len(messages) - 1
+        else breakpoints[-1]
     )
-    return tuple(range(last_breakpoint + 1))
+    if prefix_end < 0:
+        return ()
+    return tuple(range(prefix_end + 1))
 
 
 def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
@@ -228,7 +252,8 @@ def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int
     - All system messages
     - The last user message
     - The last assistant message
-    - Every message up to and including the last one carrying an Anthropic cache_control breakpoint
+    - Every message up to and including the last *stable* Anthropic cache_control
+      breakpoint (a trailing-turn-only marker is ignored; see ``_cached_prefix_indices``)
 
     The last user message is what the model is being asked to act on right now,
     so compressing it replaces the live instruction with a marker. Compression

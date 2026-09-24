@@ -2571,6 +2571,43 @@ async def test_mid_history_cache_control_row_is_never_sent_for_compression(guard
     assert result["structured_messages"][3] == cached_row
 
 
+TRAILING_CACHE_CONTROL_MESSAGES = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "You are Claude Code. " + "S" * 200, "cache_control": {"type": "ephemeral"}}
+        ],
+    },
+    {"role": "user", "content": "old question " + "Q" * 2000},
+    {
+        "role": "assistant",
+        "content": "Reading the file now.",
+        "tool_calls": [{"id": "old_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "old_1", "content": "large file body " + "F" * 5000},
+    {"role": "user", "content": "follow-up " + "U" * 500},
+    {
+        "role": "assistant",
+        "content": "Done.",
+        "tool_calls": [{"id": "new_1", "type": "function", "function": {"name": "Bash", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "new_1", "content": "volatile tail " + "T" * 500},
+    {"role": "user", "content": "live instruction", "cache_control": {"type": "ephemeral"}},
+]
+
+
+@pytest.mark.asyncio
+async def test_trailing_cache_control_still_sends_mid_history_for_compression(guardrail: HeadroomGuardrail):
+    """Claude Code's trailing write marker must not make Headroom a no-op (#42939)."""
+    wire, result = await _wire_and_result(guardrail, TRAILING_CACHE_CONTROL_MESSAGES)
+
+    # Older tool results / user turns stay compressible; only the live exchange is held back.
+    assert any(row.get("tool_call_id") == "old_1" for row in wire)
+    assert any(row.get("role") == "user" and "old question" in str(row.get("content", "")) for row in wire)
+    # Live turn stays protected / not rewritten.
+    assert result["structured_messages"][-1] == TRAILING_CACHE_CONTROL_MESSAGES[-1]
+
+
 # ---------------------------------------------------------------------------
 # #38558: a client that runs its own tool loop (e.g. Claude Code via the MCP
 # gateway) executes headroom_retrieve and echoes the recovered original content
