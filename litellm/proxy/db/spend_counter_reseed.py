@@ -40,15 +40,7 @@ from litellm.repositories.verification_token_repository import (
 )
 
 if TYPE_CHECKING:
-    from prisma.types import (
-        LiteLLM_EndUserTableWhereUniqueInput,
-        LiteLLM_OrganizationTableWhereUniqueInput,
-        LiteLLM_ProjectTableWhereUniqueInput,
-        LiteLLM_TeamMembershipWhereUniqueInput,
-        LiteLLM_TeamTableWhereUniqueInput,
-        LiteLLM_UserTableWhereUniqueInput,
-        LiteLLM_VerificationTokenWhereUniqueInput,
-    )
+    from prisma.types import LiteLLM_EndUserTableWhereUniqueInput
 
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.utils import PrismaClient
@@ -143,47 +135,41 @@ class SpendCounterReseed:
             return None
         try:
             async with db_lookup_gate.current():
-                row: Final = await SpendCounterReseed._counter_row(prisma_client, counter_key)
+                if counter_key.startswith("spend:key:"):
+                    token: Final = counter_key[len("spend:key:") :]
+                    row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})
+                elif counter_key.startswith("spend:team_member:"):
+                    suffix: Final = counter_key[len("spend:team_member:") :]
+                    if ":" not in suffix:
+                        return None
+                    user_id, team_id = suffix.rsplit(":", 1)
+                    row = await TeamMembershipRepository(prisma_client).table.find_unique(
+                        where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
+                    )
+                elif counter_key.startswith("spend:team:"):
+                    team_id = counter_key[len("spend:team:") :]
+                    row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+                elif counter_key.startswith("spend:user:"):
+                    user_id = counter_key[len("spend:user:") :]
+                    row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
+                elif counter_key.startswith(END_USER_COUNTER_PREFIX) or counter_key.startswith("spend:tag:"):
+                    return None
+                elif counter_key.startswith("spend:org:"):
+                    org_id: Final = counter_key[len("spend:org:") :]
+                    row = await OrganizationRepository(prisma_client).table.find_unique(
+                        where={"organization_id": org_id}
+                    )
+                elif counter_key.startswith("spend:project:"):
+                    project_id: Final = counter_key[len("spend:project:") :]
+                    row = await ProjectRepository(prisma_client).table.find_unique(where={"project_id": project_id})
+                else:
+                    return None
         except Exception:
             verbose_proxy_logger.exception("SpendCounterReseed.from_db: failed for %s", counter_key)
             return None
         if row is None:
             return None
         return float(getattr(row, "spend", 0.0) or 0.0)
-
-    @staticmethod
-    async def _counter_row(prisma_client: "PrismaClient", counter_key: str) -> object | None:
-        if counter_key.startswith("spend:key:"):
-            token_where: Final[LiteLLM_VerificationTokenWhereUniqueInput] = {"token": counter_key[len("spend:key:") :]}
-            return await VerificationTokenRepository(prisma_client).table.find_unique(where=token_where)
-        if counter_key.startswith("spend:team_member:"):
-            suffix: Final = counter_key[len("spend:team_member:") :]
-            if ":" not in suffix:
-                return None
-            user_id, team_id = suffix.rsplit(":", 1)
-            membership_where: Final[LiteLLM_TeamMembershipWhereUniqueInput] = {
-                "user_id_team_id": {"user_id": user_id, "team_id": team_id}
-            }
-            return await TeamMembershipRepository(prisma_client).table.find_unique(where=membership_where)
-        if counter_key.startswith("spend:team:"):
-            team_where: Final[LiteLLM_TeamTableWhereUniqueInput] = {"team_id": counter_key[len("spend:team:") :]}
-            return await TeamRepository(prisma_client).table.find_unique(where=team_where)
-        if counter_key.startswith("spend:user:"):
-            user_where: Final[LiteLLM_UserTableWhereUniqueInput] = {"user_id": counter_key[len("spend:user:") :]}
-            return await UserRepository(prisma_client).table.find_unique(where=user_where)
-        if counter_key.startswith(END_USER_COUNTER_PREFIX) or counter_key.startswith("spend:tag:"):
-            return None
-        if counter_key.startswith("spend:org:"):
-            org_where: Final[LiteLLM_OrganizationTableWhereUniqueInput] = {
-                "organization_id": counter_key[len("spend:org:") :]
-            }
-            return await OrganizationRepository(prisma_client).table.find_unique(where=org_where)
-        if counter_key.startswith("spend:project:"):
-            project_where: Final[LiteLLM_ProjectTableWhereUniqueInput] = {
-                "project_id": counter_key[len("spend:project:") :]
-            }
-            return await ProjectRepository(prisma_client).table.find_unique(where=project_where)
-        return None
 
     @staticmethod
     async def end_user_from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> float | None:
