@@ -6181,6 +6181,8 @@ def test_supported_openai_params_agree_with_sampling_param_gating(
         )
         assert 0.9 in with_top_p.values()
     else:
+        with pytest.raises(litellm.utils.UnsupportedParamsError, match=r"\['top_p'\]"):
+            litellm.utils.get_optional_params(model=model, custom_llm_provider=custom_llm_provider, top_p=0.9)
         with pytest.raises(litellm.utils.UnsupportedParamsError, match=r"top_p=0\.9"):
             litellm.utils.get_optional_params(
                 model=model, custom_llm_provider=custom_llm_provider, top_p=0.9, allowed_openai_params=["top_p"]
