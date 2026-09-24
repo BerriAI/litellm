@@ -5603,6 +5603,39 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "azure/gpt-audio": {
+        "deprecation_date": "2027-03-02",
+        "input_cost_per_audio_token": 4e-05,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_audio_token": 8e-05,
+        "output_cost_per_token": 1e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": false,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
+    },
     "azure/gpt-audio-2025-08-28": {
         "deprecation_date": "2027-03-02",
         "input_cost_per_audio_token": 4e-05,
@@ -5634,6 +5667,39 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
+    },
+    "azure/gpt-audio-1.5": {
+        "deprecation_date": "2027-08-24",
+        "input_cost_per_audio_token": 4e-05,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_audio_token": 8e-05,
+        "output_cost_per_token": 1e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": false,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
     },
     "azure/gpt-audio-1.5-2026-02-23": {
         "deprecation_date": "2027-08-24",
@@ -5849,6 +5915,41 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "azure/gpt-realtime": {
+        "cache_creation_input_audio_token_cost": 4e-06,
+        "cache_read_input_audio_token_cost": 4e-07,
+        "cache_read_input_token_cost": 4e-07,
+        "deprecation_date": "2027-03-02",
+        "input_cost_per_audio_token": 3.2e-05,
+        "input_cost_per_image_token": 5e-06,
+        "input_cost_per_token": 4e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 6.4e-05,
+        "output_cost_per_token": 1.6e-05,
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
+    },
     "azure/gpt-realtime-2025-08-28": {
         "cache_creation_input_audio_token_cost": 4e-06,
         "cache_read_input_audio_token_cost": 4e-07,
@@ -5882,6 +5983,41 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true
+    },
+    "azure/gpt-realtime-1.5": {
+        "cache_creation_input_audio_token_cost": 4e-06,
+        "cache_read_input_audio_token_cost": 4e-07,
+        "cache_read_input_token_cost": 4e-07,
+        "deprecation_date": "2027-08-24",
+        "input_cost_per_audio_token": 3.2e-05,
+        "input_cost_per_image_token": 5e-06,
+        "input_cost_per_token": 4e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 6.4e-05,
+        "output_cost_per_token": 1.6e-05,
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
     },
     "azure/gpt-realtime-1.5-2026-02-23": {
         "cache_creation_input_audio_token_cost": 4e-06,
