@@ -6366,3 +6366,126 @@ def test_gemini_multi_candidate_messages_do_not_share_state():
     assert resp.choices[1].message.tool_calls is None
     assert getattr(resp.choices[1].message, "reasoning_content", None) is None
     assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
+
+
+def _strict_function_tool():
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_a",
+                "description": "Controlled tool.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                },
+                "strict": True,
+            },
+        }
+    ]
+
+
+def test_map_function_drops_strict_with_warning(caplog):
+    config = VertexGeminiConfig()
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        mapped = config._map_function(value=_strict_function_tool(), optional_params={})
+
+    declaration = mapped[0]["function_declarations"][0]
+    assert "strict" not in declaration
+    assert any("'strict'" in record.message for record in caplog.records)
+
+
+def test_map_function_drops_top_level_strict_with_warning(caplog):
+    config = VertexGeminiConfig()
+    tools = _strict_function_tool()
+    del tools[0]["function"]["strict"]
+    tools[0]["strict"] = True
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        mapped = config._map_function(value=tools, optional_params={})
+
+    declaration = mapped[0]["function_declarations"][0]
+    assert "strict" not in declaration
+    assert any("'strict'" in record.message for record in caplog.records)
+
+
+def test_map_function_drops_allowed_callers_with_warning(caplog):
+    config = VertexGeminiConfig()
+    tools = _strict_function_tool()
+    tools[0]["function"]["allowed_callers"] = ["direct"]
+    tools[0]["function"]["name"] = "tool_a\nforged log line"
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        mapped = config._map_function(value=tools, optional_params={})
+
+    declaration = mapped[0]["function_declarations"][0]
+    assert "allowed_callers" not in declaration
+    allowed_callers_warning = next(record.message for record in caplog.records if "allowed_callers" in record.message)
+    assert "tool_a\\nforged log line" in allowed_callers_warning
+    assert "tool_a\nforged log line" not in allowed_callers_warning
+
+
+def test_map_function_does_not_warn_for_nested_schema_property_named_strict(caplog):
+    config = VertexGeminiConfig()
+    tools = _strict_function_tool()
+    del tools[0]["function"]["strict"]
+    tools[0]["function"]["parameters"]["properties"]["strict"] = {"type": "boolean"}
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        mapped = config._map_function(value=tools, optional_params={})
+
+    declaration = mapped[0]["function_declarations"][0]
+    assert "strict" in declaration["parameters"]["properties"]
+    assert not any("'strict'" in record.message for record in caplog.records)
+
+
+def test_map_function_does_not_mutate_input_tools(caplog):
+    config = VertexGeminiConfig()
+    tools = _strict_function_tool()
+    tools[0]["function"]["allowed_callers"] = ["direct"]
+    snapshot = deepcopy(tools)
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        config._map_function(value=tools, optional_params={})
+
+    assert tools == snapshot
+
+
+def test_map_openai_params_drops_parallel_tool_calls_false_with_warning(caplog):
+    config = VertexGeminiConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_a",
+                "description": "a",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_b",
+                "description": "b",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        optional_params = config.map_openai_params(
+            model="gemini/gemini-flash-latest",
+            non_default_params={
+                "tools": tools,
+                "tool_choice": {"type": "function", "function": {"name": "tool_b"}},
+                "parallel_tool_calls": False,
+                "max_tokens": 1,
+            },
+            optional_params={},
+            drop_params=False,
+        )
+
+    assert "parallel_tool_calls" not in optional_params
+    assert any("parallel_tool_calls" in record.message for record in caplog.records)

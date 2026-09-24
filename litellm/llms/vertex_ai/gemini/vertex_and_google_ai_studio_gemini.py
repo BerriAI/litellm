@@ -586,6 +586,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
+    @staticmethod
+    def _tools_have_strict_constraint(tools: Sequence[Mapping[str, object]]) -> bool:
+        for tool in tools:
+            if "strict" in tool:
+                return True
+            function_chunk = tool.get("function")
+            if isinstance(function_chunk, Mapping) and "strict" in function_chunk:
+                return True
+        return False
+
     def _map_function(self, value: list[dict], optional_params: dict) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
@@ -610,12 +620,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         googleMaps: dict | None = None
         google_maps_retrieval_config: dict | None = None
         computerUse: dict | None = None
-        # remove 'additionalProperties' from tools
-        value = _remove_additional_properties(value)
-        # remove 'strict' from tools
-        value = _remove_strict_from_schema(value)
+        mapped_value: Final = _remove_additional_properties(deepcopy(value))
+        if self._tools_have_strict_constraint(mapped_value):
+            verbose_logger.warning(
+                "Gemini function declarations do not support 'strict'. "
+                "Dropping 'strict' from tools; the constraint will not be enforced upstream. "
+                "See https://github.com/BerriAI/litellm/issues/41913"
+            )
+        for tool in mapped_value:
+            tool.pop("strict", None)
+            function_chunk = tool.get("function")
+            if isinstance(function_chunk, dict):
+                function_chunk.pop("strict", None)
 
-        for tool in value:
+        for tool in mapped_value:
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
@@ -682,6 +700,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # Empty config - Gemini will use defaults
                     computerUse = {}
             elif openai_function_object is not None:
+                if openai_function_object.get("allowed_callers") is not None:
+                    verbose_logger.warning(
+                        "Gemini function declarations do not support 'allowed_callers'. "
+                        "Dropping 'allowed_callers' from tool %r; the restriction will not be enforced upstream. "
+                        "See https://github.com/BerriAI/litellm/issues/41913",
+                        openai_function_object.get("name"),
+                    )
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
                 )
@@ -1167,7 +1192,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # Gemini does not support parallel_tool_calls=False with multiple
                 # tools. Drop the param instead of failing — Responses API clients
                 # often send parallel_tool_calls=false by default.
-                if not (value is False and num_tools > 1):
+                if value is False and num_tools > 1:
+                    verbose_logger.warning(
+                        "Gemini does not support parallel_tool_calls=False with multiple tools. "
+                        "Dropping the param; parallel tool calls will not be restricted upstream. "
+                        "See https://github.com/BerriAI/litellm/issues/41913"
+                    )
+                else:
                     optional_params["parallel_tool_calls"] = value
             elif param == "seed":
                 optional_params["seed"] = value

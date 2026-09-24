@@ -6519,3 +6519,30 @@ def test_eager_input_streaming_reaches_anthropic_request_tools():
 
     assert result["tools"][0]["eager_input_streaming"] is True
     assert result["tools"][0]["name"] == "write_file"
+
+
+def test_map_tools_drops_strict_with_warning(caplog):
+    """Regression test for BerriAI/litellm#41913: Anthropic tool definitions do not
+    support `strict` consistently, so it is dropped and the drop is logged, not silent."""
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_a",
+                "description": "Controlled tool.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                },
+                "strict": True,
+            },
+        }
+    ]
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        mapped_tools, _ = config._map_tools(tools)
+
+    assert "strict" not in mapped_tools[0]
+    assert any("'strict'" in record.message for record in caplog.records)

@@ -753,6 +753,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if _description is not None:
                 _tool["description"] = _description
 
+            if tool["function"].get("strict", tool.get("strict")) is True:
+                litellm.verbose_logger.warning(
+                    "Anthropic tool definitions do not support 'strict' consistently across models. "
+                    "Dropping 'strict' from tool %r; the constraint will not be enforced upstream. "
+                    "See https://github.com/BerriAI/litellm/issues/41913",
+                    tool["function"]["name"],
+                )
+
             returned_tool = _tool
 
         elif tool["type"].startswith("computer_"):
