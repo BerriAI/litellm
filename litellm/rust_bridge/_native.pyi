@@ -6,11 +6,14 @@ import httpx
 from pydantic import JsonValue
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
 from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
+from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
@@ -73,6 +76,26 @@ def atranscription(
     optional_params: Mapping[str, object] | None = None,
     timeout_seconds: float | None = None,
 ) -> Future[dict[str, object]]: ...
+def completion(
+    request: LiteLLMChatCompletionsRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> ModelResponse: ...
+def acompletion(
+    request: LiteLLMChatCompletionsRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> Coroutine[object, object, ModelResponse]: ...
+def responses(
+    request: LiteLLMResponsesRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> ResponsesAPIResponse: ...
+def aresponses(
+    request: LiteLLMResponsesRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> Coroutine[object, object, ResponsesAPIResponse]: ...
 def messages(
     request: LiteLLMMessagesRequest,
     args: tuple[object, ...],
@@ -381,16 +404,22 @@ __all__ = [
     "TokenCounter",
     "Tokenizer",
     "achat_completions",
+    "acompletion",
+    "aembedding",
     "amessages",
     "aocr",
+    "aresponses",
     "atranscription",
     "chat_completions",
     "chat_completions_decline",
+    "completion",
+    "embedding",
     "gil_stats",
     "messages",
     "ocr",
     "process_state_started",
     "reserve_process_for_forking",
+    "responses",
     "transcription",
 ]
 
