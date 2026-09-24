@@ -4,6 +4,7 @@ from itertools import combinations
 
 import pytest
 
+import litellm
 from litellm import Router
 from litellm.proxy.common_utils.model_listing_utils import (
     ClaudeCodeRoutingNames,
@@ -102,8 +103,6 @@ def test_only_claude_code_gets_the_view(headers, enabled):
 
 @pytest.mark.parametrize("layer", ["literal", "global", "router", "key", "team", "wildcard"])
 def test_configured_names_outrank_generated_ids_even_when_hidden_from_listing(monkeypatch, layer):
-    import litellm
-
     encoded = _encoded("foo")
     alias = {encoded: "other"}
     monkeypatch.setattr(litellm, "model_alias_map", alias if layer == "global" else {})
@@ -180,15 +179,27 @@ def test_chained_key_alias_is_listed_only_when_its_final_target_is_listable():
     assert alias_target("a", caller_alias_maps(key_aliases, None, "team-a", None)) == "hidden"
 
 
-def test_team_aliases_only_apply_when_listing_the_team_the_key_authenticated_as():
-    key_aliases, team_aliases = {"k": "gpt-4.1"}, {"t": "gpt-4.1-mini"}
-    assert caller_alias_maps(key_aliases, team_aliases, "team-a", None) == (team_aliases, key_aliases, key_aliases)
-    assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-a") == (
-        team_aliases,
+def test_team_aliases_only_apply_when_listing_the_team_the_key_authenticated_as(monkeypatch):
+    key_aliases, team_aliases, global_aliases = {"k": "gpt-4.1"}, {"t": "gpt-4.1-mini"}, {"g": "gpt-4.1"}
+    monkeypatch.setattr(litellm, "model_alias_map", global_aliases)
+    own_team = (team_aliases, key_aliases, global_aliases, key_aliases)
+    assert caller_alias_maps(key_aliases, team_aliases, "team-a", None) == own_team
+    assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-a") == own_team
+    assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-b") == (
         key_aliases,
+        global_aliases,
         key_aliases,
     )
-    assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-b") == (key_aliases, key_aliases)
+
+
+def test_global_alias_rewrites_between_the_two_key_passes_like_chat_completions(monkeypatch):
+    monkeypatch.setattr(litellm, "model_alias_map", {"b": "d"})
+    key_aliases = {"a": "b", "b": "c"}
+    entries = [("c", "c"), ("d", "d")]
+    maps = caller_alias_maps(key_aliases, None, "team-a", None)
+
+    assert alias_target("a", maps) == "d"
+    assert alias_listing_entries(entries, maps) == (*entries, ("a", "d"), ("b", "c"))
 
 
 def test_team_public_name_uses_the_same_scope_at_list_and_request():

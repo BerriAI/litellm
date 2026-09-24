@@ -165,11 +165,11 @@ def caller_alias_maps(
 ) -> tuple[object, ...]:
     """The alias maps `/chat/completions` rewrites this caller's model through, in the order
     it applies them: the team's first, only when listing the team the key authenticated as,
-    then the key's own twice, once in `add_litellm_data_to_request` and once more in
-    `common_processing_pre_call_logic`."""
+    then the key's own in `add_litellm_data_to_request`, then the global `model_alias_map` and
+    the key's own again in `common_processing_pre_call_logic`."""
     if listed_team_id is not None and listed_team_id != key_team_id:
-        return (key_aliases, key_aliases)
-    return (team_aliases, key_aliases, key_aliases)
+        return (key_aliases, litellm.model_alias_map, key_aliases)
+    return (team_aliases, key_aliases, litellm.model_alias_map, key_aliases)
 
 
 def _alias_map(aliases: object) -> Mapping[str, str]:
