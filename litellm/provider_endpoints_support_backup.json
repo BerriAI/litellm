@@ -2029,6 +2029,23 @@
         "search": true
       }
     },
+    "sail": {
+      "display_name": "Sail (`sail`)",
+      "url": "https://docs.litellm.ai/docs/providers/sail",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "sambanova": {
       "display_name": "Sambanova (`sambanova`)",
       "url": "https://docs.litellm.ai/docs/providers/sambanova",
