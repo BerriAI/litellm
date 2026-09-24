@@ -2591,6 +2591,48 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_get_user_daily_activity_aggregated_filters_by_user_owned_keys(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity_aggregated,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_response = MagicMock()
+    mock_get_user_api_key_filter = AsyncMock(return_value=["owned-key"])
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_api_key_filter",
+        mock_get_user_api_key_filter,
+    )
+    mock_get_daily_agg = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        mock_get_daily_agg,
+    )
+
+    result = await get_user_daily_activity_aggregated(
+        start_date="2026-09-22",
+        end_date="2026-09-22",
+        model=None,
+        api_key=None,
+        user_id="target-user",
+        timezone=None,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+
+    assert result is mock_response
+    mock_get_user_api_key_filter.assert_awaited_once_with(mock_prisma_client, "target-user", None)
+    assert mock_get_daily_agg.call_args.kwargs["entity_id"] is None
+    assert mock_get_daily_agg.call_args.kwargs["api_key"] == ["owned-key"]
+
+
+@pytest.mark.asyncio
 async def test_get_user_daily_activity_aggregated_non_admin_cannot_view_other_users(
     monkeypatch,
 ):
@@ -2644,19 +2686,25 @@ async def test_get_user_daily_activity_aggregated_non_admin_cannot_view_other_us
         new_callable=AsyncMock,
         return_value=mock_response,
     ) as mock_get_daily_agg:
-        result = await get_user_daily_activity_aggregated(
-            start_date="2025-01-01",
-            end_date="2025-01-31",
-            model=None,
-            api_key=None,
-            user_id=None,
-            timezone=None,
-            user_api_key_dict=non_admin_key_dict,
-        )
+        with patch(
+            "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_api_key_filter",
+            new_callable=AsyncMock,
+            return_value=["regular-user-key"],
+        ):
+            result = await get_user_daily_activity_aggregated(
+                start_date="2025-01-01",
+                end_date="2025-01-31",
+                model=None,
+                api_key=None,
+                user_id=None,
+                timezone=None,
+                user_api_key_dict=non_admin_key_dict,
+            )
 
         assert result is mock_response
         mock_get_daily_agg.assert_called_once()
-        assert mock_get_daily_agg.call_args.kwargs["entity_id"] == "regular-user-123"
+        assert mock_get_daily_agg.call_args.kwargs["entity_id"] is None
+        assert mock_get_daily_agg.call_args.kwargs["api_key"] == ["regular-user-key"]
 
 
 @pytest.mark.asyncio

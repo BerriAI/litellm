@@ -55,6 +55,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
     get_daily_activity,
     get_daily_activity_aggregated,
+    get_user_api_key_filter,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
@@ -3059,29 +3060,34 @@ async def get_user_daily_activity_aggregated(
     try:
         is_admin: Final = _user_has_admin_view(user_api_key_dict)
 
-        if is_admin:
-            entity_id = user_id  # None means global view, otherwise filter by user
-        else:
-            caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)
-            if user_id is None:
-                user_id = caller_user_id
-            if user_id != caller_user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": "Non-admin users can only view their own spend data."},
-                )
-            entity_id = user_id
+        caller_user_id: Final[str | None] = (
+            None if is_admin else require_caller_user_id_for_non_admin(user_api_key_dict)
+        )
+        requested_user_id: Final[str | None] = user_id if is_admin or user_id is not None else caller_user_id
+        if caller_user_id is not None and requested_user_id != caller_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Non-admin users can only view their own spend data."
+                },  # mutable-ok: FastAPI requires a mutable error payload
+            )
+
+        api_key_filter: Final = (
+            api_key
+            if requested_user_id is None
+            else await get_user_api_key_filter(prisma_client, requested_user_id, api_key)
+        )
 
         return await get_daily_activity_aggregated(
             prisma_client=prisma_client,
             table_name="litellm_dailyuserspend",
             entity_id_field="user_id",
-            entity_id=entity_id,
+            entity_id=None,
             entity_metadata_field=None,
             start_date=start_date,
             end_date=end_date,
             model=model,
-            api_key=api_key,
+            api_key=api_key_filter,
             timezone_offset_minutes=timezone,
             include_current_utc_day=include_current_utc_day,
         )

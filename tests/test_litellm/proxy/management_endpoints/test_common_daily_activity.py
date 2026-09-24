@@ -25,6 +25,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
+    get_user_api_key_filter,
     global_rollup_reconciled_through,
     update_metrics,
 )
@@ -329,6 +330,32 @@ async def test_get_api_key_metadata_returns_active_key_metadata():
     assert "active-key-hash-123" in result
     assert result["active-key-hash-123"]["key_alias"] == "my-active-key"
     assert result["active-key-hash-123"]["team_id"] == "team-abc"
+
+
+@pytest.mark.asyncio
+async def test_get_user_api_key_filter_scopes_to_active_and_deleted_user_keys():
+    mock_prisma = MagicMock()
+
+    active_key = SimpleNamespace(token="active-key", user_id="target-user")
+    unrelated_key = SimpleNamespace(token="unrelated-key", user_id="other-user")
+    deleted_key = SimpleNamespace(token="deleted-key", user_id="target-user")
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[active_key, unrelated_key])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[deleted_key])
+
+    assert await get_user_api_key_filter(mock_prisma, "target-user", None) == ["active-key", "deleted-key"]
+    assert await get_user_api_key_filter(mock_prisma, "target-user", "unrelated-key") == []
+
+
+@pytest.mark.asyncio
+async def test_get_user_api_key_filter_handles_deleted_lookup_failure_and_owned_key():
+    mock_prisma = MagicMock()
+    active_key = SimpleNamespace(token="active-key", user_id="target-user")
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[active_key])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
+        side_effect=RuntimeError("deleted-key table unavailable")
+    )
+
+    assert await get_user_api_key_filter(mock_prisma, "target-user", "active-key") == ["active-key"]
 
 
 @pytest.mark.asyncio
@@ -1661,6 +1688,83 @@ async def test_get_daily_activity_aggregated_explicit_api_key_filter_scopes_both
     assert day.breakdown.api_keys["key-1"].metrics.spend == 2.0
     assert day.breakdown.models["gpt-5"].metrics.spend == 2.0
     assert set(day.breakdown.models["gpt-5"].api_key_breakdown) == {"key-1"}
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_user_key_filter_keeps_usage_with_legacy_user_id(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    rows: Final = [
+        (
+            "owned-row",
+            "legacy-user-id",
+            "2026-09-22",
+            "owned-key",
+            "gpt-5",
+            "",
+            "openai",
+            "/v1/chat/completions",
+            10,
+            7.0,
+            1,
+            1,
+        ),
+        (
+            "deleted-row",
+            "another-legacy-user-id",
+            "2026-09-22",
+            "deleted-key",
+            "gpt-5",
+            "",
+            "openai",
+            "/v1/chat/completions",
+            10,
+            3.0,
+            1,
+            1,
+        ),
+        (
+            "unrelated-row",
+            "other-user-id",
+            "2026-09-22",
+            "unrelated-key",
+            "gpt-5",
+            "",
+            "openai",
+            "/v1/chat/completions",
+            10,
+            100.0,
+            1,
+            1,
+        ),
+    ]
+    _seed_daily_user_spend(_aggregated_postgresql, rows)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, [])
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(token="owned-key", key_alias="owned", team_id=None, user_id="target-user"),
+            SimpleNamespace(token="deleted-key", key_alias="deleted", team_id=None, user_id="target-user"),
+        ]
+    )
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-09-22",
+        end_date="2026-09-22",
+        model=None,
+        api_key=["owned-key", "deleted-key"],
+    )
+
+    assert result.metadata.total_spend == 10.0
+    assert set(result.results[0].breakdown.api_keys) == {"owned-key", "deleted-key"}
+    assert "unrelated-key" not in result.results[0].breakdown.api_keys
 
 
 def _prisma_with_marker(marker: str | None) -> MagicMock:
