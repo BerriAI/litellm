@@ -537,6 +537,82 @@ describe("MCPToolPermissions", () => {
       expect(deleteIssue).toBeChecked();
     });
 
+    it("keeps a denied locked toolset tool denied after Select All", async () => {
+      const toolsetServer = { server_id: "srv-toolset-1", server_name: "Toolset Server", alias: "Toolset Server" };
+      const mockOnChange = vi.fn();
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([toolsetServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([
+        {
+          toolset_id: "ts-1",
+          toolset_name: "Support Toolset",
+          tools: [{ server_id: toolsetServer.server_id, tool_name: "list_issues" }],
+        },
+      ]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedToolsets={["ts-1"]}
+          toolPermissions={{}}
+          deniedTools={{ [toolsetServer.server_id]: ["list_issues"] }}
+          onChange={mockOnChange}
+        />,
+      );
+
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      await userEvent.click(screen.getByText("Flat List"));
+      await userEvent.click(screen.getByText("Select All"));
+
+      // Select All passes every fetched name including the locked toolset tool; the write must
+      // not read that as the admin re-enabling it, or the stored deny silently disappears
+      expect(mockOnChange).toHaveBeenCalledWith({
+        toolPermissions: { [toolsetServer.server_id]: ["delete_issue"] },
+        deniedTools: { [toolsetServer.server_id]: ["list_issues"] },
+      });
+    });
+
+    it("keeps a denied locked toolset tool denied after its risk group is enabled", async () => {
+      const toolsetServer = { server_id: "srv-toolset-1", server_name: "Toolset Server", alias: "Toolset Server" };
+      const toolsetCrudTools = [
+        { name: "list_documents", description: "List every document" },
+        { name: "get_document", description: "Fetch one document" },
+        { name: "delete_document", description: "Destroy a document" },
+      ];
+      const mockOnChange = vi.fn();
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([toolsetServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([
+        {
+          toolset_id: "ts-1",
+          toolset_name: "Support Toolset",
+          tools: [{ server_id: toolsetServer.server_id, tool_name: "list_documents" }],
+        },
+      ]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: toolsetCrudTools, error: false });
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedToolsets={["ts-1"]}
+          toolPermissions={{}}
+          deniedTools={{ [toolsetServer.server_id]: ["list_documents"] }}
+          onChange={mockOnChange}
+        />,
+      );
+
+      // Enabling a risk group re-checks its locked tools too, so the write must keep their
+      // stored denies instead of reading the bulk check as the admin re-enabling them
+      const readGroupToggle = await screen.findByRole("checkbox", { name: "Allow all Read tools" });
+      await userEvent.click(readGroupToggle);
+
+      expect(mockOnChange).toHaveBeenCalledWith({
+        toolPermissions: { [toolsetServer.server_id]: ["get_document"] },
+        deniedTools: { [toolsetServer.server_id]: ["list_documents"] },
+      });
+    });
+
     it("keeps a tool-permission-only server listed and granting after Select All", async () => {
       const keyedServer = { server_id: "srv-keyed-1", server_name: "Keyed Server", alias: "Keyed Server" };
       const Harness = () => {

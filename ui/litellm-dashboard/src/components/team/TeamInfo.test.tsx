@@ -2922,13 +2922,21 @@ describe("TeamInfo MCP permission retention", () => {
   it("retains a stored tool denylist on an unrelated team save", async () => {
     const user = userEvent.setup({ delay: null });
     const catalog = [server("direct-server", "deploy_tracker")];
-    mockUseMCPServers.mockReturnValue({ data: catalog, isLoading: false, isError: false } as any);
-    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false, isError: false } as any);
+    mockUseMCPServers.mockReturnValue({
+      data: catalog,
+      isLoading: false,
+      isError: false,
+    } as ReturnType<typeof useMCPServers>);
+    mockUseMCPToolsets.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+    } as ReturnType<typeof useMCPToolsets>);
     mockUseAccessGroups.mockReturnValue({
       data: [],
       isLoading: false,
       isError: false,
-    } as any);
+    } as ReturnType<typeof useAccessGroups>);
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         models: ["gpt-4"],
@@ -2941,7 +2949,10 @@ describe("TeamInfo MCP permission retention", () => {
         },
       }),
     );
-    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({
+      data: {},
+      team_id: "123",
+    } as Awaited<ReturnType<typeof networking.teamUpdateCall>>);
 
     renderWithProviders(
       <TeamInfoView

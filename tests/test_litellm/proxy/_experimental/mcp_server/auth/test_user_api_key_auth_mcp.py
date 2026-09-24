@@ -791,6 +791,11 @@ class TestMCPRequestHandler:
         org_loader.assert_awaited_once()
         user_loader.assert_awaited_once()
 
+    async def test_grant_resolution_without_credentials_grants_everything(self):
+        grant = await MCPRequestHandler.resolve_tool_grant_for_server("server-a", None)
+        assert grant.allowed is None
+        assert grant.denied == frozenset()
+
     async def test_legacy_allowlist_still_denies_tools_not_listed(self):
         """mcp_tool_permissions alone keeps its exact behavior: a tool not named by
         the allowlist stays denied even when no denylist exists"""

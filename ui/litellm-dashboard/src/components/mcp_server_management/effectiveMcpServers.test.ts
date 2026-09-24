@@ -953,6 +953,37 @@ describe("applyToolCheckboxWrite", () => {
     expect(written).toEqual({ toolPermissions: { "uuid-1": [] }, deniedTools: { "uuid-1": ["write"] } });
   });
 
+  it("keeps a denied locked toolset tool out of a Select All write", () => {
+    const deniedTools = { "uuid-1": ["read"] };
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      selectedToolsets: ["ts-2"],
+      toolsets: [reader],
+      deniedTools,
+    };
+    const [entry] = resolveEffectiveMcpServers(input);
+    const written = applyToolCheckboxWrite(
+      checkboxInput(entry, ["read", "write"], { deniedTools, fetchedTools: ["read", "write"] }),
+    );
+
+    expect(written).toEqual({ toolPermissions: { "uuid-1": ["write"] }, deniedTools: { "uuid-1": ["read"] } });
+
+    const afterWrite = {
+      ...emptyInput,
+      allServers: [named],
+      selectedToolsets: ["ts-2"],
+      toolsets: [reader],
+      toolPermissions: written.toolPermissions,
+      deniedTools: written.deniedTools,
+    };
+    const [resolved] = resolveEffectiveMcpServers(afterWrite);
+    expect(resolved.deniedTools).toContain("read");
+    expect((resolved.allowedTools ?? []).filter((name) => !(resolved.deniedTools ?? []).includes(name))).toEqual([
+      "write",
+    ]);
+  });
+
   it("keeps a locked toolset tool's deny since its checkbox can never re-decide it", () => {
     const deniedTools = { "uuid-1": ["read"] };
     const input = {
