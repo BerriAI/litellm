@@ -29,6 +29,17 @@ class KeySearchWhere(TypedDict):
     OR: ReadOnly[tuple[KeyTokenWhere, KeyAliasContainsWhere]]
 
 
+class JsonPathArrayContains(TypedDict):
+    path: ReadOnly[tuple[str, ...]]
+    array_contains: ReadOnly[str]
+
+
+class KeyTagWhere(TypedDict):
+    """Prisma filter behind `/key/list?tag=`: keys whose metadata.tags array holds the exact tag."""
+
+    metadata: ReadOnly[JsonPathArrayContains]
+
+
 class BulkUpdateKeyRequestItem(BaseModel):
     """One /key/bulk_update item; only the fields it carries are written."""
 
