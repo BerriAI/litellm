@@ -1218,6 +1218,13 @@ async def open_sse_before_first_byte(
     if interval is None:
         return await produce_response
 
+    # The slot record must exist before this task is forked, or the release
+    # looks in the original task and never sees it.
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        get_or_create_request_stash,
+    )
+
+    get_or_create_request_stash()
     produce_task: Final = asyncio.ensure_future(produce_response)
     await asyncio.wait((produce_task,), timeout=interval)
     if produce_task.done():
