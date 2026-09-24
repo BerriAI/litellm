@@ -24,8 +24,6 @@ from litellm.types.litellm_params import (
 )
 from litellm.types.router import CredentialLiteLLMParams, RouterConfig, UpdateRouterConfig
 from litellm.types.utils import (
-    CustomPricingLiteLLMParams,
-    StandardCallbackDynamicParams,
     agentic_loop_internal_litellm_params,
     all_litellm_params,
     bedrock_batch_litellm_params,
@@ -138,6 +136,7 @@ OPTION_NAMES: Final = (
     "logger_fn",
     "verbose",
     "no-log",
+    "max_agentic_loops",
     "guardrails",
     "prompt_id",
     "prompt_variables",
@@ -166,11 +165,10 @@ OPTION_NAMES: Final = (
     "mock_timeout",
 )
 
-AGENTIC_LOOP_NAMES: Final = (
+AGENTIC_LOOP_STATE_NAMES: Final = (
     "_agentic_loop_depth",
     "_agentic_loop_fingerprints",
     "_agentic_loop_api_surface",
-    "max_agentic_loops",
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
@@ -188,7 +186,7 @@ INTERNAL_STATE_NAMES: Final = (
     "cache_key",
     "stream_response",
     "_context_compaction_state",
-    *AGENTIC_LOOP_NAMES,
+    *AGENTIC_LOOP_STATE_NAMES,
     "_router_weights",
     "fallback_depth",
     "max_fallbacks",
@@ -224,6 +222,151 @@ BEDROCK_BATCH_NAMES: Final = (
 
 ARTIFACT_NAMES: Final = ("self", "use_client", "model_config", "rust")
 
+CALLBACK_VAR_NAMES: Final = (
+    "langfuse_public_key",
+    "langfuse_secret",
+    "langfuse_secret_key",
+    "langfuse_host",
+    "langfuse_environment",
+    "langfuse_span_scope",
+    "langfuse_prompt_version",
+    "gcs_bucket_name",
+    "gcs_path_service_account",
+    "langsmith_api_key",
+    "langsmith_project",
+    "langsmith_base_url",
+    "langsmith_sampling_rate",
+    "langsmith_tenant_id",
+    "humanloop_api_key",
+    "arize_api_key",
+    "arize_space_key",
+    "arize_space_id",
+    "arize_success_sampling_rate",
+    "arize_error_sampling_rate",
+    "posthog_api_key",
+    "posthog_api_url",
+    "wandb_api_key",
+    "weave_project_id",
+    "dd_api_key",
+    "dd_site",
+    "dd_agent_host",
+    "dd_agent_port",
+    "newrelic_api_key",
+    "newrelic_region",
+    "turn_off_message_logging",
+    "litellm_disabled_callbacks",
+)
+
+PRICING_NAMES: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_character",
+    "output_cost_per_character",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
+    "tiered_pricing",
+    "input_cost_per_second",
+    "output_cost_per_second",
+    "output_cost_per_second_1080p",
+    "output_cost_per_second_480p",
+    "output_cost_per_second_720p",
+    "output_cost_per_second_768p",
+    "output_cost_per_second_2k",
+    "output_cost_per_second_4k",
+    "output_cost_per_image_512",
+    "output_cost_per_image_1024",
+    "output_cost_per_image_1536",
+    "input_cost_per_pixel",
+    "output_cost_per_pixel",
+    "input_cost_per_token_flex",
+    "input_cost_per_token_priority",
+    "input_cost_per_token_ultrafast",
+    "cache_creation_input_token_cost_above_1hr",
+    "cache_creation_input_token_cost_above_200k_tokens",
+    "cache_creation_input_token_cost_above_272k_tokens",
+    "cache_creation_input_token_cost_above_272k_tokens_priority",
+    "cache_creation_input_token_cost_above_272k_tokens_flex",
+    "cache_creation_input_token_cost_flex",
+    "cache_creation_input_token_cost_priority",
+    "cache_creation_input_token_cost_ultrafast",
+    "cache_creation_input_audio_token_cost",
+    "cache_read_input_token_cost_flex",
+    "cache_read_input_token_cost_priority",
+    "cache_read_input_token_cost_ultrafast",
+    "cache_read_input_token_cost_above_200k_tokens",
+    "cache_read_input_token_cost_above_200k_tokens_priority",
+    "cache_read_input_token_cost_above_272k_tokens_priority",
+    "cache_read_input_token_cost_above_272k_tokens_flex",
+    "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_above_272k_tokens_batches",
+    "cache_creation_input_token_cost_batches",
+    "cache_creation_input_token_cost_above_272k_tokens_batches",
+    "cache_read_input_audio_token_cost",
+    "cache_read_input_image_token_cost",
+    "input_cost_per_character_above_128k_tokens",
+    "input_cost_per_audio_token",
+    "input_cost_per_token_cache_hit",
+    "input_cost_per_token_above_128k_tokens",
+    "input_cost_per_token_above_200k_tokens",
+    "input_cost_per_token_above_200k_tokens_priority",
+    "input_cost_per_token_above_272k_tokens_priority",
+    "input_cost_per_token_above_272k_tokens_flex",
+    "input_cost_per_token_above_272k_tokens_batches",
+    "input_cost_per_query",
+    "input_cost_per_image",
+    "input_cost_per_image_above_128k_tokens",
+    "input_cost_per_audio_per_second",
+    "input_cost_per_audio_per_second_above_128k_tokens",
+    "input_cost_per_video_per_second",
+    "input_cost_per_video_per_second_above_128k_tokens",
+    "input_cost_per_video_per_second_above_15s_interval",
+    "input_cost_per_video_per_second_above_8s_interval",
+    "input_cost_per_audio_token_batches",
+    "input_cost_per_image_token_batches",
+    "input_cost_per_token_batches",
+    "input_cost_per_video_token_batches",
+    "output_cost_per_token_batches",
+    "output_cost_per_token_flex",
+    "output_cost_per_token_priority",
+    "output_cost_per_token_ultrafast",
+    "output_cost_per_audio_token",
+    "output_cost_per_token_above_128k_tokens",
+    "output_cost_per_token_above_200k_tokens",
+    "output_cost_per_token_above_200k_tokens_priority",
+    "output_cost_per_token_above_272k_tokens_priority",
+    "output_cost_per_token_above_272k_tokens_flex",
+    "output_cost_per_token_above_272k_tokens_batches",
+    "output_cost_per_character_above_128k_tokens",
+    "output_cost_per_image",
+    "output_cost_per_image_token",
+    "output_cost_per_video_token",
+    "output_cost_per_reasoning_token",
+    "output_cost_per_reasoning_token_flex",
+    "output_cost_per_reasoning_token_priority",
+    "output_cost_per_video_per_second",
+    "output_cost_per_audio_per_second",
+    "search_context_cost_per_query",
+    "google_maps_grounding_cost_per_query",
+    "citation_cost_per_token",
+    "cache_read_input_token_cost_above_272k_tokens",
+    "cache_read_input_token_cost_above_512k_tokens",
+    "input_cost_per_image_token",
+    "input_cost_per_video_token",
+    "input_cost_per_token_above_272k_tokens",
+    "input_cost_per_token_above_512k_tokens",
+    "output_cost_per_token_above_272k_tokens",
+    "output_cost_per_token_above_512k_tokens",
+    "output_vector_size",
+    "ocr_cost_per_page",
+    "ocr_cost_per_page_batches",
+    "ocr_cost_per_credit",
+    "annotation_cost_per_page",
+    "annotation_cost_per_page_batches",
+    "regional_processing_uplift_multiplier_eu",
+    "regional_processing_uplift_multiplier_us",
+    "regional_endpoint_uplift_multiplier",
+)
+
 DECLARED_BY_ROOT: Final[Mapping[type, tuple[str, ...]]] = MappingProxyType(
     {ConnectionSettings: CONNECTION_NAMES, LiteLLMOptions: OPTION_NAMES, InternalState: INTERNAL_STATE_NAMES}
 )
@@ -233,8 +376,8 @@ OWNED_NAMES: Final = (
     *OPTION_NAMES,
     *INTERNAL_STATE_NAMES,
     *ARTIFACT_NAMES,
-    *StandardCallbackDynamicParams.__annotations__,
-    *CustomPricingLiteLLMParams.model_fields,
+    *CALLBACK_VAR_NAMES,
+    *PRICING_NAMES,
 )
 
 Classifier: TypeAlias = Callable[[dict[str, object]], dict[str, object]]  # mutable-ok: classifiers use dict
@@ -300,7 +443,6 @@ class _OtherLeaf:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class _Root:
     first: _Leaf
-    direct: int | None = field(default=None, metadata=wire("_direct"))
     second: _OtherLeaf
 
 
@@ -309,13 +451,13 @@ def test_wire_names_are_the_field_names_in_declaration_order_unless_wire_renames
 
 
 def test_owned_wire_names_walk_leaves_in_declaration_order_and_keep_every_occurrence() -> None:
-    assert owned_wire_names(_Root) == ("plain", "wire-name", "_direct", "plain", "trailing")
+    assert owned_wire_names(_Root) == ("plain", "wire-name", "plain", "trailing")
 
 
 def test_agentic_loop_names_concatenate_as_a_list() -> None:
     extended: Final = agentic_loop_internal_litellm_params + ["caller_added"]  # mutable-ok: list contract under test
 
-    assert (type(extended), tuple(extended)) == (list, (*AGENTIC_LOOP_NAMES, "caller_added"))
+    assert (type(extended), tuple(extended)) == (list, (*AGENTIC_LOOP_STATE_NAMES, "max_agentic_loops", "caller_added"))
 
 
 def test_bedrock_batch_names_concatenate_as_a_tuple() -> None:
@@ -334,7 +476,7 @@ def test_proxy_stamped_fields_keep_their_wire_names() -> None:
 def test_all_litellm_params_concatenates_with_a_list_like_the_completion_entrypoint_does() -> None:
     extended: Final = ["aembedding", "extra_headers"] + all_litellm_params  # mutable-ok: list contract under test
 
-    assert (type(extended), tuple(extended)) == (list, ("aembedding", "extra_headers", *all_litellm_params))
+    assert (type(extended), frozenset(extended)) == (list, frozenset(("aembedding", "extra_headers", *OWNED_NAMES)))
 
 
 CARRIED_AND_FORWARDED: Final = frozenset(("drop_params", "hugging_face", "no_log", "replicate", "together_ai"))
@@ -438,6 +580,6 @@ def test_every_typed_config_model_shares_names_with_the_declarations(source: str
     assert _declared_names_of(source) == NAMES_SHARED_WITH_TYPED_MODELS[source]
 
 
-@pytest.mark.parametrize("name", sorted(CustomPricingLiteLLMParams.model_fields))
+@pytest.mark.parametrize("name", PRICING_NAMES)
 def test_pricing_name_is_owned_by_the_pricing_model_alone(name: str) -> None:
     assert name not in DECLARED_NAMES

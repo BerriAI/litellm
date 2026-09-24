@@ -1743,7 +1743,7 @@ class TestProxyFunctionCalling:
         direct_result = supports_function_calling(model=direct_model)
         proxy_result = supports_function_calling(model=proxy_model)
 
-        print("\nDemonstration of proxy model resolution:")
+        print(f"\nDemonstration of proxy model resolution:")
         print(f"Direct model '{direct_model}' supports function calling: {direct_result}")
         print(f"Proxy model '{proxy_model}' supports function calling: {proxy_result}")
 
@@ -5695,6 +5695,7 @@ async def test_success_deployment_hook_chains_past_callback_returning_response(
 
         async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
             self.seen.append(response)
+            return None
 
     replacer = ReplacingLogger()
     observer = ObservingLogger()

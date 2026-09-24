@@ -17,15 +17,16 @@ A field's kwarg name is its field name unless the field carries `wire(...)` meta
 which is reserved for names that are not clean identifiers or that carry a leading
 underscore to mark them internal. Nothing constructs these objects yet.
 
-Four names in `all_litellm_params` are not settings at all and so get no field: `self`
-and `model_config` arrive when a caller forwards `locals()` or a model's attributes as
-kwargs, and `use_client` and `rust` are module-level switches (`litellm.use_client`,
-`litellm.rust(...)`) that nothing reads from a call's kwargs. They stay registered so they
-keep falling out of provider params, and `KWARG_ARTIFACTS` names them.
+Four names in `all_litellm_params` are never placed into `litellm_params` and so get no
+field: `self` and `model_config` arrive when a caller forwards `locals()` or a model's
+attributes as kwargs, and `use_client` and `rust` are module-level switches
+(`litellm.use_client`, `litellm.rust(...)`) that nothing reads from a call's kwargs. They
+stay registered so they keep falling out of provider params, and `KWARG_ARTIFACTS` names
+them.
 """
 
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
@@ -215,8 +216,8 @@ class ObservabilityOptions:
     """Identifiers, metadata and logging switches. Read by the logging object and callbacks."""
 
     id: str | None = None
-    metadata: MutableMapping[str, object] | None = None
-    litellm_metadata: MutableMapping[str, object] | None = None
+    metadata: MutableMapping[str, object] | None = None  # mutable-ok: the router and logging write keys into it
+    litellm_metadata: MutableMapping[str, object] | None = None  # mutable-ok: the proxy writes keys into it
     tags: Sequence[str] | None = None
     litellm_trace_id: str | None = None
     litellm_session_id: str | None = None
@@ -224,6 +225,13 @@ class ObservabilityOptions:
     logger_fn: Callable[[Mapping[str, object]], None] | None = None
     verbose: bool | None = None
     no_log: bool | None = field(default=None, metadata=wire("no-log"))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgenticLoopOptions:
+    """Deployment-level ceiling on a server-side tool loop. Read by the interception handlers."""
+
+    max_agentic_loops: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -285,6 +293,7 @@ class LiteLLMOptions:
     caching: CachingOptions
     cost: CostOptions
     observability: ObservabilityOptions
+    agentic_loop: AgenticLoopOptions
     guardrails: GuardrailOptions
     prompt: PromptOptions
     response: ResponseOptions
@@ -313,7 +322,6 @@ class AgenticLoopState:
     api_surface: Literal["chat_completions", "responses"] | None = field(
         default=None, metadata=wire("_agentic_loop_api_surface")
     )
-    max_agentic_loops: int | None = None
     code_interpreter_active: bool | None = field(default=None, metadata=wire("_code_interpreter_interception_active"))
     code_interpreter_sandbox_key: str | None = field(
         default=None, metadata=wire("_code_interpreter_interception_sandbox_key")
@@ -391,13 +399,9 @@ def wire_names(owner: type) -> tuple[str, ...]:
 
 
 def owned_wire_names(root: type) -> tuple[str, ...]:
-    """Kwarg names of every object nested in `root`, in declaration order, plus any field `root` holds directly."""
+    """Kwarg names of every leaf object nested in `root`, in declaration order."""
     return tuple(
         name
-        for owned in fields(root)
-        for name in (
-            wire_names(owned.type)
-            if isinstance(owned.type, type) and is_dataclass(owned.type)
-            else (owned.metadata.get(WIRE_NAME, owned.name),)
-        )
+        for leaf in fields(root)
+        for name in wire_names(leaf.type)  # pyright: ignore[reportArgumentType]  # Field.type admits str
     )
