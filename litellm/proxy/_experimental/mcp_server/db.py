@@ -1418,7 +1418,7 @@ async def rotate_mcp_server_credentials_master_key(prisma_client: PrismaClient, 
 def _decode_user_credential(stored: str) -> str | None:
     """Read back a value persisted in ``LiteLLM_MCPUserCredentials.credential_b64``.
 
-    Tries nacl decryption first (current write format).  Falls back to a
+    Tries the at-rest decryptor first (current write format).  Falls back to a
     plain ``urlsafe_b64decode`` for rows persisted by older code that wrote
     the credential without encryption.  Returns ``None`` when neither path
     yields a valid string.

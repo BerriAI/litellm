@@ -33,14 +33,13 @@ defend against non-UTF-8 field content that cannot survive JSON parsing.
 
 from __future__ import annotations
 
-import base64
 from datetime import datetime, timedelta
 from typing import Final, Literal, TypeAlias
 
 import jwt
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value, encrypt_value
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
 
 ENVELOPE_PREFIX: Final = "llm_env_"
 """Marker prefix on every serialized ACCESS envelope so the edge can cheaply tell an envelope
@@ -540,22 +539,15 @@ def _decode_claims(
 
 
 def _encrypt_grant_blob(plaintext: str, encryption_key: SecretStr) -> str:
-    ciphertext: Final = bytes(encrypt_value(value=plaintext, signing_key=encryption_key.get_secret_value()))
-    return base64.urlsafe_b64encode(ciphertext).decode("ascii")
+    return encrypt_value_helper(value=plaintext, new_encryption_key=encryption_key.get_secret_value())
 
 
 def _decrypt_grant(
     blob: str,
     encryption_key: SecretStr,
 ) -> UpstreamTokenGrant | DecryptFailed | MalformedPayload:
-    from nacl.exceptions import CryptoError
-
-    try:
-        plaintext: Final = decrypt_value(
-            value=base64.urlsafe_b64decode(blob),
-            signing_key=encryption_key.get_secret_value(),
-        )
-    except (CryptoError, ValueError):
+    plaintext: Final = decrypt_if_encrypted_with(value=blob, signing_key=encryption_key.get_secret_value())
+    if plaintext is None:
         return DecryptFailed()
     try:
         return UpstreamTokenGrant.model_validate_json(plaintext)
@@ -567,14 +559,8 @@ def _decrypt_refresh(
     blob: str,
     encryption_key: SecretStr,
 ) -> RefreshCredential | DecryptFailed | MalformedPayload:
-    from nacl.exceptions import CryptoError
-
-    try:
-        plaintext: Final = decrypt_value(
-            value=base64.urlsafe_b64decode(blob),
-            signing_key=encryption_key.get_secret_value(),
-        )
-    except (CryptoError, ValueError):
+    plaintext: Final = decrypt_if_encrypted_with(value=blob, signing_key=encryption_key.get_secret_value())
+    if plaintext is None:
         return DecryptFailed()
     try:
         return RefreshCredential.model_validate_json(plaintext)

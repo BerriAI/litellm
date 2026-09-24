@@ -3646,9 +3646,9 @@ export interface paths {
         put?: never;
         /**
          * Migrate Encryption Endpoint
-         * @description Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+         * @description Re-encrypt all at-rest credentials into the versioned AES-256-GCM (``v3:gcm:``) format.
          *
-         *     Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
+         *     Admin only. Requires the proxy to write ``aes-256-gcm`` (the default).
          *     Idempotent and resumable — re-running skips already-migrated values. Pass
          *     ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
          */

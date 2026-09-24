@@ -50,7 +50,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     open_refresh_envelope,
     user_identity,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value, encrypt_value
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value
 
 _NOW = datetime(2026, 7, 9, 12, 0, 0, tzinfo=timezone.utc)
 _SIGNING_KEY = "unit-test-signing-key-0123456789abcdef0123456789abcdef"
@@ -136,7 +136,8 @@ def test_minimal_grant_round_trips_without_none_leakage_into_claims():
     claims = _unverified_claims(token)
     blob = claims["grant"]
     assert isinstance(blob, str)
-    plaintext = decrypt_value(value=base64.urlsafe_b64decode(blob), signing_key=_ENCRYPTION_KEY)
+    plaintext = decrypt_if_encrypted_with(blob, _ENCRYPTION_KEY)
+    assert plaintext is not None
     assert set(json.loads(plaintext)) == {"access_token", "token_type"}
     opened = open_envelope(token, _KEYS, _NOW)
     assert isinstance(opened, OpenedEnvelope)

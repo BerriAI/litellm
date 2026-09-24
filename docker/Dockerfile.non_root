@@ -82,6 +82,7 @@ COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
 RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
     --extra proxy \
+    --extra legacy-encryption \
     --extra proxy-runtime \
     --extra extra_proxy \
     --extra semantic-router \
@@ -110,6 +111,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     if [ "$PROXY_EXTRAS_SOURCE" = "published" ]; then \
       uv sync --frozen --no-default-groups --no-editable \
         --extra proxy \
+        --extra legacy-encryption \
         --extra proxy-runtime \
         --extra extra_proxy \
         --extra semantic-router \
@@ -120,6 +122,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     else \
       uv sync --frozen --no-default-groups --no-editable \
         --extra proxy \
+        --extra legacy-encryption \
         --extra proxy-runtime \
         --extra extra_proxy \
         --extra semantic-router \

@@ -472,7 +472,7 @@ async def test_secret_maps_create_update_round_trip(map_algorithm: str, field: s
     created: Final = await create_mcp_server(prisma, create, touched_by="test")
     first: Final = table.rows["srv-map"][field]
     assert isinstance(first, str) and isinstance(json.loads(first), str)
-    assert json.loads(first).startswith("v2:gcm:") is (map_algorithm == "aes-256-gcm")
+    assert json.loads(first).startswith("v3:gcm:") is (map_algorithm == "aes-256-gcm")
     assert "sensitive-secret" not in first and "TEMPLATE" not in first
     assert getattr(created, field) == original == getattr(create, field)
     assert decode_secret_map(first, key=field) == original

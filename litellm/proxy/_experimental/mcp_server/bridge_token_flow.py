@@ -14,9 +14,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage]  # reuse the encrypted credential's format discriminator
-)
+from litellm.proxy.common_utils.encrypt_decrypt_utils import is_versioned_gcm
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
@@ -99,7 +97,7 @@ async def _opaque_bearer_is_gateway_credential(token: str) -> bool:
         user_api_key_cache,
     )
 
-    if is_envelope(token) or is_refresh_envelope(token) or token.startswith(_V2_GCM_PREFIX):
+    if is_envelope(token) or is_refresh_envelope(token) or is_versioned_gcm(token):
         return True
     try:
         if ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token) is not None:
