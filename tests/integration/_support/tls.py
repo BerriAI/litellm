@@ -187,7 +187,7 @@ class TlsPeer:
         self._server: _CipherPeer | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
-        self._requests: list[TlsPeerRequest] = []
+        self._requests: tuple[TlsPeerRequest, ...] = ()
 
     @property
     def url(self) -> str:
@@ -195,11 +195,11 @@ class TlsPeer:
 
     def record(self, request: TlsPeerRequest) -> None:
         with self._lock:
-            self._requests.append(request)
+            self._requests = (*self._requests, request)
 
     def received(self) -> tuple[TlsPeerRequest, ...]:
         with self._lock:
-            return tuple(self._requests)
+            return self._requests
 
     def start(self) -> None:
         server: Final = _CipherPeer(("127.0.0.1", self.port), self)
