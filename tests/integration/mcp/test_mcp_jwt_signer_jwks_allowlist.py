@@ -235,7 +235,17 @@ def test_signer_jwks_pause_rejects_then_recovers(gateway: Gateway, tmp_path: Pat
     )
     token: Final = jwt.encode(_claims(), private_key, algorithm="RS256", headers={"kid": "rsa"})
     server: Final = subprocess.Popen(
-        [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", str(tmp_path / "jwks")],
+        [
+            sys.executable,
+            "-I",
+            "-m",
+            "http.server",
+            str(port),
+            "--bind",
+            "127.0.0.1",
+            "--directory",
+            str(tmp_path / "jwks"),
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
