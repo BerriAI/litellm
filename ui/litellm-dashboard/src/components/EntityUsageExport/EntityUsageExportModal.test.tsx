@@ -1,14 +1,3 @@
-/**
- * Tests for EntityUsageExportModal component
- *
- * Validates core export functionality:
- * - Renders modal with correct default state (CSV format, daily scope)
- * - User can select export type (daily vs daily_with_models)
- * - User can switch format (CSV vs JSON)
- * - Export button triggers data generation with correct parameters
- * - Modal closes after successful export
- */
-
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen } from "@testing-library/react";
 import { renderWithProviders } from "../../../tests/test-utils";

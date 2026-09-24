@@ -1483,9 +1483,6 @@ export const teamDailyActivityExportCall = async ({
   exportType: ExportScope;
   format: ExportFormat;
 }): Promise<Blob> => {
-  /**
-   * Server-side Team Usage export, not subject to the top-N key cap
-   */
   return apiClient.get<Blob>(`/team/daily/activity/export`, {
     accessToken,
     responseType: "blob",
