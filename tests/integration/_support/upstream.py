@@ -53,6 +53,13 @@ INTERNAL_FIELDS: Final = frozenset(
 )
 
 
+def observed_body(raw: bytes) -> dict[str, JsonValue]:  # mutable-ok: Observation.body is a plain dict
+    try:
+        return JSON_OBJECT.validate_json(raw)
+    except ValidationError:
+        return JSON_OBJECT.validate_json(b"{}")
+
+
 def error_type(status: int) -> str:
     if status == 429:
         return "rate_limit_error"
@@ -239,6 +246,12 @@ class Provider:
         response: Final = self.scenario_store.get(scenario_id)
         if response is None:
             return JSONResponse({"error": "Unknown scenario"}, status_code=404)
+        if request.method == "POST":
+            self.observations.put(
+                Observation(
+                    request.url.path, request.headers.get("authorization", ""), observed_body(await request.body())
+                )
+            )
         if isinstance(response, RoutedResponse):
             route_key: Final = f"{request.method} /{'/'.join(segments[1:])}"
             route: Final = next(
