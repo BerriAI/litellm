@@ -4,6 +4,7 @@ import socket
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import ValidationError
@@ -86,10 +87,13 @@ def _settlement_table(prisma_client: "PrismaClient") -> _SettlementTableActions:
     return BackgroundInteractionSettlementRepository(prisma_client).table
 
 
+_CLEARED_CREATE_CONTEXT: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def _json(data: Mapping[str, object]) -> object:
     from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
 
-    return Json(data)
+    return Json.keys(**data)
 
 
 def _pending_rows(rows: Sequence[_SettlementRow]) -> tuple[PendingBackgroundInteraction, ...]:
@@ -149,7 +153,9 @@ class PrismaBackgroundSettlementStore:
 
     async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None:
         await self.table.update_many(
-            data=_Outcome(settled_at=datetime.now(timezone.utc), outcome=outcome, create_context=_json({})),
+            data=_Outcome(
+                settled_at=datetime.now(timezone.utc), outcome=outcome, create_context=_json(_CLEARED_CREATE_CONTEXT)
+            ),
             where=_RowKey(interaction_id=interaction_id),
         )
 

@@ -30,6 +30,8 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     dynamic_params: {
       arize_api_key: "password",
       arize_space_id: "password",
+      arize_success_sampling_rate: "number",
+      arize_error_sampling_rate: "number",
     },
     description: "Arize Logging Integration",
   },

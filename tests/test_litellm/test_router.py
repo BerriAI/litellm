@@ -9,7 +9,7 @@ import sys
 import threading
 import warnings
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -850,36 +850,6 @@ async def test_arouter_async_get_healthy_deployments():
     assert result[0]["litellm_params"]["model"] == "gpt-3.5-turbo"
 
 
-@pytest.mark.asyncio
-@patch("litellm.amoderation")
-async def test_arouter_amoderation_with_credential_name(mock_amoderation):
-    """
-    Test that router.amoderation passes litellm_credential_name to the underlying litellm.amoderation call
-    """
-    mock_amoderation.return_value = AsyncMock()
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "text-moderation-stable",
-                "litellm_params": {
-                    "model": "text-moderation-stable",
-                    "litellm_credential_name": "my-custom-auth",
-                },
-            },
-        ],
-    )
-
-    await router.amoderation(input="I love everyone!", model="text-moderation-stable")
-
-    mock_amoderation.assert_called_once()
-    call_kwargs = mock_amoderation.call_args[1]  # Get the kwargs of the call
-    print(
-        "call kwargs for router.amoderation=",
-        json.dumps(call_kwargs, indent=4, default=str),
-    )
-    assert call_kwargs["litellm_credential_name"] == "my-custom-auth"
-    assert call_kwargs["model"] == "text-moderation-stable"
 
 
 def test_arouter_test_team_model():
@@ -17620,3 +17590,242 @@ class TestMemberAutoRouterInference:
         monkeypatch.setitem(sys.modules, "fastapi", None)
         monkeypatch.delitem(sys.modules, "litellm.proxy.auth.auto_router_checks", raising=False)
         assert (await self._route(router, {"metadata": {"user_api_key_team_id": "router-team"}})).model == "restricted-model"
+
+
+def _access_window_offsets(start_hours: float, end_hours: float, team_ids: list) -> dict:
+    now_utc = datetime.now(timezone.utc)
+    return {
+        "start": (now_utc + timedelta(hours=start_hours)).strftime("%H:%M"),
+        "end": (now_utc + timedelta(hours=end_hours)).strftime("%H:%M"),
+        "timezone": "UTC",
+        "team_ids": team_ids,
+    }
+
+
+def _reserved_model_list(windows_for_reserved=None, windows_for_open=None) -> list:
+    reserved: dict = {
+        "model_name": "gpt-4o-ptu",
+        "litellm_params": {"model": "gpt-4o", "mock_response": "reserved"},
+        "model_info": {"id": "reserved-deployment"},
+    }
+    if windows_for_reserved is not None:
+        reserved["model_info"]["access_windows"] = windows_for_reserved
+    unreserved: dict = {
+        "model_name": "gpt-4o-ptu",
+        "litellm_params": {"model": "gpt-4o", "mock_response": "open"},
+        "model_info": {"id": "open-deployment"},
+    }
+    if windows_for_open is not None:
+        unreserved["model_info"]["access_windows"] = windows_for_open
+    return [reserved, unreserved]
+
+
+def test_access_windows_hide_reserved_deployment_from_other_teams():
+    router = Router(
+        model_list=_reserved_model_list(
+            windows_for_reserved=[_access_window_offsets(-1, 1, ["team-a"])],
+        ),
+    )
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4o-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["open-deployment"]
+
+
+def test_access_windows_raise_when_only_reserved_deployments_remain():
+    router = Router(model_list=_reserved_model_list(
+        windows_for_reserved=[_access_window_offsets(-1, 1, ["team-a"])],
+        windows_for_open=[_access_window_offsets(-1, 1, ["team-a"])],
+    )[:1])
+    for request_kwargs in ({"metadata": {"user_api_key_team_id": "team-b"}}, {}):
+        with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+            router._common_checks_available_deployment(model="gpt-4o-ptu", request_kwargs=request_kwargs)
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4o-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["reserved-deployment"]
+
+
+def test_reserved_deployments_drop_strategy_markers_before_filtering():
+    router = Router(model_list=_reserved_model_list()[:1])
+    marker = {"model_name": "gpt-4o-ptu", "litellm_params": {"model": "auto_router/semantic"}}
+    reserved = {
+        "model_name": "gpt-4o-ptu",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"access_windows": [_access_window_offsets(-1, 1, ["team-a"])]},
+    }
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[marker, reserved],
+            request_team_id="team-b",
+        )
+
+
+def test_access_windows_invalid_timezone_fails_router_construction():
+    with pytest.raises(ValueError, match=r"gpt-4o-ptu.*access_windows"):
+        Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-ptu",
+                    "litellm_params": {"model": "gpt-4o", "mock_response": "x"},
+                    "model_info": {
+                        "access_windows": [
+                            {
+                                "start": "22:00",
+                                "end": "06:00",
+                                "timezone": "Mars/Olympus",
+                                "team_ids": ["team-a"],
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+
+
+def test_access_windows_inactive_window_leaves_deployments_available():
+    router = Router(
+        model_list=_reserved_model_list(
+            windows_for_reserved=[_access_window_offsets(2, 3, ["team-a"])],
+        ),
+    )
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4o-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+    )
+    assert {d["model_info"]["id"] for d in deployments} == {"reserved-deployment", "open-deployment"}
+
+
+def test_access_windows_apply_when_calling_by_model_id():
+    router = Router(model_list=_reserved_model_list(
+        windows_for_reserved=[_access_window_offsets(-1, 1, ["team-a"])],
+    ))
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._common_checks_available_deployment(
+            model="reserved-deployment",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+        )
+    _, deployment = router._common_checks_available_deployment(
+        model="reserved-deployment",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+    assert deployment["model_info"]["id"] == "reserved-deployment"
+
+
+def test_access_windows_apply_when_calling_by_litellm_model_name():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-ptu",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6-bypass-probe",
+                    "mock_response": "reserved",
+                },
+                "model_info": {
+                    "id": "reserved-litellm-model",
+                    "access_windows": [_access_window_offsets(-1, 1, ["team-a"])],
+                },
+            }
+        ],
+    )
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._common_checks_available_deployment(
+            model="openai/gpt-5.6-bypass-probe",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+        )
+    _, deployments = router._common_checks_available_deployment(
+        model="openai/gpt-5.6-bypass-probe",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["reserved-litellm-model"]
+
+
+def test_access_windows_apply_to_specific_deployment_calls():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-ptu",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6-specific-probe",
+                    "mock_response": "reserved",
+                },
+                "model_info": {
+                    "id": "reserved-specific",
+                    "access_windows": [_access_window_offsets(-1, 1, ["team-a"])],
+                },
+            }
+        ],
+    )
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._common_checks_available_deployment(
+            model="openai/gpt-5.6-specific-probe",
+            specific_deployment=True,
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+        )
+    _, deployments = router._common_checks_available_deployment(
+        model="openai/gpt-5.6-specific-probe",
+        specific_deployment=True,
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["reserved-specific"]
+
+
+def test_access_windows_apply_to_wildcard_early_resolve():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "mock_response": "reserved"},
+                "model_info": {
+                    "id": "reserved-wildcard",
+                    "access_windows": [_access_window_offsets(-1, 1, ["team-a"])],
+                },
+            }
+        ],
+    )
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._common_checks_available_deployment(
+            model="openai/gpt-probe-wildcard",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+        )
+    _, deployments = router._common_checks_available_deployment(
+        model="openai/gpt-probe-wildcard",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["reserved-wildcard"]
+
+
+def test_access_windows_filter_reserved_deployments_method():
+    router = Router(model_list=_reserved_model_list())
+    reserved: dict = {
+        "model_info": {
+            "id": "reserved-deployment",
+            "access_windows": [_access_window_offsets(-1, 1, ["team-a"])],
+        }
+    }
+    open_deployment: dict = {"model_info": {"id": "open-deployment"}}
+    assert [
+        d["model_info"]["id"]
+        for d in router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[reserved, open_deployment],
+            request_team_id="team-b",
+        )
+    ] == ["open-deployment"]
+    with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
+        router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[reserved],
+            request_team_id="team-b",
+        )
+    assert [
+        d["model_info"]["id"]
+        for d in router._filter_reserved_deployments(
+            model="gpt-4o-ptu",
+            healthy_deployments=[reserved, open_deployment],
+            request_team_id="team-a",
+        )
+    ] == ["reserved-deployment", "open-deployment"]

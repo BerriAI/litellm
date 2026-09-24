@@ -198,6 +198,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_output_config: bool | None
     supports_image_size: bool | None
     supports_anthropic_thinking_payload: ReadOnly[bool | None]
+    supports_anthropic_compaction: ReadOnly[bool | None]
     supported_audio_formats: ReadOnly[Sequence[Literal["mp3", "wav"]] | None]
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
@@ -290,6 +291,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None
     cache_read_input_token_cost_above_512k_tokens: float | None
+    cache_read_input_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
@@ -315,7 +320,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
+    input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
+    output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     output_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
@@ -1347,9 +1354,7 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: di
 class Message(SafeAttributeModel, OpenAIObject):
     content: str | None
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: (
-        list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
-    )  # mutable-ok: public pydantic response field; only the union member is new
+    tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
     function_call: FunctionCall | None
     audio: ChatCompletionAudioResponse | None = None
     images: list[ImageURLListItem] | None = None
@@ -1472,9 +1477,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         content: str | None
         role: str | None
         function_call: FunctionCall | None
-        tool_calls: (
-            list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
-        )  # mutable-ok: public pydantic response field; only the union member is new
+        tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
         audio: ChatCompletionAudioResponse | None
         images: list[ImageURLListItem] | None
         annotations: list[ChatCompletionAnnotation] | None
@@ -3025,6 +3028,7 @@ RoutingDecisionCause = Literal[
 
 InternalCallOrigin = Literal[
     "autorouter_classifier",
+    "autorouter_compaction",
     "shadow_eval_router",
     "shadow_eval_judge",
     "llm_as_a_judge_guardrail",
@@ -3248,6 +3252,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_budget_entity_id: str | None
     error_budget_limit: float | None
     error_budget_spend: float | None
+    normalized_error: ReadOnly[str | None]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -3636,6 +3641,8 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_api_key: str | None
     arize_space_key: str | None
     arize_space_id: str | None
+    arize_success_sampling_rate: ReadOnly[float | None]
+    arize_error_sampling_rate: ReadOnly[float | None]
 
     # PostHog dynamic params
     posthog_api_key: str | None
@@ -3714,6 +3721,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
+    cache_read_input_token_cost_batches: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_batches: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
     cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
@@ -3724,6 +3735,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_above_200k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_flex: float | None = None
+    input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
     input_cost_per_image: float | None = None
     input_cost_per_image_above_128k_tokens: float | None = None
@@ -3747,6 +3759,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_flex: float | None = None
+    output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
     output_cost_per_image_token: float | None = None
@@ -3847,7 +3860,7 @@ def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str
     )
 
 
-def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, ...]:
+def echoed_cost_map_pricing_fields(model_info: Mapping[str, object]) -> tuple[str, ...]:
     """Pricing fields a stored ``model_info`` blob copied from a ``/model/info`` response.
 
     Only ``litellm.get_model_info`` emits ``key`` (the resolved cost-map entry), so a stored
@@ -3878,7 +3891,7 @@ def echoed_cost_map_fields(
     )
 
 
-def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
+def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(
         sorted(
             frozenset(
@@ -3938,6 +3951,7 @@ all_litellm_params = (
     agentic_loop_internal_litellm_params
     + [TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD, *bedrock_batch_litellm_params]
     + [
+        "_context_compaction_state",
         "metadata",
         "litellm_metadata",
         "keepalive_seconds",
@@ -4025,6 +4039,7 @@ all_litellm_params = (
         "no-log",
         "base_model",
         "stream_timeout",
+        "stream_chunk_size",
         "supports_system_message",
         "region_name",
         "allowed_model_region",
@@ -4056,6 +4071,7 @@ all_litellm_params = (
         "litellm_credential_name",
         "allowed_openai_params",
         "litellm_session_id",
+        "provider_affinity_header",
         "use_litellm_proxy",
         "use_chat_completions_api",
         "rust",

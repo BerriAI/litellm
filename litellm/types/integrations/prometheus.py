@@ -664,6 +664,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_deployment_tpm_limit = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
@@ -770,6 +771,7 @@ class PrometheusMetricLabels:
 
     # Add deployment metrics
     litellm_deployment_failure_responses = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
@@ -786,6 +788,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_deployment_total_requests = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,

@@ -16,6 +16,7 @@ longer signal it.
 
 ### Added
 
+- **key**: Computed `server_metadata` attribute on `litellm_key` exposing every metadata entry the proxy stores, so metadata created outside Terraform is visible in state and drift on it shows on refresh, while `metadata` keeps tracking only the declared entries and updates keep preserving undeclared ones
 - **team_member_add**: `tpm_limit`, `rpm_limit`, `budget_duration`, and `allowed_models` attributes on `litellm_team_member_add`, applied to every member of the resource; `budget_duration` and `allowed_models` ride on `/team/member_add`, while the limits are sent through `/team/member_update`, which is where the proxy accepts them
 - **team**: Optional `team_id` argument on `litellm_team`, so teams can be created with a stable, human-readable ID instead of a provider-generated UUID; changing it forces replacement
 - `litellm_jwt_key_mapping` accepts `token_id` as an alternative to `key`, so a

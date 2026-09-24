@@ -75,6 +75,11 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.bug_report import (
+    allowlisted,
+    bug_report_notice,
+    should_report_bug,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
@@ -127,6 +132,8 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
+from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
@@ -304,6 +311,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.realtime_errors import (
+    close_after_upstream_handshake_refusal,
     realtime_error_event,
     websocket_close_reason,
 )
@@ -367,10 +375,12 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.batches_endpoints.endpoints import router as batches_router
+from litellm.proxy.bug_report_config import build_proxy_bug_report
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
+    KNOWN_PROXY_ROUTES,
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,
     _should_return_raw_model_name,
@@ -389,6 +399,7 @@ from litellm.proxy.common_utils.config_includes import resolve_include_file_path
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
+from litellm.proxy.common_utils.discoverable_model_filter import discoverable_rows, undiscoverable_model_names
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -411,6 +422,9 @@ from litellm.proxy.common_utils.model_deprecation import collect_model_deprecati
 from litellm.proxy.common_utils.model_listing_utils import (
     ClaudeCodeRoutingNames,
     TeamModelNameTranslator,
+    alias_listing_entries,
+    alias_target,
+    caller_alias_maps,
     claude_code_view_ids,
     configured_display_names,
     is_claude_code_client,
@@ -587,6 +601,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
     generate_key_helper_fn,
+    parse_key_alias_pattern,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
@@ -618,6 +633,9 @@ from litellm.proxy.management_endpoints.prompt_caching_requests import (
 )
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
+)
+from litellm.proxy.management_endpoints.session_endpoints import (
+    router as session_management_router,
 )
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
@@ -1491,23 +1509,29 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
-    model_info_scheduler: Final = scheduler if scheduler is not None else AsyncIOScheduler()
-    model_info_scheduler.add_job(
-        ProxyStartupEvent.refresh_model_info,
-        "interval",
-        seconds=MODEL_INFO_REFRESH_SECONDS,
-        id="refresh_model_info",
-        next_run_time=datetime.now(timezone.utc),
-        max_instances=1,
-        replace_existing=True,
+    model_info_refresh_disabled: Final = (
+        "disable_model_info_refresh" in general_settings and general_settings["disable_model_info_refresh"] is True
     )
-    if not model_info_scheduler.running:
-        model_info_scheduler.start()
+    model_info_scheduler: Final = (
+        None if model_info_refresh_disabled else scheduler if scheduler is not None else AsyncIOScheduler()
+    )
+    if model_info_scheduler is not None:
+        model_info_scheduler.add_job(
+            ProxyStartupEvent.refresh_model_info,
+            "interval",
+            seconds=MODEL_INFO_REFRESH_SECONDS,
+            id="refresh_model_info",
+            next_run_time=datetime.now(timezone.utc),
+            max_instances=1,
+            replace_existing=True,
+        )
+        if not model_info_scheduler.running:
+            model_info_scheduler.start()
 
     # End of startup event
     yield
 
-    if model_info_scheduler.running:
+    if model_info_scheduler is not None and model_info_scheduler.running:
         model_info_scheduler.remove_job("refresh_model_info")
         if model_info_scheduler is not scheduler:
             model_info_scheduler.shutdown(wait=False)
@@ -1968,7 +1992,21 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
+    if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(exc):
+        verbose_proxy_logger.warning("Database unavailable during request: %s", type(exc).__name__)
+        return await openai_exception_handler(
+            request=request, exc=PrismaDBExceptionHandler.service_unavailable_proxy_exception(exc)
+        )
     verbose_proxy_logger.exception("Unhandled exception in request: %s", type(exc).__name__)
+    if should_report_bug(exc):
+        verbose_proxy_logger.error(
+            bug_report_notice(
+                build_proxy_bug_report(
+                    exc,
+                    call_type=allowlisted(request.url.path, KNOWN_PROXY_ROUTES),
+                )
+            )
+        )
     _close_dangling_otel_server_span(request, 500, exc=exc)
     return JSONResponse(
         status_code=500,
@@ -4829,6 +4867,22 @@ def validate_deployment_complexity_router_placement(model: Mapping[str, object])
         raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
 
 
+def validate_deployment_access_windows(model: Mapping[str, object]) -> None:
+    """
+    Reject a malformed `model_info.access_windows` instead of silently dropping the deployment.
+
+    Checked here rather than on `ModelInfo` because the proxy builds its router with
+    `ignore_invalid_deployments=True`, so a rejection further down turns a bad
+    deployment into a silently missing model instead of a refusal to start.
+    """
+    model_info: Final = model.get("model_info")
+    if not isinstance(model_info, Mapping):
+        return
+    error: Final = access_windows_config_error(model_info, model_name=str(model.get("model_name", "")))
+    if error is not None:
+        raise ValueError(error)
+
+
 def validate_auto_router_capability_limits(model_list: Sequence[Mapping[str, object]], *, limit: int | None) -> None:
     """
     Refuse to start when config.yaml defines more auto-routers claiming a licensed capability than allowed.
@@ -5026,6 +5080,7 @@ class ProxyConfig:
 
     def __init__(self) -> None:
         self.config: Mapping[str, object] = MappingProxyType({})
+        self.auto_router_db_catalog: tuple[AutoRouterCatalogEntry, ...] | None = None
         self._last_semantic_filter_config: dict[str, object] | None = None
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
@@ -5214,9 +5269,7 @@ class ProxyConfig:
             return
 
         with open(f"{user_config_file_path}", "w") as config_file:
-            yaml.dump(
-                dict(new_config), config_file, default_flow_style=False
-            )  # mutable-ok: YAML must serialize a plain dict
+            yaml.dump(dict(new_config), config_file, default_flow_style=False)
 
     async def _save_changed_config_section(
         self,
@@ -6225,6 +6278,8 @@ class ProxyConfig:
                         litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(**value)
                     else:
                         raise Exception(f"Invalid value set for upperbound_key_generate_params - value={value}")
+                elif key == "key_alias_pattern":
+                    litellm.key_alias_pattern = parse_key_alias_pattern(value)
                 elif key == "json_logs" and value is True:
                     litellm.json_logs = True
                     litellm._turn_on_json()
@@ -6295,10 +6350,12 @@ class ProxyConfig:
 
             ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
             use_google_kms: Final = general_settings.get("use_google_kms", False)
-            load_google_kms(use_google_kms=use_google_kms)
+            if use_google_kms:
+                self.initialize_secret_manager(KeyManagementSystem.GOOGLE_KMS.value)
             ### [DEPRECATED] LOAD FROM AZURE KEY VAULT ### old way of loading from azure secret manager
             use_azure_key_vault: Final = general_settings.get("use_azure_key_vault", False)
-            load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
+            if use_azure_key_vault is not False:
+                self.initialize_secret_manager(KeyManagementSystem.AZURE_KEY_VAULT.value)
             ### ALERTING ###
             self._load_alerting_settings(general_settings=general_settings)
             ### PLUGINS ###
@@ -6529,6 +6586,7 @@ class ProxyConfig:
                         model["litellm_params"][k] = get_secret(v)
                 validate_deployment_max_agentic_loops(model)
                 validate_deployment_complexity_router_placement(model)
+                validate_deployment_access_windows(model)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
@@ -6798,6 +6856,7 @@ class ProxyConfig:
         """
         Initialize the relevant secret manager if `key_management_system` is provided
         """
+        previous_client: Final[object] = litellm.secret_manager_client
         if key_management_system is not None:
             if key_management_system == KeyManagementSystem.AZURE_KEY_VAULT.value:
                 ### LOAD FROM AZURE KEY VAULT ###
@@ -6845,6 +6904,11 @@ class ProxyConfig:
                 load_custom_secret_manager(config_file_path=config_file_path)
             else:
                 raise ValueError("Invalid Key Management System selected")
+
+            from litellm.rust_bridge.secret_manager import capture_secret_manager
+
+            if litellm.secret_manager_client is not previous_client:
+                capture_secret_manager(litellm.secret_manager_client, key_management_system)
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """
@@ -7646,6 +7710,12 @@ class ProxyConfig:
     def _should_load_db_object(self, object_type: str | SupportedDBObjectType) -> bool:
         return should_load_db_object(object_type=object_type)
 
+    def remove_auto_router_catalog_entries(self, model_ids: frozenset[str]) -> None:
+        if self.auto_router_db_catalog is not None:
+            self.auto_router_db_catalog = tuple(
+                row for row in self.auto_router_db_catalog if row.model_id not in model_ids
+            )
+
     async def _get_models_from_db(self, prisma_client: PrismaClient) -> Sequence[_ProxyModelRow] | None:
         """
         Fetch all model deployments from the DB.
@@ -7666,6 +7736,7 @@ class ProxyConfig:
             new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(
                 WriterPinnedClient(prisma_client.db)
             ).table.find_many()
+            self.auto_router_db_catalog = build_auto_router_catalog(new_models)
             return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -8633,9 +8704,9 @@ class ProxyConfig:
 
     @staticmethod
     def _merge_config_and_db_search_tools(
-        config_search_tools: list[SearchToolTypedDict],
-        db_search_tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+        config_search_tools: Sequence[SearchToolTypedDict],
+        db_search_tools: Sequence[dict[str, object]],
+    ) -> list[dict[str, object]]:
         db_tool_names: Final = {tool.get("search_tool_name") for tool in db_search_tools}
         return [
             *[
@@ -9206,10 +9277,10 @@ _EMPTY_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 async def _iter_with_keepalive(
-    aiter: AsyncIterator[Any],
+    aiter: AsyncIterator[object],
     resolve_keepalive_seconds: Callable[[object], float],
     keepalive_seconds: float,
-) -> AsyncGenerator[Any, None]:
+) -> AsyncGenerator[object, None]:
     """Wrap `aiter` with idle-gap heartbeats, re-resolving the interval after each
     real chunk via `resolve_keepalive_seconds`. A mid-stream router fallback can
     swap in a deployment with a different keepalive policy, including one that
@@ -9220,7 +9291,7 @@ async def _iter_with_keepalive(
     actually produced it, in both directions. While the interval is <= 0, no
     task is created and no timeout is awaited: a chunk is forwarded the moment
     it arrives, at the same cost as a bare `async for`."""
-    pending: asyncio.Task[Any] | None = None  # rebind-ok: rebound each loop iteration
+    pending: asyncio.Task[object] | None = None  # rebind-ok: rebound each loop iteration
     current_keepalive_seconds = keepalive_seconds  # rebind-ok: re-resolved after each chunk
     try:
         while True:
@@ -10072,7 +10143,7 @@ class ProxyStartupEvent:
                         str(identity): str(fingerprint)
                         for identity, fingerprint in (decoded.items() if isinstance(decoded, Mapping) else ())
                     }
-                )  # mutable-ok: MappingProxyType owns the completed immutable baseline
+                )
             snapshot: Final = snapshot_tuning_baselines(deployments)
             try:
                 await config_table.create(
@@ -10098,7 +10169,7 @@ class ProxyStartupEvent:
                             competing_decoded.items() if isinstance(competing_decoded, Mapping) else ()
                         )
                     }
-                )  # mutable-ok: MappingProxyType owns the completed immutable baseline
+                )
         except Exception as e:  # noqa: BLE001  # enforcement is skipped for this boot; refusing every tuned router on a DB blip is the one outcome the gate forbids
             verbose_proxy_logger.warning("Heuristic-v1 tuning baseline unavailable, gate not enforced this boot: %s", e)
             return None
@@ -10134,7 +10205,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
-        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor  # rebind-ok: startup publishes the one read-only baseline snapshot
+        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
@@ -11108,14 +11179,13 @@ async def model_list(
     view_aliases: Final = (
         view_router_settings.get("model_group_alias") if isinstance(view_router_settings, Mapping) else None
     )
+    caller_aliases: Final = caller_alias_maps(
+        user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+    )
     routing_names: Final = ClaudeCodeRoutingNames(
         llm_router,
         team_id or user_api_key_dict.team_id,
-        (
-            user_api_key_dict.aliases,
-            user_api_key_dict.team_model_aliases,
-            view_aliases,
-        ),
+        (*caller_aliases.rewrite, view_aliases),
     )
 
     # Validate scope parameter if provided
@@ -11178,9 +11248,11 @@ async def model_list(
             only_model_access_groups=only_model_access_groups or False,
         )
 
-        # Hide paused/unhealthy models from the public listing
-        if hidden_names:
-            all_models = [m for m in all_models if m not in hidden_names]
+        expanded_undiscoverable_names: Final = undiscoverable_model_names(
+            all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+        )
+        if hidden_names or expanded_undiscoverable_names:
+            all_models = [m for m in all_models if m not in hidden_names and m not in expanded_undiscoverable_names]
 
         # Surface the public team name by default; legacy internal keys via flag.
         # The internal routing key drives the metadata/fallback lookup, while the
@@ -11231,15 +11303,19 @@ async def model_list(
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Hide paused/unhealthy models from the public listing
-    if hidden_names:
-        all_models = [m for m in all_models if m not in hidden_names]
+    undiscoverable_names: Final = undiscoverable_model_names(
+        all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+    )
+    if hidden_names or undiscoverable_names:
+        all_models = [m for m in all_models if m not in hidden_names and m not in undiscoverable_names]
 
     # Surface the public team name by default; legacy internal keys via flag.
     # The internal routing key drives the metadata/fallback lookup, while the
     # public name is what the client sees as the model id.
     model_data = []
-    entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+    entries: Final = alias_listing_entries(
+        TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), caller_aliases
+    )
     for response_id, lookup_id in entries:
         model_info = create_model_info_response(
             model_id=lookup_id,
@@ -11323,7 +11399,8 @@ async def model_info(
     )
 
     # Mirror /v1/models' visibility filter so first-occurrence resolution
-    # cannot land on a deployment the listing had hidden.
+    # cannot land on a deployment the listing had hidden. Undiscoverable
+    # models stay retrievable by id, they only drop out of the alias guard.
     blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
     unhealthy_names: Final = await get_hidden_unhealthy_model_names(
         healthy_only=healthy_only,
@@ -11333,10 +11410,25 @@ async def model_info(
     hidden_names: Final = blocked_names | unhealthy_names
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
+    undiscoverable_names: Final = undiscoverable_model_names(
+        all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+    )
 
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
+    aliased_model_id: Final = alias_target(
+        model_id,
+        caller_alias_maps(
+            user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+        ),
+        frozenset(
+            response_id
+            for response_id, _ in TeamModelNameTranslator.listing_entries(
+                tuple(m for m in all_models if m not in undiscoverable_names), llm_router, settings
+            )
+        ),
+    )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
-        model_id=model_id,
+        model_id=aliased_model_id or model_id,
         available_models=all_models,
         llm_router=llm_router,
         general_settings=settings,
@@ -11366,7 +11458,8 @@ async def model_info(
         fallback_type=None,
         llm_router=llm_router,
     )
-    return {**response, "id": internal_to_public.get(resolved_model_id, model_id)}  # mutable-ok: response id differs
+    response_id: Final = model_id if aliased_model_id else internal_to_public.get(resolved_model_id, model_id)
+    return {**response, "id": response_id}  # mutable-ok: response id differs
 
 
 def _blocked_response_usage(original_response: object | None) -> "litellm.Usage":
@@ -12490,9 +12583,9 @@ async def realtime_websocket_endpoint(
             user_model=user_model,
         )
         await llm_call
-    except websockets.exceptions.InvalidStatusCode as e:
+    except websockets.exceptions.InvalidStatus as e:
         verbose_proxy_logger.exception("Invalid status code")
-        await websocket.close(code=e.status_code, reason="Invalid status code")
+        await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
     except Exception as e:
         verbose_proxy_logger.exception("Internal server error")
         redacted_error: Final = _redact_string(str(e))
@@ -15730,7 +15823,10 @@ async def model_info_v1(
         general_settings=general_settings,
         llm_router=llm_router,
     )
-    visible_models: Final = [model for model in all_models if model.get("model_name") not in hidden_names]
+    visible_models: Final = discoverable_rows(
+        (model for model in all_models if model.get("model_name") not in hidden_names),
+        user_api_key_dict,
+    )
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
     return _model_info_json_response(visible_models)
@@ -16009,8 +16105,13 @@ async def model_group_info(
             user_api_key_cache=user_api_key_cache,
         )
     )
+    undiscoverable_group_names: Final = undiscoverable_model_names(
+        all_models_str, llm_router, user_api_key_dict, user_api_key_dict.team_id
+    )
     model_groups: list[ModelGroupInfoProxy] = _get_model_group_info(
-        llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
+        llm_router=llm_router,
+        all_models_str=[name for name in all_models_str if name not in undiscoverable_group_names],
+        model_group=model_group,
     )
 
     # Append A2A agents to model groups
@@ -16957,6 +17058,19 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
 
     if user_obj and hasattr(user_obj, "__dict__"):
         user_obj.__dict__.pop("password", None)
+
+    # The password just changed via an invitation/reset link; any UI session
+    # minted under the old password may be in hostile hands. Revoke them all —
+    # the caller holds only the short-lived onboarding JWT, and the fresh
+    # session key is minted below, after this sweep.
+    from litellm.proxy.management_endpoints.session_endpoints import (
+        revoke_ui_session_keys,
+    )
+
+    await revoke_ui_session_keys(
+        user_id=invite_obj.user_id,
+        user_api_key_dict=UserAPIKeyAuth(user_id=invite_obj.user_id),
+    )
 
     try:
         jwt_token: Final = await _generate_onboarding_ui_session_token(user_obj=user_obj)
@@ -19377,6 +19491,7 @@ app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(password_management_router)
+app.include_router(session_management_router)
 app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(organization_router)

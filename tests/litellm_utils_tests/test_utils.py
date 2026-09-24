@@ -263,7 +263,7 @@ def test_trimming_should_not_change_original_messages():
     assert messages == messages_copy
 
 
-@pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-sonnet-4-6"])
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "claude-sonnet-4-6"])
 def test_trimming_with_model_cost_max_input_tokens(model):
     messages = [
         {"role": "system", "content": "This is a normal system message"},

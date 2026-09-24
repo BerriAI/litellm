@@ -653,6 +653,10 @@ def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
         "/mcp-rest/tools/call",
         "/mcp/tools/list",
         "/token",
+        "/mcp/sse",
+        "/mcp/sse/",
+        "/mcp/sse/messages",
+        "/mcp/sse/messages/",
     ],
 )
 def test_mcp_inference_routes_classified_as_llm_api(route):
@@ -4310,3 +4314,26 @@ def test_project_delete_route_stays_proxy_admin_only():
             valid_token=valid_token,
             request_data={},
         )
+
+
+@pytest.mark.parametrize("route", ("/mcp/sse", "/mcp/sse/", "/mcp/sse/messages", "/mcp/sse/messages/"))
+@pytest.mark.parametrize("route_group", ("mcp_routes", "llm_api_routes", "openai_routes"))
+def test_legacy_sse_respects_virtual_key_route_permissions(route: str, route_group: str) -> None:
+    token: Final = UserAPIKeyAuth(
+        user_id="sse-caller", user_role=LitellmUserRoles.INTERNAL_USER, allowed_routes=[route_group]
+    )
+    request: Final = Request({"type": "http", "method": "POST" if "messages" in route else "GET", "path": route})
+    if route_group == "openai_routes":
+        with pytest.raises(HTTPException) as caught:
+            RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=token, request=request)
+        assert caught.value.status_code == 403
+        return
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=LitellmUserRoles.INTERNAL_USER,
+        route=route,
+        request=request,
+        valid_token=token,
+        request_data={},
+    )
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=token, request=request)

@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
@@ -88,6 +89,16 @@ def mock_auth():
     app.dependency_overrides[user_api_key_auth] = mock_user_api_key_auth
     yield
     app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.fixture(autouse=True)
+def fresh_settings_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.config_resolvers.settings_store import SettingsStore
+
+    store: Final = SettingsStore("general_settings")
+    monkeypatch.setattr(proxy_server.proxy_config, "settings", store)
+    monkeypatch.setattr(proxy_server, "general_settings", store)
 
 
 class TestProxySettingEndpoints:
@@ -3670,6 +3681,91 @@ class TestPtuCostAttributionUISetting:
         assert not mock_prisma.db.litellm_uisettings.upsert.called
 
 
+class TestApplyUserBudgetToTeamKeysUISetting:
+    """``apply_user_budget_to_team_keys`` mirrors general_settings on every GET.
+
+    The proxy enforces the key owner's user budget on team keys only when
+    ``general_settings.apply_user_budget_to_team_keys`` is on, so the dashboard
+    shows the owner's budget gate on a team key iff this derived value is true.
+    Like the other derived settings it is read-only and never persisted.
+    """
+
+    @staticmethod
+    def _mock_prisma(monkeypatch, stored=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        mock_record = None
+        if stored is not None:
+            mock_record = MagicMock()
+            mock_record.ui_settings = stored
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=mock_record)
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        return mock_prisma
+
+    def test_reported_false_when_general_settings_lacks_the_flag(self, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["apply_user_budget_to_team_keys"] is False
+
+    def test_reported_true_when_general_settings_enables_the_flag(self, mock_auth, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"apply_user_budget_to_team_keys": True},
+        )
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["apply_user_budget_to_team_keys"] is True
+
+    def test_non_json_values_elsewhere_in_general_settings_do_not_break_get(self, mock_auth, monkeypatch):
+        """general_settings holds non-JSON values at runtime (e.g. RoleBasedPermissions
+        instances under "role_permissions"); only the flag itself may be inspected."""
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"role_permissions": [object()], "apply_user_budget_to_team_keys": True},
+        )
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["apply_user_budget_to_team_keys"] is True
+
+    def test_reads_only_the_flag_key(self):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            _apply_user_budget_to_team_keys_enabled,
+        )
+
+        assert _apply_user_budget_to_team_keys_enabled({"apply_user_budget_to_team_keys": True}) is True
+        assert _apply_user_budget_to_team_keys_enabled({}) is False
+        assert _apply_user_budget_to_team_keys_enabled({"apply_user_budget_to_team_keys": "true"}) is False
+
+    def test_a_persisted_true_cannot_forge_the_derived_value(self, mock_auth, monkeypatch):
+        """A row written before the allowlist existed must not be able to turn the feature on."""
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        self._mock_prisma(monkeypatch, stored={"apply_user_budget_to_team_keys": True})
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["apply_user_budget_to_team_keys"] is False
+
+    def test_is_not_an_allowlisted_persisted_setting(self):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            ALLOWED_UI_SETTINGS_FIELDS,
+        )
+
+        assert "apply_user_budget_to_team_keys" not in ALLOWED_UI_SETTINGS_FIELDS
+
+
 class TestTeamAdminEditableTeamFieldsSetting:
     """team_admin_editable_team_fields: the proxy-wide allow-list update_team applies to team admins."""
 
@@ -3796,6 +3892,31 @@ class TestTeamAdminEditableTeamFieldsSetting:
         assert "tpm_limit" in field_schema["items"]["enum"]
         assert "projects" in field_schema["items"]["enum"]
 
+    @pytest.mark.parametrize(("stored", "patched"), [(["tpm_limit"], []), (["rpm_limit"], ["max_budget"])])
+    def test_get_reports_its_own_db_row_whatever_an_earlier_test_patched(self, monkeypatch, stored, patched):
+        """A booted proxy keeps its runtime settings in one shared store. Each case PATCHes a list into
+        that store, so whichever case ran second used to read the other's list instead of its own DB row."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy import proxy_server
+
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        mock_db_record = MagicMock()
+        mock_db_record.ui_settings = {"team_admin_editable_team_fields": stored}
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+        try:
+            fetched = client.get("/get/ui_settings")
+            proxy_server._bind_general_settings_store(proxy_server.proxy_config.settings)
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": patched})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert fetched.json()["values"]["team_admin_editable_team_fields"] == stored
+        assert response.status_code == 200
+        assert proxy_server.general_settings["team_admin_editable_team_fields"] == patched
+
 
 class TestSyncUiSettingsToGeneralSettings:
     """The DB re-read each pod runs on startup and on every config reload."""
@@ -3877,6 +3998,32 @@ class TestSyncUiSettingsToGeneralSettings:
         assert general_settings["forward_client_headers_to_llm_api"] is True
         assert general_settings.source("forward_client_headers_to_llm_api") == "db"
 
+    def test_every_runtime_flag_reaches_a_reader_once_applied(self, monkeypatch):
+        """A flag the settings rules do not route to the ui_settings row is stored but never read back."""
+        from litellm.proxy import proxy_server
+        from litellm.proxy.config_resolvers import SettingsStore
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
+            _RUNTIME_GENERAL_SETTINGS_FLAGS,
+            apply_runtime_general_settings_flags,
+        )
+
+        general_settings = SettingsStore("general_settings")
+        general_settings.load_yaml({})
+        monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+
+        stored = {
+            key: (["tpm_limit"] if key == TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING else True)
+            for key in _RUNTIME_GENERAL_SETTINGS_FLAGS
+        }
+        assert stored
+
+        apply_runtime_general_settings_flags(stored)
+
+        read_back = {key: general_settings.get(key) for key in stored}
+
+        assert read_back == stored
+
     def test_applied_runtime_flags_cannot_override_the_config_file(self, monkeypatch):
         from litellm.proxy import proxy_server
         from litellm.proxy.config_resolvers import SettingsStore
@@ -3890,3 +4037,4 @@ class TestSyncUiSettingsToGeneralSettings:
 
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
+

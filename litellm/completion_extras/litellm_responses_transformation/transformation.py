@@ -6,7 +6,7 @@ import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
 
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response
@@ -38,7 +38,6 @@ from litellm.responses.sse_output_recovery import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils, normalize_responses_api_stream_options
 from litellm.types.llms.openai import (
-    REASONING_EFFORT,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionToolCallChunk,
@@ -192,8 +191,6 @@ def _as_chat_reasoning_items(
 ) -> list[ChatCompletionReasoningItem] | None:
     if not reasoning_items:
         return None
-    # cast-ok: _BuiltReasoningItem is the structural shape ChatCompletionReasoningItem
-    # describes, and TypedDict invariance is what stops the two from unifying here.
     return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
 
 
@@ -1180,10 +1177,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def _map_reasoning_effort(self, reasoning_effort: str | Reasoning) -> Reasoning | None:
+    def _map_reasoning_effort(self, reasoning_effort: object) -> Reasoning:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
-            return Reasoning(**reasoning_effort)
+            return Reasoning(
+                **cast(Reasoning, reasoning_effort)  # cast-ok: dict is forwarded verbatim to the provider
+            )
 
         # Check if auto-summary is enabled via flag or environment variable
         # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
@@ -1191,13 +1190,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
         )
 
-        if reasoning_effort in get_args(REASONING_EFFORT):
-            return (
-                Reasoning(effort=reasoning_effort, summary="detailed")
-                if auto_summary_enabled
-                else Reasoning(effort=reasoning_effort)
-            )
-        return None
+        return (
+            Reasoning(effort=reasoning_effort, summary="detailed")
+            if auto_summary_enabled
+            else Reasoning(effort=reasoning_effort)
+        )
 
     def _add_web_search_tool(
         self,
@@ -1371,7 +1368,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if tool_call_index_map is None:
             return output_index
         if output_index not in tool_call_index_map:
-            tool_call_index_map[output_index] = len(tool_call_index_map)  # mutable-ok: per-stream accumulator state
+            tool_call_index_map[output_index] = len(tool_call_index_map)
         return tool_call_index_map[output_index]
 
     @staticmethod

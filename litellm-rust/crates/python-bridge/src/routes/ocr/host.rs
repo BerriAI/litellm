@@ -131,7 +131,7 @@ impl RouteHost for OcrRouteHost {
 
     fn classify(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
         if let Error::Secret(source) = &error
-            && let Some(original) = crate::secrets::callback::python_error(py, source)
+            && let Some(original) = crate::secrets::python_error(py, source)
         {
             return Ok(original);
         }

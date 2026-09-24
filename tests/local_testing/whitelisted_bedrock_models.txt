@@ -139,3 +139,4 @@ bedrock/ap-southeast-2/qwen.qwen3-next-80b-a3b
 bedrock/eu-west-1/qwen.qwen3-next-80b-a3b
 bedrock/eu-west-2/qwen.qwen3-next-80b-a3b
 bedrock/sa-east-1/qwen.qwen3-next-80b-a3b
+bedrock/eu-west-2/nvidia.nemotron-super-3-120b

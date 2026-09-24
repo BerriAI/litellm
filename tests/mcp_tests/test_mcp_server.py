@@ -456,9 +456,15 @@ async def test_sse_mcp_handler_mock():
     """Test the SSE MCP handler functionality"""
     from litellm.proxy._types import UserAPIKeyAuth
 
-    # Mock the SSE session manager and its methods
-    mock_sse_session_manager = AsyncMock()
-    mock_sse_session_manager.handle_request = AsyncMock()
+    read_stream, write_stream = MagicMock(), MagicMock()
+
+    @asynccontextmanager
+    async def connect_sse(scope, receive, send):
+        yield read_stream, write_stream
+
+    mock_sse = MagicMock()
+    mock_sse.connect_sse.side_effect = connect_sse
+    run = AsyncMock()
 
     # Mock scope, receive, send with proper ASGI scope format
     mock_scope = {
@@ -483,13 +489,14 @@ async def test_sse_mcp_handler_mock():
     )
 
     with (
+        patch("litellm.proxy._experimental.mcp_server.server.server.run", run),
         patch(
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.sse_session_manager",
-            mock_sse_session_manager,
+            "litellm.proxy._experimental.mcp_server.server.sse",
+            mock_sse,
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
@@ -504,10 +511,8 @@ async def test_sse_mcp_handler_mock():
         # Call the handler
         await handle_sse_mcp(mock_scope, mock_receive, mock_send)
 
-        # Verify SSE session manager handle_request was called
-        mock_sse_session_manager.handle_request.assert_called_once_with(
-            mock_scope, mock_receive, mock_send
-        )
+        assert run.await_args.args[:2] == (read_stream, write_stream)
+        assert mock_sse.connect_sse.call_args.args[0]["path"] == "/mcp/sse"
 
 
 @pytest.mark.asyncio
@@ -545,7 +550,10 @@ async def test_sse_mcp_handler_propagates_passthrough_401():
             True,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.sse_session_manager",
+            "litellm.proxy._experimental.mcp_server.server.sse",
+        ) as transport,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.server.run",
             AsyncMock(),
         ),
         patch(
@@ -569,6 +577,7 @@ async def test_sse_mcp_handler_propagates_passthrough_401():
         with pytest.raises(HTTPException) as excinfo:
             await handle_sse_mcp(mock_scope, mock_receive, mock_send)
 
+    transport.connect_sse.assert_not_called()
     assert excinfo.value.status_code == 401
     assert excinfo.value.headers and "WWW-Authenticate" in excinfo.value.headers
 
@@ -2953,7 +2962,7 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
         mcp_info={"server_name": "test_server"},
     )
 
-    expected_response = [TextContent(type="text", text="ok")]
+    expected_response = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
 
     with (
         patch.object(
@@ -3029,7 +3038,7 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
         mcp_info={"server_name": "test_server"},
     )
 
-    expected_response = [TextContent(type="text", text="ok")]
+    expected_response = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
 
     with (
         patch.object(

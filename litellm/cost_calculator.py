@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_service_tier_cost_key,
     calculate_cost_component,
     generic_cost_per_token,
+    get_batch_cost_rates,
     get_billable_input_tokens,
     get_token_type_cost_breakdown,
     parse_prompt_tokens_details,
@@ -1531,6 +1532,7 @@ def completion_cost(
                         size=size,
                         optional_params=optional_params,
                         call_type=call_type,
+                        model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -2010,17 +2012,13 @@ def _deployment_model_info(
 ) -> ModelInfo | None:
     if not custom_pricing:
         return None
-    registered_deployment_info: Final = (
-        _cost_map_model_info(router_model_id, None)
-        if router_model_id is not None and router_model_id in litellm.model_cost
-        else None
-    )
+    registered_deployment_info: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
     if registered_deployment_info is not None:
-        return registered_deployment_info
+        return cast(ModelInfo, registered_deployment_info)  # cast-ok: router registers deployment prices under its id
     if litellm_logging_obj is None:
         return None
-    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
-    if litellm_params is None:
+    litellm_params: Final = litellm_logging_obj.litellm_params
+    if not litellm_params:
         return None
     return next(
         (
@@ -2038,7 +2036,9 @@ def _ocr_model_info(
     router_model_id: str | None,
 ) -> OCRPricing | None:
     deployment_info: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
-    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None) if custom_pricing else None
+    litellm_params: Final = (
+        litellm_logging_obj.litellm_params if custom_pricing and litellm_logging_obj is not None else None
+    )
     if litellm_params is None:
         return deployment_info
     return _layered_ocr_pricing(litellm_params, deployment_info)
@@ -2084,8 +2084,7 @@ def pricing_entry_for_cost_calc(
     deployment_entry: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
     deployment_key: Final = router_model_id or model
     if deployment_entry is not None and deployment_key is not None:
-        registered_entry: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
-        return deployment_key, registered_entry or deployment_entry
+        return deployment_key, deployment_entry
     selected_model: Final = _select_model_name_for_cost_calc(
         model=model,
         completion_response=completion_response,
@@ -2345,6 +2344,7 @@ def default_image_cost_calculator(
     n: int | None = 1,  # Default to 1 image
     size: str | None = "1024-x-1024",  # OpenAI default
     optional_params: dict | None = None,
+    model_info: ModelInfo | None = None,
 ) -> float:
     """
     Default image cost calculator for image generation
@@ -2355,6 +2355,7 @@ def default_image_cost_calculator(
         quality (Optional[str]): Image quality setting
         n (Optional[int]): Number of images generated
         size (Optional[str]): Image size (e.g. "1024x1024" or "1024-x-1024")
+        model_info (Optional[ModelInfo]): The deployment's own prices, consulted before the cost map
 
     Returns:
         float: Cost in USD for the image generation
@@ -2376,6 +2377,11 @@ def default_image_cost_calculator(
         model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
         base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
     model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
+    provider_first_model_name_with_quality: Final = (
+        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
+        if quality and custom_llm_provider
+        else None
+    )
 
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
@@ -2385,32 +2391,42 @@ def default_image_cost_calculator(
     model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
     model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
 
-    # Try model with quality first, fall back to base model name
-    cost_info: dict | None = None
-    models_to_check: Final[list[str | None]] = [
+    models_to_check: Final = (
         model_name_with_quality,
+        provider_first_model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
         model_with_quality_without_provider,
         model_without_provider,
         model,
         model_name_without_custom_llm_provider,
-    ]
-    for _model in models_to_check:
-        if _model is not None and _model in litellm.model_cost:
-            cost_info = litellm.model_cost[_model]
-            break
-    if cost_info is None:
+    )
+    matched_model: Final = next(
+        (_model for _model in models_to_check if _model is not None and _model in litellm.model_cost), None
+    )
+    if matched_model is None and model_info is None:
         raise Exception(f"Model not found in cost map. Tried checking {models_to_check}")
 
-    # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
-    if "input_cost_per_image" in cost_info and cost_info["input_cost_per_image"] is not None:
-        return cost_info["input_cost_per_image"] * n
-    # Priority 2: Fall back to per-pixel pricing for backward compatibility
-    elif "input_cost_per_pixel" in cost_info and cost_info["input_cost_per_pixel"] is not None:
-        return cost_info["input_cost_per_pixel"] * height * width * n
-    else:
+    shared_cost_info: Final = litellm.model_cost[matched_model] if matched_model is not None else None
+    price_tables: Final = tuple(table for table in (model_info, shared_cost_info) if table is not None)
+    image_count: Final = n if n is not None else 1
+    unit_counts: Final = (
+        ("input_cost_per_image", image_count),
+        ("output_cost_per_image", image_count),
+        ("input_cost_per_pixel", height * width * image_count),
+    )
+    cost: Final = next(
+        (
+            price * units
+            for price_table in price_tables
+            for cost_key, units in unit_counts
+            if (price := price_table.get(cost_key)) is not None
+        ),
+        None,
+    )
+    if cost is None:
         raise Exception(f"No pricing information found for model {model}. Tried checking {models_to_check}")
+    return cost
 
 
 def default_video_cost_calculator(
@@ -2557,35 +2573,14 @@ def batch_cost_calculator(
     if not model_info:
         return 0.0, 0.0
 
-    input_cost_per_token_batches: Final = model_info.get("input_cost_per_token_batches")
+    batch_rates: Final = get_batch_cost_rates(model_info, usage, custom_llm_provider)
     input_cost_per_token: Final = model_info.get("input_cost_per_token")
-    output_cost_per_token_batches: Final = model_info.get("output_cost_per_token_batches")
     output_cost_per_token: Final = model_info.get("output_cost_per_token")
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
-    if input_cost_per_token_batches is not None:
-        batch_details: Final = parse_prompt_tokens_details(usage)
-        audio_tokens, image_tokens, video_tokens = (
-            batch_details["audio_tokens"],
-            batch_details["image_tokens"],
-            batch_details["video_tokens"],
-        )
-        modality_rates: Final = (
-            _batch_rate(model_info, "input_cost_per_audio_token_batches", input_cost_per_token_batches),
-            _batch_rate(model_info, "input_cost_per_image_token_batches", input_cost_per_token_batches),
-            _batch_rate(model_info, "input_cost_per_video_token_batches", input_cost_per_token_batches),
-        )
-        total_prompt_cost = sum(
-            tokens * rate
-            for tokens, rate in zip(
-                (
-                    max((usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens, 0),
-                    audio_tokens,
-                    image_tokens,
-                    video_tokens,
-                ),
-                (input_cost_per_token_batches, *modality_rates),
-            )
+    if batch_rates.input is not None:
+        total_prompt_cost = _batch_prompt_cost(
+            usage, model_info, batch_rates.input, batch_rates.cache_read, batch_rates.cache_creation
         )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
@@ -2605,8 +2600,8 @@ def batch_cost_calculator(
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
-    if output_cost_per_token_batches is not None:
-        total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
+    if batch_rates.output is not None:
+        total_completion_cost = usage.completion_tokens * batch_rates.output
     elif output_cost_per_token:
         total_completion_cost = (
             usage.completion_tokens * (output_cost_per_token) / 2
@@ -2618,6 +2613,34 @@ def batch_cost_calculator(
         total_completion_cost *= uplift
 
     return total_prompt_cost, total_completion_cost
+
+
+def _batch_prompt_cost(
+    usage: Usage,
+    model_info: ModelInfo,
+    input_rate: float,
+    cache_read_rate: float | None,
+    cache_creation_rate: float | None,
+) -> float:
+    details: Final = parse_prompt_tokens_details(usage)
+    cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
+    written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
+    audio_tokens, image_tokens, video_tokens = (
+        details["audio_tokens"],
+        details["image_tokens"],
+        details["video_tokens"],
+    )
+    text_tokens: Final = max(
+        (usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens - cached_tokens - written_tokens, 0
+    )
+    return (
+        text_tokens * input_rate
+        + audio_tokens * _batch_rate(model_info, "input_cost_per_audio_token_batches", input_rate)
+        + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
+        + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
+        + cached_tokens * (cache_read_rate or 0.0)
+        + written_tokens * (cache_creation_rate or 0.0)
+    )
 
 
 def _attribute_value(obj: object, name: str) -> object:

@@ -118,6 +118,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
     resolve_model_budget,
@@ -126,6 +127,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
 )
 from litellm.proxy.management_endpoints.common_utils import (
+    _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
     _is_user_team_admin,
@@ -1415,7 +1417,7 @@ async def new_team(
     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
-    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
@@ -1637,6 +1639,12 @@ async def new_team(
                 data.members_with_roles.append(Member(role="admin", user_id=user_api_key_dict.user_id))
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
+        _check_disable_global_guardrails_caller_permission(
+            data.disable_global_guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            user_api_key_dict,
+            entity="team",
+        )
 
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
@@ -2171,7 +2179,7 @@ async def update_team(
     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
-    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
@@ -2312,6 +2320,13 @@ async def update_team(
         )
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
+        _check_disable_global_guardrails_caller_permission(
+            data.disable_global_guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            user_api_key_dict,
+            entity="team",
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+        )
 
         if data.soft_budget is not None:
             max_budget_to_check = data.max_budget if data.max_budget is not None else existing_team_row.max_budget
@@ -2995,7 +3010,7 @@ async def _update_team_members_list(
     # extend() consumes the generator as it appends, so a member already added by this
     # same call is seen by the next _member_already_in_team check - the batch dedupes
     # against itself exactly as the append-one-at-a-time loop this replaced did.
-    complete_team_data.members_with_roles.extend(  # rebind-ok: this helper's contract is to grow the caller's roster in place
+    complete_team_data.members_with_roles.extend(
         m for m in resolved_members if not _member_already_in_team(m, complete_team_data)
     )
 
@@ -3751,6 +3766,13 @@ async def _team_member_delete(
                 }
             )
 
+    if keys_to_delete:
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=keys_to_delete,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
     await delete_cache_team_object(
         team_id=data.team_id,
         team_alias=existing_team_row.team_alias,
@@ -4129,9 +4151,7 @@ async def reset_team_member_budget_fn(
 
     team_default_budget_id: Final = await _existing_team_default_budget_id(team_obj, prisma_client)
     budget_link: Final = (
-        {
-            "connect": {"budget_id": team_default_budget_id}
-        }  # mutable-ok: prisma client requires a plain dict data= argument
+        {"connect": {"budget_id": team_default_budget_id}}
         if team_default_budget_id is not None
         else {"disconnect": True}  # mutable-ok: same prisma data= argument
     )
@@ -4468,6 +4488,13 @@ async def delete_team(
         )
 
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
+
+    if keys_to_delete:
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=keys_to_delete,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
 
     await _invalidate_deleted_key_cache(
         keys=keys_to_delete,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
-import { buildModelAvailability } from "@/lib/autorouter_presets";
+import { buildModelAvailability, deploymentRefsFromModelInfo } from "@/lib/autorouter_presets";
 import { buildAutomaticRouterConfig, buildPreferredTierModels, type PreferredTierModels } from "./auto_setup";
 
 const models = (...names: string[]) => names.map((model_group) => ({ model_group, mode: "chat" }));
@@ -54,6 +54,42 @@ describe("buildPreferredTierModels", () => {
 });
 
 describe("buildAutomaticRouterConfig", () => {
+  it("selects native Terra and Sol groups with their reasoning settings, retaining cloud fallback", () => {
+    const modelNames = ["gpt-5.6-terra", "gpt-5.6-sol"];
+    const deployments = modelNames.flatMap((model) => [
+      deployment(model, `azure/${model}`),
+      deployment(`z-native-${model}`, `openai/${model}`),
+    ]);
+    const available = deployments.map(({ model_name }) => reasoningModel(model_name!, ["none", "high"]));
+    const availability = buildModelAvailability(
+      available.map(({ model_group }) => model_group),
+      deploymentRefsFromModelInfo(deployments),
+    );
+    const preferred = buildPreferredTierModels([], availability);
+    const config = buildAutomaticRouterConfig(available, deployments, preferred);
+
+    expect(tierModels(config)).toEqual([
+      "z-native-gpt-5.6-terra",
+      "z-native-gpt-5.6-terra",
+      "z-native-gpt-5.6-sol",
+      "z-native-gpt-5.6-sol",
+    ]);
+    expect(config?.tier_model_params).toEqual({
+      REASONING: { "z-native-gpt-5.6-sol": { reasoning_effort: "high" } },
+    });
+
+    const cloudOnly = models(...modelNames);
+    const cloudAvailability = buildModelAvailability(modelNames, deploymentRefsFromModelInfo(deployments));
+    const cloudPreferred = buildPreferredTierModels([], cloudAvailability);
+
+    expect(tierModels(buildAutomaticRouterConfig(cloudOnly, deployments, cloudPreferred))).toEqual([
+      "gpt-5.6-terra",
+      "gpt-5.6-terra",
+      "gpt-5.6-sol",
+      "gpt-5.6-sol",
+    ]);
+  });
+
   it("selects one preferred model for each tier", () => {
     const preferred: PreferredTierModels = {
       SIMPLE: ["simple"],

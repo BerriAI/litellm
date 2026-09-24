@@ -24,6 +24,7 @@ DATABASE_USER="${E2E_DATABASE_USER:-litellm}"
 DATABASE_PASSWORD="${E2E_DATABASE_PASSWORD:-dbpassword9090}"
 DATABASE_NAME="${E2E_DATABASE_NAME:-litellm}"
 JAEGER_OTLP_PORT="${E2E_JAEGER_OTLP_PORT:-4318}"
+JAEGER_OTLP_TLS_PORT="${E2E_JAEGER_OTLP_TLS_PORT:-4319}"
 JAEGER_QUERY_PORT="${E2E_JAEGER_QUERY_PORT:-16686}"
 KEYCLOAK_PORT="${E2E_KEYCLOAK_PORT:-8081}"
 
@@ -122,7 +123,7 @@ SERVER_ENV=(
   "CONFIG_FILE_PATH=${CONFIG_PATH}"
   "STORE_MODEL_IN_DB=True"
   "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf"
-  "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:${JAEGER_OTLP_PORT}"
+  "OTEL_EXPORTER_OTLP_ENDPOINT=https://127.0.0.1:${JAEGER_OTLP_TLS_PORT}"
   "SSL_CERT_FILE=${CERTS_DIR}/ca-bundle.pem"
   "PYTHONPATH=${REPO_ROOT}"
   "JWT_PUBLIC_KEY_URL=http://127.0.0.1:${KEYCLOAK_PORT}/realms/litellm-e2e/protocol/openid-connect/certs"
@@ -147,16 +148,12 @@ start_server() {
   echo $! > "${PIDS_DIR}/${name}.pid"
 }
 
-start_server backend uv run --no-sync uvicorn backend.main:app --host 0.0.0.0 --port "${BACKEND_PORT}"
-start_server gateway-1 uv run --no-sync uvicorn gateway.main:app --workers 1 --host 0.0.0.0 --port "${GATEWAY_PORT_1}"
-start_server gateway-2 uv run --no-sync uvicorn gateway.main:app --workers 1 --host 0.0.0.0 --port "${GATEWAY_PORT_2}"
-
 if [[ "$(uname)" == "Linux" ]]; then
   NGINX_UPSTREAM_HOST=127.0.0.1
   NGINX_DOCKER_ARGS=(--network host)
 else
   NGINX_UPSTREAM_HOST=host.docker.internal
-  NGINX_DOCKER_ARGS=(-p "${LB_PORT}:${LB_PORT}")
+  NGINX_DOCKER_ARGS=(-p "${LB_PORT}:${LB_PORT}" -p "${JAEGER_OTLP_TLS_PORT}:${JAEGER_OTLP_TLS_PORT}")
 fi
 
 cat > "${STACK_DIR}/nginx.conf" <<EOF
@@ -186,12 +183,29 @@ http {
       proxy_send_timeout 600s;
     }
   }
+  server {
+    listen ${JAEGER_OTLP_TLS_PORT} ssl;
+    ssl_certificate /certs/server.crt;
+    ssl_certificate_key /certs/server.key;
+    client_max_body_size 100m;
+    location / {
+      proxy_pass http://${NGINX_UPSTREAM_HOST}:${JAEGER_OTLP_PORT};
+    }
+  }
 }
 EOF
 
 docker rm -f e2e-nginx >/dev/null 2>&1 || true
 docker run -d --name e2e-nginx "${NGINX_DOCKER_ARGS[@]}" \
-  -v "${STACK_DIR}/nginx.conf:/etc/nginx/nginx.conf:ro" "${NGINX_IMAGE}" >/dev/null
+  -v "${STACK_DIR}/nginx.conf:/etc/nginx/nginx.conf:ro" \
+  -v "${CERTS_DIR}:/certs:ro" "${NGINX_IMAGE}" >/dev/null
+
+wait_for "Jaeger OTLP TLS listener" \
+  "curl -sS --cacert ${CERTS_DIR}/ca.crt https://127.0.0.1:${JAEGER_OTLP_TLS_PORT}/ -o /dev/null -w '%{http_code}' | grep -qE '^[2345]'"
+
+start_server backend uv run --no-sync uvicorn backend.main:app --host 0.0.0.0 --port "${BACKEND_PORT}"
+start_server gateway-1 uv run --no-sync uvicorn gateway.main:app --workers 1 --host 0.0.0.0 --port "${GATEWAY_PORT_1}"
+start_server gateway-2 uv run --no-sync uvicorn gateway.main:app --workers 1 --host 0.0.0.0 --port "${GATEWAY_PORT_2}"
 
 wait_for "backend" "curl -fs http://127.0.0.1:${BACKEND_PORT}/health/liveliness >/dev/null" 300
 wait_for "gateway-1" "curl -fs http://127.0.0.1:${GATEWAY_PORT_1}/health/liveliness >/dev/null" 300
@@ -206,6 +220,7 @@ LITELLM_MASTER_KEY=${MASTER_KEY}
 REDIS_HOST=127.0.0.1
 REDIS_PORT=${REDIS_PORT}
 E2E_OTEL_QUERY_URL=http://127.0.0.1:${JAEGER_QUERY_PORT}
+E2E_OTEL_EXPORTER_ENDPOINT=https://127.0.0.1:${JAEGER_OTLP_TLS_PORT}
 E2E_KEYCLOAK_URL=http://127.0.0.1:${KEYCLOAK_PORT}
 E2E_KEYCLOAK_ADMIN_USER=admin
 E2E_KEYCLOAK_ADMIN_PASSWORD=e2e-ephemeral-idp-not-a-secret

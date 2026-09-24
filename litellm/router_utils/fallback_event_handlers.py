@@ -498,7 +498,12 @@ async def _is_fallback_target_authorized(
 ) -> bool:
     access_check: Final = litellm_router.fallback_access_check
     target: Final = _get_fallback_target_model_group(fallback_entry)
-    if access_check is None or target is None or target == original_model_group:
+    if (
+        access_check is None
+        or target is None
+        or target == original_model_group
+        or target == get_pre_routing_selection(kwargs)
+    ):
         return True
     if await access_check(model=target, request_kwargs=kwargs, llm_router=litellm_router):
         return True
@@ -650,7 +655,7 @@ async def run_async_fallback(
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
-            kwargs.pop("_target_order", None)  # rebind-ok: next hop must not inherit the previous order target
+            kwargs.pop("_target_order", None)
             if isinstance(mg, str):
                 kwargs["model"] = mg
             elif isinstance(mg, dict):

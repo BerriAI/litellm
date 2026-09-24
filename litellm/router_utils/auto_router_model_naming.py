@@ -25,7 +25,9 @@ AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
 StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
 
-StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding", "evaluation"]
+StrategyRouterDependencyRole: TypeAlias = Literal[
+    "tier", "default", "classifier", "embedding", "evaluation", "compactor"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +157,7 @@ def strategy_router_dependencies(
         dict.fromkeys(
             tuple(dep for tier in _mapping(complexity.get("tiers")).values() for dep in _pool(tier, "tier"))
             + _named(litellm_params.get("complexity_router_default_model"), "default")
+            + _named(_mapping(complexity.get("context_compaction")).get("model"), "compactor")
             + (
                 _named(classifier.get("model"), "classifier")
                 if complexity.get("classifier_type") in LLM_CLASSIFIER_TYPES

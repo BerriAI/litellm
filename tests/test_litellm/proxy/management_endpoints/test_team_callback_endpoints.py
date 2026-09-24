@@ -110,9 +110,7 @@ def patched_prisma():
 
 
 @pytest.mark.asyncio
-async def test_add_team_callbacks_rejects_unauthorized_caller(
-    patched_prisma, unauthorized_caller
-):
+async def test_add_team_callbacks_rejects_unauthorized_caller(patched_prisma, unauthorized_caller):
     data = AddTeamCallback(
         callback_name="langfuse",
         callback_type="success",
@@ -133,9 +131,7 @@ async def test_add_team_callbacks_rejects_unauthorized_caller(
 
 
 @pytest.mark.asyncio
-async def test_disable_team_logging_rejects_unauthorized_caller(
-    patched_prisma, unauthorized_caller
-):
+async def test_disable_team_logging_rejects_unauthorized_caller(patched_prisma, unauthorized_caller):
     with pytest.raises(HTTPException) as exc:
         await disable_team_logging(
             http_request=Mock(spec=Request),
@@ -147,9 +143,7 @@ async def test_disable_team_logging_rejects_unauthorized_caller(
 
 
 @pytest.mark.asyncio
-async def test_get_team_callbacks_rejects_unauthorized_caller(
-    patched_prisma, unauthorized_caller
-):
+async def test_get_team_callbacks_rejects_unauthorized_caller(patched_prisma, unauthorized_caller):
     with pytest.raises(HTTPException) as exc:
         await get_team_callbacks(
             http_request=Mock(spec=Request),
@@ -180,9 +174,7 @@ async def test_proxy_admin_can_add_team_callbacks(patched_prisma):
 
 @pytest.mark.asyncio
 async def test_team_admin_of_target_team_can_add_callbacks(patched_prisma):
-    patched_prisma.get_data = AsyncMock(
-        return_value=_team_row(admin_user_id="team_admin_user")
-    )
+    patched_prisma.get_data = AsyncMock(return_value=_team_row(admin_user_id="team_admin_user"))
 
     team_admin = UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -472,9 +464,7 @@ async def test_add_team_callbacks_writes_encrypted_callback_vars(monkeypatch):
             litellm_changed_by=None,
         )
 
-    written = json.loads(
-        mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"]
-    )
+    written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
     cv = written["logging"][0]["callback_vars"]
     assert cv["langfuse_secret_key"] != "sk-lf-real-secret"
     assert cv["langfuse_public_key"] != "pk-lf-real-public"
@@ -1192,8 +1182,12 @@ async def test_add_team_callbacks_rejects_team_deleted_before_write():
     )
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-        patch("litellm.proxy.proxy_server.master_key", None),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(
+            "litellm.proxy.proxy_server.master_key", None
+        ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
     ):
         with pytest.raises(HTTPException) as exc:
             await add_team_callbacks(
@@ -1482,12 +1476,16 @@ async def test_unknown_team_is_indistinguishable_from_no_access(call_handler, un
     a probe for valid team ids. The unknown-team response has to match the
     no-access one exactly, status and body.
     """
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_client:  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_client
+    ):  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
         mock_client.get_data = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as unknown_team:
             await call_handler(unauthorized_caller)
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_client:  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_client
+    ):  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
         mock_client.get_data = AsyncMock(return_value=_team_row())
         mock_client.db.litellm_teamtable.update = AsyncMock()
         with patch(  # test-quality-ok: _verify_team_access calls this module-level helper directly, so there is no seam to inject through
@@ -1508,7 +1506,9 @@ async def test_proxy_admin_still_told_the_team_is_unknown():
     """The masking is only for callers who could not have managed the team; a proxy
     admin keeps the diagnosable error."""
     admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin", api_key="sk-admin")
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_client:  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_client
+    ):  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
         mock_client.get_data = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as exc:
             await get_team_callbacks(
@@ -1526,13 +1526,29 @@ async def test_proxy_admin_still_told_the_team_is_unknown():
     [
         # the redirect, in every carrier a caller could pick: an entry naming
         # only a host, pairing with a key pair written on another entry
-        ({"langfuse_host": "http://attacker.invalid"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], True),
+        (
+            {"langfuse_host": "http://attacker.invalid"},
+            [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}],
+            True,
+        ),
         # the sibling carrier -- langfuse and langfuse_otel are one account
-        ({"langfuse_host": "http://attacker.invalid"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_secret_key": "sk"}], True),
+        (
+            {"langfuse_host": "http://attacker.invalid"},
+            [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_secret_key": "sk"}],
+            True,
+        ),
         # a destination variable no integration registry lists
         ({"dd_agent_host": "attacker.invalid"}, [{"dd_api_key": "k", "dd_site": "us5.datadoghq.com"}], True),
         # one entry owning its family end to end is the feature
-        ({"langfuse_host": "https://eu.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [], False),
+        (
+            {
+                "langfuse_host": "https://eu.cloud.langfuse.com",
+                "langfuse_public_key": "pk",
+                "langfuse_secret_key": "sk",
+            },
+            [],
+            False,
+        ),
         # a different family alongside an existing one stays fine
         ({"gcs_bucket_name": "bucket"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
         ({"langsmith_api_key": "k"}, [{"dd_api_key": "k"}], False),
@@ -1541,19 +1557,55 @@ async def test_proxy_admin_still_told_the_team_is_unknown():
         # the span scope picks what the family exports, not where to, so a second
         # entry may set either legal value next to the family's credentials
         ({"langfuse_span_scope": "llm_only"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
-        ({"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "full"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "llm_only"}], False),
+        (
+            {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "full"},
+            [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "llm_only"}],
+            False,
+        ),
         # the scope on the stored entry must not shield a redirect riding next to it
-        ({"langfuse_host": "http://attacker.invalid", "langfuse_span_scope": "llm_only"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "llm_only"}], True),
+        (
+            {"langfuse_host": "http://attacker.invalid", "langfuse_span_scope": "llm_only"},
+            [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "llm_only"}],
+            True,
+        ),
         # the same integration registered for a second event: identical values
         # flatten to the identical dict, so there is nothing to redirect
-        ({"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
+        (
+            {
+                "langfuse_host": "https://us.cloud.langfuse.com",
+                "langfuse_public_key": "pk",
+                "langfuse_secret_key": "sk",
+            },
+            [
+                {
+                    "langfuse_host": "https://us.cloud.langfuse.com",
+                    "langfuse_public_key": "pk",
+                    "langfuse_secret_key": "sk",
+                }
+            ],
+            False,
+        ),
         # the same credential under its other spelling is the same credential
         ({"langfuse_secret": "sk"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
         # a value the family already holds cannot be moved into another of its
         # variables either; the exporter would address or authenticate with it
-        ({"langfuse_host": "pk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk"}], True),
+        (
+            {"langfuse_host": "pk"},
+            [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk"}],
+            True,
+        ),
         # the same shape with one value moved is the redirect again
-        ({"langfuse_host": "http://attacker.invalid", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], True),
+        (
+            {"langfuse_host": "http://attacker.invalid", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+            [
+                {
+                    "langfuse_host": "https://us.cloud.langfuse.com",
+                    "langfuse_public_key": "pk",
+                    "langfuse_secret_key": "sk",
+                }
+            ],
+            True,
+        ),
     ],
 )
 def test_one_entry_owns_a_credential_family(new_vars, stored, rejected):
@@ -1568,7 +1620,13 @@ def test_one_entry_owns_a_credential_family(new_vars, stored, rejected):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("caller", [_admin_auth(), UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="victim_admin", api_key="sk-team-admin")])
+@pytest.mark.parametrize(
+    "caller",
+    [
+        _admin_auth(),
+        UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="victim_admin", api_key="sk-team-admin"),
+    ],
+)
 async def test_a_second_entry_may_not_flip_the_span_scope(patched_prisma, caller):
     """The entries flatten last-wins at request time, so a failure entry saying
     llm_only next to a success entry saying full would export whichever is stored
@@ -1580,7 +1638,11 @@ async def test_a_second_entry_may_not_flip_the_span_scope(patched_prisma, caller
                     {
                         "callback_name": "langfuse_otel",
                         "callback_type": "success",
-                        "callback_vars": {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "full"},
+                        "callback_vars": {
+                            "langfuse_public_key": "pk",
+                            "langfuse_secret_key": "sk",
+                            "langfuse_span_scope": "full",
+                        },
                     }
                 ]
             }
@@ -1610,3 +1672,35 @@ async def test_a_second_entry_may_not_flip_the_span_scope(patched_prisma, caller
         user_api_key_dict=caller,
     )
     patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_add_team_callbacks_rejects_out_of_range_arize_sampling_rate(patched_prisma):
+    data = AddTeamCallback(
+        callback_name="arize",
+        callback_type="success",
+        callback_vars={"arize_success_sampling_rate": "1.5"},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await add_team_callbacks(
+            data=data,
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            user_api_key_dict=_admin_auth(),
+        )
+    assert exc.value.status_code == 400
+    assert "arize_success_sampling_rate" in str(exc.value.detail)
+    patched_prisma.db.litellm_teamtable.update.assert_not_called()
+
+
+def test_add_team_callback_accepts_arize_sampling_rate_vars():
+    data = AddTeamCallback(
+        callback_name="arize",
+        callback_type="success",
+        callback_vars={
+            "arize_success_sampling_rate": "0.5",
+            "arize_error_sampling_rate": "1.0",
+        },
+    )
+    assert data.callback_vars["arize_success_sampling_rate"] == "0.5"
+    assert data.callback_vars["arize_error_sampling_rate"] == "1.0"

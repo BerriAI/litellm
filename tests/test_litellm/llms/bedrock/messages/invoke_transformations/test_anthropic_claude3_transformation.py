@@ -1,12 +1,17 @@
 import asyncio
+import base64
 import copy
 import json
 import os
+import struct
+import zlib
 from datetime import datetime
 from types import SimpleNamespace
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import Mock
 
+import httpx
 import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
@@ -3395,3 +3400,97 @@ def test_bedrock_invoke_eager_input_streaming_beta_not_duplicated_with_client_he
     )
 
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+
+
+def _bedrock_event_frame(payload: Mapping[str, object]) -> bytes:
+    def _header(name: str, value: str) -> bytes:
+        return (
+            bytes([len(name)])
+            + name.encode()
+            + bytes([7])
+            + struct.pack(">H", len(value))
+            + value.encode()
+        )
+
+    headers: Final = (
+        _header(":message-type", "event")
+        + _header(":event-type", "chunk")
+        + _header(":content-type", "application/json")
+    )
+    body: Final = json.dumps(
+        {"bytes": base64.b64encode(json.dumps(payload).encode()).decode()}
+    ).encode()
+    prelude: Final = struct.pack(">II", 12 + len(headers) + len(body) + 4, len(headers))
+    prelude_crc: Final = struct.pack(">I", zlib.crc32(prelude))
+    message_crc: Final = struct.pack(">I", zlib.crc32(prelude + prelude_crc + headers + body))
+    return prelude + prelude_crc + headers + body + message_crc
+
+
+class _GatedAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: Sequence[bytes], gate: asyncio.Event) -> None:
+        self._chunks = chunks
+        self._gate = gate
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._chunks[0]
+        await self._gate.wait()
+        for chunk in self._chunks[1:]:
+            yield chunk
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_get_async_streaming_response_iterator_yields_small_frame_before_upstream_pauses():
+    gate: Final = asyncio.Event()
+    response: Final = httpx.Response(
+        200,
+        stream=_GatedAsyncByteStream(
+            chunks=(
+                _bedrock_event_frame(
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_test",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [],
+                            "model": "us.anthropic.claude-sonnet-4-6",
+                            "usage": {"input_tokens": 3, "output_tokens": 1},
+                        },
+                    }
+                ),
+                _bedrock_event_frame(
+                    {
+                        "type": "message_stop",
+                        "usage": {"input_tokens": 3, "output_tokens": 9},
+                    }
+                ),
+            ),
+            gate=gate,
+        ),
+    )
+
+    iterator: Final = AmazonAnthropicClaudeMessagesConfig().get_async_streaming_response_iterator(
+        model="us.anthropic.claude-sonnet-4-6",
+        httpx_response=response,
+        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/us.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_small_frame_before_upstream_pauses",
+            function_id="test_small_frame_before_upstream_pauses",
+        ),
+    )
+
+    first: Final = await asyncio.wait_for(anext(iterator), timeout=10)
+    assert first.startswith(b"event: message_start\n"), first
+
+    gate.set()
+    remaining: Final = tuple([chunk async for chunk in iterator])
+    assert any(chunk.startswith(b"event: message_stop\n") for chunk in remaining), remaining
+    await iterator.aclose()

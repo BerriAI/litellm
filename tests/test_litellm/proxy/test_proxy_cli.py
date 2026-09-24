@@ -10,6 +10,8 @@ import pytest
 
 
 import builtins
+import runpy
+import sys
 import types
 import urllib.parse as urlparse
 
@@ -18,6 +20,7 @@ import yaml
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
+from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
 
@@ -639,6 +642,36 @@ class TestProxyInitializationHelpers:
     @patch("uvicorn.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    def test_script_boot_imports_the_package_proxy_server(
+        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+    ):
+        package_proxy_server = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        sibling_proxy_server = types.ModuleType("proxy_server")
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": sibling_proxy_server, "litellm.proxy.proxy_server": package_proxy_server},
+            ),
+            patch.object(sys, "argv", ["proxy_cli.py", "--skip_server_startup"]),
+            patch.object(sys, "path", list(sys.path)),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            runpy.run_path(proxy_cli.__file__, run_name="__main__")
+
+        assert exit_info.value.code == 0
+        package_proxy_server.save_worker_config.assert_called_once()
+
+    @patch("uvicorn.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch(
         "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
     )
@@ -1173,6 +1206,172 @@ class TestProxyInitializationHelpers:
                 assert appended_params["pgbouncer"] == "true"
             else:
                 assert "pgbouncer" not in appended_params
+
+    @pytest.mark.parametrize(
+        "env_value, config_value, expect_pgbouncer",
+        [
+            ("true", None, True),
+            ("1", None, True),
+            ("false", None, False),
+            (None, None, False),
+            ("true", False, True),
+            ("false", True, True),
+        ],
+    )
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_disable_prepared_statements_env_var_forwarded_to_url(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_atexit_register,
+        mock_subprocess_run,
+        env_value,
+        config_value,
+        expect_pgbouncer,
+    ):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+
+        general_settings = {"database_url": "postgresql://test:test@localhost:5432/test"}
+        if config_value is not None:
+            general_settings["database_disable_prepared_statements"] = config_value
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
+            return_value={"general_settings": general_settings}
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "DATABASE_DISABLE_PREPARED_STATEMENTS")
+        }
+        if env_value is not None:
+            clean_env["DATABASE_DISABLE_PREPARED_STATEMENTS"] = env_value
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.proxy_cli.append_query_params",
+                side_effect=lambda url, params: str(url),
+            ) as mock_append_query_params,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--config", "test-config.yaml", "--skip_server_startup"],
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            appended_params = mock_append_query_params.call_args.args[1]
+            if expect_pgbouncer:
+                assert appended_params["pgbouncer"] == "true", appended_params
+            else:
+                assert "pgbouncer" not in appended_params, appended_params
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_malformed_disable_prepared_statements_env_var_is_rejected_even_when_config_enables_it(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
+            return_value={
+                "general_settings": {
+                    "database_url": "postgresql://test:test@localhost:5432/test",
+                    "database_disable_prepared_statements": True,
+                }
+            }
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "DATABASE_DISABLE_PREPARED_STATEMENTS")
+        }
+        clean_env["DATABASE_DISABLE_PREPARED_STATEMENTS"] = "enabled"
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.proxy_cli.append_query_params",
+                side_effect=lambda url, params: str(url),
+            ) as mock_append_query_params,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--config", "test-config.yaml", "--skip_server_startup"],
+            )
+
+            assert isinstance(result.exception, ValueError), f"exit_code={result.exit_code}, output={result.output}"
+            assert "DATABASE_DISABLE_PREPARED_STATEMENTS" in str(result.exception), result.exception
+            mock_append_query_params.assert_not_called()
 
     @patch("uvicorn.run")
     @patch("atexit.register")
@@ -1779,13 +1978,18 @@ class TestProxyInitializationHelpers:
         mock_proxy_config_instance.get_config = mock_get_config
         mock_proxy_config.return_value = mock_proxy_config_instance
 
-        mock_proxy_server_module = MagicMock(app=mock_app)
+        mock_proxy_server_module = MagicMock(
+            app=mock_app,
+            ProxyConfig=mock_proxy_config,
+            KeyManagementSettings=mock_key_mgmt,
+            save_worker_config=mock_save_worker_config,
+        )
 
         # Only remove DATABASE_URL and DIRECT_URL to prevent the database setup
         # code path from running. Do NOT use clear=True as it removes PATH, HOME,
         # etc., which causes imports inside run_server to break in CI (the real
-        # litellm.proxy.proxy_server import at line 820 of proxy_cli.py has heavy
-        # side effects that fail without a proper environment).
+        # litellm.proxy.proxy_server import has heavy side effects that fail
+        # without a proper environment).
         env_overrides = {
             "DATABASE_URL": "",
             "DIRECT_URL": "",
@@ -1801,18 +2005,7 @@ class TestProxyInitializationHelpers:
             with (
                 patch.dict(
                     "sys.modules",
-                    {
-                        "proxy_server": MagicMock(
-                            app=mock_app,
-                            ProxyConfig=mock_proxy_config,
-                            KeyManagementSettings=mock_key_mgmt,
-                            save_worker_config=mock_save_worker_config,
-                        ),
-                        # Also mock litellm.proxy.proxy_server to prevent the real
-                        # import at line 820 of proxy_cli.py which has heavy side
-                        # effects (FastAPI app init, logging setup, etc.)
-                        "litellm.proxy.proxy_server": mock_proxy_server_module,
-                    },
+                    {"litellm.proxy.proxy_server": mock_proxy_server_module},
                 ),
                 patch(
                     "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"

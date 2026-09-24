@@ -14471,6 +14471,21 @@ async def test_request_selected_during_guardrail_runs_concurrently_with_tool(mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("in_config,in_db,expected", [(True, False, True), (False, True, False), (True, True, False)])
+async def test_server_response_identifies_read_only_config(in_config, in_db, expected):
+    manager = MCPServerManager()
+    server = MCPServer(server_id="source-server", name="source_server", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server} if in_config else {}
+    manager.registry = {server.server_id: server} if in_db else {}
+
+    listed = await manager.get_all_mcp_servers_unfiltered()
+
+    assert len(listed) == 1
+    assert listed[0].model_dump().get("is_config") is expected
+    assert manager._build_mcp_server_table(server).model_dump().get("is_config") is expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("with_caller,legacy_factory", [(True, False), (False, False), (True, True)])
 async def test_client_sampling_does_not_fill_explicit_context_from_another_ambient_caller(with_caller, legacy_factory):
     from mcp.server.auth.middleware.auth_context import auth_context_var
@@ -14501,3 +14516,62 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
         assert captured["client_ip"] is None
     finally:
         auth_context_var.reset(token)
+
+
+class TestSharedIdentifierPrefixWarning:
+    """Two stored rows sharing lowercased alias-or-server_name publish one tool
+    prefix; reload must surface them once so the ambiguity is visible."""
+
+    @pytest.mark.asyncio
+    async def test_reload_warns_once_per_shared_identifier(self, caplog):
+        manager = MCPServerManager()
+        rows = [
+            LiteLLM_MCPServerTable(
+                server_id="srv-a", server_name="alpha", alias="shared", url="https://a.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+            LiteLLM_MCPServerTable(
+                server_id="srv-b", server_name="beta", alias="Shared", url="https://b.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+            LiteLLM_MCPServerTable(
+                server_id="srv-c", server_name="gamma", alias="lonely", url="https://c.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+        ]
+        raw_rows = [MagicMock(model_dump=lambda row=row: row.model_dump()) for row in rows]
+        repository = MagicMock()
+        repository.table.find_many = AsyncMock(return_value=raw_rows)
+
+        async def build_from_table(table, **_kwargs):
+            return MCPServer(
+                server_id=table.server_id,
+                name=table.alias or table.server_name,
+                alias=table.alias,
+                server_name=table.server_name,
+                url=table.url,
+                transport=table.transport,
+            )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repository,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch.object(manager, "build_mcp_server_from_table", new=build_from_table),
+            patch.object(manager, "_maybe_register_openapi_tools", new=AsyncMock()),
+            patch.object(manager, "_prime_oauth_metadata_discovery_for_servers"),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        shared_warnings = [m for m in caplog.messages if "share the identifier" in m]
+        assert len(shared_warnings) == 1
+        assert "srv-a" in shared_warnings[0]
+        assert "srv-b" in shared_warnings[0]
+        assert "srv-c" not in shared_warnings[0]
+        assert "'shared'" in shared_warnings[0]

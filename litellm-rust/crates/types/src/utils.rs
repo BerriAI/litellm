@@ -3,6 +3,21 @@ use serde_json::{Map, Value};
 
 use crate::llms::openai::{ChatCompletionThinkingBlock, ChatCompletionToolCallChunk};
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProviderSpecificHeader {
+    #[serde(default)]
+    pub custom_llm_provider: String,
+    #[serde(default)]
+    pub extra_headers: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProviderSpecificHeaders {
+    One(ProviderSpecificHeader),
+    Many(Vec<ProviderSpecificHeader>),
+}
+
 /// OpenAI `usage`, including the `prompt_tokens_details` split LiteLLM's Python
 /// path reports so cost tracking sees the same numbers on either path.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

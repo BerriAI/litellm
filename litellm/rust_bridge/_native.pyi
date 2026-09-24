@@ -2,15 +2,39 @@ from asyncio import Future
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import Never, final
 
+import httpx
+from pydantic import JsonValue
+
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
+from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
+from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
+
+@final
+class NativeDiagnosticProcessor:
+    def __new__(cls, minimum_custom_key_length: int) -> NativeDiagnosticProcessor: ...
+    def redact_text(self, text: str) -> str: ...
+    def redact_structured_text(self, key: str | None, text: str) -> str: ...
+    def redact_client_message(self, text: str) -> str: ...
+    def process_diagnostic(
+        self,
+        message: str,
+        exception: str | None,
+        stack: str | None,
+        leaves: Sequence[tuple[str | None, str]],
+        policy: tuple[bool, int, int],
+    ) -> tuple[str, str | None, str | None, list[str], bool]: ...
+    def scrub_access_arguments(self, arguments: Sequence[str]) -> list[str]: ...
 
 def ocr(
     request: LiteLLMOcrRequest,
@@ -22,6 +46,16 @@ def aocr(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> Coroutine[object, object, OCRResponse]: ...
+def embedding(
+    request: LiteLLMEmbeddingRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> EmbeddingResponse: ...
+def aembedding(
+    request: LiteLLMEmbeddingRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> Coroutine[object, object, EmbeddingResponse]: ...
 def transcription(
     model: str,
     audio: object,
@@ -42,6 +76,26 @@ def atranscription(
     optional_params: Mapping[str, object] | None = None,
     timeout_seconds: float | None = None,
 ) -> Future[dict[str, object]]: ...
+def completion(
+    request: LiteLLMChatCompletionsRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> ModelResponse: ...
+def acompletion(
+    request: LiteLLMChatCompletionsRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> Coroutine[object, object, ModelResponse]: ...
+def responses(
+    request: LiteLLMResponsesRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> ResponsesAPIResponse: ...
+def aresponses(
+    request: LiteLLMResponsesRequest,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> Coroutine[object, object, ResponsesAPIResponse]: ...
 def messages(
     request: LiteLLMMessagesRequest,
     args: tuple[object, ...],
@@ -97,6 +151,8 @@ class ResponsesWebSocketConnection:
 class _ResponseCacheRuntime:
     @staticmethod
     def from_cache(cache: object) -> _ResponseCacheRuntime: ...
+    @staticmethod
+    def from_selected(cache: object) -> _ResponseCacheRuntime: ...
     @property
     def kind(self) -> str: ...
     def lookup(
@@ -105,6 +161,7 @@ class _ResponseCacheRuntime:
         *,
         callback_kwargs: Mapping[str, object] | Sequence[object] | None = None,
     ) -> object: ...
+    def lookup_semantic(self, request: object) -> tuple[object, float | None]: ...
     def store(
         self,
         request: object,
@@ -124,6 +181,7 @@ class _ResponseCacheRuntime:
         *,
         callback_kwargs: Mapping[str, object] | None = None,
     ) -> Future[object]: ...
+    def async_lookup_semantic(self, request: object) -> Future[tuple[object, float | None]]: ...
     def async_store(
         self,
         request: object,
@@ -216,6 +274,11 @@ class _CacheTestHandle:
     @property
     def backend(self) -> str: ...
     def _bind_facade(self, facade: object) -> None: ...
+
+@final
+class _CacheResolver:
+    def __new__(cls, namespace: object) -> _CacheResolver: ...
+    def resolve(self) -> _ResponseCacheRuntime: ...
 
 @final
 class _CacheTestResolver:
@@ -333,6 +396,7 @@ def reserve_process_for_forking() -> None: ...
 __all__ = [
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
+    "NativeDiagnosticProcessor",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
@@ -340,15 +404,60 @@ __all__ = [
     "TokenCounter",
     "Tokenizer",
     "achat_completions",
+    "acompletion",
+    "aembedding",
     "amessages",
     "aocr",
+    "aresponses",
     "atranscription",
     "chat_completions",
     "chat_completions_decline",
+    "completion",
+    "embedding",
     "gil_stats",
     "messages",
     "ocr",
     "process_state_started",
     "reserve_process_for_forking",
+    "responses",
     "transcription",
 ]
+
+@final
+class _SecretManagerRuntime:
+    @staticmethod
+    def from_config(
+        system: str,
+        environment: Mapping[str, str],
+        settings: Mapping[str, object] | None = None,
+        enterprise_enabled: bool = False,
+    ) -> _SecretManagerRuntime: ...
+    @staticmethod
+    def from_client(client: object) -> _SecretManagerRuntime | None: ...
+    @property
+    def system(self) -> str: ...
+    def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> JsonValue: ...
+    def read_secret_async(self, name: str, settings: Mapping[str, object] | None = None) -> Future[JsonValue]: ...
+    def async_write_secret(
+        self, secret_name: str, secret_value: str, description: str | None = None,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None, tags: object = None,
+    ) -> Future[dict[str, JsonValue]]: ...
+    def async_delete_secret(
+        self, secret_name: str, recovery_window_in_days: int | None = None,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Future[dict[str, JsonValue]]: ...
+    def async_rotate_secret(
+        self, current_secret_name: str, new_secret_name: str, new_secret_value: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Future[dict[str, JsonValue]]: ...
+    def sync_read_secret(
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
+    ) -> JsonValue: ...
+    def async_read_secret(
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
+    ) -> Future[JsonValue]: ...

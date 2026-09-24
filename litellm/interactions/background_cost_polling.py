@@ -187,7 +187,7 @@ async def fetch_background_interaction(context: BackgroundInteractionPollContext
         custom_llm_provider=context.custom_llm_provider,
         api_key=context.api_key,
         api_base=context.api_base,
-        **{"no-log": True},  # mutable-ok: "no-log" is not an identifier, so it only passes through a mapping
+        **{"no-log": True},
     )
 
 
@@ -332,9 +332,7 @@ async def poll_and_log_background_interaction_cost(
     context: BackgroundInteractionPollContext,
     fetch_interaction: FetchInteraction = fetch_background_interaction,
 ) -> SettlementOutcome | None:
-    last_response: InteractionsAPIResponse | None = (
-        None  # rebind-ok: the give-up path settles from, or names, what the poll last saw
-    )
+    last_response: InteractionsAPIResponse | None = None  # rebind-ok: the give-up path settles from the last poll
     for interval in _poll_intervals(
         initial=context.initial_interval_seconds,
         maximum=context.max_interval_seconds,
