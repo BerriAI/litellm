@@ -259,7 +259,7 @@ def _upstream_failure_row(gateway: Gateway, message: str) -> dict[str, JsonValue
         model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=0)
         key: Final = scenario.key(models=[model])
         failed: Final = gateway.request("POST", CHAT, _body(CHAT, model, uuid.uuid4().hex), key=key)
-        assert failed.status_code == 429 and message in failed.text, failed.text[:300]
+        assert failed.status_code == 429 and message in failed.json()["error"]["message"], failed.text[:300]
         assert len(wire.drain()) == 1
         return _error_information(failed.headers["x-litellm-call-id"])
 
