@@ -7364,15 +7364,37 @@ def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
 
+PROXY_STAMPED_NAMES: Final = frozenset(
+    (
+        "proxy_server_request",
+        "secret_fields",
+        "litellm_trusted_callback_vars",
+        "_litellm_addressed_response_id",
+        "_litellm_strip_stream_usage",
+        "client_side_timeout",
+        "model_file_id_mapping",
+    )
+)
+
+
 @pytest.mark.parametrize(
     "name",
-    sorted(frozenset(litellm.all_litellm_params) - frozenset(("metadata", "litellm_metadata", "proxy_server_request"))),
+    sorted(frozenset(litellm.all_litellm_params) - frozenset(("metadata", "litellm_metadata")) - PROXY_STAMPED_NAMES),
 )
 def test_passthrough_keeps_each_registered_litellm_owned_name_out_of_the_forwarded_body(name: str) -> None:
     split: Final = _split_pass_through_body(json.dumps({name: "owned", **json.loads(GEMINI_BODY)}))
 
     assert frozenset(split.litellm_params) == frozenset((name, "metadata", "proxy_server_request"))
     assert split.litellm_params[name] == "owned"
+    assert split.forwarded_body == json.loads(GEMINI_BODY)
+
+
+@pytest.mark.parametrize("name", sorted(PROXY_STAMPED_NAMES))
+def test_passthrough_drops_a_client_supplied_proxy_stamped_name(name: str) -> None:
+    split: Final = _split_pass_through_body(json.dumps({name: {"forged": "by-client"}, **json.loads(GEMINI_BODY)}))
+
+    assert frozenset(split.litellm_params) == frozenset(("metadata", "proxy_server_request"))
+    assert split.litellm_params["proxy_server_request"] != {"forged": "by-client"}, split.litellm_params
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
 

@@ -106,6 +106,7 @@ from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
+from litellm.types.litellm_params import ProxyRequestState, wire_names
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -135,6 +136,7 @@ router: Final = APIRouter()
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
 _METADATA_CARRIERS: Final = frozenset(("litellm_metadata", "metadata"))
+_KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_CARRIERS | frozenset(wire_names(ProxyRequestState))
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -587,7 +589,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
         )
         litellm_params_in_body: Final = MappingProxyType(
-            {k: v for k, v in owned_in_body.items() if k not in _METADATA_CARRIERS}
+            {k: v for k, v in owned_in_body.items() if k not in _KEPT_OUT_OF_LITELLM_PARAMS}
         )
 
         _metadata = dict(
