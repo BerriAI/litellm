@@ -26697,23 +26697,23 @@ export interface components {
         };
         /** ChatCompletionAssistantMessage */
         ChatCompletionAssistantMessage: {
-            cache_control?: components["schemas"]["ProxyChatCompletionRequest_ChatCompletionCachedContent"];
+            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
-            content?: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ProxyChatCompletionRequest_ChatCompletionThinkingBlock"] | components["schemas"]["ProxyChatCompletionRequest_ChatCompletionRedactedThinkingBlock"] | components["schemas"]["ChatCompletionImageObject"])[] | null;
+            content?: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionThinkingBlock"] | components["schemas"]["ChatCompletionRedactedThinkingBlock"] | components["schemas"]["ChatCompletionImageObject"])[] | null;
             function_call?: components["schemas"]["ChatCompletionToolCallFunctionChunk"] | null;
             /** Name */
             name?: string | null;
             /** Reasoning Content */
             reasoning_content?: string | null;
             /** Reasoning Items */
-            reasoning_items?: components["schemas"]["ProxyChatCompletionRequest_ChatCompletionReasoningItem"][] | null;
+            reasoning_items?: components["schemas"]["ChatCompletionReasoningItem"][] | null;
             /**
              * Role
              * @constant
              */
             role: "assistant";
             /** Thinking Blocks */
-            thinking_blocks?: (components["schemas"]["ProxyChatCompletionRequest_ChatCompletionThinkingBlock"] | components["schemas"]["ProxyChatCompletionRequest_ChatCompletionRedactedThinkingBlock"])[] | null;
+            thinking_blocks?: (components["schemas"]["ChatCompletionThinkingBlock"] | components["schemas"]["ChatCompletionRedactedThinkingBlock"])[] | null;
             /** Tool Calls */
             tool_calls?: components["schemas"]["ChatCompletionAssistantToolCall"][] | null;
         };
@@ -26776,7 +26776,7 @@ export interface components {
         };
         /** ChatCompletionDeveloperMessage */
         ChatCompletionDeveloperMessage: {
-            cache_control?: components["schemas"]["ProxyChatCompletionRequest_ChatCompletionCachedContent"];
+            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
             content: string | unknown[];
             /** Name */
@@ -26927,7 +26927,7 @@ export interface components {
         };
         /** ChatCompletionSystemMessage */
         ChatCompletionSystemMessage: {
-            cache_control?: components["schemas"]["ProxyChatCompletionRequest_ChatCompletionCachedContent"];
+            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
             content: string | unknown[];
             /** Name */
@@ -26940,7 +26940,7 @@ export interface components {
         };
         /** ChatCompletionTextObject */
         ChatCompletionTextObject: {
-            cache_control?: components["schemas"]["ProxyChatCompletionRequest_ChatCompletionCachedContent"];
+            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Text */
             text: string;
             /**
@@ -27057,7 +27057,7 @@ export interface components {
         };
         /** ChatCompletionUserMessage */
         ChatCompletionUserMessage: {
-            cache_control?: components["schemas"]["ProxyChatCompletionRequest_ChatCompletionCachedContent"];
+            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
             content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionAudioObject"] | components["schemas"]["ChatCompletionDocumentObject"] | components["schemas"]["ChatCompletionVideoObject"] | components["schemas"]["ChatCompletionFileObject"])[];
             /**
@@ -29128,7 +29128,7 @@ export interface components {
             /** Description */
             description?: string;
             /** Format */
-            format?: components["schemas"]["ResponsesAPIRequestParams_Text"] | components["schemas"]["ResponsesAPIRequestParams_Grammar"];
+            format?: components["schemas"]["Text"] | components["schemas"]["Grammar"];
             /** Name */
             name: string;
             /**
@@ -30077,10 +30077,10 @@ export interface components {
          */
         FileSearchToolParam: {
             /** Filters */
-            filters?: components["schemas"]["ResponsesAPIRequestParams_ComparisonFilter"] | components["schemas"]["ResponsesAPIRequestParams_CompoundFilter"] | null;
+            filters?: components["schemas"]["ComparisonFilter"] | components["schemas"]["CompoundFilter"] | null;
             /** Max Num Results */
             max_num_results?: number;
-            ranking_options?: components["schemas"]["ResponsesAPIRequestParams_RankingOptions"];
+            ranking_options?: components["schemas"]["RankingOptions"];
             /**
              * Type
              * @constant
@@ -35826,7 +35826,7 @@ export interface components {
             /** Name */
             name: string;
             /** Tools */
-            tools: (components["schemas"]["ResponsesAPIRequestParams_ToolFunction"] | components["schemas"]["CustomToolParam"])[];
+            tools: (components["schemas"]["ToolFunction"] | components["schemas"]["CustomToolParam"])[];
             /**
              * Type
              * @constant
@@ -38755,76 +38755,6 @@ export interface components {
              */
             user: string | null;
         };
-        /** ChatCompletionCachedContent */
-        ProxyChatCompletionRequest_ChatCompletionCachedContent: {
-            /**
-             * Ttl
-             * @enum {string}
-             */
-            ttl?: "5m" | "1h";
-            /**
-             * Type
-             * @constant
-             */
-            type: "ephemeral";
-        };
-        /**
-         * ChatCompletionReasoningItem
-         * @description Represents an OpenAI Responses API reasoning item for round-tripping in conversation history.
-         */
-        ProxyChatCompletionRequest_ChatCompletionReasoningItem: {
-            /** Encrypted Content */
-            encrypted_content?: string | null;
-            /** Id */
-            id?: string;
-            /** Summary */
-            summary?: components["schemas"]["ProxyChatCompletionRequest_ChatCompletionReasoningSummaryTextBlock"][];
-            /**
-             * Type
-             * @constant
-             */
-            type: "reasoning";
-        };
-        /** ChatCompletionReasoningSummaryTextBlock */
-        ProxyChatCompletionRequest_ChatCompletionReasoningSummaryTextBlock: {
-            /** Text */
-            text?: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "summary_text";
-        };
-        /** ChatCompletionRedactedThinkingBlock */
-        ProxyChatCompletionRequest_ChatCompletionRedactedThinkingBlock: {
-            /** Cache Control */
-            cache_control?: {
-                [key: string]: unknown;
-            } | components["schemas"]["ProxyChatCompletionRequest_ChatCompletionCachedContent"] | null;
-            /** Data */
-            data?: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "redacted_thinking";
-        };
-        /** ChatCompletionThinkingBlock */
-        ProxyChatCompletionRequest_ChatCompletionThinkingBlock: {
-            /** Cache Control */
-            cache_control?: {
-                [key: string]: unknown;
-            } | components["schemas"]["ProxyChatCompletionRequest_ChatCompletionCachedContent"] | null;
-            /** Signature */
-            signature?: string | null;
-            /** Thinking */
-            thinking?: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "thinking";
-        };
         /** PublicModelHubInfo */
         PublicModelHubInfo: {
             /** Custom Docs Description */
@@ -39703,7 +39633,7 @@ export interface components {
             /** Id */
             id: string;
             /** Outputs */
-            outputs: (components["schemas"]["ResponsesAPIRequestParams_OutputLogs"] | components["schemas"]["ResponsesAPIRequestParams_OutputImage"])[] | null;
+            outputs: (components["schemas"]["OutputLogs"] | components["schemas"]["OutputImage"])[] | null;
             /**
              * Status
              * @enum {string}
@@ -39845,15 +39775,15 @@ export interface components {
          */
         ResponseComputerToolCallParam: {
             /** Action */
-            action?: components["schemas"]["ResponsesAPIRequestParams_ActionClick"] | components["schemas"]["ResponsesAPIRequestParams_ActionDoubleClick"] | components["schemas"]["ResponsesAPIRequestParams_ActionDrag"] | components["schemas"]["ResponsesAPIRequestParams_ActionKeypress"] | components["schemas"]["ResponsesAPIRequestParams_ActionMove"] | components["schemas"]["ResponsesAPIRequestParams_ActionScreenshot"] | components["schemas"]["ResponsesAPIRequestParams_ActionScroll"] | components["schemas"]["ResponsesAPIRequestParams_ActionType"] | components["schemas"]["ResponsesAPIRequestParams_ActionWait"];
+            action?: components["schemas"]["ActionClick"] | components["schemas"]["ResponsesAPIRequestParams_ActionDoubleClick"] | components["schemas"]["ActionDrag"] | components["schemas"]["ActionKeypress"] | components["schemas"]["ActionMove"] | components["schemas"]["ActionScreenshot"] | components["schemas"]["ActionScroll"] | components["schemas"]["ActionType"] | components["schemas"]["ActionWait"];
             /** Actions */
-            actions?: (components["schemas"]["ResponsesAPIRequestParams_Click"] | components["schemas"]["ResponsesAPIRequestParams_DoubleClick"] | components["schemas"]["ResponsesAPIRequestParams_Drag"] | components["schemas"]["ResponsesAPIRequestParams_Keypress"] | components["schemas"]["ResponsesAPIRequestParams_Move"] | components["schemas"]["ResponsesAPIRequestParams_Screenshot"] | components["schemas"]["ResponsesAPIRequestParams_Scroll"] | components["schemas"]["ResponsesAPIRequestParams_Type"] | components["schemas"]["ResponsesAPIRequestParams_Wait"])[];
+            actions?: (components["schemas"]["Click"] | components["schemas"]["ResponsesAPIRequestParams_DoubleClick"] | components["schemas"]["Drag"] | components["schemas"]["Keypress"] | components["schemas"]["Move"] | components["schemas"]["Screenshot"] | components["schemas"]["Scroll"] | components["schemas"]["Type"] | components["schemas"]["Wait"])[];
             /** Call Id */
             call_id: string;
             /** Id */
             id: string;
             /** Pending Safety Checks */
-            pending_safety_checks: components["schemas"]["ResponsesAPIRequestParams_PendingSafetyCheck"][];
+            pending_safety_checks: components["schemas"]["PendingSafetyCheck"][];
             /**
              * Status
              * @enum {string}
@@ -40037,7 +39967,7 @@ export interface components {
             /** Queries */
             queries: string[];
             /** Results */
-            results?: components["schemas"]["ResponsesAPIRequestParams_Result"][] | null;
+            results?: components["schemas"]["Result"][] | null;
             /**
              * Status
              * @enum {string}
@@ -40320,7 +40250,7 @@ export interface components {
          */
         ResponseFunctionWebSearchParam: {
             /** Action */
-            action: components["schemas"]["ResponsesAPIRequestParams_ActionSearch"] | components["schemas"]["ResponsesAPIRequestParams_ActionOpenPage"] | components["schemas"]["ResponsesAPIRequestParams_ActionFind"];
+            action: components["schemas"]["ActionSearch"] | components["schemas"]["ActionOpenPage"] | components["schemas"]["ActionFind"];
             /** Id */
             id: string;
             /**
@@ -40679,9 +40609,9 @@ export interface components {
          */
         ResponseOutputTextParam: {
             /** Annotations */
-            annotations: (components["schemas"]["ResponsesAPIRequestParams_AnnotationFileCitation"] | components["schemas"]["ResponsesAPIRequestParams_AnnotationURLCitation"] | components["schemas"]["ResponsesAPIRequestParams_AnnotationContainerFileCitation"] | components["schemas"]["ResponsesAPIRequestParams_AnnotationFilePath"])[];
+            annotations: (components["schemas"]["AnnotationFileCitation"] | components["schemas"]["AnnotationURLCitation"] | components["schemas"]["AnnotationContainerFileCitation"] | components["schemas"]["AnnotationFilePath"])[];
             /** Logprobs */
-            logprobs?: components["schemas"]["ResponsesAPIRequestParams_Logprob"][];
+            logprobs?: components["schemas"]["Logprob"][];
             /** Text */
             text: string;
             /**
@@ -40725,7 +40655,7 @@ export interface components {
          */
         ResponseReasoningItemParam: {
             /** Content */
-            content?: components["schemas"]["ResponsesAPIRequestParams_Content"][];
+            content?: components["schemas"]["Content"][];
             /** Encrypted Content */
             encrypted_content?: string | null;
             /** Id */
@@ -40736,7 +40666,7 @@ export interface components {
              */
             status?: "in_progress" | "completed" | "incomplete";
             /** Summary */
-            summary: components["schemas"]["ResponsesAPIRequestParams_Summary"][];
+            summary: components["schemas"]["Summary"][];
             /**
              * Type
              * @constant
@@ -40830,7 +40760,7 @@ export interface components {
             /** Status */
             status?: ("in_progress" | "completed" | "incomplete") | null;
             /** Tools */
-            tools: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["ResponsesAPIRequestParams_Mcp"] | components["schemas"]["ResponsesAPIRequestParams_CodeInterpreter"] | components["schemas"]["ResponsesAPIRequestParams_ImageGeneration"] | components["schemas"]["ResponsesAPIRequestParams_LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"])[];
+            tools: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"])[];
             /**
              * Type
              * @constant
@@ -40849,7 +40779,7 @@ export interface components {
             /** Include */
             include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
             /** Input */
-            input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["ResponsesAPIRequestParams_LocalShellCall"] | components["schemas"]["ResponsesAPIRequestParams_LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["ResponsesAPIRequestParams_McpListTools"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["ResponsesAPIRequestParams_McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+            input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
             /** Instructions */
             instructions?: string | null;
             /** Max Output Tokens */
@@ -40886,11 +40816,11 @@ export interface components {
             stream_options?: components["schemas"]["ResponsesAPIStreamOptions"] | null;
             /** Temperature */
             temperature?: number | null;
-            text?: components["schemas"]["ResponsesAPIRequestParams_ResponseTextConfigParam"] | null;
+            text?: components["schemas"]["ResponseTextConfigParam"] | null;
             /** Tool Choice */
-            tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceAllowedParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceTypesParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceFunctionParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceMcpParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceCustomParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceApplyPatchParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceShellParam"] | null;
+            tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
             /** Tools */
-            tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["ResponsesAPIRequestParams_Mcp"] | components["schemas"]["ResponsesAPIRequestParams_CodeInterpreter"] | components["schemas"]["ResponsesAPIRequestParams_ImageGeneration"] | components["schemas"]["ResponsesAPIRequestParams_LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+            tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
             /** Top Logprobs */
             top_logprobs?: number | null;
             /** Top P */
@@ -40899,28 +40829,6 @@ export interface components {
             truncation?: ("auto" | "disabled") | null;
             /** User */
             user?: string | null;
-        };
-        /**
-         * ActionClick
-         * @description A click action.
-         */
-        ResponsesAPIRequestParams_ActionClick: {
-            /**
-             * Button
-             * @enum {string}
-             */
-            button: "left" | "right" | "wheel" | "back" | "forward";
-            /** Keys */
-            keys?: string[] | null;
-            /**
-             * Type
-             * @constant
-             */
-            type: "click";
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
         };
         /**
          * ActionDoubleClick
@@ -40940,342 +40848,6 @@ export interface components {
             y: number;
         };
         /**
-         * ActionDrag
-         * @description A drag action.
-         */
-        ResponsesAPIRequestParams_ActionDrag: {
-            /** Keys */
-            keys?: string[] | null;
-            /** Path */
-            path: components["schemas"]["ResponsesAPIRequestParams_ActionDragPath"][];
-            /**
-             * Type
-             * @constant
-             */
-            type: "drag";
-        };
-        /**
-         * ActionDragPath
-         * @description An x/y coordinate pair, e.g. `{ x: 100, y: 200 }`.
-         */
-        ResponsesAPIRequestParams_ActionDragPath: {
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
-        };
-        /**
-         * ActionFind
-         * @description Action type "find_in_page": Searches for a pattern within a loaded page.
-         */
-        ResponsesAPIRequestParams_ActionFind: {
-            /** Pattern */
-            pattern: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "find_in_page";
-            /** Url */
-            url: string;
-        };
-        /**
-         * ActionKeypress
-         * @description A collection of keypresses the model would like to perform.
-         */
-        ResponsesAPIRequestParams_ActionKeypress: {
-            /** Keys */
-            keys: string[];
-            /**
-             * Type
-             * @constant
-             */
-            type: "keypress";
-        };
-        /**
-         * ActionMove
-         * @description A mouse move action.
-         */
-        ResponsesAPIRequestParams_ActionMove: {
-            /** Keys */
-            keys?: string[] | null;
-            /**
-             * Type
-             * @constant
-             */
-            type: "move";
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
-        };
-        /**
-         * ActionOpenPage
-         * @description Action type "open_page" - Opens a specific URL from search results.
-         */
-        ResponsesAPIRequestParams_ActionOpenPage: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "open_page";
-            /** Url */
-            url?: string | null;
-        };
-        /**
-         * ActionScreenshot
-         * @description A screenshot action.
-         */
-        ResponsesAPIRequestParams_ActionScreenshot: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "screenshot";
-        };
-        /**
-         * ActionScroll
-         * @description A scroll action.
-         */
-        ResponsesAPIRequestParams_ActionScroll: {
-            /** Keys */
-            keys?: string[] | null;
-            /** Scroll X */
-            scroll_x: number;
-            /** Scroll Y */
-            scroll_y: number;
-            /**
-             * Type
-             * @constant
-             */
-            type: "scroll";
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
-        };
-        /**
-         * ActionSearch
-         * @description Action type "search" - Performs a web search query.
-         */
-        ResponsesAPIRequestParams_ActionSearch: {
-            /** Queries */
-            queries?: string[];
-            /** Query */
-            query: string;
-            /** Sources */
-            sources?: components["schemas"]["ResponsesAPIRequestParams_ActionSearchSource"][];
-            /**
-             * Type
-             * @constant
-             */
-            type: "search";
-        };
-        /**
-         * ActionSearchSource
-         * @description A source used in the search.
-         */
-        ResponsesAPIRequestParams_ActionSearchSource: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "url";
-            /** Url */
-            url: string;
-        };
-        /**
-         * ActionType
-         * @description An action to type in text.
-         */
-        ResponsesAPIRequestParams_ActionType: {
-            /** Text */
-            text: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "type";
-        };
-        /**
-         * ActionWait
-         * @description A wait action.
-         */
-        ResponsesAPIRequestParams_ActionWait: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "wait";
-        };
-        /**
-         * AnnotationContainerFileCitation
-         * @description A citation for a container file used to generate a model response.
-         */
-        ResponsesAPIRequestParams_AnnotationContainerFileCitation: {
-            /** Container Id */
-            container_id: string;
-            /** End Index */
-            end_index: number;
-            /** File Id */
-            file_id: string;
-            /** Filename */
-            filename: string;
-            /** Start Index */
-            start_index: number;
-            /**
-             * Type
-             * @constant
-             */
-            type: "container_file_citation";
-        };
-        /**
-         * AnnotationFileCitation
-         * @description A citation to a file.
-         */
-        ResponsesAPIRequestParams_AnnotationFileCitation: {
-            /** File Id */
-            file_id: string;
-            /** Filename */
-            filename: string;
-            /** Index */
-            index: number;
-            /**
-             * Type
-             * @constant
-             */
-            type: "file_citation";
-        };
-        /**
-         * AnnotationFilePath
-         * @description A path to a file.
-         */
-        ResponsesAPIRequestParams_AnnotationFilePath: {
-            /** File Id */
-            file_id: string;
-            /** Index */
-            index: number;
-            /**
-             * Type
-             * @constant
-             */
-            type: "file_path";
-        };
-        /**
-         * AnnotationURLCitation
-         * @description A citation for a web resource used to generate a model response.
-         */
-        ResponsesAPIRequestParams_AnnotationURLCitation: {
-            /** End Index */
-            end_index: number;
-            /** Start Index */
-            start_index: number;
-            /** Title */
-            title: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "url_citation";
-            /** Url */
-            url: string;
-        };
-        /**
-         * Click
-         * @description A click action.
-         */
-        ResponsesAPIRequestParams_Click: {
-            /**
-             * Button
-             * @enum {string}
-             */
-            button: "left" | "right" | "wheel" | "back" | "forward";
-            /** Keys */
-            keys?: string[] | null;
-            /**
-             * Type
-             * @constant
-             */
-            type: "click";
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
-        };
-        /**
-         * CodeInterpreter
-         * @description A tool that runs Python code to help generate a response to a prompt.
-         */
-        ResponsesAPIRequestParams_CodeInterpreter: {
-            /** Container */
-            container: string | components["schemas"]["ResponsesAPIRequestParams_CodeInterpreterContainerCodeInterpreterToolAuto"];
-            /**
-             * Type
-             * @constant
-             */
-            type: "code_interpreter";
-        };
-        /**
-         * CodeInterpreterContainerCodeInterpreterToolAuto
-         * @description Configuration for a code interpreter container.
-         *
-         *     Optionally specify the IDs of the files to run the code on.
-         */
-        ResponsesAPIRequestParams_CodeInterpreterContainerCodeInterpreterToolAuto: {
-            /** File Ids */
-            file_ids?: string[];
-            /** Memory Limit */
-            memory_limit?: ("1g" | "4g" | "16g" | "64g") | null;
-            /** Network Policy */
-            network_policy?: components["schemas"]["ContainerNetworkPolicyDisabledParam"] | components["schemas"]["ContainerNetworkPolicyAllowlistParam"];
-            /**
-             * Type
-             * @constant
-             */
-            type: "auto";
-        };
-        /**
-         * ComparisonFilter
-         * @description A filter used to compare a specified attribute key to a given value using a defined comparison operation.
-         */
-        ResponsesAPIRequestParams_ComparisonFilter: {
-            /** Key */
-            key: string;
-            /**
-             * Type
-             * @enum {string}
-             */
-            type: "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "in" | "nin";
-            /** Value */
-            value: string | number | boolean | (string | number)[];
-        };
-        /**
-         * CompoundFilter
-         * @description Combine multiple filters using `and` or `or`.
-         */
-        ResponsesAPIRequestParams_CompoundFilter: {
-            /** Filters */
-            filters: (components["schemas"]["ResponsesAPIRequestParams_ComparisonFilter"] | unknown)[];
-            /**
-             * Type
-             * @enum {string}
-             */
-            type: "and" | "or";
-        };
-        /**
-         * Content
-         * @description Reasoning text from the model.
-         */
-        ResponsesAPIRequestParams_Content: {
-            /** Text */
-            text: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "reasoning_text";
-        };
-        /**
          * DoubleClick
          * @description A double click action.
          */
@@ -41291,107 +40863,6 @@ export interface components {
             x: number;
             /** Y */
             y: number;
-        };
-        /**
-         * Drag
-         * @description A drag action.
-         */
-        ResponsesAPIRequestParams_Drag: {
-            /** Keys */
-            keys?: string[] | null;
-            /** Path */
-            path: components["schemas"]["ResponsesAPIRequestParams_DragPath"][];
-            /**
-             * Type
-             * @constant
-             */
-            type: "drag";
-        };
-        /**
-         * DragPath
-         * @description An x/y coordinate pair, e.g. `{ x: 100, y: 200 }`.
-         */
-        ResponsesAPIRequestParams_DragPath: {
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
-        };
-        /**
-         * Filters
-         * @description Filters for the search.
-         */
-        ResponsesAPIRequestParams_Filters: {
-            /** Allowed Domains */
-            allowed_domains?: string[] | null;
-        };
-        /**
-         * Grammar
-         * @description A grammar defined by the user.
-         */
-        ResponsesAPIRequestParams_Grammar: {
-            /** Definition */
-            definition: string;
-            /**
-             * Syntax
-             * @enum {string}
-             */
-            syntax: "lark" | "regex";
-            /**
-             * Type
-             * @constant
-             */
-            type: "grammar";
-        };
-        /**
-         * ImageGeneration
-         * @description A tool that generates images using the GPT image models.
-         */
-        ResponsesAPIRequestParams_ImageGeneration: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action?: "generate" | "edit" | "auto";
-            /**
-             * Background
-             * @enum {string}
-             */
-            background?: "transparent" | "opaque" | "auto";
-            /** Input Fidelity */
-            input_fidelity?: ("high" | "low") | null;
-            input_image_mask?: components["schemas"]["ResponsesAPIRequestParams_ImageGenerationInputImageMask"];
-            /** Model */
-            model?: string | ("gpt-image-1" | "gpt-image-1-mini" | "gpt-image-1.5");
-            /**
-             * Moderation
-             * @enum {string}
-             */
-            moderation?: "auto" | "low";
-            /** Output Compression */
-            output_compression?: number;
-            /**
-             * Output Format
-             * @enum {string}
-             */
-            output_format?: "png" | "webp" | "jpeg";
-            /** Partial Images */
-            partial_images?: number;
-            /**
-             * Quality
-             * @enum {string}
-             */
-            quality?: "low" | "medium" | "high" | "auto";
-            /**
-             * Size
-             * @enum {string}
-             */
-            size?: "1024x1024" | "1024x1536" | "1536x1024" | "auto";
-            /**
-             * Type
-             * @constant
-             */
-            type: "image_generation";
         };
         /**
          * ImageGenerationCall
@@ -41414,194 +40885,6 @@ export interface components {
             type: "image_generation_call";
         };
         /**
-         * ImageGenerationInputImageMask
-         * @description Optional mask for inpainting.
-         *
-         *     Contains `image_url`
-         *     (string, optional) and `file_id` (string, optional).
-         */
-        ResponsesAPIRequestParams_ImageGenerationInputImageMask: {
-            /** File Id */
-            file_id?: string;
-            /** Image Url */
-            image_url?: string;
-        };
-        /**
-         * Keypress
-         * @description A collection of keypresses the model would like to perform.
-         */
-        ResponsesAPIRequestParams_Keypress: {
-            /** Keys */
-            keys: string[];
-            /**
-             * Type
-             * @constant
-             */
-            type: "keypress";
-        };
-        /**
-         * LocalShell
-         * @description A tool that allows the model to execute shell commands in a local environment.
-         */
-        ResponsesAPIRequestParams_LocalShell: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "local_shell";
-        };
-        /**
-         * LocalShellCall
-         * @description A tool call to run a command on the local shell.
-         */
-        ResponsesAPIRequestParams_LocalShellCall: {
-            action: components["schemas"]["ResponsesAPIRequestParams_LocalShellCallAction"];
-            /** Call Id */
-            call_id: string;
-            /** Id */
-            id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "in_progress" | "completed" | "incomplete";
-            /**
-             * Type
-             * @constant
-             */
-            type: "local_shell_call";
-        };
-        /**
-         * LocalShellCallAction
-         * @description Execute a shell command on the server.
-         */
-        ResponsesAPIRequestParams_LocalShellCallAction: {
-            /** Command */
-            command: string[];
-            /** Env */
-            env: {
-                [key: string]: string;
-            };
-            /** Timeout Ms */
-            timeout_ms?: number | null;
-            /**
-             * Type
-             * @constant
-             */
-            type: "exec";
-            /** User */
-            user?: string | null;
-            /** Working Directory */
-            working_directory?: string | null;
-        };
-        /**
-         * LocalShellCallOutput
-         * @description The output of a local shell tool call.
-         */
-        ResponsesAPIRequestParams_LocalShellCallOutput: {
-            /** Id */
-            id: string;
-            /** Output */
-            output: string;
-            /** Status */
-            status?: ("in_progress" | "completed" | "incomplete") | null;
-            /**
-             * Type
-             * @constant
-             */
-            type: "local_shell_call_output";
-        };
-        /**
-         * Logprob
-         * @description The log probability of a token.
-         */
-        ResponsesAPIRequestParams_Logprob: {
-            /** Bytes */
-            bytes: number[];
-            /** Logprob */
-            logprob: number;
-            /** Token */
-            token: string;
-            /** Top Logprobs */
-            top_logprobs: components["schemas"]["ResponsesAPIRequestParams_LogprobTopLogprob"][];
-        };
-        /**
-         * LogprobTopLogprob
-         * @description The top log probability of a token.
-         */
-        ResponsesAPIRequestParams_LogprobTopLogprob: {
-            /** Bytes */
-            bytes: number[];
-            /** Logprob */
-            logprob: number;
-            /** Token */
-            token: string;
-        };
-        /**
-         * Mcp
-         * @description Give the model access to additional tools via remote Model Context Protocol
-         *     (MCP) servers. [Learn more about MCP](https://platform.openai.com/docs/guides/tools-remote-mcp).
-         */
-        ResponsesAPIRequestParams_Mcp: {
-            /** Allowed Tools */
-            allowed_tools?: string[] | components["schemas"]["ResponsesAPIRequestParams_McpAllowedToolsMcpToolFilter"] | null;
-            /** Authorization */
-            authorization?: string;
-            /**
-             * Connector Id
-             * @enum {string}
-             */
-            connector_id?: "connector_dropbox" | "connector_gmail" | "connector_googlecalendar" | "connector_googledrive" | "connector_microsoftteams" | "connector_outlookcalendar" | "connector_outlookemail" | "connector_sharepoint";
-            /** Defer Loading */
-            defer_loading?: boolean;
-            /** Headers */
-            headers?: {
-                [key: string]: string;
-            } | null;
-            /** Require Approval */
-            require_approval?: components["schemas"]["ResponsesAPIRequestParams_McpRequireApprovalMcpToolApprovalFilter"] | ("always" | "never") | null;
-            /** Server Description */
-            server_description?: string;
-            /** Server Label */
-            server_label: string;
-            /** Server Url */
-            server_url?: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "mcp";
-        };
-        /**
-         * McpAllowedToolsMcpToolFilter
-         * @description A filter object to specify which tools are allowed.
-         */
-        ResponsesAPIRequestParams_McpAllowedToolsMcpToolFilter: {
-            /** Read Only */
-            read_only?: boolean;
-            /** Tool Names */
-            tool_names?: string[];
-        };
-        /**
-         * McpApprovalRequest
-         * @description A request for human approval of a tool invocation.
-         */
-        ResponsesAPIRequestParams_McpApprovalRequest: {
-            /** Arguments */
-            arguments: string;
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Server Label */
-            server_label: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "mcp_approval_request";
-        };
-        /**
          * McpApprovalResponse
          * @description A response to an MCP approval request.
          */
@@ -41619,101 +40902,6 @@ export interface components {
              * @constant
              */
             type: "mcp_approval_response";
-        };
-        /**
-         * McpCall
-         * @description An invocation of a tool on an MCP server.
-         */
-        ResponsesAPIRequestParams_McpCall: {
-            /** Approval Request Id */
-            approval_request_id?: string | null;
-            /** Arguments */
-            arguments: string;
-            /** Error */
-            error?: string | null;
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Output */
-            output?: string | null;
-            /** Server Label */
-            server_label: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status?: "in_progress" | "completed" | "incomplete" | "calling" | "failed";
-            /**
-             * Type
-             * @constant
-             */
-            type: "mcp_call";
-        };
-        /**
-         * McpListTools
-         * @description A list of tools available on an MCP server.
-         */
-        ResponsesAPIRequestParams_McpListTools: {
-            /** Error */
-            error?: string | null;
-            /** Id */
-            id: string;
-            /** Server Label */
-            server_label: string;
-            /** Tools */
-            tools: components["schemas"]["ResponsesAPIRequestParams_McpListToolsTool"][];
-            /**
-             * Type
-             * @constant
-             */
-            type: "mcp_list_tools";
-        };
-        /**
-         * McpListToolsTool
-         * @description A tool available on an MCP server.
-         */
-        ResponsesAPIRequestParams_McpListToolsTool: {
-            /** Annotations */
-            annotations?: unknown | null;
-            /** Description */
-            description?: string | null;
-            /** Input Schema */
-            input_schema: unknown;
-            /** Name */
-            name: string;
-        };
-        /**
-         * McpRequireApprovalMcpToolApprovalFilter
-         * @description Specify which of the MCP server's tools require approval.
-         *
-         *     Can be
-         *     `always`, `never`, or a filter object associated with tools
-         *     that require approval.
-         */
-        ResponsesAPIRequestParams_McpRequireApprovalMcpToolApprovalFilter: {
-            always?: components["schemas"]["ResponsesAPIRequestParams_McpRequireApprovalMcpToolApprovalFilterAlways"];
-            never?: components["schemas"]["ResponsesAPIRequestParams_McpRequireApprovalMcpToolApprovalFilterNever"];
-        };
-        /**
-         * McpRequireApprovalMcpToolApprovalFilterAlways
-         * @description A filter object to specify which tools are allowed.
-         */
-        ResponsesAPIRequestParams_McpRequireApprovalMcpToolApprovalFilterAlways: {
-            /** Read Only */
-            read_only?: boolean;
-            /** Tool Names */
-            tool_names?: string[];
-        };
-        /**
-         * McpRequireApprovalMcpToolApprovalFilterNever
-         * @description A filter object to specify which tools are allowed.
-         */
-        ResponsesAPIRequestParams_McpRequireApprovalMcpToolApprovalFilterNever: {
-            /** Read Only */
-            read_only?: boolean;
-            /** Tool Names */
-            tool_names?: string[];
         };
         /**
          * Message
@@ -41739,359 +40927,6 @@ export interface components {
              * @constant
              */
             type?: "message";
-        };
-        /**
-         * Move
-         * @description A mouse move action.
-         */
-        ResponsesAPIRequestParams_Move: {
-            /** Keys */
-            keys?: string[] | null;
-            /**
-             * Type
-             * @constant
-             */
-            type: "move";
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
-        };
-        /**
-         * OutputImage
-         * @description The image output from the code interpreter.
-         */
-        ResponsesAPIRequestParams_OutputImage: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "image";
-            /** Url */
-            url: string;
-        };
-        /**
-         * OutputLogs
-         * @description The logs output from the code interpreter.
-         */
-        ResponsesAPIRequestParams_OutputLogs: {
-            /** Logs */
-            logs: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "logs";
-        };
-        /**
-         * PendingSafetyCheck
-         * @description A pending safety check for the computer call.
-         */
-        ResponsesAPIRequestParams_PendingSafetyCheck: {
-            /** Code */
-            code?: string | null;
-            /** Id */
-            id: string;
-            /** Message */
-            message?: string | null;
-        };
-        /**
-         * RankingOptions
-         * @description Ranking options for search.
-         */
-        ResponsesAPIRequestParams_RankingOptions: {
-            hybrid_search?: components["schemas"]["ResponsesAPIRequestParams_RankingOptionsHybridSearch"];
-            /**
-             * Ranker
-             * @enum {string}
-             */
-            ranker?: "auto" | "default-2024-11-15";
-            /** Score Threshold */
-            score_threshold?: number;
-        };
-        /**
-         * RankingOptionsHybridSearch
-         * @description Weights that control how reciprocal rank fusion balances semantic embedding matches versus sparse keyword matches when hybrid search is enabled.
-         */
-        ResponsesAPIRequestParams_RankingOptionsHybridSearch: {
-            /** Embedding Weight */
-            embedding_weight: number;
-            /** Text Weight */
-            text_weight: number;
-        };
-        /**
-         * ResponseFormatJSONObject
-         * @description JSON object response format.
-         *
-         *     An older method of generating JSON responses.
-         *     Using `json_schema` is recommended for models that support it. Note that the
-         *     model will not generate JSON without a system or user message instructing it
-         *     to do so.
-         */
-        ResponsesAPIRequestParams_ResponseFormatJSONObject: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "json_object";
-        };
-        /**
-         * ResponseFormatText
-         * @description Default response format. Used to generate text responses.
-         */
-        ResponsesAPIRequestParams_ResponseFormatText: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "text";
-        };
-        /**
-         * ResponseFormatTextJSONSchemaConfigParam
-         * @description JSON Schema response format.
-         *
-         *     Used to generate structured JSON responses.
-         *     Learn more about [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs).
-         */
-        ResponsesAPIRequestParams_ResponseFormatTextJSONSchemaConfigParam: {
-            /** Description */
-            description?: string;
-            /** Name */
-            name: string;
-            /** Schema */
-            schema: {
-                [key: string]: unknown;
-            };
-            /** Strict */
-            strict?: boolean | null;
-            /**
-             * Type
-             * @constant
-             */
-            type: "json_schema";
-        };
-        /**
-         * ResponseTextConfigParam
-         * @description Configuration options for a text response from the model.
-         *
-         *     Can be plain
-         *     text or structured JSON data. Learn more:
-         *     - [Text inputs and outputs](https://platform.openai.com/docs/guides/text)
-         *     - [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs)
-         */
-        ResponsesAPIRequestParams_ResponseTextConfigParam: {
-            /** Format */
-            format?: components["schemas"]["ResponsesAPIRequestParams_ResponseFormatText"] | components["schemas"]["ResponsesAPIRequestParams_ResponseFormatTextJSONSchemaConfigParam"] | components["schemas"]["ResponsesAPIRequestParams_ResponseFormatJSONObject"];
-            /** Verbosity */
-            verbosity?: ("low" | "medium" | "high") | null;
-        };
-        /** Result */
-        ResponsesAPIRequestParams_Result: {
-            /** Attributes */
-            attributes?: {
-                [key: string]: string | number | boolean;
-            } | null;
-            /** File Id */
-            file_id?: string;
-            /** Filename */
-            filename?: string;
-            /** Score */
-            score?: number;
-            /** Text */
-            text?: string;
-        };
-        /**
-         * Screenshot
-         * @description A screenshot action.
-         */
-        ResponsesAPIRequestParams_Screenshot: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "screenshot";
-        };
-        /**
-         * Scroll
-         * @description A scroll action.
-         */
-        ResponsesAPIRequestParams_Scroll: {
-            /** Keys */
-            keys?: string[] | null;
-            /** Scroll X */
-            scroll_x: number;
-            /** Scroll Y */
-            scroll_y: number;
-            /**
-             * Type
-             * @constant
-             */
-            type: "scroll";
-            /** X */
-            x: number;
-            /** Y */
-            y: number;
-        };
-        /**
-         * Summary
-         * @description A summary text from the model.
-         */
-        ResponsesAPIRequestParams_Summary: {
-            /** Text */
-            text: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "summary_text";
-        };
-        /**
-         * Text
-         * @description Unconstrained free-form text.
-         */
-        ResponsesAPIRequestParams_Text: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "text";
-        };
-        /**
-         * ToolChoiceAllowedParam
-         * @description Constrains the tools available to the model to a pre-defined set.
-         */
-        ResponsesAPIRequestParams_ToolChoiceAllowedParam: {
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "auto" | "required";
-            /** Tools */
-            tools: {
-                [key: string]: unknown;
-            }[];
-            /**
-             * Type
-             * @constant
-             */
-            type: "allowed_tools";
-        };
-        /**
-         * ToolChoiceApplyPatchParam
-         * @description Forces the model to call the apply_patch tool when executing a tool call.
-         */
-        ResponsesAPIRequestParams_ToolChoiceApplyPatchParam: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "apply_patch";
-        };
-        /**
-         * ToolChoiceCustomParam
-         * @description Use this option to force the model to call a specific custom tool.
-         */
-        ResponsesAPIRequestParams_ToolChoiceCustomParam: {
-            /** Name */
-            name: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "custom";
-        };
-        /**
-         * ToolChoiceFunctionParam
-         * @description Use this option to force the model to call a specific function.
-         */
-        ResponsesAPIRequestParams_ToolChoiceFunctionParam: {
-            /** Name */
-            name: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "function";
-        };
-        /**
-         * ToolChoiceMcpParam
-         * @description Use this option to force the model to call a specific tool on a remote MCP server.
-         */
-        ResponsesAPIRequestParams_ToolChoiceMcpParam: {
-            /** Name */
-            name?: string | null;
-            /** Server Label */
-            server_label: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "mcp";
-        };
-        /**
-         * ToolChoiceShellParam
-         * @description Forces the model to call the shell tool when a tool call is required.
-         */
-        ResponsesAPIRequestParams_ToolChoiceShellParam: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "shell";
-        };
-        /**
-         * ToolChoiceTypesParam
-         * @description Indicates that the model should use a built-in tool to generate a response.
-         *     [Learn more about built-in tools](https://platform.openai.com/docs/guides/tools).
-         */
-        ResponsesAPIRequestParams_ToolChoiceTypesParam: {
-            /**
-             * Type
-             * @enum {string}
-             */
-            type: "file_search" | "web_search_preview" | "computer" | "computer_use_preview" | "computer_use" | "web_search_preview_2025_03_11" | "image_generation" | "code_interpreter";
-        };
-        /** ToolFunction */
-        ResponsesAPIRequestParams_ToolFunction: {
-            /** Defer Loading */
-            defer_loading?: boolean;
-            /** Description */
-            description?: string | null;
-            /** Name */
-            name: string;
-            /** Parameters */
-            parameters?: unknown | null;
-            /** Strict */
-            strict?: boolean | null;
-            /**
-             * Type
-             * @constant
-             */
-            type: "function";
-        };
-        /**
-         * Type
-         * @description An action to type in text.
-         */
-        ResponsesAPIRequestParams_Type: {
-            /** Text */
-            text: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "type";
-        };
-        /**
-         * Wait
-         * @description A wait action.
-         */
-        ResponsesAPIRequestParams_Wait: {
-            /**
-             * Type
-             * @constant
-             */
-            type: "wait";
         };
         /** ResponsesAPIResponse */
         ResponsesAPIResponse: {
@@ -47162,7 +45997,7 @@ export interface components {
          *     [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
          */
         WebSearchToolParam: {
-            filters?: components["schemas"]["ResponsesAPIRequestParams_Filters"] | null;
+            filters?: components["schemas"]["Filters"] | null;
             /**
              * Search Context Size
              * @enum {string}
@@ -61727,7 +60562,7 @@ export interface operations {
                     /** Include */
                     include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
                     /** Input */
-                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["ResponsesAPIRequestParams_LocalShellCall"] | components["schemas"]["ResponsesAPIRequestParams_LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["ResponsesAPIRequestParams_McpListTools"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["ResponsesAPIRequestParams_McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
                     /** Instructions */
                     instructions?: string | null;
                     /** Max Output Tokens */
@@ -61764,11 +60599,11 @@ export interface operations {
                     stream_options?: components["schemas"]["ResponsesAPIStreamOptions"] | null;
                     /** Temperature */
                     temperature?: number | null;
-                    text?: components["schemas"]["ResponsesAPIRequestParams_ResponseTextConfigParam"] | null;
+                    text?: components["schemas"]["ResponseTextConfigParam"] | null;
                     /** Tool Choice */
-                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceAllowedParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceTypesParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceFunctionParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceMcpParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceCustomParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceApplyPatchParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceShellParam"] | null;
+                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["ResponsesAPIRequestParams_Mcp"] | components["schemas"]["ResponsesAPIRequestParams_CodeInterpreter"] | components["schemas"]["ResponsesAPIRequestParams_ImageGeneration"] | components["schemas"]["ResponsesAPIRequestParams_LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
@@ -64984,7 +63819,7 @@ export interface operations {
                     /** Include */
                     include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
                     /** Input */
-                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["ResponsesAPIRequestParams_LocalShellCall"] | components["schemas"]["ResponsesAPIRequestParams_LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["ResponsesAPIRequestParams_McpListTools"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["ResponsesAPIRequestParams_McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
                     /** Instructions */
                     instructions?: string | null;
                     /** Max Output Tokens */
@@ -65021,11 +63856,11 @@ export interface operations {
                     stream_options?: components["schemas"]["ResponsesAPIStreamOptions"] | null;
                     /** Temperature */
                     temperature?: number | null;
-                    text?: components["schemas"]["ResponsesAPIRequestParams_ResponseTextConfigParam"] | null;
+                    text?: components["schemas"]["ResponseTextConfigParam"] | null;
                     /** Tool Choice */
-                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceAllowedParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceTypesParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceFunctionParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceMcpParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceCustomParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceApplyPatchParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceShellParam"] | null;
+                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["ResponsesAPIRequestParams_Mcp"] | components["schemas"]["ResponsesAPIRequestParams_CodeInterpreter"] | components["schemas"]["ResponsesAPIRequestParams_ImageGeneration"] | components["schemas"]["ResponsesAPIRequestParams_LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
@@ -74161,7 +72996,7 @@ export interface operations {
                     /** Include */
                     include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
                     /** Input */
-                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["ResponsesAPIRequestParams_LocalShellCall"] | components["schemas"]["ResponsesAPIRequestParams_LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["ResponsesAPIRequestParams_McpListTools"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["ResponsesAPIRequestParams_McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
                     /** Instructions */
                     instructions?: string | null;
                     /** Max Output Tokens */
@@ -74198,11 +73033,11 @@ export interface operations {
                     stream_options?: components["schemas"]["ResponsesAPIStreamOptions"] | null;
                     /** Temperature */
                     temperature?: number | null;
-                    text?: components["schemas"]["ResponsesAPIRequestParams_ResponseTextConfigParam"] | null;
+                    text?: components["schemas"]["ResponseTextConfigParam"] | null;
                     /** Tool Choice */
-                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceAllowedParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceTypesParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceFunctionParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceMcpParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceCustomParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceApplyPatchParam"] | components["schemas"]["ResponsesAPIRequestParams_ToolChoiceShellParam"] | null;
+                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["ResponsesAPIRequestParams_Mcp"] | components["schemas"]["ResponsesAPIRequestParams_CodeInterpreter"] | components["schemas"]["ResponsesAPIRequestParams_ImageGeneration"] | components["schemas"]["ResponsesAPIRequestParams_LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */

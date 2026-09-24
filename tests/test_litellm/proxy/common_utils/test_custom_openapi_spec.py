@@ -309,3 +309,84 @@ def test_move_defs_to_components_renames_defs_whose_refs_point_at_renamed_defs()
     assert schemas["NS_Inner"] == {"type": "integer"}
     assert schemas["Wrapper"] == {"$ref": "#/components/schemas/Inner"}
     assert schemas["NS_Wrapper"] == {"$ref": "#/components/schemas/NS_Inner"}
+
+
+def test_add_schema_to_components_keeps_name_for_same_shape_existing_def():
+    openapi = {
+        "components": {
+            "schemas": {
+                "Block": {
+                    "type": "object",
+                    "properties": {"type": {"type": "string"}, "x": {"type": "string"}},
+                    "required": ["type", "x"],
+                    "additionalProperties": True,
+                },
+            }
+        }
+    }
+
+    CustomOpenAPISpec.add_schema_to_components(
+        openapi,
+        "Req",
+        {
+            "type": "object",
+            "properties": {"b": {"$ref": "#/$defs/Block"}},
+            "$defs": {
+                "Block": {
+                    "type": "object",
+                    "properties": {"type": {"type": "string"}, "x": {"type": "string"}},
+                    "required": ["type", "x"],
+                },
+            },
+        },
+    )
+
+    schemas = openapi["components"]["schemas"]
+    assert "Req_Block" not in schemas
+    assert schemas["Block"]["additionalProperties"] is True
+    assert schemas["Req"]["properties"]["b"]["$ref"] == "#/components/schemas/Block"
+
+
+def test_add_schema_to_components_renames_def_with_different_required_set():
+    openapi = {
+        "components": {
+            "schemas": {
+                "Block": {
+                    "type": "object",
+                    "properties": {
+                        "keys": {"type": "array"},
+                        "type": {"type": "string"},
+                        "x": {"type": "string"},
+                        "y": {"type": "string"},
+                    },
+                    "required": ["type", "x", "y"],
+                },
+            }
+        }
+    }
+
+    CustomOpenAPISpec.add_schema_to_components(
+        openapi,
+        "Req",
+        {
+            "type": "object",
+            "properties": {"b": {"$ref": "#/$defs/Block"}},
+            "$defs": {
+                "Block": {
+                    "type": "object",
+                    "properties": {
+                        "keys": {"type": "array"},
+                        "type": {"type": "string"},
+                        "x": {"type": "string"},
+                        "y": {"type": "string"},
+                    },
+                    "required": ["keys", "type", "x", "y"],
+                },
+            },
+        },
+    )
+
+    schemas = openapi["components"]["schemas"]
+    assert schemas["Block"]["required"] == ["type", "x", "y"]
+    assert schemas["Req_Block"]["required"] == ["keys", "type", "x", "y"]
+    assert schemas["Req"]["properties"]["b"]["$ref"] == "#/components/schemas/Req_Block"

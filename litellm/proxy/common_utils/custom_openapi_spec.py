@@ -185,9 +185,24 @@ class CustomOpenAPISpec:
             {
                 name: f"{namespace}_{name}"
                 for name, d in defs.items()
-                if name in schemas and schemas[name] != CustomOpenAPISpec._rewrite_defs_refs(d, renames)
+                if name in schemas
+                and not CustomOpenAPISpec._same_shape(schemas[name], CustomOpenAPISpec._rewrite_defs_refs(d, renames))
             }
         )
+
+    @staticmethod
+    def _same_shape(existing: JsonValue, incoming: JsonValue) -> bool:
+        if existing == incoming:
+            return True
+        existing_obj: Final = CustomOpenAPISpec._as_object(existing)
+        incoming_obj: Final = CustomOpenAPISpec._as_object(incoming)
+        existing_props: Final = CustomOpenAPISpec._as_object(existing_obj.get("properties"))
+        incoming_props: Final = CustomOpenAPISpec._as_object(incoming_obj.get("properties"))
+        if not existing_props or not incoming_props:
+            return False
+        return existing_props.keys() == incoming_props.keys() and frozenset(
+            x for x in CustomOpenAPISpec._as_array(existing_obj.get("required")) if isinstance(x, str)
+        ) == frozenset(x for x in CustomOpenAPISpec._as_array(incoming_obj.get("required")) if isinstance(x, str))
 
     @staticmethod
     def _fixed_renames(
