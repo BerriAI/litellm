@@ -56,6 +56,7 @@ use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
 use crate::prompt_caching_savings::{
     PromptCachingSavingsRequest, calculate_prompt_caching_savings,
 };
+use crate::provider::LlmProviders;
 use crate::provider_cache::apply_provider_cache_read_default;
 use crate::realtime_cost::{
     combine_usage_objects, event_usage, get_transcription_model_name_from_results,
@@ -473,6 +474,7 @@ impl ModelInfoCatalog {
         request: ModelCostRequest<'_>,
         call: CostCall<'_>,
     ) -> Result<(f64, f64), CatalogCallError> {
+        let provider = request.provider.and_then(LlmProviders::parse);
         match call {
             CostCall::Token {
                 call_type,
@@ -480,7 +482,7 @@ impl ModelInfoCatalog {
                 completion_characters,
                 request_model,
             } => {
-                if request.provider == Some("vertex_ai") {
+                if provider == Some(LlmProviders::VERTEX_AI) {
                     return Ok(self.vertex_cost(
                         request,
                         call_type,
@@ -488,12 +490,16 @@ impl ModelInfoCatalog {
                         completion_characters,
                     )?);
                 }
-                if request.provider == Some("together_ai")
-                    && matches!(call_type, "embedding" | "aembedding")
+                if provider == Some(LlmProviders::TOGETHER_AI)
+                    && matches!(
+                        crate::call_type::CallTypes::parse(call_type),
+                        Some(crate::call_type::CallTypes::embedding)
+                            | Some(crate::call_type::CallTypes::aembedding)
+                    )
                 {
                     return Ok(self.together_ai_cost_per_token(request, call_type)?);
                 }
-                if request.provider == Some("azure_ai") {
+                if provider == Some(LlmProviders::AZURE_AI) {
                     return Ok(self.azure_ai_cost_per_token(request, request_model)?);
                 }
                 Ok(self.cost_per_token(request)?)
@@ -848,26 +854,27 @@ impl ModelInfoCatalog {
         {
             return Ok(cost);
         }
-        if request.provider == Some("azure_ai") {
+        let provider = request.provider.and_then(LlmProviders::parse);
+        if provider == Some(LlmProviders::AZURE_AI) {
             return self.azure_ai_cost_per_token(request, None);
         }
-        if request.provider == Some("databricks") {
+        if provider == Some(LlmProviders::DATABRICKS) {
             return self.databricks_cost_per_token(request);
         }
-        if request.provider == Some("lemonade") {
+        if provider == Some(LlmProviders::LEMONADE) {
             return Ok(self.lemonade_cost_per_token(request));
         }
-        if request.provider == Some("perplexity")
+        if provider == Some(LlmProviders::PERPLEXITY)
             && let Some(cost) = request.usage.cost
         {
             return Ok((0.0, cost));
         }
-        if request.provider == Some("xai")
+        if provider == Some(LlmProviders::XAI)
             && let Some(cost) = xai_reported_cost(request.usage)
         {
             return Ok((0.0, cost));
         }
-        let needs_together_fallback = (request.provider == Some("together_ai")
+        let needs_together_fallback = (provider == Some(LlmProviders::TOGETHER_AI)
             || request.model.contains("togethercomputer")
             || request.model.contains("together_ai"))
             && !has_together_registry_pricing(request.model, &self.entries);
@@ -894,70 +901,72 @@ impl ModelInfoCatalog {
         if let Some(cost) = per_second_pricing_cost(&model_info, request.response_time_ms) {
             return Ok(cost);
         }
-        if request.provider == Some("azure")
+        if provider == Some(LlmProviders::AZURE)
             && let Some(cost) = output_per_second_cost(&model_info, request.response_time_ms)
         {
             return Ok(cost);
         }
-        if request.provider == Some("perplexity") {
-            return Ok(perplexity_cost_per_token(
-                request.usage,
-                &model_info,
-                request.at,
-            ));
-        }
-        if request.provider == Some("xai") {
-            return Ok(xai_cost_per_token(request.usage, &model_info, request.at));
-        }
-        if matches!(
-            request.provider,
-            Some("dashscope" | "qwencloud" | "qwen_ai_platform")
-        ) {
-            return Ok(dashscope_cost_per_token(
-                request.usage,
-                &model_info,
-                request.at,
-            ));
-        }
-        if request.provider == Some("fireworks_ai") {
-            return Ok(fireworks_cost_per_token(
-                request.usage,
-                &self.entries[key],
-                request.at,
-            ));
-        }
-        if request.provider == Some("vertex_ai") {
-            return Ok(vertex_cost_per_token(
-                request.usage,
-                &model_info,
-                request.service_tier,
-                request.vertex_location,
-                request.at,
-            ));
-        }
-        if !matches!(
-            request.provider,
+        match provider {
+            Some(LlmProviders::PERPLEXITY) => {
+                return Ok(perplexity_cost_per_token(
+                    request.usage,
+                    &model_info,
+                    request.at,
+                ));
+            }
+            Some(LlmProviders::XAI) => {
+                return Ok(xai_cost_per_token(request.usage, &model_info, request.at));
+            }
             Some(
-                "vertex_ai"
-                    | "anthropic"
-                    | "bedrock"
-                    | "openai"
-                    | "databricks"
-                    | "fireworks_ai"
-                    | "azure"
-                    | "gemini"
-                    | "deepseek"
-                    | "tencent"
-                    | "perplexity"
-                    | "xai"
-                    | "lemonade"
-                    | "dashscope"
-                    | "qwencloud"
-                    | "qwen_ai_platform"
-                    | "azure_ai"
+                LlmProviders::DASHSCOPE | LlmProviders::QWENCLOUD | LlmProviders::QWEN_AI_PLATFORM,
+            ) => {
+                return Ok(dashscope_cost_per_token(
+                    request.usage,
+                    &model_info,
+                    request.at,
+                ));
+            }
+            Some(LlmProviders::FIREWORKS_AI) => {
+                return Ok(fireworks_cost_per_token(
+                    request.usage,
+                    &self.entries[key],
+                    request.at,
+                ));
+            }
+            Some(LlmProviders::VERTEX_AI) => {
+                return Ok(vertex_cost_per_token(
+                    request.usage,
+                    &model_info,
+                    request.service_tier,
+                    request.vertex_location,
+                    request.at,
+                ));
+            }
+            _ => {}
+        }
+        let dispatches_before_the_gate = matches!(
+            provider,
+            Some(
+                LlmProviders::VERTEX_AI
+                    | LlmProviders::ANTHROPIC
+                    | LlmProviders::BEDROCK
+                    | LlmProviders::OPENAI
+                    | LlmProviders::DATABRICKS
+                    | LlmProviders::FIREWORKS_AI
+                    | LlmProviders::AZURE
+                    | LlmProviders::GEMINI
+                    | LlmProviders::DEEPSEEK
+                    | LlmProviders::TENCENT
+                    | LlmProviders::PERPLEXITY
+                    | LlmProviders::XAI
+                    | LlmProviders::LEMONADE
+                    | LlmProviders::DASHSCOPE
+                    | LlmProviders::QWENCLOUD
+                    | LlmProviders::QWEN_AI_PLATFORM
+                    | LlmProviders::AZURE_AI
             )
-        ) && !has_token_or_tiered_pricing(&model_info)
-        {
+        );
+        if !dispatches_before_the_gate && !has_token_or_tiered_pricing(&model_info) {
             return Ok((0.0, 0.0));
         }
         let cost = calculate_generic_cost_from_model_info_with_region(
@@ -969,7 +978,7 @@ impl ModelInfoCatalog {
             request.vertex_location,
             request.at,
         );
-        let speed = if request.provider == Some("anthropic") {
+        let speed = if provider == Some(LlmProviders::ANTHROPIC) {
             fast_speed_multiplier(&model_info, request.usage)
                 * get_provider_specific_geo_multiplier(
                     &model_info,

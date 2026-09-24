@@ -5,7 +5,9 @@
 
 use serde_json::Value;
 
+use litellm_cost::call_type::CallTypes;
 use litellm_cost::pricing::{Metric, ServiceTier, tokenize};
+use litellm_cost::provider::LlmProviders;
 use litellm_cost::wire::{RawCatalogEntry, cost_per_unit};
 
 fn fixture() -> Value {
@@ -170,5 +172,47 @@ fn registered_entry_parses_into_model_pricing_with_projected_rates() {
             .get(&(Metric::InputPerToken, ServiceTier::Priority))
             .and_then(|r| r.value()),
         Some(6e-7)
+    );
+}
+
+#[test]
+fn provider_and_call_type_enums_mirror_python() {
+    let pinning = pinning();
+    let python_providers: std::collections::BTreeSet<&str> = pinning["llm_providers"]
+        .as_array()
+        .expect("llm providers")
+        .iter()
+        .map(|value| value.as_str().expect("provider value"))
+        .collect();
+    let rust_providers: std::collections::BTreeSet<&str> = LlmProviders::VALUES
+        .iter()
+        .map(|provider| provider.as_str())
+        .collect();
+    assert_eq!(
+        rust_providers, python_providers,
+        "every Python LlmProviders value is a Rust variant and no extras exist"
+    );
+    for provider in &python_providers {
+        assert!(LlmProviders::parse(provider).is_some());
+    }
+    let python_calls: std::collections::BTreeSet<&str> = pinning["call_types"]
+        .as_array()
+        .expect("call types")
+        .iter()
+        .map(|value| value.as_str().expect("call type value"))
+        .collect();
+    let rust_calls: std::collections::BTreeSet<&str> =
+        CallTypes::VALUES.iter().map(|call| call.as_str()).collect();
+    assert_eq!(
+        rust_calls, python_calls,
+        "every Python CallTypes value is a Rust variant and no extras exist"
+    );
+    for call in &python_calls {
+        assert!(CallTypes::parse(call).is_some());
+    }
+    assert_eq!(CallTypes::parse("_arealtime"), Some(CallTypes::arealtime));
+    assert_eq!(
+        CallTypes::parse("_aresponses_websocket"),
+        Some(CallTypes::aresponses_websocket)
     );
 }

@@ -19,6 +19,7 @@ pub mod batch;
 pub mod bedrock_image_cost;
 #[allow(clippy::disallowed_types)]
 pub mod billed_token_rates;
+pub mod call_type;
 #[allow(clippy::disallowed_types)]
 pub mod catalog;
 #[allow(clippy::disallowed_types)]
@@ -77,6 +78,8 @@ pub mod perplexity_cost;
 pub mod pricing;
 #[allow(clippy::disallowed_types)]
 pub mod prompt_caching_savings;
+#[allow(clippy::disallowed_types)]
+pub mod provider;
 #[allow(clippy::disallowed_types)]
 pub mod provider_cache;
 #[allow(clippy::disallowed_types)]

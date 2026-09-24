@@ -1116,11 +1116,15 @@ def pinning_surface() -> dict[str, Any]:
                 "result": result,
             }
         )
+    from litellm.types.utils import CallTypes, LlmProviders
+
     return {
         "thresholds": thresholds,
         "service_tier_suffixes": list(cost_utils._SERVICE_TIER_SUFFIXES),
         "batch_tier_key": cost_utils._BATCH_TIER_KEY.pattern,
         "cost_per_unit": cost_per_unit,
+        "llm_providers": [provider.value for provider in LlmProviders],
+        "call_types": [call.value for call in CallTypes],
     }
 
 
