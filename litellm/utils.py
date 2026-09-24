@@ -9610,6 +9610,12 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 
             return VertexAIVideoConfig()
+        elif LlmProviders.BLACK_FOREST_LABS == provider:
+            from litellm.llms.black_forest_labs.videos.transformation import (
+                BlackForestLabsVideoConfig,
+            )
+
+            return BlackForestLabsVideoConfig()
         elif LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
