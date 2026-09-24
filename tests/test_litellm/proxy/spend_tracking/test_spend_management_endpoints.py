@@ -121,6 +121,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         alias = re.search(r"user_api_key_alias' LIKE \$(\d+)", cond)
         code = re.search(r"error_code' = \$(\d+)", cond)
         msg = re.search(r"error_message' LIKE \$(\d+)", cond)
+        credential = re.fullmatch(r"metadata->>'used_client_oauth_token' = \$(\d+)", cond)
         sess = re.fullmatch(r"session_id LIKE \$(\d+)", cond)
         status = re.fullmatch(r"status = \$(\d+)", cond)
         api_key_not_in = re.fullmatch(r"api_key NOT IN \(\$(\d+), \$(\d+)\)", cond)
@@ -176,6 +177,13 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
                 {
                     "path": ["error_information", "error_message"],
                     "string_contains": str(params[int(msg.group(1)) - 1]).strip("%"),
+                }
+            )
+        elif credential:
+            metadata_conds.append(
+                {
+                    "path": ["used_client_oauth_token"],
+                    "equals": params[int(credential.group(1)) - 1],
                 }
             )
         else:
@@ -3430,6 +3438,82 @@ async def test_ui_view_spend_logs_with_cache_hit_filter(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_used_client_oauth_token_filter(client, monkeypatch):
+    base = {
+        "api_key": "sk-test-key",
+        "user": "test_user_1",
+        "team_id": "team1",
+        "spend": 0.05,
+        "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+        "model": "claude-sonnet-5",
+        "status": "success",
+    }
+    mock_spend_logs = [
+        {**base, "id": "log1", "request_id": "req-seat", "metadata": {"used_client_oauth_token": True}},
+        {**base, "id": "log2", "request_id": "req-key", "metadata": {"used_client_oauth_token": False}},
+        {**base, "id": "log3", "request_id": "req-legacy", "metadata": {"user_agent": "curl/8.7.1"}},
+    ]
+
+    def filter_by_credential(where):
+        metadata_filter = where.get("metadata")
+        if metadata_filter is None:
+            return mock_spend_logs
+        assert metadata_filter["path"] == ["used_client_oauth_token"]
+        return [
+            log
+            for log in mock_spend_logs
+            if json.dumps(log["metadata"].get("used_client_oauth_token")) == metadata_filter["equals"]
+        ]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_credential),
+    )
+
+    start_date, end_date = _default_date_range()
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        for flag, expected_ids in (("true", ["req-seat"]), ("false", ["req-key"])):
+            response = client.get(
+                "/spend/logs/ui",
+                params={
+                    "used_client_oauth_token": flag,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                headers={"Authorization": "Bearer sk-test"},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == len(expected_ids)
+            assert [row["request_id"] for row in data["data"]] == expected_ids
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert response.json()["total"] == 3
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "used_client_oauth_token": "seat",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 422
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_span_type_filter(client, monkeypatch):
     base = {
         "api_key": "sk-test-key",
@@ -3845,7 +3929,7 @@ class TestSpendLogsPayload:
                     "model": "gpt-4o",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "metadata": '{"applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "used_client_oauth_token": null, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.00022500000000000002,
                     "total_tokens": 30,

@@ -3271,6 +3271,14 @@ def test_get_spend_logs_metadata_keeps_user_agent():
     assert _get_spend_logs_metadata(None)["user_agent"] is None
 
 
+@pytest.mark.parametrize("used_client_oauth_token", [True, False])
+def test_get_spend_logs_metadata_keeps_used_client_oauth_token(used_client_oauth_token: bool):
+    meta = _get_spend_logs_metadata({"used_client_oauth_token": used_client_oauth_token})
+    assert meta["used_client_oauth_token"] is used_client_oauth_token
+    assert _get_spend_logs_metadata(None)["used_client_oauth_token"] is None
+    assert _get_spend_logs_metadata({"user_agent": "curl/8.7.1"})["used_client_oauth_token"] is None
+
+
 def test_redact_logged_api_key_bearer_only_returns_none():
     # "bearer " with nothing after stripping is equivalent to no key
     assert _redact_logged_api_key("bearer ") is None

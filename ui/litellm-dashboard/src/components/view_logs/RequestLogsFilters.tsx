@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import type { Team } from "../key_team_helpers/key_list";
-import { ERROR_CODE_OPTIONS } from "./constants";
+import { CREDENTIAL_LABELS, ERROR_CODE_OPTIONS } from "./constants";
 import { LOG_FILTER_IDS, type LogsWindow } from "./log_filter_logic";
 
 const ALL_VALUE = "all";
@@ -36,6 +36,11 @@ const CACHE_FILTER_ITEMS = [
   { value: ALL_VALUE, label: "All Requests" },
   { value: "hit", label: "Cache Hit" },
   { value: "miss", label: "Cache Miss" },
+] as const;
+
+const CREDENTIAL_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Credentials" },
+  ...Object.entries(CREDENTIAL_LABELS).map(([value, label]) => ({ value, label })),
 ] as const;
 
 const SPAN_TYPE_FILTER_ITEMS = [
@@ -389,6 +394,27 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
           </SelectTrigger>
           <SelectContent>
             {CACHE_FILTER_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </DataTableFilterField>
+
+      <DataTableFilterField label="Credential">
+        <Select
+          items={CREDENTIAL_FILTER_ITEMS}
+          value={valueOf(LOG_FILTER_IDS.CREDENTIAL) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.CREDENTIAL)}
+          onValueChange={(next) =>
+            set(LOG_FILTER_IDS.CREDENTIAL, next === null || next === ALL_VALUE ? undefined : next)
+          }
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="All Credentials" />
+          </SelectTrigger>
+          <SelectContent>
+            {CREDENTIAL_FILTER_ITEMS.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>

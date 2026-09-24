@@ -212,6 +212,7 @@ def _get_spend_logs_metadata(
             litellm_call_id=litellm_call_id,
             router_metadata=router_metadata,
             azure_spillover=azure_spillover,
+            used_client_oauth_token=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))

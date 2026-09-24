@@ -38,6 +38,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     move_guardrails_to_metadata,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.litellm_logging import get_standard_logging_metadata
+from litellm.proxy.spend_tracking.spend_tracking_utils import _get_spend_logs_metadata
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_logging_from_dynamic_params
 from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -6768,6 +6770,45 @@ async def test_add_litellm_data_to_request_redacts_oauth_header_from_logging_cop
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path, metadata_variable_name",
+    [
+        ("/v1/messages", "litellm_metadata"),
+        ("/v1/chat/completions", "metadata"),
+    ],
+)
+async def test_add_litellm_data_to_request_stamps_used_client_oauth_token(path, metadata_variable_name):
+    """A seat-billed request and a configured-key request must land in spend logs differing on exactly
+    the credential flag, and the flag must never carry the token itself."""
+
+    async def metadata_for(client_headers: dict) -> dict:
+        request_mock = _make_request_mock(path, {"Content-Type": "application/json", **client_headers})
+        updated = await add_litellm_data_to_request(
+            data={"model": "anthropic-claude", "messages": [{"role": "user", "content": "hello"}]},
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"forward_client_headers_to_llm_api": True},
+            version="test-version",
+        )
+        return updated[metadata_variable_name]
+
+    def spend_log_row_metadata(request_metadata: dict) -> dict:
+        return dict(_get_spend_logs_metadata(dict(get_standard_logging_metadata(metadata=request_metadata))))
+
+    seat_row = spend_log_row_metadata(
+        await metadata_for({"Authorization": _OAUTH_TOKEN, "x-litellm-api-key": "Bearer sk-virtual-key"})
+    )
+    key_row = spend_log_row_metadata(await metadata_for({"Authorization": "Bearer sk-virtual-key"}))
+
+    assert seat_row["used_client_oauth_token"] is True
+    assert key_row["used_client_oauth_token"] is False
+    differing_keys = {key for key in seat_row.keys() | key_row.keys() if seat_row.get(key) != key_row.get(key)}
+    assert differing_keys == {"used_client_oauth_token"}
+    assert "sk-ant-oat01" not in json.dumps(seat_row, default=repr)
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_of_logging_copies():
     """Credentials kept for transport must not survive anywhere under proxy_server_request."""
     secrets = {
@@ -7558,6 +7599,23 @@ def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():
     forwarded = _headers_forwarded_to({"anthropic-beta": "claude-code-20250219"}, "openai")
 
     assert forwarded == {}
+
+
+@pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
+def test_add_provider_specific_headers_reports_a_forwarded_oauth_credential(authorization_header_name):
+    assert add_provider_specific_headers_to_request(data={}, headers=_client_headers(authorization_header_name)) is True
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        _client_headers(None),
+        {"content-type": "application/json", "authorization": "Bearer sk-a-normal-key"},
+        {"anthropic-beta": "claude-code-20250219", "authorization": "Bearer sk-ant-api03-a-configured-key"},
+    ],
+)
+def test_add_provider_specific_headers_reports_no_oauth_credential_without_a_forwarded_token(headers):
+    assert add_provider_specific_headers_to_request(data={}, headers=headers) is False
 
 
 def test_no_provider_specific_header_when_client_sends_nothing_anthropic():
