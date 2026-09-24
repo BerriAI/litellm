@@ -867,6 +867,20 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
     }
 )
 
+MCP_DISCOVERY_ROUTES: Final = frozenset({"/mcp-rest/tools/list", "/v1/mcp/tools", "/mcp/tools", "/mcp/tools/list"})
+
+MCP_ZERO_SPEND_JSONRPC_METHODS: Final = frozenset({"initialize", "notifications/initialized", "ping", "tools/list"})
+
+MCP_TOOL_CALL_ROUTES: Final = frozenset({"/mcp/tools/call", "/mcp-rest/tools/call"})
+
+
+def is_mcp_discovery_request(route: str, request_body: Mapping[str, object]) -> bool:
+    if route in MCP_DISCOVERY_ROUTES:
+        return True
+    if route in MCP_TOOL_CALL_ROUTES or not (route == "/mcp" or route.startswith("/mcp/")):
+        return False
+    return request_body.get("method") in MCP_ZERO_SPEND_JSONRPC_METHODS
+
 
 def route_skips_budget_checks(route: str) -> bool:
     return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
@@ -925,7 +939,11 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = skip_budget_checks or route_skips_budget_checks(route=route)
+    skip_all_budget_checks: Final = (
+        skip_budget_checks
+        or route_skips_budget_checks(route=route)
+        or is_mcp_discovery_request(route=route, request_body=request_body)
+    )
 
     membership_user_id: Final = (
         valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None

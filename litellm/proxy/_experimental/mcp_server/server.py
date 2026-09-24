@@ -27,6 +27,7 @@ from starlette.types import Message, Receive, Scope, Send
 from litellm._logging import verbose_logger
 from litellm.constants import (
     MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH,
+    MCP_PEEKED_BODY_SCOPE_KEY,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -1202,6 +1203,14 @@ if MCP_AVAILABLE:
             return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"
 
+    def _peeked_json_object_body(body: bytes) -> bytes | None:
+        """The peeked bytes when they form a complete JSON-RPC object, else None so a
+        truncated prefix or a batch array fails closed and stays budget-enforced."""
+        try:
+            return body if isinstance(json.loads(body), dict) else None
+        except (json.JSONDecodeError, TypeError):
+            return None
+
     def _is_initialize_request(body: bytes) -> bool:
         """
         Check if the request body is a JSON-RPC initialize method.
@@ -1350,7 +1359,7 @@ if MCP_AVAILABLE:
         Stops reading from the wire as soon as either (a) we have peeked
         ``_MCP_ROUTING_PEEK_MAX_BYTES`` of body, or (b) the body is complete.
         The remainder of an oversized body is streamed lazily through
-        ``wrapped_receive`` in the caller — so an authenticated client cannot
+        ``_LazyPeekedBody.receive`` in the caller — so an authenticated client cannot
         force the proxy to buffer an arbitrarily large payload just to make a
         routing decision.
         """
@@ -1387,6 +1396,29 @@ if MCP_AVAILABLE:
                 break
 
         return consumed_messages, b"".join(body_chunks)
+
+    class _LazyPeekedBody:
+        """Reads the POST body for routing and auth only when first asked, so an
+        allowlist rejection never touches the receive channel. Whatever it
+        consumed is replayed to the downstream handler through ``receive``,
+        which falls through to the wire once the replay buffer is drained."""
+
+        __slots__ = ("_consumed_messages", "_peeked_body", "_receive")
+
+        def __init__(self, receive: Receive) -> None:
+            self._receive = receive
+            self._consumed_messages: list[Message] | None = None
+            self._peeked_body: bytes = b""
+
+        async def body(self) -> bytes:
+            if self._consumed_messages is None:
+                self._consumed_messages, self._peeked_body = await _read_request_body_for_routing(self._receive)
+            return self._peeked_body
+
+        async def receive(self) -> Message:
+            if self._consumed_messages:
+                return self._consumed_messages.pop(0)
+            return await self._receive()
 
     async def _handle_stale_mcp_session(
         scope: Scope,
@@ -1947,6 +1979,14 @@ if MCP_AVAILABLE:
                 )(scope, receive, send)
                 return
             path: Final[str] = scope.get("path", "")
+            peek: Final = _LazyPeekedBody(receive) if scope.get("method") == "POST" else None
+            if peek is not None:
+                receive = peek.receive  # rebind-ok: replay peeked ASGI messages to the downstream handler
+
+                async def peeked_json_object_body() -> bytes:
+                    return _peeked_json_object_body(await peek.body()) or b"{}"
+
+                scope[MCP_PEEKED_BODY_SCOPE_KEY] = peeked_json_object_body
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -1956,6 +1996,8 @@ if MCP_AVAILABLE:
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
             reject_disallowed_mcp_client(StarletteRequest(scope).headers, user_api_key_auth)
+            body: Final = await peek.body() if peek is not None else b""
+            is_initialize: Final = _is_initialize_request(body)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
@@ -2026,8 +2068,6 @@ if MCP_AVAILABLE:
             # - No session ID + initialize → stateful (so client gets mcp-session-id)
             # - No session ID + other → stateless (curl, Inspector, Notion)
             session_id = _get_session_id_from_scope(scope)
-            is_initialize = False
-            consumed_messages: list[Message] = []
 
             # Owner-binding: a live stateful session may only be driven by the
             # caller that created it. Reject mismatches with 403 so a leaked
@@ -2035,8 +2075,7 @@ if MCP_AVAILABLE:
             #
             # Run before ``_handle_stale_mcp_session`` so a non-owner cannot
             # force-clean another caller's residual tracking entries via a
-            # stale DELETE, and before peeking the request body so the 403
-            # response sees a pristine ``receive`` channel.
+            # stale DELETE.
             if session_id:
                 expected_owner: Final = _stateful_session_owners.get(session_id)
                 request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
@@ -2065,11 +2104,6 @@ if MCP_AVAILABLE:
                     return
                 session_id = _get_session_id_from_scope(scope)
 
-            body = b""
-            if scope.get("method") == "POST":
-                consumed_messages, body = await _read_request_body_for_routing(receive)
-                is_initialize = _is_initialize_request(body)
-
             use_stateful: Final = bool(session_id or is_initialize)
             target_manager: Final = session_manager_stateful if use_stateful else session_manager_stateless
 
@@ -2097,17 +2131,6 @@ if MCP_AVAILABLE:
                     )
                     await too_many_response(scope, receive, send)
                     return
-
-            # Replay body messages if we consumed them for peeking
-            original_receive: Final = receive
-            if consumed_messages:
-
-                async def wrapped_receive():
-                    if consumed_messages:
-                        return consumed_messages.pop(0)
-                    return await original_receive()
-
-                receive = wrapped_receive
 
             # Serialize requests on the same stateful session so concurrent
             # callers don't clobber each other's auth context mid-flight.
