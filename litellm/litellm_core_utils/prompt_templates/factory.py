@@ -4706,6 +4706,26 @@ class BedrockConverseMessagesProcessor:
         )
 
     @staticmethod
+    def _is_bedrock_converse_reasoning_model(model: str | None) -> bool:
+        if model is None:
+            return True
+        model_lower: Final = model.lower()
+        if any(
+            name in model_lower for name in ("nova", "amazon.nova", "meta.llama", "llama", "mistral", "cohere", "ai21")
+        ):
+            return False
+        if "anthropic" in model_lower or "claude" in model_lower:
+            return True
+        import litellm
+        from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+
+        candidates: Final = (model, get_bedrock_base_model(model))
+        entries: Final = tuple(entry for c in candidates if (entry := litellm.model_cost.get(c)) is not None)
+        if entries:
+            return any(entry.get("supports_reasoning") is True for entry in entries)
+        return True
+
+    @staticmethod
     def add_thinking_blocks_to_assistant_content(
         thinking_blocks: list[BedrockContentBlock],
         assistant_parts: list[BedrockContentBlock],
@@ -4719,25 +4739,7 @@ class BedrockConverseMessagesProcessor:
 
         Relevant Issue: https://github.com/BerriAI/litellm/issues/9063
         """
-        model_lower = model.lower() if model is not None else None
-        if model_lower is None:
-            is_anthropic_model = True
-        elif any(
-            name in model_lower for name in ("nova", "amazon.nova", "meta.llama", "llama", "mistral", "cohere", "ai21")
-        ):
-            is_anthropic_model = False
-        elif "anthropic" in model_lower or "claude" in model_lower:
-            is_anthropic_model = True
-        else:
-            import litellm
-            from litellm.llms.bedrock.common_utils import get_bedrock_base_model
-
-            candidates = (model, get_bedrock_base_model(model))
-            entries = [entry for c in candidates if (entry := litellm.model_cost.get(c)) is not None]
-            if entries:
-                is_anthropic_model = any(entry.get("supports_reasoning") is True for entry in entries)
-            else:
-                is_anthropic_model = True
+        is_anthropic_model: Final = BedrockConverseMessagesProcessor._is_bedrock_converse_reasoning_model(model)
         filtered_thinking_blocks: Final = []
         for block in thinking_blocks:
             reasoning_content = block.get("reasoningContent", None)
