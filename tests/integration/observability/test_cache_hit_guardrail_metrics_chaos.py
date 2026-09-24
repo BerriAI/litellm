@@ -206,7 +206,7 @@ def test_stalled_guardrail_sink_recovers_and_counts(gateway: Gateway, tmp_path: 
 
 
 def test_redis_outage_keeps_serving_in_memory_hits(gateway: Gateway, tmp_path: Path) -> None:
-    """X2: the redis cache keeps an in-memory shadow, so a redis kill does not stop cache-hit rejects."""
+    """X2: the redis cache keeps an in-memory shadow, so a redis outage does not stop cache-hit rejects."""
     marker: Final = uuid.uuid4().hex
     with owned_redis(tmp_path) as cache:
         with _rig(gateway, tmp_path, marker, env={"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}) as rig:
