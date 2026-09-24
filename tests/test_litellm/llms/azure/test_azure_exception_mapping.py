@@ -404,8 +404,6 @@ class TestAzureExceptionMapping:
         assert "docs.litellm.ai" in error.message
 
     def test_azure_prompt_content_filter_maps_to_content_policy_violation(self):
-        """Prompt-filter 400s use code=content_filter and innererror.ContentFiltered (#42247)."""
-
         mock_exception = Exception("Bad request")
         mock_exception.body = {
             "error": {
@@ -449,8 +447,6 @@ class TestAzureExceptionMapping:
         assert e.provider_specific_fields["inner_error"]["code"] == "ContentFiltered"
 
     def test_azure_content_filtered_innererror_without_top_code(self):
-        """innererror.ContentFiltered is a prompt-filter alias even when the top-level code is generic."""
-
         mock_exception = Exception("Bad request")
         mock_exception.body = {
             "error": {
@@ -476,7 +472,6 @@ class TestAzureExceptionMapping:
         assert e.provider_specific_fields["innererror"]["code"] == "ContentFiltered"
 
     def test_azure_ordinary_invalid_request_stays_bad_request(self):
-        """Ordinary Azure 400s must stay BadRequestError so content_policy_fallbacks do not fire."""
         from litellm.exceptions import BadRequestError
 
         mock_exception = Exception(
