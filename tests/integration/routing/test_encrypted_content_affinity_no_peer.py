@@ -119,7 +119,9 @@ def _responses_turn(gateway: Gateway, group: str, request_input: JsonValue) -> h
 
 
 def _turn_one(gateway: Gateway, group: str, deployment_ids: tuple[str, ...]) -> tuple[str, list[JsonValue]]:
-    response: Final = _responses_turn(gateway, group, "hello affinity")
+    # the proxy caches responses, so the turn-one prompt needs a unique marker or a
+    # stale body carrying another run's encoded model_id would replay instead
+    response: Final = _responses_turn(gateway, group, f"hello affinity {uuid.uuid4().hex}")
     assert response.status_code == 200, response.text
     origin: Final = str(response.headers["x-litellm-model-id"])
     assert origin in deployment_ids, f"turn one served by unknown deployment {origin}: {response.text}"
