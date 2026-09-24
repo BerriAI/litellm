@@ -362,3 +362,44 @@ fn served_response_model_alone_prices_in_the_request_region() {
         Some("bedrock/us-east-1/served".to_owned())
     );
 }
+
+// expected values recorded from cost_calculator.py::_strip_unregistered_leading_segments
+#[rstest]
+#[case::region_segment_stays_in_the_head(
+    "bedrock/us-east-1/x",
+    Some("us-east-1"),
+    "bedrock/us-east-1/x"
+)]
+#[case::unmatched_region_segment_is_strippable("bedrock/us-east-1/x", None, "bedrock/x")]
+#[case::two_segments_never_take_a_region_head(
+    "bedrock/us-east-1",
+    Some("us-east-1"),
+    "bedrock/us-east-1"
+)]
+#[case::single_segment_is_unchanged("solo", None, "solo")]
+#[case::alias_after_the_region_is_stripped(
+    "bedrock/us-west-2/team/y",
+    Some("us-west-2"),
+    "bedrock/us-west-2/y"
+)]
+#[case::other_region_keeps_the_model(
+    "bedrock/us-west-2/team/y",
+    Some("eu-west-1"),
+    "bedrock/us-west-2/team/y"
+)]
+fn strip_unregistered_leading_segments_matches_python(
+    #[case] model: &str,
+    #[case] region: Option<&str>,
+    #[case] expected: &str,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        ("bedrock/x".to_owned(), json!({})),
+        ("solo/".to_owned(), json!({})),
+        ("bedrock/us-west-2/y".to_owned(), json!({})),
+        ("bedrock/us-east-1/".to_owned(), json!({})),
+    ]));
+    assert_eq!(
+        strip_unregistered_leading_segments(model, region, &catalog),
+        expected
+    );
+}
