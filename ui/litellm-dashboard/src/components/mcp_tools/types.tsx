@@ -320,6 +320,7 @@ export interface MCPServerCostInfo {
 
 // Define MCP provider info
 export interface MCPInfo {
+  is_public?: boolean;
   server_name: string;
   description?: string;
   logo_url?: string;
