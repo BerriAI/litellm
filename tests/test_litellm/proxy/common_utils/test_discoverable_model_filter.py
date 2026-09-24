@@ -132,3 +132,25 @@ def test_discoverable_rows_drops_flagged_rows_only_for_non_admin():
         "internal-evaluator",
         "no-model-info",
     ]
+
+
+def test_expanded_name_served_by_a_discoverable_wildcard_too_stays_listed():
+    router = _router(
+        _deployment("anthropic/*", model="anthropic/*", discoverable=False),
+        _deployment("anthropic/claude-*", model="anthropic/claude-*"),
+    )
+
+    hidden = undiscoverable_model_names(
+        ["anthropic/claude-opus-5", "anthropic/other-model"], router, _non_admin(), None
+    )
+
+    assert hidden == {"anthropic/other-model"}
+
+
+def test_hidden_alias_of_a_flagged_model_is_undiscoverable():
+    router = _router(
+        _deployment("internal-evaluator", discoverable=False),
+        model_group_alias={"eval": {"model": "internal-evaluator", "hidden": True}},
+    )
+
+    assert undiscoverable_model_names(["eval"], router, _non_admin(), None) == {"eval"}

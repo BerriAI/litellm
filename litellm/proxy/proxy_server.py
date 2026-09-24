@@ -11244,7 +11244,6 @@ async def model_list(
             only_model_access_groups=only_model_access_groups or False,
         )
 
-        # Hide paused, unhealthy and undiscoverable models from the public listing
         expanded_undiscoverable_names: Final = undiscoverable_model_names(
             all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
         )
@@ -11300,7 +11299,6 @@ async def model_list(
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Hide paused, unhealthy and undiscoverable models from the public listing
     undiscoverable_names: Final = undiscoverable_model_names(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
     )
