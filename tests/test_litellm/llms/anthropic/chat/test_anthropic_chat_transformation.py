@@ -6387,3 +6387,35 @@ def test_get_supported_openai_params_hides_temperature_for_models_without_sampli
     normal = config.get_supported_openai_params(model="claude-3-5-sonnet-20241022")
     assert "temperature" in normal
     assert "top_p" in normal
+
+
+def test_no_sampling_model_still_forwards_temperature_one():
+    """Regression: even though get_supported_openai_params no longer advertises
+    `temperature` for models that removed sampling params (Opus 4.7+/Fable 5),
+    an explicit `temperature=1` must still pass through the forward path unchanged
+    (Anthropic still accepts the default value). See #42910."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    optional_params: dict = {}
+    AnthropicConfig._apply_sampling_param(
+        optional_params=optional_params,
+        model="claude-opus-4-7-20250101",
+        param="temperature",
+        value=1,
+        drop_params=False,
+        output_key="temperature",
+    )
+    assert optional_params.get("temperature") == 1
+
+    # A non-default temperature still raises for these models.
+    import pytest
+
+    with pytest.raises(Exception):
+        AnthropicConfig._apply_sampling_param(
+            optional_params={},
+            model="claude-opus-4-7-20250101",
+            param="temperature",
+            value=0.2,
+            drop_params=False,
+            output_key="temperature",
+        )

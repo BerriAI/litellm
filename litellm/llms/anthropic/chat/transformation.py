@@ -489,7 +489,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     def get_supported_openai_params(self, model: str):
-        params: Final = [
+        params = [
             "stream",
             "stop",
             "temperature",
