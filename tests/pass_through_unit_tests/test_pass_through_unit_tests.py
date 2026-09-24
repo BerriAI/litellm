@@ -195,6 +195,35 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
     assert result["litellm_params"]["metadata"]["user_api_key_request_route"] is None
 
 
+def test_init_kwargs_preserves_provider_request_id(mock_request, mock_user_api_key_dict):
+    request = mock_request()
+    passthrough_payload = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+    parsed_body = {"id": "codex-manual-search-test", "model": "search-model"}
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_payload,
+        _parsed_body=parsed_body,
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+    )
+
+    assert result["litellm_params"]["proxy_server_request"]["body"] == parsed_body
+    assert result["litellm_params"]["proxy_server_request"]["body"]["id"] == "codex-manual-search-test"
+
+
 def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict):
     """
     Expected behavior: litellm_metadata should be merged with default metadata

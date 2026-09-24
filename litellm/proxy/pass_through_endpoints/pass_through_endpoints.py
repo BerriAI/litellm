@@ -583,7 +583,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _parsed_body = _parsed_body or {}
 
         litellm_params_in_body: Final = {}
-        for k in all_litellm_params:
+        for k in (param for param in all_litellm_params if param != "id"):
             if k in _parsed_body:
                 litellm_params_in_body[k] = _parsed_body.pop(k, None)
 
