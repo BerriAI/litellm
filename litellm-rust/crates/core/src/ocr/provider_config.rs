@@ -167,7 +167,11 @@ pub fn get_health_check_document(
 /// The URL the resolved Azure AI OCR config would call for `model` on
 /// `api_base`, used by the passthrough logger to tell whether a relayed
 /// response is OCR-costable.
-pub fn passthrough_url(model: &str, api_base: &str, settings: OcrSettings) -> Result<String, Error> {
+pub fn passthrough_url(
+    model: &str,
+    api_base: &str,
+    settings: OcrSettings,
+) -> Result<String, Error> {
     let (model, config) = resolve_provider_config(model, Some("azure_ai"))?;
     let arguments = CallArguments::default();
     let request = PreparedOcrRequest {
@@ -219,11 +223,9 @@ pub fn passthrough_url(model: &str, api_base: &str, settings: OcrSettings) -> Re
 pub fn passthrough_transform(model: &str, body: &[u8]) -> Result<LiteLLMOcrResponse, Error> {
     let (model, config) = resolve_provider_config(model, Some("azure_ai"))?;
     match config {
-        OcrConfigKind::AzureAi => AzureAiOcrConfig.transform_ocr_response(
-            &model,
-            body,
-            OcrResponseFormat::Litellm,
-        ),
+        OcrConfigKind::AzureAi => {
+            AzureAiOcrConfig.transform_ocr_response(&model, body, OcrResponseFormat::Litellm)
+        }
         OcrConfigKind::AzureCohere => AzureAICohereParseConfig.transform_ocr_response(
             &model,
             body,
@@ -638,8 +640,7 @@ mod tests {
             "model": "mistral-document-ai-2512",
             "usage_info": {"pages_processed": 2}
         }"#;
-        let response =
-            passthrough_transform("azure_ai/mistral-document-ai-2512", body).unwrap();
+        let response = passthrough_transform("azure_ai/mistral-document-ai-2512", body).unwrap();
         let json = response.into_json();
         assert_eq!(json["usage_info"]["pages_processed"], 2);
         assert_eq!(json["pages"][0]["markdown"], "page one");

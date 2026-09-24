@@ -133,10 +133,12 @@ pub(crate) fn ocr_passthrough_response(
     if status_code != 200 {
         return Ok(None);
     }
-    let url =
-        provider_config::passthrough_url(model, api_base, ocr_settings(py)?).map_err(errors::to_pyerr)?;
+    let url = provider_config::passthrough_url(model, api_base, ocr_settings(py)?)
+        .map_err(errors::to_pyerr)?;
     let expected_path = format!("/{}", endpoint.trim_matches('/'));
-    let matches = url::Url::parse(&url).map(|url| url.path() == expected_path).unwrap_or(false);
+    let matches = url::Url::parse(&url)
+        .map(|url| url.path() == expected_path)
+        .unwrap_or(false);
     if !matches {
         return Ok(None);
     }
