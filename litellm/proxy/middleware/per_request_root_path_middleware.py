@@ -22,6 +22,22 @@ from litellm._logging import verbose_proxy_logger
 
 SERVER_ROOT_PATHS_ENV: Final = "SERVER_ROOT_PATHS"
 
+
+class RootPathMiddleware:
+    """Normalize requests from proxies that strip the configured root path."""
+
+    def __init__(self, app: ASGIApp, root_path: str) -> None:
+        self.app = app
+        self.root_path: Final = root_path.rstrip("/")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if self.root_path and scope["type"] in ("http", "websocket"):
+            path: Final = scope.get("path", "")
+            if path != self.root_path and not path.startswith(self.root_path + "/"):
+                scope["path"] = f"{self.root_path}{path}"  # rebind-ok: ASGI middleware contract
+        await self.app(scope, receive, send)
+
+
 # The effective ``root_path`` for the currently-handled request. Populated by
 # ``PerRequestRootPathMiddleware`` from the (possibly-mutated) scope so code
 # that emits URLs off the request path — the 401 challenges' resource_metadata
