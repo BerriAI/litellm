@@ -129,6 +129,12 @@ pub struct OffPeakPricing {
     pub windows: Option<Vec<OffPeakWindow>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weekday_timezone: Option<String>,
+    /// YYYY-MM-DD dates, read on weekday_timezone, that are off-peak all day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_peak_dates: Option<Vec<String>>,
+    /// YYYY-MM-DD dates, read on weekday_timezone, that follow the Monday-to-Friday rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekday_dates: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
