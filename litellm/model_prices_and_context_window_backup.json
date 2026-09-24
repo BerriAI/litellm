@@ -64596,6 +64596,131 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "bedrock_mantle/deepseek.v3.1": {
+        "input_cost_per_token": 5.8e-07,
+        "output_cost_per_token": 1.68e-06,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-deepseek-deepseek-v3-1.html"
+    },
+    "bedrock_mantle/moonshotai.kimi-k2-thinking": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.5e-06,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 16000,
+        "max_tokens": 16000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html"
+    },
+    "bedrock_mantle/qwen.qwen3-235b-a22b-2507": {
+        "input_cost_per_token": 2.2e-07,
+        "output_cost_per_token": 8.8e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-235b-a22b-2507.html"
+    },
+    "bedrock_mantle/qwen.qwen3-32b": {
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-32b.html"
+    },
+    "bedrock_mantle/qwen.qwen3-coder-30b-a3b-instruct": {
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 16000,
+        "max_tokens": 16000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-30b-a3b-instruct.html"
+    },
+    "bedrock_mantle/qwen.qwen3-coder-480b-a35b-instruct": {
+        "input_cost_per_token": 4.5e-07,
+        "output_cost_per_token": 1.8e-06,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16000,
+        "max_tokens": 16000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-coder-480b-a35b-instruct.html"
+    },
+    "bedrock_mantle/qwen.qwen3-next-80b-a3b-instruct": {
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-next-80b-a3b.html"
+    },
+    "bedrock_mantle/qwen.qwen3-vl-235b-a22b-instruct": {
+        "input_cost_per_token": 5.3e-07,
+        "output_cost_per_token": 2.66e-06,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-qwen-qwen3-vl-235b-a22b.html"
+    },
     "azure/us-gov/gpt-5.1": {
         "cache_read_input_token_cost": 1.71875e-07,
         "default_reasoning_effort": "none",
