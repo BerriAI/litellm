@@ -3648,6 +3648,61 @@ def test_add_litellm_metadata_from_request_headers_explicit_trace_id_beats_trace
     assert data["litellm_session_id"] == "explicit-trace-id-value"
 
 
+def test_add_litellm_metadata_from_request_headers_body_trace_id_beats_traceparent():
+    """A caller that set metadata.trace_id keeps it: the traceparent fallback is
+    documented as last-resort, so it must not overwrite an explicit choice.
+
+    This matters in practice because some platforms (e.g. GCP) inject a
+    traceparent into every inbound request, so the fallback would otherwise fire
+    on traffic whose caller never sent the header at all."""
+    headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    data = {"metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_body_session_id_beats_baggage():
+    """Same for session_id and the baggage header."""
+    headers = {"baggage": "session.id=baggage-session-42"}
+    data = {"metadata": {"session_id": "caller-chosen-session-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["session_id"] == "caller-chosen-session-id"
+    assert "litellm_session_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_body_steering_is_per_field():
+    """Steering one field must not suppress the fallback for the other:
+    a caller setting only trace_id still gets session_id from baggage."""
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {"metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert data["litellm_session_id"] == "baggage-session-42"
+
+
+def test_add_litellm_metadata_from_request_headers_litellm_metadata_steering_honoured():
+    """Routes in LITELLM_METADATA_ROUTES (/v1/responses, /v1/messages, batches,
+    files) carry their metadata in litellm_metadata, so steering there counts
+    the same as steering in metadata."""
+    headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    data = {"litellm_metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert data["litellm_metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert "litellm_trace_id" not in data
+
+
 def _otel_span_with_trace_id(trace_id: int) -> NonRecordingSpan:
     return NonRecordingSpan(SpanContext(trace_id=trace_id, span_id=0x00F067AA0BA902B7, is_remote=False))
 
