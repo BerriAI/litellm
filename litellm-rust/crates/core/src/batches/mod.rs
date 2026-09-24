@@ -6,7 +6,9 @@ use litellm_llms::{
         ANTHROPIC_BATCHES_TRANSFORMATION, AnthropicBatchesConfig, AnthropicMessageBatch,
         LiteLlmMessageBatch,
     },
-    base_llm::{anthropic_messages::transformation::Headers, chat::transformation::Error as LlmError},
+    base_llm::{
+        anthropic_messages::transformation::Headers, chat::transformation::Error as LlmError,
+    },
 };
 use reqwest::Method;
 use time::OffsetDateTime;
@@ -71,7 +73,15 @@ pub async fn create_batch(
         config.validate_environment(connection.extra_headers, connection.api_key, env_lookup)?;
     let body = serde_json::to_vec(&body)
         .map_err(|error| LlmError::InvalidRequest(format!("unserializable batch: {error}")))?;
-    let batch = send(client, Method::POST, url, headers, Some(body), connection.timeout).await?;
+    let batch = send(
+        client,
+        Method::POST,
+        url,
+        headers,
+        Some(body),
+        connection.timeout,
+    )
+    .await?;
     Ok(config.transform_create_batch_response(batch, now()))
 }
 
@@ -92,8 +102,12 @@ async fn send(
         .fold(client.request(method, url), |builder, (name, value)| {
             builder.header(name, value)
         });
-    let request = body.into_iter().fold(request, reqwest::RequestBuilder::body);
-    let request = timeout.into_iter().fold(request, reqwest::RequestBuilder::timeout);
+    let request = body
+        .into_iter()
+        .fold(request, reqwest::RequestBuilder::body);
+    let request = timeout
+        .into_iter()
+        .fold(request, reqwest::RequestBuilder::timeout);
     let response = request
         .send()
         .await
@@ -158,7 +172,11 @@ mod tests {
                 headers.sort();
                 let length = head
                     .lines()
-                    .find_map(|line| line.to_lowercase().strip_prefix("content-length: ").map(str::to_string))
+                    .find_map(|line| {
+                        line.to_lowercase()
+                            .strip_prefix("content-length: ")
+                            .map(str::to_string)
+                    })
                     .map_or(0, |value| value.parse::<usize>().unwrap());
                 if body.len() >= length || n == 0 {
                     break Received {
@@ -329,9 +347,13 @@ mod tests {
     #[case::not_found(
         "404 Not Found",
         r#"{"type":"error","error":{"type":"not_found_error"}}"#,
-        "upstream request failed with status 404: {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\"}}",
+        "upstream request failed with status 404: {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\"}}"
     )]
-    #[case::server_error("500 Internal Server Error", "boom", "upstream request failed with status 500: boom")]
+    #[case::server_error(
+        "500 Internal Server Error",
+        "boom",
+        "upstream request failed with status 500: boom"
+    )]
     #[tokio::test]
     async fn retrieve_surfaces_upstream_failures(
         #[case] status: &'static str,

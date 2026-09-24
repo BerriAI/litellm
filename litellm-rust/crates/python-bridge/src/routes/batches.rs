@@ -26,7 +26,12 @@ impl OwnedConnection {
         Connection {
             api_key: self.api_key.as_deref(),
             api_base: self.api_base.as_deref(),
-            extra_headers: self.extra_headers.clone().unwrap_or_default().into_iter().collect(),
+            extra_headers: self
+                .extra_headers
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
             timeout: optional_timeout(self.timeout_seconds),
         }
     }
@@ -36,7 +41,10 @@ fn env_lookup(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-async fn retrieve(batch_id: String, connection: OwnedConnection) -> Result<LiteLlmMessageBatch, Error> {
+async fn retrieve(
+    batch_id: String,
+    connection: OwnedConnection,
+) -> Result<LiteLlmMessageBatch, Error> {
     run_retrieve_batch(
         http_client(),
         RetrieveBatchRequest {
@@ -155,7 +163,11 @@ pub(crate) fn create_batch(
         extra_headers,
         timeout_seconds,
     };
-    run_sync(py, create(input_jsonl, model, connection), create_error_to_pyerr)
+    run_sync(
+        py,
+        create(input_jsonl, model, connection),
+        create_error_to_pyerr,
+    )
 }
 
 #[pyfunction]
@@ -179,7 +191,11 @@ pub(crate) fn acreate_batch(
         extra_headers,
         timeout_seconds,
     };
-    run_async(py, create(input_jsonl, model, connection), create_error_to_pyerr)
+    run_async(
+        py,
+        create(input_jsonl, model, connection),
+        create_error_to_pyerr,
+    )
 }
 
 #[cfg(test)]
@@ -206,7 +222,8 @@ mod tests {
                 return Raised::Value(error.value(py).to_string());
             }
             assert!(error.is_instance_of::<RustUpstreamError>(py), "{error}");
-            let (status, message): (u16, String) = error.value(py).getattr("args").unwrap().extract().unwrap();
+            let (status, message): (u16, String) =
+                error.value(py).getattr("args").unwrap().extract().unwrap();
             Raised::Upstream(status, message)
         })
     }
@@ -236,7 +253,10 @@ mod tests {
     #[case::http(http_error(), Raised::Upstream(404, "missing".into()))]
     #[case::network(Error::Transport(TransportError::Network("reset".into())), Raised::Upstream(0, "reset".into()))]
     #[case::invalid_response(invalid_response(), Raised::Upstream(0, "invalid Anthropic batch response: []".into()))]
-    fn retrieve_declines_only_before_the_request_is_sent(#[case] error: Error, #[case] expected: Raised) {
+    fn retrieve_declines_only_before_the_request_is_sent(
+        #[case] error: Error,
+        #[case] expected: Raised,
+    ) {
         assert_eq!(raised(retrieve_error_to_pyerr(error)), expected);
     }
 

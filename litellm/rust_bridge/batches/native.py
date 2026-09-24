@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.rust_bridge.bindings import NativeBinding
@@ -12,9 +12,9 @@ class RustRetrieveBatch(Protocol):
         batch_id: str,
         api_key: str | None,
         api_base: str | None,
-        extra_headers: dict[str, str] | None,
+        extra_headers: Mapping[str, str] | None,
         timeout_seconds: float | None,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object]:
         raise NotImplementedError
 
 
@@ -24,9 +24,9 @@ class RustAretrieveBatch(Protocol):
         batch_id: str,
         api_key: str | None,
         api_base: str | None,
-        extra_headers: dict[str, str] | None,
+        extra_headers: Mapping[str, str] | None,
         timeout_seconds: float | None,
-    ) -> Awaitable[dict[str, object]]:
+    ) -> Awaitable[Mapping[str, object]]:
         raise NotImplementedError
 
 
@@ -37,9 +37,9 @@ class RustCreateBatch(Protocol):
         model: str | None,
         api_key: str | None,
         api_base: str | None,
-        extra_headers: dict[str, str] | None,
+        extra_headers: Mapping[str, str] | None,
         timeout_seconds: float | None,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object]:
         raise NotImplementedError
 
 
@@ -50,34 +50,34 @@ class RustAcreateBatch(Protocol):
         model: str | None,
         api_key: str | None,
         api_base: str | None,
-        extra_headers: dict[str, str] | None,
+        extra_headers: Mapping[str, str] | None,
         timeout_seconds: float | None,
-    ) -> Awaitable[dict[str, object]]:
+    ) -> Awaitable[Mapping[str, object]]:
         raise NotImplementedError
 
 
 def _retrieve_binding(value: object) -> RustRetrieveBatch | None:
-    return (
-        cast("RustRetrieveBatch", value) if callable(value) else None
-    )  # cast-ok: callable validated at the native binding boundary
+    if not callable(value):
+        return None
+    return cast("RustRetrieveBatch", value)  # cast-ok: callable validated at the native binding boundary
 
 
 def _aretrieve_binding(value: object) -> RustAretrieveBatch | None:
-    return (
-        cast("RustAretrieveBatch", value) if callable(value) else None
-    )  # cast-ok: callable validated at the native binding boundary
+    if not callable(value):
+        return None
+    return cast("RustAretrieveBatch", value)  # cast-ok: callable validated at the native binding boundary
 
 
 def _create_binding(value: object) -> RustCreateBatch | None:
-    return (
-        cast("RustCreateBatch", value) if callable(value) else None
-    )  # cast-ok: callable validated at the native binding boundary
+    if not callable(value):
+        return None
+    return cast("RustCreateBatch", value)  # cast-ok: callable validated at the native binding boundary
 
 
 def _acreate_binding(value: object) -> RustAcreateBatch | None:
-    return (
-        cast("RustAcreateBatch", value) if callable(value) else None
-    )  # cast-ok: callable validated at the native binding boundary
+    if not callable(value):
+        return None
+    return cast("RustAcreateBatch", value)  # cast-ok: callable validated at the native binding boundary
 
 
 NATIVE_RETRIEVE_BATCH: Final = NativeBinding("retrieve_batch", validate=_retrieve_binding)

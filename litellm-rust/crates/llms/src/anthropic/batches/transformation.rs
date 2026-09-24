@@ -192,9 +192,8 @@ fn batches_base_url(
 fn batch_request(model: Option<&str>, line: &str) -> Result<Value, Error> {
     let line: BatchInputLine = serde_json::from_str(line)
         .map_err(|error| Error::InvalidRequest(format!("invalid batch input line: {error}")))?;
-    let invalid = |reason: &str| {
-        Error::InvalidRequest(format!("batch request {}: {reason}", line.custom_id))
-    };
+    let invalid =
+        |reason: &str| Error::InvalidRequest(format!("batch request {}: {reason}", line.custom_id));
     if line.method != "POST" || line.url != CHAT_COMPLETIONS_URL {
         return Err(invalid(&format!(
             "{} {} is not supported, only POST {CHAT_COMPLETIONS_URL}",

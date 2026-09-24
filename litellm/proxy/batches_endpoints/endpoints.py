@@ -195,7 +195,9 @@ async def _managed_input_file_row(input_file_id: str) -> "LiteLLM_ManagedFileTab
     if prisma_client is None:
         return None
     try:
-        return await ManagedFileRepository(prisma_client).table.find_first(where={"unified_file_id": input_file_id})
+        return await ManagedFileRepository(prisma_client).table.find_first(
+            where={"unified_file_id": input_file_id}  # mutable-ok: Prisma query filters require a concrete mapping
+        )
     except Exception as e:
         verbose_proxy_logger.warning("create_batch: managed file lookup failed for %s: %s", input_file_id, e)
         return None
@@ -235,7 +237,7 @@ async def _create_provider_batch_for_managed_file(
     }
     response: Final = await llm_router.acreate_batch(
         **request,
-        **({} if input_content is None else {ANTHROPIC_BATCH_INPUT_CONTENT_KWARG: input_content}),
+        **({} if input_content is None else {ANTHROPIC_BATCH_INPUT_CONTENT_KWARG: input_content}),  # mutable-ok: kwargs require a concrete mapping
     )
     response.input_file_id = input_file_id
     response._hidden_params["unified_file_id"] = unified_file_id
