@@ -13,6 +13,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.tool_op_classification import CrudOp
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
@@ -94,22 +95,49 @@ class UnloadableEntitlementError(Exception):
     it places no ceiling; denying there would refuse MCP to every caller during a cold-cache fault."""
 
 
+McpToolDecision = Literal["granted", "denied", "needs_classification"]
+
+
 @dataclass(frozen=True, slots=True)
 class McpToolGrant:
     """One caller's effective tool grant on one MCP server.
 
     ``allowed`` is the resolved allowlist (``None`` = unrestricted); ``denied``
     is the union of bare tool names every level's ``mcp_tool_denied_tools`` maps
-    to this server. A tool is granted iff the allowlist chain grants it AND no
-    denylist at any level names it. Denylists are additive restrictions only:
-    unlike ``mcp_tool_permissions`` keys, their server keys never count as a
-    server grant anywhere."""
+    to this server; ``approved`` is the intersection of bare tool names every
+    level's ``mcp_tool_approved_tools`` maps to this server (``None`` = no level
+    activates the approval policy). A tool is granted iff the allowlist chain
+    grants it AND no denylist at any level names it AND (no approval policy is
+    active OR the tool is approved OR it classifies non-delete). ``sources``
+    carries the per-source grants of an admitted-subject union so ``decide``
+    evaluates each source's own predicate and never mixes approvals."""
 
     allowed: list[str] | None
     denied: frozenset[str]
+    approved: frozenset[str] | None = None
+    sources: tuple["McpToolGrant", ...] = ()
 
-    def grants(self, bare_tool_name: str) -> bool:
-        return MCPRequestHandler.tool_is_granted(bare_tool_name, self.allowed) and bare_tool_name not in self.denied
+    def decide(self, bare_tool_name: str) -> McpToolDecision:
+        if self.sources:
+            decisions: Final = tuple(source.decide(bare_tool_name) for source in self.sources)
+            if "granted" in decisions:
+                return "granted"
+            if "needs_classification" in decisions:
+                return "needs_classification"
+            return "denied"
+        if not MCPRequestHandler.tool_is_granted(bare_tool_name, self.allowed) or bare_tool_name in self.denied:
+            return "denied"
+        if self.approved is None or bare_tool_name in self.approved:
+            return "granted"
+        return "needs_classification"
+
+    def grants(self, bare_tool_name: str, op: CrudOp | None = None) -> bool:
+        decision: Final = self.decide(bare_tool_name)
+        if decision == "granted":
+            return True
+        if decision == "denied":
+            return False
+        return op is not None and op != "delete"
 
 
 @dataclass(frozen=True, slots=True)
@@ -2097,8 +2125,9 @@ class MCPRequestHandler:
             return McpToolGrant(
                 allowed=None,
                 denied=frozenset.intersection(*unrestricted_denied) - enumerated_allowed,
+                sources=source_grants,
             )
-        return McpToolGrant(allowed=sorted(enumerated_allowed), denied=frozenset())
+        return McpToolGrant(allowed=sorted(enumerated_allowed), denied=frozenset(), sources=source_grants)
 
     @staticmethod
     async def _resolve_admitted_subject_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str] | None:
@@ -2289,8 +2318,9 @@ class MCPRequestHandler:
         *,
         keyless_source: bool = False,
     ) -> McpToolGrant:
-        """The caller's effective tool grant on one server: the resolved allowlist plus the union of
-        every level's ``mcp_tool_denied_tools``, computed in one pass so tool listing and tools/call
+        """The caller's effective tool grant on one server: the resolved allowlist, the union of
+        every level's ``mcp_tool_denied_tools``, and the intersection of every level's
+        ``mcp_tool_approved_tools``, computed in one pass so tool listing and tools/call
         cannot disagree."""
         if not user_api_key_auth:
             return McpToolGrant(allowed=None, denied=frozenset())
@@ -2388,7 +2418,18 @@ class MCPRequestHandler:
                     end_user_step.object_permission,
                 ),
             )
-            return McpToolGrant(allowed=allowed_tools, denied=denied)
+            approved: Final = MCPRequestHandler._approved_tools_from_rows(
+                server_id,
+                (
+                    key_obj_perm,
+                    team_obj_perm,
+                    agent_org_step.agent_object_permission,
+                    agent_org_step.org_object_permission,
+                    user_step.object_permission,
+                    end_user_step.object_permission,
+                ),
+            )
+            return McpToolGrant(allowed=allowed_tools, denied=denied, approved=approved)
 
         except Exception as e:
             # An entitlement known to exist but unreadable denies for BOTH caller shapes, so [] rather
@@ -2427,6 +2468,33 @@ class MCPRequestHandler:
             )
             or ()
         )
+
+    @staticmethod
+    def _approved_tools_from_rows(
+        server_id: str,
+        levels: tuple[LiteLLM_ObjectPermissionTable | None, ...],
+    ) -> frozenset[str] | None:
+        """Bare tool names every level's ``mcp_tool_approved_tools`` maps to ``server_id``,
+        intersected over the rows the allowlist chain already loaded. Presence of the server key
+        activates the policy at that level (an empty list counts), so a delete-classified tool must
+        be approved at every level that names the server. ``None`` when no level has the key, which
+        is exactly today's behavior."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        approved_sets: Final = tuple(
+            frozenset(expanded[server_id])
+            for object_permission in levels
+            if object_permission is not None and isinstance(object_permission.mcp_tool_approved_tools, dict)
+            for expanded in (
+                global_mcp_server_manager.expand_tool_permissions(object_permission.mcp_tool_approved_tools),
+            )
+            if server_id in expanded
+        )
+        if not approved_sets:
+            return None
+        return frozenset.intersection(*approved_sets)
 
     @staticmethod
     async def _apply_agent_and_org_tool_ceilings(
@@ -2521,13 +2589,12 @@ class MCPRequestHandler:
         return allowed_tool_names is None or bare_tool_name in allowed_tool_names
 
     @staticmethod
-    async def is_tool_allowed_for_server(
+    async def decide_tool_for_server(
         tool_name: str,
         server_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
-    ) -> bool:
-        """
-        Check if a specific tool is allowed for a server based on key/team permissions.
+    ) -> McpToolDecision:
+        """Decide a specific tool for a server based on key/team permissions.
 
         Args:
             tool_name: Bare tool name, already resolved against the server's prefixes
@@ -2535,13 +2602,32 @@ class MCPRequestHandler:
             user_api_key_auth: User auth
 
         Returns:
-            True if allowed, False if blocked
+            "granted" / "denied" / "needs_classification" (the approval policy is
+            active and the tool is not explicitly approved, so the caller must
+            classify the tool's operation before letting it through)
         """
         grant: Final = await MCPRequestHandler.resolve_tool_grant_for_server(
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
-        return grant.grants(tool_name)
+        return grant.decide(tool_name)
+
+    @staticmethod
+    async def is_tool_allowed_for_server(
+        tool_name: str,
+        server_id: str,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> bool:
+        """Bool view of ``decide_tool_for_server`` for callers that only need
+        granted/not: ``needs_classification`` reads as not allowed since the
+        caller cannot classify."""
+        return (
+            await MCPRequestHandler.decide_tool_for_server(
+                tool_name=tool_name,
+                server_id=server_id,
+                user_api_key_auth=user_api_key_auth,
+            )
+        ) == "granted"
 
     @staticmethod
     def is_tool_allowed(

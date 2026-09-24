@@ -85,6 +85,9 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     _request_extra_headers,
     _request_resolved_auth_headers,
 )
+from litellm.proxy._experimental.mcp_server.tool_op_classification import (
+    classify_tool_op,
+)
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -1418,7 +1421,8 @@ async def filter_tools_by_key_team_permissions(
     but tool names from MCP servers are prefixed. We need to strip
     the prefix before comparing.
     """
-    # Filter by key/team tool-level permissions (allowlist plus denylist)
+    # Filter by key/team tool-level permissions (allowlist plus denylist plus
+    # the delete-approval policy, whose unapproved tools need classification)
     grant: Final = await MCPRequestHandler.resolve_tool_grant_for_server(
         server_id=server_id,
         user_api_key_auth=user_api_key_auth,
@@ -1429,7 +1433,12 @@ async def filter_tools_by_key_team_permissions(
     # prefix containing the separator still reduces to the stored bare name.
     server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
     return [
-        t for t in tools if grant.grants(strip_known_server_prefix(t.name, server))
+        t
+        for t in tools
+        if grant.grants(
+            strip_known_server_prefix(t.name, server),
+            classify_tool_op(strip_known_server_prefix(t.name, server), t.description or ""),
+        )
     ]  # mutable-ok: list result is part of the function's signature; one-shot filter, never grown
 
 

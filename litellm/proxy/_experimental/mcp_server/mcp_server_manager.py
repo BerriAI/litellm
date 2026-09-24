@@ -5476,41 +5476,47 @@ class MCPServerManager:
         tool_name: str,
         server: MCPServer,
         user_api_key_auth: UserAPIKeyAuth | None,
-    ) -> None:
+    ) -> bool:
         """
         Check if a tool is allowed based on key/team object_permission.mcp_tool_permissions.
-        Uses MCPRequestHandler.is_tool_allowed_for_server for consistent inheritance logic.
-        Raises HTTPException if tool is not allowed.
+        Uses MCPRequestHandler.decide_tool_for_server for consistent inheritance logic.
+        Raises HTTPException if tool is denied.
 
         Args:
             tool_name: Name of the tool to check
             server: MCPServer object
             user_api_key_auth: User authentication
 
+        Returns:
+            True when the grant requires tool-op classification before the call
+            may proceed (an approval policy is active and this tool is not
+            explicitly approved)
+
         Raises:
-            HTTPException: If tool is not allowed for this key/team
+            HTTPException: If tool is denied for this key/team
         """
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
 
         if not user_api_key_auth:
-            return
+            return False
 
         # Check if tool is allowed
-        is_allowed: Final = await MCPRequestHandler.is_tool_allowed_for_server(
+        decision: Final = await MCPRequestHandler.decide_tool_for_server(
             tool_name=tool_name,
             server_id=server.server_id,
             user_api_key_auth=user_api_key_auth,
         )
 
-        if not is_allowed:
+        if decision == "denied":
             raise HTTPException(
                 status_code=403,
                 detail={
                     "error": f"Tool '{tool_name}' is not allowed for your key/team on server '{server.name}'. Contact proxy admin for access."
                 },
             )
+        return decision == "needs_classification"
 
     async def _call_openapi_tool_handler(
         self,
@@ -5617,7 +5623,7 @@ class MCPServerManager:
             )
 
         ## check tool-level permissions from object_permission
-        await self.check_tool_permission_for_key_team(
+        tool_op_check_required: Final = await self.check_tool_permission_for_key_team(
             tool_name=name,
             server=server,
             user_api_key_auth=user_api_key_auth,
@@ -5630,7 +5636,7 @@ class MCPServerManager:
             server=server,
         )
 
-        hook_result: Final[dict[str, Any]] = {}
+        hook_result: Final[dict[str, Any]] = {"tool_op_check_required": True} if tool_op_check_required else {}
         if proxy_logging_obj is None:
             return hook_result
 
@@ -5820,6 +5826,53 @@ class MCPServerManager:
             )
             return await retry_client.call_tool(call_tool_params, host_progress_callback=host_progress_callback)
 
+    async def _enforce_tool_op_policy(
+        self,
+        client: MCPClient,
+        mcp_server: MCPServer,
+        original_tool_name: str,
+    ) -> None:
+        """Fail a tool call whose grant requires operation classification.
+
+        Fetches the tool list on the SAME client the call uses, so upstream
+        credentials (BYOK, OBO subject token, per-user and static headers,
+        hook-injected headers) are identical to the call's by construction.
+        A delete-classified or missing tool is denied; MCPUpstreamAuthError
+        propagates unchanged (the 401/403 contract), while a transport fault
+        fails closed for this policy only.
+        """
+        from litellm.proxy._experimental.mcp_server.tool_op_classification import (
+            classify_tool_op,
+        )
+
+        server_label: Final = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
+        try:
+            tools: Final = await self._fetch_tools_with_timeout(client, server_label)
+        except MCPUpstreamAuthError:
+            raise
+        except MCPServerListError as e:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Tool '{original_tool_name}' on server '{server_label}' requires explicit admin approval: tool metadata unavailable, cannot classify"
+                },
+            ) from e
+        matched: Final = next((t for t in tools if t.name == original_tool_name), None)
+        if matched is None:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Tool '{original_tool_name}' on server '{server_label}' requires explicit admin approval: tool metadata unavailable, cannot classify"
+                },
+            )
+        if classify_tool_op(matched.name, matched.description or "") == "delete":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Tool '{original_tool_name}' on server '{server_label}' is a delete operation and requires explicit admin approval"
+                },
+            )
+
     async def _call_regular_mcp_tool(
         self,
         mcp_server: MCPServer,
@@ -5835,6 +5888,7 @@ class MCPServerManager:
         hook_extra_headers: dict[str, str] | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         client_ip: str | None = None,
+        tool_op_check_required: bool = False,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -5994,6 +6048,8 @@ class MCPServerManager:
             # all others keep the plain single call below.
             async def _obo_call_tool_limited():
                 async with self._limit_outbound_concurrency(mcp_server):
+                    if tool_op_check_required:
+                        await self._enforce_tool_op_policy(client, mcp_server, original_tool_name)
                     return await self._obo_call_tool_with_retry(
                         client=client,
                         call_tool_params=call_tool_params,
@@ -6018,6 +6074,8 @@ class MCPServerManager:
 
             async def _call_tool_via_client(client, params):
                 async with self._limit_outbound_concurrency(mcp_server):
+                    if tool_op_check_required:
+                        await self._enforce_tool_op_policy(client, mcp_server, original_tool_name)
                     if not relays_upstream_auth:
                         return await client.call_tool(params, host_progress_callback=host_progress_callback)
                     # The client-forwarded modes carry the caller's own upstream token, so an upstream
@@ -6338,6 +6396,7 @@ class MCPServerManager:
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
+        tool_op_check_required: Final = bool(hook_result.get("tool_op_check_required"))
 
         # Prepare tasks for during hooks
         tasks: Final = []
@@ -6360,6 +6419,33 @@ class MCPServerManager:
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
             verbose_logger.debug("Calling OpenAPI tool %s directly via HTTP handler", name)
+            if tool_op_check_required:
+                # The generated tool's local registry entry carries the description the
+                # classifier needs; no upstream request. Fail closed on missing metadata.
+                from litellm.proxy._experimental.mcp_server.tool_op_classification import (
+                    classify_tool_op,
+                )
+                from litellm.proxy._experimental.mcp_server.tool_registry import (
+                    global_mcp_tool_registry,
+                )
+
+                openapi_tool: Final = global_mcp_tool_registry.get_tool(
+                    add_server_prefix_to_name(name, get_server_prefix(mcp_server))
+                )
+                if openapi_tool is None:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": f"Tool '{name}' on server '{mcp_server.name}' requires explicit admin approval: tool metadata unavailable"
+                        },
+                    )
+                if classify_tool_op(name, openapi_tool.description or "") == "delete":
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": f"Tool '{name}' on server '{mcp_server.name}' is a delete operation and requires explicit admin approval"
+                        },
+                    )
             if hook_result.get("extra_headers"):
                 verbose_logger.warning(
                     "pre_mcp_call hook returned extra_headers for OpenAPI-backed "
@@ -6419,6 +6505,7 @@ class MCPServerManager:
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
                 user_api_key_auth=user_api_key_auth,
+                tool_op_check_required=tool_op_check_required,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)

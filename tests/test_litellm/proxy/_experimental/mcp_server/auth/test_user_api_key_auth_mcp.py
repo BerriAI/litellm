@@ -1,4 +1,5 @@
 import contextlib
+from contextlib import ExitStack
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -945,6 +946,304 @@ class TestMCPRequestHandler:
         assert grant.grants("a") is True
         assert grant.grants("b") is True
         assert grant.grants("unrelated") is False
+
+    # ------------------------------------------------------------------
+    # mcp_tool_approved_tools: an explicit per-server delete-approval map.
+    # Presence of the server key activates the policy at that level; a tool
+    # that is not approved and classifies delete needs classification, while
+    # non-delete tools and absent maps keep today's behavior.
+    # ------------------------------------------------------------------
+
+    def _approval_patches(self, *, key_perm=None, team_perm=None, user_perm=None, org_perm=None, agent_perm=None):
+        mock_manager = self._mock_manager_with_toolsets({})
+        return (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_perm)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=user_perm)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_org_object_permission", AsyncMock(return_value=org_perm)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=agent_perm)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        )
+
+    async def test_approved_map_present_non_delete_tool_still_granted(self):
+        """An active approval policy gates only delete-classified tools: an
+        unapproved tool the classifier calls non-delete is still granted"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_approved_tools = {"server-a": ["delete_everything"]}
+
+        with ExitStack() as stack:
+            for p in self._approval_patches(key_perm=key_object_permission):
+                stack.enter_context(p)
+            grant = await MCPRequestHandler.resolve_tool_grant_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert grant.grants("new_tool", "create") is True
+        assert grant.grants("new_tool", "read") is True
+        assert grant.grants("new_tool", "unknown") is True
+
+    async def test_approved_map_present_new_delete_tool_needs_classification(self):
+        """With the approval policy active, an unapproved tool decides
+        needs_classification; classified delete it is refused, otherwise granted"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_approved_tools = {"server-a": ["some_delete"]}
+
+        with ExitStack() as stack:
+            for p in self._approval_patches(key_perm=key_object_permission):
+                stack.enter_context(p)
+            grant = await MCPRequestHandler.resolve_tool_grant_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            decision = await MCPRequestHandler.decide_tool_for_server(
+                tool_name="purge_records", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert decision == "needs_classification"
+        assert grant.grants("purge_records", "delete") is False
+        assert grant.grants("purge_records", "create") is True
+
+    async def test_explicitly_approved_delete_tool_granted(self):
+        """A tool named in the approval map is granted outright, no
+        classification needed"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_approved_tools = {"server-a": ["purge_records"]}
+
+        with ExitStack() as stack:
+            for p in self._approval_patches(key_perm=key_object_permission):
+                stack.enter_context(p)
+            decision = await MCPRequestHandler.decide_tool_for_server(
+                tool_name="purge_records", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert decision == "granted"
+
+    async def test_deny_beats_approval(self):
+        """A tool in both the denylist and the approval map stays denied: deny
+        wins over approval at the same level"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_denied_tools = {"server-a": ["tool_x"]}
+        key_object_permission.mcp_tool_approved_tools = {"server-a": ["tool_x"]}
+
+        with ExitStack() as stack:
+            for p in self._approval_patches(key_perm=key_object_permission):
+                stack.enter_context(p)
+            decision = await MCPRequestHandler.decide_tool_for_server(
+                tool_name="tool_x", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert decision == "denied"
+
+    async def test_empty_approved_list_activates_policy(self):
+        """mcp_tool_approved_tools {server: []} activates the policy: every tool
+        on that server needs classification, and a delete-classified one is refused"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_approved_tools = {"server-a": []}
+
+        with ExitStack() as stack:
+            for p in self._approval_patches(key_perm=key_object_permission):
+                stack.enter_context(p)
+            grant = await MCPRequestHandler.resolve_tool_grant_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert grant.approved == frozenset()
+        assert grant.decide("any_tool") == "needs_classification"
+        assert grant.grants("any_tool", "read") is True
+        assert grant.grants("any_tool", "delete") is False
+
+    async def test_absent_approved_map_grants_delete(self):
+        """No mcp_tool_approved_tools anywhere => legacy behavior: a
+        delete-classified tool is granted like any other allowed tool"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+
+        with ExitStack() as stack:
+            for p in self._approval_patches(key_perm=key_object_permission):
+                stack.enter_context(p)
+            grant = await MCPRequestHandler.resolve_tool_grant_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert grant.approved is None
+        assert grant.decide("delete_everything") == "granted"
+
+    async def test_legacy_allowlist_without_approved_map_unchanged(self):
+        """An allowlisted delete-classified tool is granted and an unlisted one
+        denied, exactly as before approval maps existed"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_permissions = {"server-a": ["wipe_everything"]}
+
+        with ExitStack() as stack:
+            for p in self._approval_patches(key_perm=key_object_permission):
+                stack.enter_context(p)
+            grant = await MCPRequestHandler.resolve_tool_grant_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert grant.approved is None
+        assert grant.decide("wipe_everything") == "granted"
+        assert grant.decide("other_tool") == "denied"
+
+    async def test_team_approval_map_gates_key_allowlisted_tool(self):
+        """The key allowlists the tool but the team's approval map does not
+        approve it: intersecting levels leave it needing classification"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", team_id="team-1")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_permissions = {"server-a": ["delete_issue"]}
+        team_object_permission = self._toolset_only_object_permission([])
+        team_object_permission.mcp_tool_approved_tools = {"server-a": ["some_other"]}
+
+        with ExitStack() as stack:
+            for p in self._approval_patches(key_perm=key_object_permission, team_perm=team_object_permission):
+                stack.enter_context(p)
+            decision = await MCPRequestHandler.decide_tool_for_server(
+                tool_name="delete_issue", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert decision == "needs_classification"
+
+    async def test_key_approved_tool_still_gated_by_team_approval_map(self):
+        """The key approves the tool but the team's approval map does not:
+        approvals intersect across levels, so it needs classification"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", team_id="team-1")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_tool_approved_tools = {"server-a": ["delete_issue"]}
+        team_object_permission = self._toolset_only_object_permission([])
+        team_object_permission.mcp_tool_approved_tools = {"server-a": ["some_other"]}
+
+        with ExitStack() as stack:
+            for p in self._approval_patches(key_perm=key_object_permission, team_perm=team_object_permission):
+                stack.enter_context(p)
+            decision = await MCPRequestHandler.decide_tool_for_server(
+                tool_name="delete_issue", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            approved_elsewhere = await MCPRequestHandler.decide_tool_for_server(
+                tool_name="some_other", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert decision == "needs_classification"
+        assert approved_elsewhere == "needs_classification"
+
+    async def test_toolset_fed_key_gated_by_team_approval_map(self):
+        """A tool the key reaches through a toolset is gated by the team's
+        approval map the same as a directly allowlisted tool"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", team_id="team-1")
+        key_object_permission = self._toolset_only_object_permission(["toolset-1"])
+        team_object_permission = self._toolset_only_object_permission([])
+        team_object_permission.mcp_tool_approved_tools = {"server-a": ["some_other"]}
+        mock_manager = self._mock_manager_with_toolsets({"server-a": ["lookup_status"]})
+
+        with ExitStack() as stack:
+            patches = self._approval_patches(key_perm=key_object_permission, team_perm=team_object_permission)
+            for p in patches[:-1]:
+                stack.enter_context(p)
+            stack.enter_context(
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                    mock_manager,
+                )
+            )
+            decision = await MCPRequestHandler.decide_tool_for_server(
+                tool_name="lookup_status", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert decision == "needs_classification"
+
+    async def test_admitted_subject_approval_maps_stay_per_source(self):
+        """Two granting sources OR their own predicates: source A is
+        unrestricted with an approval map that omits the delete tool, source B
+        allowlists it with no approval map — the call is granted through B and
+        A's approval policy never leaks onto B"""
+        auth = UserAPIKeyAuth(user_id="sso-user")
+        auth.mcp_admitted_user_subject = True
+        source_a = UserAPIKeyAuth(team_id="team-1")
+        source_b = UserAPIKeyAuth(team_id="team-2")
+        grants = {
+            id(source_a): McpToolGrant(allowed=None, denied=frozenset(), approved=frozenset({"other_tool"})),
+            id(source_b): McpToolGrant(allowed=["delete_issue"], denied=frozenset()),
+        }
+
+        mock_manager = MagicMock()
+        mock_manager.operator_open_server_ids = AsyncMock(return_value=set())
+
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "admitted_source_grants",
+                AsyncMock(return_value=[(source_a, {"server-a"}), (source_b, {"server-a"})]),
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "resolve_tool_grant_for_server",
+                AsyncMock(side_effect=lambda server_id, source, **kw: grants[id(source)]),
+            ),
+            patch.object(MCPRequestHandler, "admin_view_unscoped", AsyncMock(return_value=False)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            grant = await MCPRequestHandler._resolve_admitted_subject_grant("server-a", auth)
+
+        assert grant.decide("delete_issue") == "granted"
+        assert grant.grants("delete_issue", "delete") is True
+
+    async def test_admitted_subject_unapproved_delete_denied_when_no_source_grants(self):
+        """Mirror case: A's approval map omits the tool AND B's allowlist does not
+        name it — neither source grants, so the union cannot grant either"""
+        auth = UserAPIKeyAuth(user_id="sso-user")
+        auth.mcp_admitted_user_subject = True
+        source_a = UserAPIKeyAuth(team_id="team-1")
+        source_b = UserAPIKeyAuth(team_id="team-2")
+        grants = {
+            id(source_a): McpToolGrant(allowed=None, denied=frozenset(), approved=frozenset({"other_tool"})),
+            id(source_b): McpToolGrant(allowed=["read_only"], denied=frozenset()),
+        }
+
+        mock_manager = MagicMock()
+        mock_manager.operator_open_server_ids = AsyncMock(return_value=set())
+
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "admitted_source_grants",
+                AsyncMock(return_value=[(source_a, {"server-a"}), (source_b, {"server-a"})]),
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "resolve_tool_grant_for_server",
+                AsyncMock(side_effect=lambda server_id, source, **kw: grants[id(source)]),
+            ),
+            patch.object(MCPRequestHandler, "admin_view_unscoped", AsyncMock(return_value=False)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            grant = await MCPRequestHandler._resolve_admitted_subject_grant("server-a", auth)
+
+        assert grant.decide("delete_issue") == "needs_classification"
+        assert grant.grants("delete_issue", "delete") is False
+        assert grant.grants("delete_issue", "read") is True
 
     # ------------------------------------------------------------------
     # LIT-5749: toolsets attached to a TEAM, ORG, or internal USER must be
