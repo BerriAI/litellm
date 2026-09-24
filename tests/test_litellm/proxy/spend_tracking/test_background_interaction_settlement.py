@@ -167,6 +167,50 @@ async def test_claim_is_won_by_exactly_one_settler():
     assert table.rows["interactions/bg-1"].claimed_by == "replica-b:1"
 
 
+class _MissingSettlementTable:
+    """Prisma's per-model actions against a database whose migration for this table was held back."""
+
+    async def create(self, *, data):
+        raise self._missing()
+
+    async def find_unique(self, *, where):
+        raise self._missing()
+
+    async def find_many(self, *, where):
+        raise self._missing()
+
+    async def update_many(self, *, data, where):
+        raise self._missing()
+
+    def _missing(self):
+        from prisma.errors import TableNotFoundError
+
+        return TableNotFoundError(
+            {
+                "user_facing_error": {
+                    "error_code": "P2021",
+                    "meta": {"table": "public.LiteLLM_BackgroundInteractionSettlement"},
+                    "message": "The table does not exist in the current database.",
+                }
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_missing_table_holds_no_rows_and_takes_no_registration():
+    from prisma.errors import TableNotFoundError
+
+    store = PrismaBackgroundSettlementStore(table=_MissingSettlementTable(), claimed_by="replica-a:1")
+
+    with pytest.raises(TableNotFoundError):
+        await store.register(_pending("interactions/bg-1"))
+    assert await store.pending("interactions/bg-1") is None
+    assert await store.is_claimed("interactions/bg-1") is False
+    assert await store.claim("interactions/bg-1") is False
+    with pytest.raises(TableNotFoundError):
+        await store.unclaimed()
+
+
 @pytest.mark.asyncio
 async def test_unclaimed_skips_claimed_and_unreadable_rows():
     table = _FakeSettlementTable(

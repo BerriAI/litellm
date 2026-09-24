@@ -485,33 +485,55 @@ def _track_poll(
     return task
 
 
+@dataclass(frozen=True, slots=True)
+class _UnverifiedRegistrationStore:
+    """
+    Store of a create whose registration raised, so whether its row landed is
+    unknown until the durable store answers. The settlement claim asks it
+    first, and only an interaction it reports as never stored settles through
+    the local gate, which no other process can reach.
+    """
+
+    durable: BackgroundSettlementStore
+    local: InMemoryBackgroundSettlementStore = field(default_factory=InMemoryBackgroundSettlementStore)
+
+    async def register(self, pending: PendingBackgroundInteraction) -> None:
+        await self.durable.register(pending)
+
+    async def pending(self, interaction_id: str) -> PendingBackgroundInteraction | None:
+        return await self.durable.pending(interaction_id)
+
+    async def is_claimed(self, interaction_id: str) -> bool:
+        return await self.local.is_claimed(interaction_id) or await self.durable.is_claimed(interaction_id)
+
+    async def claim(self, interaction_id: str) -> bool:
+        if await self.durable.claim(interaction_id):
+            return True
+        if await self.durable.is_claimed(interaction_id):
+            return False
+        return await self.local.claim(interaction_id)
+
+    async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None:
+        if await self.local.is_claimed(interaction_id):
+            return
+        await self.durable.record_outcome(interaction_id, outcome)
+
+    async def unclaimed(self) -> Sequence[PendingBackgroundInteraction]:
+        return await self.durable.unclaimed()
+
+
 async def _registered_store(
     store: BackgroundSettlementStore, pending: PendingBackgroundInteraction
 ) -> BackgroundSettlementStore:
     try:
         await store.register(pending)
-    except Exception:  # noqa: BLE001  # a store outage must not fail the create; the poll settles from this process
-        if await _registration_landed(store, pending.interaction_id):
-            verbose_logger.exception(
-                "Registering background interaction %s raised although its row landed; it settles through the store",
-                pending.interaction_id,
-            )
-            return store
+    except Exception:  # noqa: BLE001  # a store outage must not fail the create; the claim learns if the row landed
         verbose_logger.exception(
-            "Could not durably register background interaction %s; only this process can settle it",
+            "Could not durably register background interaction %s; its settlement claim decides whether the row landed",
             pending.interaction_id,
         )
-        fallback: Final = InMemoryBackgroundSettlementStore()
-        await fallback.register(pending)
-        return fallback
+        return _UnverifiedRegistrationStore(durable=store)
     return store
-
-
-async def _registration_landed(store: BackgroundSettlementStore, interaction_id: str) -> bool:
-    try:
-        return await store.pending(interaction_id) is not None or await store.is_claimed(interaction_id)
-    except Exception:  # noqa: BLE001  # the row cannot be read either, so the poll settles from this process
-        return False
 
 
 async def maybe_schedule_background_interaction_cost_polling(

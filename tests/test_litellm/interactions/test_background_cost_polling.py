@@ -939,8 +939,103 @@ async def test_delete_on_a_worker_that_resumed_the_poll_fails_when_it_cannot_fet
     assert await asyncio.wait_for(resumed, timeout=5) == "billed"
 
 
+class _LandsThenGoesDown:
+    """Register commits the row and loses its acknowledgement; every read fails until the store recovers."""
+
+    def __init__(self):
+        self.store = InMemoryBackgroundSettlementStore()
+        self.down = True
+
+    async def register(self, pending):
+        await self.store.register(pending)
+        raise RuntimeError("connection reset after the row was committed")
+
+    async def pending(self, interaction_id):
+        self._answer()
+        return await self.store.pending(interaction_id)
+
+    async def is_claimed(self, interaction_id):
+        self._answer()
+        return await self.store.is_claimed(interaction_id)
+
+    async def claim(self, interaction_id):
+        self._answer()
+        return await self.store.claim(interaction_id)
+
+    async def record_outcome(self, interaction_id, outcome):
+        return None
+
+    async def unclaimed(self):
+        self._answer()
+        return await self.store.unclaimed()
+
+    def _answer(self):
+        if self.down:
+            raise RuntimeError("database unavailable")
+
+
+class _TableLessStore:
+    """A replica whose database never got the settlement table: writes fail and reads see no rows."""
+
+    async def register(self, pending):
+        raise RuntimeError("the settlement table does not exist")
+
+    async def pending(self, interaction_id):
+        return None
+
+    async def is_claimed(self, interaction_id):
+        return False
+
+    async def claim(self, interaction_id):
+        return False
+
+    async def record_outcome(self, interaction_id, outcome):
+        raise RuntimeError("the settlement table does not exist")
+
+    async def unclaimed(self):
+        raise RuntimeError("the settlement table does not exist")
+
+
 @pytest.mark.asyncio
-async def test_create_still_settles_on_its_own_replica_when_the_store_is_down():
+async def test_create_whose_registration_and_read_back_both_failed_bills_once_through_the_landed_row():
+    """
+    A registration that raised and could not be read back used to give the
+    creator a private in-memory gate, so it billed while the stored row stayed
+    unclaimed for the next boot to resume and bill again. With the durable
+    state unknown, the claim waits for the store and settles through the row.
+    """
+    store = _LandsThenGoesDown()
+    logging_obj = _logging_obj(litellm_params={"metadata": _create_metadata()})
+    poll_fetch, _ = _fetch_sequence(_response("in_progress", with_usage=False))
+    task = await maybe_schedule_background_interaction_cost_polling(
+        response=_response("in_progress", with_usage=False),
+        create_kwargs={"litellm_logging_obj": logging_obj},
+        custom_llm_provider="gemini",
+        store=store,
+        fetch_interaction=poll_fetch,
+    )
+    fetch, calls = _fetch_sequence(_response("completed", with_usage=True), _response("completed", with_usage=True))
+
+    while_down = await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc", delete_kwargs={}, fetch_interaction=fetch, store=store
+    )
+    store.down = False
+    recovered = await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc", delete_kwargs={}, fetch_interaction=fetch, store=store
+    )
+
+    assert (while_down, recovered) == (None, "billed")
+    assert len(calls) == 2
+    assert await store.is_claimed("interactions/bg-abc")
+    assert await store.unclaimed() == ()
+    assert await resume_unsettled_background_interactions(store, poll_fetch, schedule=FAST_SCHEDULE) == ()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_create_whose_store_never_answers_is_not_billed_through_a_private_gate():
     logging_obj = _logging_obj()
     poll_fetch, _ = _fetch_sequence(_response("in_progress", with_usage=False))
     task = await maybe_schedule_background_interaction_cost_polling(
@@ -959,8 +1054,37 @@ async def test_create_still_settles_on_its_own_replica_when_the_store_is_down():
         store=_DownStore(),
     )
 
-    assert outcome == "billed"
+    assert outcome is None
     assert len(calls) == 1
+    assert "response_cost" not in logging_obj.model_call_details
+    assert not task.done()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_create_on_a_replica_without_the_settlement_table_still_settles_in_process():
+    logging_obj = _logging_obj()
+    poll_fetch, _ = _fetch_sequence(_response("in_progress", with_usage=False))
+    task = await maybe_schedule_background_interaction_cost_polling(
+        response=_response("in_progress", with_usage=False),
+        create_kwargs={"litellm_logging_obj": logging_obj},
+        custom_llm_provider="gemini",
+        store=_TableLessStore(),
+        fetch_interaction=poll_fetch,
+    )
+    fetch, calls = _fetch_sequence(_response("completed", with_usage=True), _response("completed", with_usage=True))
+
+    outcome = await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc", delete_kwargs={}, fetch_interaction=fetch, store=_TableLessStore()
+    )
+    again = await maybe_settle_background_interaction_before_delete(
+        interaction_id="interactions/bg-abc", delete_kwargs={}, fetch_interaction=fetch, store=_TableLessStore()
+    )
+
+    assert (outcome, again) == ("billed", None)
+    assert len(calls) == 2
     assert logging_obj.model_call_details["response_cost"] > 0
     task.cancel()
     with pytest.raises(asyncio.CancelledError):

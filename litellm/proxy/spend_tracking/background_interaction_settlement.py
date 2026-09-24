@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar
 
 from pydantic import ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -88,6 +88,16 @@ def _settlement_table(prisma_client: "PrismaClient") -> _SettlementTableActions:
 
 
 _CLEARED_CREATE_CONTEXT: Final[Mapping[str, object]] = MappingProxyType({})
+_T = TypeVar("_T")
+
+
+async def _read_from_a_table_that_may_not_exist(query: Awaitable[_T], when_missing: _T) -> _T:
+    from prisma.errors import TableNotFoundError  # noqa: PLC0415  # local import: prisma may be ungenerated at load
+
+    try:
+        return await query
+    except TableNotFoundError:
+        return when_missing
 
 
 def _json(data: Mapping[str, object]) -> object:
@@ -135,21 +145,29 @@ class PrismaBackgroundSettlementStore:
         )
 
     async def pending(self, interaction_id: str) -> PendingBackgroundInteraction | None:
-        row: Final = await self.table.find_unique(where=_RowKey(interaction_id=interaction_id))
+        row: Final = await self._row(interaction_id)
         if row is None or row.claimed_at is not None:
             return None
         return next(iter(_pending_row(row)), None)
 
     async def is_claimed(self, interaction_id: str) -> bool:
-        row: Final = await self.table.find_unique(where=_RowKey(interaction_id=interaction_id))
+        row: Final = await self._row(interaction_id)
         return row is not None and row.claimed_at is not None
 
     async def claim(self, interaction_id: str) -> bool:
-        claimed_rows: Final = await self.table.update_many(
-            data=_Claim(claimed_at=datetime.now(timezone.utc), claimed_by=self.claimed_by),
-            where=_UnclaimedRowKey(interaction_id=interaction_id, claimed_at=None),
+        claimed_rows: Final = await _read_from_a_table_that_may_not_exist(
+            self.table.update_many(
+                data=_Claim(claimed_at=datetime.now(timezone.utc), claimed_by=self.claimed_by),
+                where=_UnclaimedRowKey(interaction_id=interaction_id, claimed_at=None),
+            ),
+            when_missing=0,
         )
         return claimed_rows == 1
+
+    async def _row(self, interaction_id: str) -> _SettlementRow | None:
+        return await _read_from_a_table_that_may_not_exist(
+            self.table.find_unique(where=_RowKey(interaction_id=interaction_id)), when_missing=None
+        )
 
     async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None:
         await self.table.update_many(
