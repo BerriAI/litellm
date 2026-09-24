@@ -356,6 +356,10 @@ class _TeamIdInFilter(TypedDict, total=False):
     team_id: Mapping[str, Sequence[str]]
 
 
+class _TagOwnerRelease(TypedDict):
+    team_id: ReadOnly[None]
+
+
 class _DeletedTeamsResult(TypedDict):
     deleted_teams: ReadOnly[Sequence[str]]
 
@@ -410,7 +414,6 @@ UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(te
 """
 
 _INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
-_RELEASE_TAG_OWNER: Final = MappingProxyType({"team_id": None})
 
 
 def _team_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_TeamTable]":
@@ -4629,7 +4632,8 @@ async def _sweep_deleted_team_references_tx(team_ids: Sequence[str], tx: _TeamDe
 
     membership_filter: Final[_TeamIdInFilter] = {"team_id": {"in": tuple(team_ids)}}
     _ = await tx.litellm_teammembership.delete_many(where=membership_filter)
-    _ = await tx.litellm_tagtable.update_many(where=membership_filter, data=_RELEASE_TAG_OWNER)
+    release_owner: Final[_TagOwnerRelease] = {"team_id": None}
+    _ = await tx.litellm_tagtable.update_many(where=membership_filter, data=release_owner)
 
 
 async def _invalidate_deleted_key_cache(
