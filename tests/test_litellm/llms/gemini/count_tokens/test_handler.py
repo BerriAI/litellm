@@ -58,3 +58,38 @@ async def test_acount_tokens_keeps_contents_body_without_system_or_tools():
 
     body = json.loads(recorded[-1].content)
     assert body == {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+
+
+@pytest.mark.asyncio
+async def test_acount_tokens_wraps_unexpected_error_in_api_error():
+    import litellm
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("transport exploded")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+
+    with pytest.raises(litellm.APIError) as excinfo:
+        await GoogleAIStudioTokenCounter().acount_tokens(
+            model="gemini-2.5-flash",
+            contents=[{"role": "user", "parts": [{"text": "hello"}]}],
+            api_key="test-key",
+            client=client,
+        )
+
+    assert excinfo.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_acount_tokens_wraps_malformed_contents_error_in_api_error():
+    import litellm
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})))
+
+    with pytest.raises(litellm.APIError):
+        await GoogleAIStudioTokenCounter().acount_tokens(
+            model="gemini-2.5-flash",
+            contents=5,  # pyright: ignore[reportArgumentType]  # malformed caller input exercises the error boundary
+            api_key="test-key",
+            client=client,
+        )

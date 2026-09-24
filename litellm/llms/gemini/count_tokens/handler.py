@@ -124,47 +124,45 @@ class GoogleAIStudioTokenCounter:
             Exception: For any other unexpected errors
         """
 
-        # Prepare headers
-        headers, url = await self.validate_environment(
-            api_key=api_key,
-            api_base=api_base,
-            headers={},
-            model=model,
-            litellm_params=kwargs,
-        )
-
-        # Prepare request body - clean up contents to remove unsupported fields
-        cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
-        request_body: Final = (
-            {"contents": cleaned_contents}  # mutable-ok: httpx json body takes a plain dict
-            if system_instruction is None and tools is None
-            else {  # mutable-ok: httpx json body takes a plain dict
-                "generateContentRequest": {  # mutable-ok: httpx json body takes a plain dict
-                    "model": f"models/{model}",
-                    "contents": cleaned_contents,
-                    **(
-                        {  # mutable-ok: httpx json body takes a plain dict
-                            "systemInstruction": system_instruction,
-                        }
-                        if system_instruction is not None
-                        else {}  # mutable-ok: httpx json body takes a plain dict
-                    ),
-                    **(
-                        {  # mutable-ok: httpx json body takes a plain dict
-                            "tools": tools,
-                        }
-                        if tools is not None
-                        else {}  # mutable-ok: httpx json body takes a plain dict
-                    ),
-                }
-            }
-        )
-
-        async_httpx_client: Final = client or get_async_httpx_client(
-            llm_provider=LlmProviders.GEMINI,
-        )
-
         try:
+            headers, url = await self.validate_environment(
+                api_key=api_key,
+                api_base=api_base,
+                headers={},  # mutable-ok: validate_environment merges into this dict
+                model=model,
+                litellm_params=kwargs,
+            )
+
+            cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
+            request_body: Final = (
+                {"contents": cleaned_contents}  # mutable-ok: httpx json body takes a plain dict
+                if system_instruction is None and tools is None
+                else {  # mutable-ok: httpx json body takes a plain dict
+                    "generateContentRequest": {  # mutable-ok: httpx json body takes a plain dict
+                        "model": f"models/{model}",
+                        "contents": cleaned_contents,
+                        **(
+                            {  # mutable-ok: httpx json body takes a plain dict
+                                "systemInstruction": system_instruction,
+                            }
+                            if system_instruction is not None
+                            else {}  # mutable-ok: httpx json body takes a plain dict
+                        ),
+                        **(
+                            {  # mutable-ok: httpx json body takes a plain dict
+                                "tools": tools,
+                            }
+                            if tools is not None
+                            else {}  # mutable-ok: httpx json body takes a plain dict
+                        ),
+                    }
+                }
+            )
+
+            async_httpx_client: Final = client or get_async_httpx_client(
+                llm_provider=LlmProviders.GEMINI,
+            )
+
             response: Final = await async_httpx_client.post(url=url, headers=headers, json=request_body)
 
             # Check for HTTP errors

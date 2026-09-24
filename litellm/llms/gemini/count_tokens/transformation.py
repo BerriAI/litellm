@@ -1,10 +1,18 @@
-"""Translate an Anthropic /v1/messages/count_tokens request into a Gemini
-countTokens payload (contents + systemInstruction + tools)."""
+"""Translate a token-count request into a Gemini countTokens payload
+(contents + systemInstruction + tools).
 
+Callers send Anthropic Messages shapes (/v1/messages/count_tokens) or
+already-OpenAI shapes (/v1/responses/input_tokens, /utils/token_counter).
+OpenAI input skips the Anthropic adapter, which only reads Anthropic fields
+and would drop tool_calls, tool messages, and web search tool declarations.
+"""
+
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, cast
 
+import litellm
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
 )
@@ -15,6 +23,7 @@ from litellm.llms.vertex_ai.gemini.transformation import (
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.llms.vertex_ai import ContentType, SystemInstructions, Tools
+from litellm.types.utils import AllMessageValues
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,44 +33,393 @@ class GeminiCountTokensPayload:
     tools: list[Tools] | None
 
 
+_ANTHROPIC_PART_TYPES: Final = frozenset(
+    {
+        "tool_use",
+        "tool_result",
+        "thinking",
+        "redacted_thinking",
+        "image",
+        "document",
+        "server_tool_use",
+        "web_search_tool_result",
+        "web_fetch_tool_result",
+        "code_execution_tool_result",
+        "mcp_tool_use",
+        "mcp_tool_result",
+        "container_upload",
+    }
+)
+
+_ANTHROPIC_TOOL_TYPE_PREFIXES: Final = (
+    "web_search_",
+    "web_fetch_",
+    "code_execution_",
+    "computer_",
+    "text_editor_",
+    "bash_",
+    "mcp_",
+)
+
+# Server-side Anthropic content blocks the anthropic->openai adapter drops, so
+# they would silently count as ~1 token each. They are flattened to text
+# (closest token mass to the serialized block Anthropic itself bills).
+_SERVER_SIDE_PART_TYPES: Final = frozenset(
+    {
+        "server_tool_use",
+        "web_search_tool_result",
+        "web_fetch_tool_result",
+        "code_execution_tool_result",
+        "code_execution_result",
+        "mcp_tool_use",
+        "mcp_tool_result",
+        "container_upload",
+        "redacted_thinking",
+    }
+)
+
+# Anthropic hosted tools with a native Gemini equivalent: mapping preserves
+# roughly the hosted-tool token overhead instead of collapsing them to a
+# name-only function declaration.
+_ANTHROPIC_HOSTED_TOOL_TYPES: Final = (
+    ("code_execution", "codeExecution"),
+    ("web_fetch", "urlContext"),
+)
+
+_GEMINI_TOOL_KEYS: Final = frozenset(
+    {
+        "function_declarations",
+        "functionDeclarations",
+        "googleSearch",
+        "google_search",
+        "urlContext",
+        "url_context",
+        "codeExecution",
+        "code_execution",
+        "enterpriseWebSearch",
+        "googleSearchRetrieval",
+        "retrieval",
+        "computerUse",
+        "computer_use",
+    }
+)
+
+
+def _has_anthropic_shape(
+    system: object | None,
+    tools: Sequence[Mapping[str, object]] | None,
+    messages: Sequence[Mapping[str, object]] | None,
+) -> bool:
+    # A top-level system given as a list of blocks only exists in the Anthropic API
+    if isinstance(system, list):
+        return True
+    for message in messages or ():
+        if not isinstance(message, Mapping):
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, Mapping) and part.get("type") in _ANTHROPIC_PART_TYPES:
+                    return True
+    for tool in tools or ():
+        if isinstance(tool, Mapping):
+            if "input_schema" in tool:
+                return True
+            tool_type = tool.get("type")
+            if isinstance(tool_type, str) and tool_type.startswith(_ANTHROPIC_TOOL_TYPE_PREFIXES):
+                return True
+    return False
+
+
+def _is_web_search_tool(tool: Mapping[str, object]) -> bool:
+    tool_type = tool.get("type")
+    return isinstance(tool_type, str) and tool_type.startswith("web_search")
+
+
+def _is_gemini_tool_shape(tool: Mapping[str, object]) -> bool:
+    return any(key in tool for key in _GEMINI_TOOL_KEYS)
+
+
+def _hosted_tool_type(tool: Mapping[str, object]) -> str | None:
+    tool_type = tool.get("type")
+    if not isinstance(tool_type, str):
+        return None
+    for prefix, gemini_name in _ANTHROPIC_HOSTED_TOOL_TYPES:
+        if tool_type.startswith(prefix):
+            return gemini_name
+    return None
+
+
+def _normalize_openai_tool(tool: Mapping[str, object]) -> dict[str, object]:
+    if "function" in tool:
+        return dict(tool)  # mutable-ok: _map_function takes plain tool dicts
+    if "input_schema" in tool:
+        return {  # mutable-ok: normalized tool dict for _map_function (anthropic function shape reaching the openai path)
+            "type": "function",
+            "function": {  # mutable-ok: normalized tool dict for _map_function
+                "name": tool.get("name"),
+                "description": tool.get("description"),
+                "parameters": tool.get("input_schema"),
+            },
+        }
+    if tool.get("type") == "function" and "name" in tool:
+        return {  # mutable-ok: normalized tool dict for _map_function (responses-api flat shape)
+            "type": "function",
+            "function": {  # mutable-ok: normalized tool dict for _map_function
+                key: tool[key] for key in ("name", "description", "parameters", "strict") if key in tool
+            },
+        }
+    return dict(tool)  # mutable-ok: _map_function takes plain tool dicts
+
+
+def _apply_mixed_tool_drop_rule(merged: Sequence[Tools]) -> list[Tools] | None:
+    if not merged:
+        return None
+    optional_params: Final = {  # mutable-ok: shared Vertex drop-rule mutates the tools list in place
+        "tools": list(merged)  # mutable-ok: shared Vertex drop-rule mutates the tools list in place
+    }
+    VertexGeminiConfig._drop_search_tools_mixed_with_functions(optional_params)
+    kept: Final = optional_params["tools"]
+    return kept or None
+
+
+def _map_to_gemini_tools(
+    openai_tools: Sequence[Mapping[str, object]],
+    web_search_options: object | None,
+) -> list[Tools] | None:
+    merged: Final = (
+        VertexGeminiConfig()._map_function(
+            value=[dict(tool) for tool in openai_tools],  # mutable-ok: _map_function takes plain tool dicts
+            optional_params={},  # mutable-ok: _map_function signature takes a dict
+        )
+        if openai_tools
+        else []  # mutable-ok: merged with the mapped tools list below
+    ) + (
+        [VertexGeminiConfig()._map_web_search_options({})]  # mutable-ok: merged tools list for the drop-rule
+        if web_search_options is not None
+        else []  # mutable-ok: merged with the mapped tools list
+    )
+    return _apply_mixed_tool_drop_rule(merged)
+
+
+def normalize_count_tokens_tools(
+    tools: Sequence[Mapping[str, object]] | None,
+) -> list[Tools] | None:
+    """Tools arriving alongside native Gemini contents may be in Gemini,
+    OpenAI, Responses-API, or Anthropic shape. Gemini-shaped entries pass
+    through; the rest are normalized so mixed-shape callers do not 400."""
+    if not tools:
+        return None
+    gemini_shaped: Final = tuple(tool for tool in tools if _is_gemini_tool_shape(tool))
+    rest: Final = tuple(tool for tool in tools if not _is_gemini_tool_shape(tool))
+    mapped: Final = _map_to_gemini_tools(
+        openai_tools=tuple(_normalize_openai_tool(tool) for tool in rest if not _is_web_search_tool(tool)),
+        web_search_options={}  # mutable-ok: truthy marker for _map_web_search_options
+        if any(_is_web_search_tool(tool) for tool in rest)
+        else None,
+    )
+    merged: Final = (
+        [
+            cast(  # cast-ok: plain dicts for the Tools wire shape
+                Tools,
+                dict(tool),  # mutable-ok: plain dicts for the Tools wire shape
+            )
+            for tool in gemini_shaped
+        ]
+        + list(mapped or [])  # mutable-ok: concat with mapped tools
+    )
+    return _apply_mixed_tool_drop_rule(merged)
+
+
+def _dedupe_thought_signature_parts(contents: Sequence[ContentType]) -> list[ContentType]:
+    """The openai->gemini converter emits both a {thought: true, text} part
+    and a duplicate {thoughtSignature, text} part for one signed thinking
+    block; the signature belongs as a field on the thought part, not a second
+    part, or every reasoning turn is counted twice."""
+
+    def _merge(parts: Sequence[object]) -> Sequence[object]:
+        sig_by_text: Final = {  # mutable-ok: text->signature lookup
+            part.get("text"): part.get("thoughtSignature")
+            for part in parts
+            if isinstance(part, Mapping)
+            and part.get("thoughtSignature") is not None
+            and part.get("thought") is not True
+        }
+        if not sig_by_text:
+            return parts
+        thought_texts: Final = frozenset(
+            part.get("text") for part in parts if isinstance(part, Mapping) and part.get("thought") is True
+        )
+        return tuple(
+            (
+                {  # mutable-ok: rebuilt part with merged signature
+                    **dict(part),  # mutable-ok: rebuilt part with merged signature
+                    "thoughtSignature": sig_by_text[part.get("text")],
+                }
+                if isinstance(part, Mapping)
+                and part.get("thought") is True
+                and sig_by_text.get(part.get("text")) is not None
+                else part
+            )
+            for part in parts
+            if not (
+                isinstance(part, Mapping)
+                and part.get("thoughtSignature") is not None
+                and part.get("thought") is not True
+                and part.get("text") in thought_texts
+            )
+        )
+
+    return [  # mutable-ok: rebuilt contents list
+        cast(  # cast-ok: same ContentType shape with deduped parts
+            ContentType,
+            {  # mutable-ok: rebuilt content with deduped parts
+                **dict(content),  # mutable-ok: rebuilt content with deduped parts
+                "parts": _merge(content.get("parts", [])),  # mutable-ok: default parts list for the merge
+            },
+        )
+        if isinstance(content.get("parts"), list)
+        else content
+        for content in contents
+    ]
+
+
+def _textify_server_side_blocks(
+    messages: Sequence[Mapping[str, object]],
+) -> tuple[Mapping[str, object], ...]:
+    """Flatten server-side Anthropic content blocks to text so the
+    anthropic->openai adapter (which drops them) still counts their mass."""
+
+    def _textify(content: object) -> object:
+        if not isinstance(content, list):
+            return content
+        return [  # mutable-ok: rebuilt content list
+            (
+                {  # mutable-ok: textified block for counting
+                    "type": "text",
+                    "text": json.dumps(dict(block), ensure_ascii=False),  # mutable-ok: plain dict copy for the dump
+                }
+                if isinstance(block, Mapping) and block.get("type") in _SERVER_SIDE_PART_TYPES
+                else block
+            )
+            for block in content
+        ]  # mutable-ok: rebuilt content list
+
+    return tuple(
+        (
+            {**dict(message), "content": _textify(message.get("content"))}  # mutable-ok: rebuilt message
+            if isinstance(message.get("content"), list)
+            else message
+        )
+        for message in messages
+    )
+
+
+def _payload_from_openai_parts(
+    model: str,
+    messages: Sequence[object],
+    tools: Sequence[Mapping[str, object]],
+    web_search_options: object | None,
+) -> GeminiCountTokensPayload:
+    system_instruction, remaining_messages = _transform_system_message(
+        supports_system_message=litellm.supports_system_messages(model=model, custom_llm_provider="gemini"),
+        messages=cast(  # cast-ok: chat-shaped message dicts accepted by the helper
+            "list[AllMessageValues]",
+            list(messages),  # mutable-ok: helper contract takes a list
+        ),
+    )
+    contents: Final = _dedupe_thought_signature_parts(
+        _gemini_convert_messages_with_history(
+            messages=remaining_messages,
+            model=model,
+            custom_llm_provider="gemini",
+        )
+    )
+    return GeminiCountTokensPayload(
+        contents=contents,
+        system_instruction=system_instruction,
+        tools=_map_to_gemini_tools(openai_tools=tools, web_search_options=web_search_options),
+    )
+
+
+def _build_anthropic_payload(
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+    system: object | None,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> GeminiCountTokensPayload:
+    hosted_tools: Final = tuple(tool for tool in tools or () if _hosted_tool_type(tool) is not None)
+    adapter_tools: Final = tuple(tool for tool in tools or () if _hosted_tool_type(tool) is None)
+    anthropic_request: Final[AnthropicMessagesRequest] = cast(  # cast-ok: adapter reads only the keys supplied
+        AnthropicMessagesRequest,
+        {  # mutable-ok: transient request dict for the anthropic adapter
+            "model": model,
+            "messages": list(  # mutable-ok: adapter contract takes a list of messages
+                _textify_server_side_blocks(messages)
+            ),
+            **({"system": system} if system else {}),  # mutable-ok: transient request dict for the anthropic adapter
+            **(
+                {"tools": list(adapter_tools)}
+                if adapter_tools
+                else {}  # mutable-ok: transient request dict for the anthropic adapter
+            ),
+        },
+    )
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_request, custom_llm_provider="gemini"
+    )
+    openai_tools: Final = openai_request.get("tools")
+    payload: Final = _payload_from_openai_parts(
+        model=model,
+        messages=openai_request["messages"],
+        tools=tuple(dict(tool) for tool in openai_tools)  # mutable-ok: plain dicts for the normalizer
+        if openai_tools
+        else (),
+        web_search_options=openai_request.get("web_search_options"),
+    )
+    if not hosted_tools:
+        return payload
+    merged_tools: Final = _apply_mixed_tool_drop_rule(
+        list(payload.tools or [])  # mutable-ok: merged tools for the drop-rule
+        + [  # mutable-ok: merged tools list for the drop-rule
+            cast(Tools, {gemini_name: {}})  # cast-ok: hosted tool wire shape  # mutable-ok: hosted tool wire shape
+            for gemini_name in {_hosted_tool_type(tool) for tool in hosted_tools}  # mutable-ok: set dedupe
+        ]
+    )
+    return GeminiCountTokensPayload(
+        contents=payload.contents,
+        system_instruction=payload.system_instruction,
+        tools=merged_tools,
+    )
+
+
+def _build_openai_payload(
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+    system: object | None,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> GeminiCountTokensPayload:
+    openai_messages: Final = (
+        [{"role": "system", "content": system}, *messages]  # mutable-ok: transient list for the message converter
+        if system is not None
+        else list(messages)  # mutable-ok: transient list for the message converter
+    )
+    return _payload_from_openai_parts(
+        model=model,
+        messages=openai_messages,
+        tools=tuple(_normalize_openai_tool(tool) for tool in tools or () if not _is_web_search_tool(tool)),
+        web_search_options={}  # mutable-ok: truthy marker for _map_web_search_options
+        if any(_is_web_search_tool(tool) for tool in tools or ())
+        else None,
+    )
+
+
 def build_count_tokens_payload(
     model: str,
     messages: Sequence[Mapping[str, object]],
     system: object | None,
     tools: Sequence[Mapping[str, object]] | None,
 ) -> GeminiCountTokensPayload:
-    anthropic_request: Final[AnthropicMessagesRequest] = cast(  # cast-ok: adapter reads only the keys supplied
-        AnthropicMessagesRequest,
-        {  # mutable-ok: transient request dict for the anthropic adapter
-            "model": model,
-            "messages": list(messages),  # mutable-ok: adapter contract takes a list of messages
-            **({"system": system} if system else {}),  # mutable-ok: transient request dict for the anthropic adapter
-            **({"tools": list(tools)} if tools else {}),  # mutable-ok: transient request dict for the anthropic adapter
-        },
-    )
-    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-        anthropic_request, custom_llm_provider="gemini"
-    )
-    system_instruction, remaining_messages = _transform_system_message(
-        supports_system_message=True,
-        messages=list(openai_request["messages"]),  # mutable-ok: helper pops the leading system message
-    )
-    contents: Final = _gemini_convert_messages_with_history(
-        messages=remaining_messages,
-        model=model,
-        custom_llm_provider="gemini",
-    )
-    openai_tools: Final = openai_request.get("tools")
-    gemini_tools: Final = (
-        VertexGeminiConfig()._map_function(
-            value=[dict(tool) for tool in openai_tools],  # mutable-ok: _map_function takes plain tool dicts
-            optional_params={},  # mutable-ok: _map_function signature takes a dict
-        )
-        if openai_tools
-        else None
-    )
-    return GeminiCountTokensPayload(
-        contents=contents,
-        system_instruction=system_instruction,
-        tools=gemini_tools,
-    )
+    if _has_anthropic_shape(system=system, tools=tools, messages=messages):
+        return _build_anthropic_payload(model=model, messages=messages, system=system, tools=tools)
+    return _build_openai_payload(model=model, messages=messages, system=system, tools=tools)

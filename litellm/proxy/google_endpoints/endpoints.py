@@ -181,6 +181,8 @@ async def google_count_tokens(request: Request, model_name: str):
         model=model_name,
         contents=contents,
         messages=messages,  # compatibility when use openai-like endpoint
+        tools=data.get("tools"),
+        system=data.get("systemInstruction"),
     )
 
     # Call the internal token counter function with direct request flag set to False

@@ -37,18 +37,10 @@ class TestGeminiModelInfo:
         # Test edge cases where model names end with characters from "models/"
         # These would be incorrectly processed if using strip("models/") instead of replace("models/", "")
         models = [
-            {
-                "name": "models/gemini-1.5-pro"
-            },  # ends with 'o' - would become "gemini-1.5-pr" with strip()
-            {
-                "name": "models/test-model"
-            },  # ends with 'l' - would become "gemini/test-mode" with strip()
-            {
-                "name": "models/custom-models"
-            },  # ends with 's' - would become "gemini/custom-model" with strip()
-            {
-                "name": "models/demo"
-            },  # ends with 'o' - would become "gemini/dem" with strip()
+            {"name": "models/gemini-1.5-pro"},  # ends with 'o' - would become "gemini-1.5-pr" with strip()
+            {"name": "models/test-model"},  # ends with 'l' - would become "gemini/test-mode" with strip()
+            {"name": "models/custom-models"},  # ends with 's' - would become "gemini/custom-model" with strip()
+            {"name": "models/demo"},  # ends with 'o' - would become "gemini/dem" with strip()
         ]
 
         result = gemini_model_info.process_model_name(models)
@@ -99,16 +91,10 @@ class TestGoogleAIStudioTokenCounter:
         token_counter = GoogleAIStudioTokenCounter()
 
         # Test with gemini provider - should return True
-        assert (
-            token_counter.should_use_token_counting_api(LlmProviders.GEMINI.value)
-            is True
-        )
+        assert token_counter.should_use_token_counting_api(LlmProviders.GEMINI.value) is True
 
         # Test with other providers - should return False
-        assert (
-            token_counter.should_use_token_counting_api(LlmProviders.OPENAI.value)
-            is False
-        )
+        assert token_counter.should_use_token_counting_api(LlmProviders.OPENAI.value) is False
         assert token_counter.should_use_token_counting_api("anthropic") is False
         assert token_counter.should_use_token_counting_api("vertex_ai") is False
 
@@ -158,9 +144,7 @@ class TestGoogleAIStudioTokenCounter:
             assert result.original_response == mock_response
 
             # Verify the mock was called correctly
-            mock_acount_tokens.assert_called_once_with(
-                model=model_to_use, contents=contents, client=None
-            )
+            mock_acount_tokens.assert_called_once_with(model=model_to_use, contents=contents, client=None)
 
     @pytest.mark.asyncio
     async def test_count_tokens_translates_anthropic_messages_system_and_tools(self):
@@ -269,6 +253,51 @@ class TestGoogleAIStudioTokenCounter:
         assert result.error_message is not None
 
     @pytest.mark.asyncio
+    async def test_count_tokens_translation_error_falls_back(self):
+        """A crash translating bad message shapes must surface as an error
+        TokenCountResponse so the proxy falls back instead of 500ing."""
+        token_counter = GoogleAIStudioTokenCounter()
+
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "tool", "content": "orphaned result", "tool_call_id": "missing-call"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model="gemini/gemini-2.5-flash",
+        )
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 500
+        assert result.total_tokens == 0
+        assert result.error_message is not None
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_unexpected_handler_error_returns_error_response(self):
+        """A non-litellm exception escaping the handler must still surface as an
+        error TokenCountResponse so the proxy can fall back."""
+        token_counter = GoogleAIStudioTokenCounter()
+
+        with patch(
+            "litellm.llms.gemini.count_tokens.handler.GoogleAIStudioTokenCounter.acount_tokens",
+            new_callable=AsyncMock,
+        ) as mock_acount_tokens:
+            mock_acount_tokens.side_effect = RuntimeError("unexpected failure")
+
+            result = await token_counter.count_tokens(
+                model_to_use="gemini-2.5-flash",
+                messages=[{"role": "user", "content": "hello"}],
+                contents=None,
+                deployment=None,
+                request_model="gemini/gemini-2.5-flash",
+            )
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 500
+        assert "unexpected failure" in (result.error_message or "")
+
+    @pytest.mark.asyncio
     async def test_count_tokens_returns_none_without_contents_or_messages(self):
         token_counter = GoogleAIStudioTokenCounter()
 
@@ -297,9 +326,7 @@ class TestGoogleAIStudioTokenCounter:
                         "functionResponse": {
                             "id": "read_many_files-1757526647518-730a691aac11c",  # This should be removed
                             "name": "read_many_files",
-                            "response": {
-                                "output": "No files matching the criteria were found or all were skipped."
-                            },
+                            "response": {"output": "No files matching the criteria were found or all were skipped."},
                         }
                     }
                 ],
@@ -308,9 +335,7 @@ class TestGoogleAIStudioTokenCounter:
         ]
 
         # Clean the contents
-        cleaned_contents = token_counter._clean_contents_for_gemini_api(
-            contents_with_id
-        )
+        cleaned_contents = token_counter._clean_contents_for_gemini_api(contents_with_id)
 
         # Verify the 'id' field was removed
         function_response = cleaned_contents[1]["parts"][0]["functionResponse"]
@@ -319,8 +344,7 @@ class TestGoogleAIStudioTokenCounter:
         assert "response" in function_response
         assert function_response["name"] == "read_many_files"
         assert (
-            function_response["response"]["output"]
-            == "No files matching the criteria were found or all were skipped."
+            function_response["response"]["output"] == "No files matching the criteria were found or all were skipped."
         )
 
     def test_clean_contents_for_gemini_api_preserves_other_fields(self):
@@ -336,9 +360,7 @@ class TestGoogleAIStudioTokenCounter:
         ]
 
         # Clean the contents
-        cleaned_contents = token_counter._clean_contents_for_gemini_api(
-            contents_without_function_response
-        )
+        cleaned_contents = token_counter._clean_contents_for_gemini_api(contents_without_function_response)
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response
