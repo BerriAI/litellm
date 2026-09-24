@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.vertex_ai_gemma import parse_vertex_gemma_container_error
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
@@ -123,7 +124,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         Unwrap the Vertex Gemma predictions format to OpenAI format.
 
         Vertex Gemma wraps the OpenAI-compatible response in a 'predictions' field.
-        This method extracts it so the parent class can process it normally.
+        This method extracts it so the parent class can process it normally. A serving
+        container can also answer with its own OpenAI-shaped error object inside that
+        field, still under HTTP 200, which is raised with its own status and message.
         """
         if "predictions" not in response_json:
             raise BaseLLMException(
@@ -131,7 +134,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message="Invalid response format: missing 'predictions' field",
             )
 
-        return response_json["predictions"]
+        predictions: Final = response_json["predictions"]
+        container_error: Final = parse_vertex_gemma_container_error(predictions)
+        if container_error is None:
+            return predictions
+        raise BaseLLMException(status_code=container_error.code, message=container_error.message)
 
     @staticmethod
     def _sync_post(
