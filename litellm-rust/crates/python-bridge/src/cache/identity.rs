@@ -55,7 +55,7 @@ pub(super) enum BackendIdentity {
 const TYPES: &str = "facade and native backend types must match";
 
 impl BackendIdentity {
-    /// The native backend name reported to Python through `_CacheTestHandle.backend`.
+    /// The native backend name the facade guard maps to its Python backend class.
     pub(super) fn kind(&self) -> &'static str {
         match self {
             Self::Memory { .. } => "memory",

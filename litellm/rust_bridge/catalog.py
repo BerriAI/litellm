@@ -1,4 +1,4 @@
-"""Ordered rollout policy for routes, cache backends, and secret managers.
+"""Ordered rollout policy for routes, the response cache facade and backends, and secret managers.
 
 The first matching rule wins; unmatched contexts stay on Python. Native
 admission separately decides whether the selected implementation can execute.
@@ -74,6 +74,19 @@ class CacheRule:
 
 
 @dataclass(frozen=True, slots=True)
+class CacheFacadeContext:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class CacheFacadeRule:
+    rollout: Rollout
+
+    def matches(self, context: Context) -> bool:
+        return isinstance(context, CacheFacadeContext)
+
+
+@dataclass(frozen=True, slots=True)
 class SecretManagerContext:
     system: str
 
@@ -100,8 +113,8 @@ class LoggerRule:
         return isinstance(context, LoggerContext)
 
 
-Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext | LoggerContext
-Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule | LoggerRule
+Context: TypeAlias = RouteContext | CacheContext | CacheFacadeContext | SecretManagerContext | LoggerContext
+Rule: TypeAlias = RouteRule | CacheRule | CacheFacadeRule | SecretManagerRule | LoggerRule
 Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
@@ -115,6 +128,7 @@ RULES: Final[Rules] = (
     RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
+    CacheFacadeRule(Rollout.PYTHON_ONLY),
     CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.LOCAL})),
     CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.REDIS})),
     CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.REDIS_SEMANTIC})),

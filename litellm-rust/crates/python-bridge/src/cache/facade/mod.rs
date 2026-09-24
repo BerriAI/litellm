@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use pyo3::{
     PyTraverseError, PyVisit,
-    exceptions::{PyAttributeError, PyRuntimeError},
+    exceptions::{PyAttributeError, PyException, PyRuntimeError},
     prelude::*,
     sync::PyOnceLock,
     types::{PyDict, PyFrozenSet, PyString, PyTuple},
@@ -256,11 +256,20 @@ impl Cache {
 
     #[setter(cache)]
     fn assign_cache(slf: &Bound<'_, Self>, backend: Bound<'_, PyAny>) -> PyResult<()> {
+        let py = slf.py();
         slf.get().set_backend(backend.unbind());
-        if slf.hasattr("type")? {
-            init::resolve_native(slf)?;
+        if !slf.hasattr("type")? {
+            return Ok(());
         }
-        Ok(())
+        match init::resolve_native(slf) {
+            Ok(()) => Ok(()),
+            Err(error) if error.is_instance_of::<PyException>(py) => keys::debug(
+                py,
+                "LiteLLM Cache: the assigned storage object stays on Python: %s",
+                [error.value(py).clone().into_any()],
+            ),
+            Err(error) => Err(error),
+        }
     }
 
     #[classattr]

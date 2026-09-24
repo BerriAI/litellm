@@ -1,5 +1,6 @@
 //! `Cache.__init__`.
 
+use litellm_host_python::json_loads;
 use pyo3::{
     PyTypeInfo,
     exceptions::PyTypeError,
@@ -161,7 +162,8 @@ fn redis_backend<'py>(arguments: &Arguments<'py>) -> PyResult<Bound<'py, PyAny>>
             .getattr("get_secret")?
             .call1(("REDIS_CLUSTER_NODES",))?;
         if configured.is_instance_of::<PyString>() {
-            startup_nodes = py.import("json")?.call_method1("loads", (configured,))?;
+            startup_nodes =
+                json_loads(py, configured.extract::<String>()?.as_bytes())?.into_bound(py);
         }
     }
     if !startup_nodes.is_truthy()? {
@@ -471,7 +473,7 @@ pub(super) fn resolve_native(slf: &Bound<'_, Cache>) -> PyResult<()> {
     }
     let resolved = py
         .import("litellm.rust_bridge.response_cache")?
-        .getattr("resolve_response_cache")?
+        .getattr("resolve_native_runtime")?
         .call1((slf,))?;
     if resolved.is_none() {
         return Ok(());

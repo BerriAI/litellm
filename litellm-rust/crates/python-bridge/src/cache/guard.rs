@@ -80,48 +80,15 @@ const CLUSTER_POOL: RedisPoolAttributes = RedisPoolAttributes {
 
 const VALKEY_POOL: RedisPoolAttributes = STANDALONE_POOL;
 
-struct ConfigGuard {
-    reference: Py<PyAny>,
-    config: Vec<Value>,
-}
-
-const FACADE_CONFIG: &[&str] = &[
-    "type",
-    "mode",
-    "ttl",
-    "namespace",
-    "supported_call_types",
-    "redis_flush_size",
-    "semantic_cache_scope",
-];
+/// Class-level defaults an instance overwrites with its own state rather than behavior: the
+/// Python facade's `Cache._native_cache` holds the runtime `Cache.__init__` resolved.
+const INSTANCE_STATE: &[&str] = &["_native_cache"];
 
 pub(super) struct FacadeGuard {
-    facade: ConfigGuard,
+    outer: ObjectGuard,
     backend: ObjectGuard,
     disk_store: Option<DiskStoreGuard>,
     connection: ConnectionGuard,
-}
-
-impl ConfigGuard {
-    fn capture(py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            reference: py
-                .import("weakref")?
-                .getattr("ref")?
-                .call1((facade,))?
-                .unbind(),
-            config: ObjectGuard::config(facade, FACADE_CONFIG)?,
-        })
-    }
-
-    fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
-        Ok(self.reference.bind(py).call0()?.is(facade)
-            && ObjectGuard::config(facade, FACADE_CONFIG)? == self.config)
-    }
-
-    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.reference)
-    }
 }
 
 impl ObjectGuard {
@@ -203,7 +170,9 @@ impl ObjectGuard {
                 return Ok(false);
             }
             for (name, value) in &expected.attributes {
-                if (instance.contains(name)? && !self.config_names.contains(&name.as_str()))
+                if (instance.contains(name)?
+                    && !self.config_names.contains(&name.as_str())
+                    && !INSTANCE_STATE.contains(&name.as_str()))
                     || !attributes.get_item(name)?.is(value.bind(py))
                 {
                     return Ok(false);
@@ -392,7 +361,8 @@ impl FacadeGuard {
     ) -> PyResult<Self> {
         let identity = service.identity();
         let kind = identity.kind();
-        if !facade.get_type().is(py.get_type::<Cache>()) {
+        let python_facade = py.import("litellm.caching.caching")?.getattr("Cache")?;
+        if !facade.get_type().is(&python_facade) && !facade.is_instance_of::<Cache>() {
             return Err(PyTypeError::new_err(
                 "only exact built-in Cache facades can be registered",
             ));
@@ -451,7 +421,19 @@ impl FacadeGuard {
             ));
         }
         Ok(Self {
-            facade: ConfigGuard::capture(py, facade)?,
+            outer: ObjectGuard::capture(
+                py,
+                facade,
+                &[
+                    "type",
+                    "mode",
+                    "ttl",
+                    "namespace",
+                    "supported_call_types",
+                    "redis_flush_size",
+                    "semantic_cache_scope",
+                ],
+            )?,
             backend: ObjectGuard::capture(
                 py,
                 &backend,
@@ -491,7 +473,7 @@ impl FacadeGuard {
     }
 
     pub(super) fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
-        if !self.facade.matches(py, facade)? {
+        if !self.outer.matches(py, facade)? {
             return Ok(false);
         }
         let backend = facade.getattr("cache")?;
@@ -507,7 +489,7 @@ impl FacadeGuard {
     }
 
     pub(super) fn traverse(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.facade.traverse(&visit)?;
+        self.outer.traverse(&visit)?;
         self.backend.traverse(&visit)?;
         if let Some(guard) = &self.disk_store {
             guard.traverse(&visit)?;

@@ -2,7 +2,7 @@
 
 use litellm_cache::ExactCacheContext;
 use litellm_cache_response::{CacheKeyInput, ResponseCacheRequest};
-use litellm_host_python::{from_py, release_gil, to_py};
+use litellm_host_python::{from_py, json_loads, release_gil, to_py};
 use pyo3::{
     exceptions::PyException,
     prelude::*,
@@ -136,15 +136,22 @@ pub(super) fn get_cache_logic<'py>(
     if cached_response.is_instance_of::<PyDict>() {
         return Ok(cached_response);
     }
-    match py
-        .import("json")?
-        .call_method1("loads", (&cached_response,))
-    {
+    match json_document(py, &cached_response) {
         Ok(decoded) => Ok(decoded),
         Err(_) => py
             .import("ast")?
             .call_method1("literal_eval", (cached_response,)),
     }
+}
+
+/// `json.loads(value)` for the `str`, `bytes` and `bytearray` values it accepts.
+fn json_document<'py>(py: Python<'py>, value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let document = if let Ok(text) = value.cast::<PyString>() {
+        text.to_str()?.as_bytes().to_vec()
+    } else {
+        value.extract::<Vec<u8>>()?
+    };
+    json_loads(py, &document).map(|decoded| decoded.into_bound(py))
 }
 
 pub(super) fn safe_lookup_kwargs<'py>(kwargs: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
@@ -250,13 +257,14 @@ pub(super) fn native_request(
 }
 
 pub(super) fn native_response(py: Python<'_>, result: &Bound<'_, PyAny>) -> PyResult<Value> {
-    let json = py.import("json")?;
     if is_base_model(result)? {
-        let document = result.call_method0("model_dump_json")?;
-        return from_py(&json.call_method1("loads", (document,))?);
+        return from_py(&json_document(
+            py,
+            &result.call_method0("model_dump_json")?,
+        )?);
     }
     if let Ok(text) = result.cast::<PyString>() {
-        return match json.call_method1("loads", (text,)) {
+        return match json_document(py, text.as_any()) {
             Ok(decoded) => from_py(&decoded),
             Err(_) => Ok(Value::String(text.to_str()?.to_owned())),
         };

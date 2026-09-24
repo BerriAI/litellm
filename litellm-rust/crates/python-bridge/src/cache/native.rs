@@ -285,10 +285,6 @@ impl NativeResponseCache {
         }
     }
 
-    pub fn kind(&self) -> &'static str {
-        self.identity().kind()
-    }
-
     pub fn with_redis_flush_size(self, flush_size: Option<usize>) -> Self {
         match self {
             Self::Exact(service) if matches!(service.identity, BackendIdentity::Redis { .. }) => {

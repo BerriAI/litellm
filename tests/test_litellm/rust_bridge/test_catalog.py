@@ -8,6 +8,7 @@ import pytest
 from litellm.rust_bridge import catalog, configuration
 from litellm.rust_bridge.catalog import (
     CacheContext,
+    CacheFacadeContext,
     CacheRule,
     Context,
     Delivery,
@@ -74,6 +75,7 @@ def test_missing_rule_stays_on_python_even_when_rust_is_enabled(monkeypatch: pyt
 @pytest.mark.parametrize(
     "context",
     (
+        CacheFacadeContext(),
         *(CacheContext(backend.value) for backend in LiteLLMCacheType),
         *(SecretManagerContext(system.value) for system in KeyManagementSystem),
         CacheContext("custom"),

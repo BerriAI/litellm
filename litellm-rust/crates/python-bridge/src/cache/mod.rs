@@ -6,7 +6,6 @@ mod embedder;
 mod facade;
 mod future;
 mod guard;
-mod handle;
 mod identity;
 mod native;
 mod request;
@@ -24,7 +23,6 @@ use pyo3::{
 pub(crate) use self::{
     binding::ResolvedCache,
     facade::{Cache, capture_method_table},
-    handle::CacheTestHandle,
     resolver::CacheResolver,
 };
 

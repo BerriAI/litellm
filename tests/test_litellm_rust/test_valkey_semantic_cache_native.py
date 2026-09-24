@@ -18,6 +18,11 @@ from litellm.caching.valkey_semantic_cache import ValkeySemanticCache
 from litellm.rust_bridge import _native, catalog
 from litellm.rust_bridge.catalog import CacheRule
 from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.response_cache import (
+    NativeResponseCacheRuntime,
+    ResponseCacheRuntime,
+    resolve_native_runtime,
+)
 from litellm.types.caching import LiteLLMCacheType
 
 pytestmark: Final = pytest.mark.requires_rust_extension
@@ -115,6 +120,24 @@ def _facade(
     return facade
 
 
+_RUST_RULES: Final = (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({LiteLLMCacheType.VALKEY_SEMANTIC})),)
+
+
+def _runtime(url: str, index_name: str, backend: ValkeySemanticCache) -> NativeResponseCacheRuntime:
+    """The native runtime a Rust rule activates for a facade whose storage object is `backend`."""
+    facade: Final = Cache(
+        type=LiteLLMCacheType.VALKEY_SEMANTIC,
+        redis_url=url,
+        similarity_threshold=0.8,
+        valkey_semantic_cache_index_name=index_name,
+    )
+    facade.cache = backend
+    runtime: Final = resolve_native_runtime(facade, _RUST_RULES)
+    assert runtime is not None
+    assert runtime.kind == "native"
+    return runtime
+
+
 def _backend(
     url: str,
     index_name: str,
@@ -145,13 +168,7 @@ def test_python_write_native_read(
     backend: Final = _backend(valkey_url, index_name)
     response: Final = {"answer": "python"}
     backend.set_cache("key", response, messages=_request()["messages"])
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        backend,
-    )
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     assert binding.lookup(_request()) == response
 
 
@@ -160,13 +177,7 @@ def test_native_write_python_read(
     index_name: str,
 ) -> None:
     backend: Final = _backend(valkey_url, index_name)
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        backend,
-    )
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     response: Final = {"answer": "native"}
     binding.store({**_request(), "ttl_seconds": 2.0}, response)
     cached: Final = cast(Mapping[str, object], backend.get_cache("key", messages=_request()["messages"]))
@@ -178,13 +189,7 @@ async def test_async_lookup_and_store(
     index_name: str,
 ) -> None:
     backend: Final = _backend(valkey_url, index_name)
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        backend,
-    )
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     request: Final = {**_request(), "ttl_seconds": 2.0}
     await binding.async_store(request, {"answer": "async"})
     assert await binding.async_lookup(request) == {"answer": "async"}
@@ -202,13 +207,7 @@ async def test_disabled_cache_controls_skip_async_embedding(
         raise AssertionError("embedding must not run")
 
     backend._get_async_embedding = fail_embedding
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        backend,
-    )
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     controls: Final = {
         "supported_call_type": True,
         "configured": True,
@@ -244,13 +243,7 @@ async def test_async_embedding_runs_inline_in_caller_task(
         return [1.0, 0.0]
 
     backend._get_async_embedding = async_embedding
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        backend,
-    )
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     request: Final = {**_request(), "ttl_seconds": 2.0}
     caller_task: Final = asyncio.current_task()
     caller_thread: Final = threading.get_ident()
@@ -269,21 +262,16 @@ async def test_async_embedding_runs_inline_in_caller_task(
 def test_facade_activation_and_mutation_fallback(
     valkey_url: str,
     index_name: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    facade: Final = Cache(
+    monkeypatch.setattr(catalog, "RULES", _RUST_RULES)
+    facade: Final = _native.Cache(
         type=LiteLLMCacheType.VALKEY_SEMANTIC,
         redis_url=valkey_url,
         similarity_threshold=0.8,
         valkey_semantic_cache_index_name=index_name,
     )
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        facade.cache,
-    )
-    handle._bind_facade(facade)
-    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    resolver: Final = _native._CacheResolver(SimpleNamespace(cache=facade))
     assert resolver.resolve().kind == "native"
     facade.cache.similarity_threshold = 0.7
     assert resolver.resolve().kind == "python_callback"
@@ -294,13 +282,7 @@ def test_batch_lookup_is_unsupported(
     index_name: str,
 ) -> None:
     backend: Final = _backend(valkey_url, index_name)
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        backend,
-    )
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     with pytest.raises(NotImplementedError):
         binding.lookup_batch([_request()])
 
@@ -310,8 +292,7 @@ def test_ttl_expiry(
     index_name: str,
 ) -> None:
     backend: Final = _backend(valkey_url, index_name)
-    handle: Final = _native._CacheTestHandle.valkey_semantic(valkey_url, 0.8, index_name, backend)
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     binding.store({**_request(), "ttl_seconds": 1.0}, {"answer": "expires"})
     client: Final = redis.Redis.from_url(valkey_url)
     documents: Final = list(client.scan_iter(f"{index_name}:*"))
@@ -326,8 +307,7 @@ def test_no_ttl_is_persistent_and_python_reads_native_value(
     index_name: str,
 ) -> None:
     backend: Final = _backend(valkey_url, index_name)
-    handle: Final = _native._CacheTestHandle.valkey_semantic(valkey_url, 0.8, index_name, backend)
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     response: Final = {"answer": "persistent"}
     binding.store(_request(), response)
     client: Final = redis.Redis.from_url(valkey_url)
@@ -347,8 +327,7 @@ def test_below_threshold_misses_on_native_and_python(
         index_name,
         {"prompt A": [1.0, 0.0], "prompt B": [0.0, 1.0]},
     )
-    handle: Final = _native._CacheTestHandle.valkey_semantic(valkey_url, 0.8, index_name, backend)
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     binding.store(_request("prompt A"), {"answer": "A"})
     assert binding.lookup(_request("prompt B")) is None
     assert backend.get_cache("key", messages=_request("prompt B")["messages"]) is None
@@ -371,8 +350,7 @@ def test_malformed_entry_is_a_miss_on_native_and_python(
             "embedding": struct.pack("<2f", 1.0, 0.0),
         },
     )
-    handle: Final = _native._CacheTestHandle.valkey_semantic(valkey_url, 0.8, index_name, backend)
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     assert binding.lookup(_request()) is None
     assert backend.get_cache("key", messages=_request()["messages"]) is None
 
@@ -386,8 +364,7 @@ def test_mixed_content_parts_match_python_semantic_behavior(
     backend.set_cache("key", {"answer": "mixed"}, messages=messages)
     assert backend.get_cache("key", messages=messages) is None
 
-    handle: Final = _native._CacheTestHandle.valkey_semantic(valkey_url, 0.8, index_name, backend)
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     request: Final = {**_request(), "messages": messages}
     binding.store(request, {"answer": "mixed"})
     assert binding.lookup(request) is None
@@ -421,8 +398,7 @@ async def test_async_store_batch_and_lookup(
 
     backend._get_embedding = sync_embedding
     backend._get_async_embedding = async_embedding
-    handle: Final = _native._CacheTestHandle.valkey_semantic(valkey_url, 0.8, index_name, backend)
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     requests: Final = [_request("prompt A"), _request("prompt B")]
     responses: Final = [{"answer": "A"}, {"answer": "B"}]
     caller_task: Final = asyncio.current_task()
@@ -448,7 +424,7 @@ def test_subclass_backend_falls_back_to_python(
         valkey_semantic_cache_index_name=index_name,
     )
     facade.cache = Custom(redis_url=valkey_url, similarity_threshold=0.8, index_name=index_name)
-    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    resolver: Final = _native._CacheResolver(SimpleNamespace(cache=facade))
     assert resolver.resolve().kind == "python_callback"
 
 
@@ -463,13 +439,7 @@ def test_field_key_matches_python_semantic_scope(
         messages=[{"role": "user", "content": "semantic cache prompt"}],
         metadata=metadata,
     )
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        facade.cache,
-    )
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, facade.cache)
     binding.store(_field_request("semantic cache prompt", metadata), {"answer": "scoped"})
     client: Final = redis.Redis.from_url(valkey_url)
     documents: Final = list(client.scan_iter(f"{index_name}:*"))
@@ -491,13 +461,7 @@ def test_field_key_reads_all_python_tenant_metadata_sources(
         metadata={},
         litellm_params={"metadata": params_metadata},
     )
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        facade.cache,
-    )
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, facade.cache)
     binding.store(
         _field_request(
             "semantic cache prompt",
@@ -535,13 +499,7 @@ def test_namespace_isolates_semantic_entries(
         {"semantic cache prompt": [1.0, 0.0]},
         namespace="team-a",
     )
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        facade.cache,
-    )
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, facade.cache)
     team_a: Final = _field_request("semantic cache prompt", {}, namespace="team-a")
     team_b: Final = _field_request("semantic cache prompt", {}, namespace="team-b")
     binding.store(team_a, {"answer": "team-a"})
@@ -562,13 +520,7 @@ def test_field_key_isolates_tenant_scope(
     index_name: str,
 ) -> None:
     facade: Final = _facade(valkey_url, index_name, {"semantic cache prompt": [1.0, 0.0]})
-    handle: Final = _native._CacheTestHandle.valkey_semantic(
-        valkey_url,
-        0.8,
-        index_name,
-        facade.cache,
-    )
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, facade.cache)
     binding.store(
         _field_request("semantic cache prompt", {"user_api_key": "k1"}),
         {"answer": "tenant one"},
@@ -586,7 +538,7 @@ def test_tls_valkey_facade_falls_back_to_python(
         similarity_threshold=0.8,
         valkey_semantic_cache_index_name=index_name,
     )
-    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    resolver: Final = _native._CacheResolver(SimpleNamespace(cache=facade))
     assert resolver.resolve().kind == "python_callback"
 
 
@@ -595,8 +547,7 @@ async def test_ping_maps_unsupported_native_operation_to_not_implemented(
     index_name: str,
 ) -> None:
     backend: Final = _backend(valkey_url, index_name)
-    handle: Final = _native._CacheTestHandle.valkey_semantic(valkey_url, 0.8, index_name, backend)
-    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding: Final = _runtime(valkey_url, index_name, backend)
     with pytest.raises(NotImplementedError):
         await binding.ping()
 
@@ -606,13 +557,11 @@ async def test_rust_required_rule_activates_the_facade_natively(
     index_name: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        catalog,
-        "RULES",
-        (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({LiteLLMCacheType.VALKEY_SEMANTIC})),),
-    )
+    monkeypatch.setattr(catalog, "RULES", _RUST_RULES)
     facade: Final = _facade(valkey_url, index_name, {"semantic cache prompt": [1.0, 0.0]})
-    assert _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "native"
+    runtime: Final = facade._native_cache  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
+    assert isinstance(runtime, ResponseCacheRuntime)
+    assert runtime.kind == "native"
     kwargs: Final = {"model": "gpt-4o", "messages": _request()["messages"]}
     await facade.async_add_cache({"answer": "valkey"}, **kwargs)
     assert await facade.async_get_cache(**kwargs) == {"answer": "valkey"}
