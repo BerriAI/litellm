@@ -5734,7 +5734,7 @@
         "supports_vision": false
     },
     "azure/gpt-audio-mini": {
-        "deprecation_date": "2027-04-06",
+        "deprecation_date": "2027-06-15",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure",
@@ -6768,7 +6768,7 @@
     },
     "azure/gpt-5-chat": {
         "cache_read_input_token_cost": 1.25e-07,
-        "deprecation_date": "2026-05-13",
+        "deprecation_date": "2026-06-29",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
