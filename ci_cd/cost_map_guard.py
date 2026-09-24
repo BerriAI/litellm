@@ -2,8 +2,9 @@
 
 Every pull request whose diff against its merge base touches one of the three cost map files gets the file
 checks: the files parse, the backup copy matches the root file, and, while the schema file exists in the head
-tree, the JSON schema is in sync and validates the map. A pull request that leaves all three untouched skips them, since merging it keeps the base branch's copies
-and its head tree only carries whatever state the branch was cut from. Pull requests from the cost map sync bot
+tree, the JSON schema is in sync and validates the map. A pull request that leaves all three untouched skips
+them, since merging it keeps the base branch's copies and its head tree only carries whatever state the branch
+was cut from. Pull requests from the cost map sync bot
 (branches named litellm_cost_map_sync_*) always get the file checks and additionally may only touch those three
 files and may only add or update models.
 """
