@@ -118,6 +118,7 @@ class SlackAlerting(CustomBatchLogger):
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
+        self._periodic_flush_task: asyncio.Task[None] | None = None
         self.hanging_request_check = AlertingHangingRequestCheck(
             slack_alerting_object=self,
         )
@@ -128,6 +129,12 @@ class SlackAlerting(CustomBatchLogger):
         self.digest_buckets: dict[str, DigestEntry] = {}
         self.digest_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
+
+    def _ensure_periodic_flush_task(self) -> None:
+        if self.periodic_started and (self._periodic_flush_task is None or not self._periodic_flush_task.done()):
+            return
+        self._periodic_flush_task = asyncio.create_task(self.periodic_flush())
+        self.periodic_started = True
 
     def update_values(
         self,
@@ -141,17 +148,14 @@ class SlackAlerting(CustomBatchLogger):
     ):
         if alerting is not None:
             self.alerting = alerting
-            asyncio.create_task(self.periodic_flush())
-            self.periodic_started = True
+            self._ensure_periodic_flush_task()
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
         if alert_types is not None:
             self.alert_types = alert_types
         if alerting_args is not None:
             self.alerting_args = SlackAlertingArgs(**alerting_args)
-            if not self.periodic_started:
-                asyncio.create_task(self.periodic_flush())
-                self.periodic_started = True
+            self._ensure_periodic_flush_task()
         if alert_type_config is not None:
             for key, val in alert_type_config.items():
                 self.alert_type_config[key] = AlertTypeConfig(**val) if isinstance(val, dict) else val
@@ -1451,9 +1455,8 @@ Model Info:
             return
 
         # Start periodic flush if not already started
-        if not self.periodic_started and self.alerting is not None and len(self.alerting) > 0:
-            asyncio.create_task(self.periodic_flush())
-            self.periodic_started = True
+        if self.alerting is not None and len(self.alerting) > 0:
+            self._ensure_periodic_flush_task()
 
         if "webhook" in self.alerting and alert_type == "budget_alerts" and user_info is not None:
             await self.send_webhook_alert(webhook_event=user_info)

@@ -173,9 +173,7 @@ def _prepare_ocr_request(
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         provider_config=ocr_provider_config,
-        optional_params=cast(
-            dict[str, object], optional_params
-        ),  # cast-ok: provider configs return heterogeneous OCR options
+        optional_params=cast(dict[str, object], optional_params),
         litellm_params=dict(litellm_params),
         effective_timeout=effective_timeout,
         litellm_logging_obj=litellm_logging_obj,

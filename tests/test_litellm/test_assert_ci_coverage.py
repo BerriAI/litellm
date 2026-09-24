@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Final
 
+import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -339,7 +340,7 @@ def test_a_dockerfile_directory_entry_is_stale_because_only_an_exact_path_exempt
 def test_a_workflow_that_names_a_file_clears_it_from_the_slice_check():
     named = coverage._workflow_named_tokens()
     assert named, "the workflows must name some test paths or the check proves nothing"
-    assert any(coverage._token_covers(token, "tests/local_testing/test_caching_handler.py") for token in named)
+    assert any(coverage._token_covers(token, "tests/proxy_unit_tests/test_proxy_custom_logger.py") for token in named)
 
 
 def test_the_slice_check_credits_only_workflows_never_the_circleci_config():
@@ -350,8 +351,20 @@ def test_the_slice_check_credits_only_workflows_never_the_circleci_config():
     )
 
 
-def test_a_file_no_workflow_names_is_still_reported_when_every_slice_drops_it():
-    named = coverage._workflow_named_tokens()
-    assert not any(coverage._token_covers(token, "tests/local_testing/test_caching.py") for token in named), (
-        "test_caching.py is allowlisted, not run; crediting it would hide a real gap"
+@pytest.mark.parametrize("selector", ("test_selected.py", "test_selected.py::test_redis_auth"))
+def test_a_workflow_does_not_credit_a_file_it_never_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selector: str
+) -> None:
+    workflows: Final = tmp_path / "workflows"
+    workflows.mkdir()
+    (workflows / "test.yml").write_text(
+        f"jobs:\n  test:\n    steps:\n      - run: uv run pytest tests/local_testing/{selector}\n"
+    )
+    monkeypatch.setattr(coverage, "WORKFLOW_DIR", workflows)
+    monkeypatch.setattr(coverage, "CIRCLECI_CONFIG", tmp_path / "circleci.yml")
+
+    named: Final = coverage._workflow_named_tokens()
+    assert named == frozenset({"tests/local_testing/test_selected.py"})
+    assert not any(
+        coverage._token_covers(token, "tests/local_testing/test_unrun.py") for token in named
     )

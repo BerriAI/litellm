@@ -6,6 +6,8 @@ from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
 
 from litellm.proxy._experimental.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 @pytest.mark.asyncio
@@ -363,3 +365,147 @@ async def test_explicit_proxy_context_lists_builtin_tools_and_blocks_direct_tool
     assert denied.is_error is True
     assert "unavailable on /mcp/proxy" in denied.content[0].text
     allowed.assert_not_awaited()
+
+
+def _server(server_id: str, auth_type: MCPAuth) -> MCPServer:
+    return MCPServer(
+        server_id=server_id,
+        name=f"{server_id}-server",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        token_exchange_endpoint="https://idp.example.com/token",
+        client_id="cid",
+        client_secret="csec",
+    )
+
+
+class TestChallengeMissingTokenExchangeSubject:
+    """The REST cold-catalog path must answer a missing OBO subject with the RFC 9728 401 challenge
+    before the best-effort listing swallows the upstream 401 and tool resolution turns it into a 500."""
+
+    @staticmethod
+    def _challenge(
+        server: MCPServer | None,
+        allowed: list[MCPServer],
+        *,
+        user: UserAPIKeyAuth | None = None,
+        oauth2_headers: dict[str, str] | None = None,
+        raw_headers: dict[str, str] | None = None,
+        requested_server: MCPServer | None = None,
+    ) -> None:
+        from litellm.proxy._experimental.mcp_server.operations import _challenge_missing_token_exchange_subject
+
+        return _challenge_missing_token_exchange_subject(
+            server=server,
+            requested_server=requested_server,
+            allowed_mcp_servers=allowed,
+            user_api_key_auth=user,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
+
+    def test_missing_subject_raises_401_challenge(self):
+        from fastapi import HTTPException
+
+        server = _server("te-cold", MCPAuth.oauth2_token_exchange)
+        with pytest.raises(HTTPException) as exc_info:
+            self._challenge(
+                server,
+                [server],
+                user=UserAPIKeyAuth(api_key="sk-admission"),
+                raw_headers={"x-litellm-api-key": "sk-admission"},
+            )
+        assert exc_info.value.status_code == 401
+        challenge = (exc_info.value.headers or {}).get("WWW-Authenticate", "")
+        assert challenge.startswith("Bearer ") and 'error="invalid_token"' in challenge, challenge
+        assert "resource_metadata" in challenge, challenge
+
+    @pytest.mark.parametrize(
+        "authorization",
+        ["Bearer sk-admission", "Bearer sk-some-other-virtual-key"],
+        ids=["repeated-admission-key", "another-virtual-key"],
+    )
+    def test_litellm_key_in_authorization_is_not_a_subject(self, authorization: str):
+        from fastapi import HTTPException
+
+        server = _server("te-vk", MCPAuth.oauth2_token_exchange)
+        with pytest.raises(HTTPException) as exc_info:
+            self._challenge(
+                server,
+                [server],
+                user=UserAPIKeyAuth(api_key="sk-admission"),
+                oauth2_headers={"Authorization": authorization},
+                raw_headers={"x-litellm-api-key": "sk-admission", "authorization": authorization},
+            )
+        assert exc_info.value.status_code == 401
+
+    def test_subject_present_does_not_challenge(self):
+
+        server = _server("te-ok", MCPAuth.oauth2_token_exchange)
+        assert (
+            self._challenge(
+                server,
+                [server],
+                user=UserAPIKeyAuth(api_key="sk-admission"),
+                oauth2_headers={"Authorization": "Bearer idp-subject"},
+                raw_headers={"x-litellm-api-key": "sk-admission", "authorization": "Bearer idp-subject"},
+            )
+            is None
+        )
+
+    def test_server_outside_allowlist_is_not_challenged(self):
+
+        server = _server("te-hidden", MCPAuth.oauth2_token_exchange)
+        other = _server("te-visible", MCPAuth.oauth2_token_exchange)
+        assert self._challenge(server, [other], user=UserAPIKeyAuth(api_key="sk-admission")) is None
+        assert self._challenge(None, [other], user=UserAPIKeyAuth(api_key="sk-admission")) is None
+
+    def test_prefix_owner_differing_from_server_id_is_not_challenged(self):
+        """An explicit server_id that disagrees with the tool prefix keeps the existing mismatch answer."""
+        from fastapi import HTTPException
+
+        prefix_owner = _server("te-prefix", MCPAuth.oauth2_token_exchange)
+        requested = _server("te-requested", MCPAuth.oauth2_token_exchange)
+        user = UserAPIKeyAuth(api_key="sk-admission")
+        allowed = [prefix_owner, requested]
+        assert self._challenge(prefix_owner, allowed, user=user, requested_server=requested) is None
+        with pytest.raises(HTTPException):
+            self._challenge(prefix_owner, allowed, user=user, requested_server=prefix_owner)
+
+    @pytest.mark.parametrize(
+        "auth_type",
+        ["oauth2", "oauth_delegate", "oauth2_id_jag", "bearer_token", "api_key", "none"],
+    )
+    def test_other_auth_types_are_untouched(self, auth_type: str):
+
+        server = _server("na", MCPAuth(auth_type))
+        assert self._challenge(server, [server], user=UserAPIKeyAuth(api_key="sk-admission")) is None
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_challenges_missing_subject_before_cold_listing():
+    """On a cold catalog the challenge fires before any listing or tool resolution is attempted."""
+    from fastapi import HTTPException
+    from datetime import datetime, timezone
+    from litellm.proxy._experimental.mcp_server import operations
+
+    server = _server("te-exec", MCPAuth.oauth2_token_exchange)
+    listing = AsyncMock()
+    with (
+        patch.object(operations.global_mcp_server_manager, "get_mcp_server_by_id", return_value=server),
+        patch.object(operations.global_mcp_server_manager, "server_exposes_tool", return_value=False),
+        patch.object(operations, "_get_tools_from_mcp_servers", listing),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await operations.execute_mcp_tool(
+            name="add",
+            arguments={"a": 2, "b": 3},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(timezone.utc),
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-admission"),
+            raw_headers={"x-litellm-api-key": "sk-admission"},
+            requested_server_id=server.server_id,
+        )
+    assert exc_info.value.status_code == 401
+    listing.assert_not_awaited()
