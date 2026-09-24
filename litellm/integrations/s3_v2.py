@@ -56,7 +56,6 @@ if TYPE_CHECKING:
 
 UploadOutcome = Literal["delivered", "retry", "dropped"]
 
-_TRANSIENT_STATUSES: Final = frozenset({408, 429, 500, 502, 503, 504})
 _TRANSIENT_ERROR_CODES: Final = frozenset(
     {
         "RequestTimeout",
@@ -78,7 +77,7 @@ def _s3_error_code(response: httpx.Response) -> str | None:
 
 
 def _is_transient(response: httpx.Response) -> bool:
-    if response.status_code in _TRANSIENT_STATUSES:
+    if response.status_code in (408, 429) or 500 <= response.status_code < 600:
         return True
     return response.status_code in _BODY_CODED_STATUSES and _s3_error_code(response) in _TRANSIENT_ERROR_CODES
 
@@ -298,8 +297,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
         configured_attempts: Final = params.get("s3_max_flush_attempts")
         self.s3_max_flush_attempts = resolve_s3_max_flush_attempts(
-            s3_max_flush_attempts if configured_attempts is None or configured_attempts == "" else configured_attempts,
-            DEFAULT_S3_MAX_FLUSH_ATTEMPTS if s3_max_flush_attempts is None else s3_max_flush_attempts,
+            configured_attempts if configured_attempts not in (None, "") else s3_max_flush_attempts,
+            DEFAULT_S3_MAX_FLUSH_ATTEMPTS,
         )
 
         self.s3_batch_file_upload = s3_batch_file_upload or resolve_s3_batch_file_upload(
@@ -371,6 +370,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
     def _enqueue(self, element: s3BatchLoggingElement) -> None:
         if len(self.log_queue) >= self.max_queue_size:
+            if self._dropped_at_enqueue == 0:
+                verbose_logger.warning(
+                    "s3 logging: queue full (max_queue_size=%s), dropping new events until the next flush",
+                    self.max_queue_size,
+                )
             self._dropped_at_enqueue += 1
             verbose_logger.debug(
                 "s3 logging: queue full (max_queue_size=%s), dropping event key=%s",

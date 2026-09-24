@@ -2569,14 +2569,15 @@ class _FailOnSuffixPut:
 
 
 class _FailUntilClearedPut:
-    def __init__(self) -> None:
+    def __init__(self, status: int = 503) -> None:
         self.failing = True
+        self.status = status
         self.calls: tuple[tuple[str, str | None], ...] = ()
 
     async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         self.calls = (*self.calls, (url, data))
         if self.failing:
-            return _transient_failure_response()
+            return _transient_failure_response(self.status)
         return _ok_response()
 
 
@@ -2709,11 +2710,11 @@ def test_empty_config_concurrency_falls_back_to_constructor_value(empty: object)
     assert logger._upload_semaphore._value == 4
 
 
-def _transient_failure_response() -> MagicMock:
+def _transient_failure_response(status: int = 503) -> MagicMock:
     response = MagicMock()
-    response.status_code = 503
+    response.status_code = status
     response.raise_for_status = MagicMock(
-        side_effect=httpx.HTTPStatusError("503", request=MagicMock(), response=response)
+        side_effect=httpx.HTTPStatusError(str(status), request=MagicMock(), response=response)
     )
     return response
 
@@ -3046,7 +3047,7 @@ async def test_transient_failure_is_dropped_after_the_flush_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_enqueue_drops_new_events_when_queue_is_full() -> None:
+async def test_enqueue_drops_new_events_when_queue_is_full(caplog) -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -3057,7 +3058,7 @@ async def test_enqueue_drops_new_events_when_queue_is_full() -> None:
     logger.max_queue_size = 3
 
     with patch.object(logger, "handle_callback_failure") as mock_failure:
-        for index in range(4):
+        for index in range(5):
             await logger._async_log_event_base(
                 kwargs={
                     "call_type": "acompletion",
@@ -3069,8 +3070,10 @@ async def test_enqueue_drops_new_events_when_queue_is_full() -> None:
             )
 
     assert len(logger.log_queue) == 3
-    assert all(element.payload["id"] != "event-3" for element in logger.log_queue)
-    mock_failure.assert_called_once_with(callback_name="S3Logger")
+    assert all(element.payload["id"] not in {"event-3", "event-4"} for element in logger.log_queue)
+    assert mock_failure.call_count == 2
+    mock_failure.assert_called_with(callback_name="S3Logger")
+    assert caplog.text.count("dropping new events until the next flush") == 1
 
 
 def test_sync_upload_does_not_retry_403():
@@ -3138,3 +3141,47 @@ async def test_requeued_batch_file_carries_max_flush_attempts_forward() -> None:
     assert len(logger.log_queue) == 1
     assert logger.log_queue[0].s3_object_key.endswith(".jsonl")
     assert logger.log_queue[0].flush_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_every_5xx_status_is_requeued() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    put = _FailUntilClearedPut(status=507)
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    logger.log_queue = [_element({"id": "req-507"}, "507")]
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await logger.flush_queue()
+
+    assert len(logger.log_queue) == 1
+    assert logger.log_queue[0].flush_attempts == 1
+
+
+def test_zero_flush_attempts_falls_back_to_default() -> None:
+    from litellm.constants import DEFAULT_S3_MAX_FLUSH_ATTEMPTS
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_flush_attempts=0,
+    )
+
+    assert logger.s3_max_flush_attempts == DEFAULT_S3_MAX_FLUSH_ATTEMPTS
+
+
+def test_invalid_callback_params_flush_attempts_falls_back_to_default() -> None:
+    from litellm.constants import DEFAULT_S3_MAX_FLUSH_ATTEMPTS
+
+    logger = _override_logger(s3_max_flush_attempts="abc")
+
+    assert logger.s3_max_flush_attempts == DEFAULT_S3_MAX_FLUSH_ATTEMPTS
