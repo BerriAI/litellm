@@ -317,7 +317,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs["tools"] = cast("list[ChatCompletionToolParam]", tools)  # cast-ok: raw request json
         model: Final = data.get("model")
         if model:
-            inputs["model"] = cast("str", model)  # cast-ok: base forwarded the raw model value
+            inputs["model"] = cast("str", model)  # cast-ok: raw request json
         return inputs, structured_messages, scoped_message_indices
 
     def _not_run_reason(
