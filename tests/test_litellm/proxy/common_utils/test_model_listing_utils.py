@@ -7,6 +7,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.proxy.common_utils.model_listing_utils import (
+    CallerAliases,
     ClaudeCodeRoutingNames,
     alias_listing_entries,
     alias_target,
@@ -24,6 +25,10 @@ def _encoded(name):
 
 def _marked(name):
     return f"{_encoded(name)}[1m]"
+
+
+def _caller(*maps):
+    return CallerAliases(maps, maps)
 
 
 def _row(name, limit=1000000):
@@ -134,23 +139,32 @@ def test_team_alias_is_listed_under_its_target_metadata_and_only_when_the_target
         None,
         {"claude-sonnet-4-5": "gpt-4.1-mini", "via-public": "team-public", "not-granted": "gpt-4.1"},
     )
-    assert alias_listing_entries(entries, aliases) == (
+    assert alias_listing_entries(entries, _caller(*aliases)) == (
         *entries,
         ("claude-sonnet-4-5", "gpt-4.1-mini"),
         ("via-public", "model_name_team_1_abc"),
     )
-    assert alias_listing_entries(entries, (None, {})) == tuple(entries)
+    assert alias_listing_entries(entries, _caller(None, {})) == tuple(entries)
 
 
 def test_alias_target_resolves_the_requested_alias_across_key_and_team_maps():
-    assert (
-        alias_target("claude-sonnet-4-5", ({"o": "gpt-4.1"}, {"claude-sonnet-4-5": "gpt-4.1-mini"})) == "gpt-4.1-mini"
-    )
-    assert alias_target("gpt-4.1-mini", (None, {"claude-sonnet-4-5": "gpt-4.1-mini"})) is None
+    maps = _caller({"o": "gpt-4.1"}, {"claude-sonnet-4-5": "gpt-4.1-mini"})
+    assert alias_target("claude-sonnet-4-5", maps) == "gpt-4.1-mini"
+    assert alias_target("gpt-4.1-mini", _caller(None, {"claude-sonnet-4-5": "gpt-4.1-mini"})) is None
+
+
+def test_alias_colliding_with_a_listed_id_keeps_the_listed_model_at_list_and_retrieval():
+    entries = [("fast", "fast"), ("gpt-4.1-mini", "gpt-4.1-mini")]
+    maps = _caller({"fast": "gpt-4.1-mini"})
+    listed = frozenset(response_id for response_id, _ in entries)
+
+    assert alias_listing_entries(entries, maps) == tuple(entries)
+    assert alias_target("fast", maps, listed) is None
+    assert alias_target("fast", maps) == "gpt-4.1-mini"
 
 
 def test_alias_maps_apply_in_the_order_chat_completions_applies_them():
-    team_then_key = ({"fast": "gpt-4.1-mini", "hop": "mid"}, {"fast": "gpt-4.1", "mid": "gpt-4.1"})
+    team_then_key = _caller({"fast": "gpt-4.1-mini", "hop": "mid"}, {"fast": "gpt-4.1", "mid": "gpt-4.1"})
     entries = [("gpt-4.1-mini", "gpt-4.1-mini"), ("gpt-4.1", "gpt-4.1")]
 
     assert alias_target("fast", team_then_key) == "gpt-4.1-mini"
@@ -167,8 +181,8 @@ def test_one_bad_alias_entry_hides_only_itself():
     aliases = {"fast": "gpt-4.1-mini", "broken": 5, 7: "gpt-4.1-mini"}
     entries = [("gpt-4.1-mini", "gpt-4.1-mini")]
 
-    assert alias_listing_entries(entries, (aliases,)) == (*entries, ("fast", "gpt-4.1-mini"))
-    assert alias_target("fast", (aliases,)) == "gpt-4.1-mini"
+    assert alias_listing_entries(entries, _caller(aliases)) == (*entries, ("fast", "gpt-4.1-mini"))
+    assert alias_target("fast", _caller(aliases)) == "gpt-4.1-mini"
 
 
 def test_chained_key_alias_is_listed_only_when_its_final_target_is_listable():
@@ -182,13 +196,11 @@ def test_chained_key_alias_is_listed_only_when_its_final_target_is_listable():
 def test_team_aliases_only_apply_when_listing_the_team_the_key_authenticated_as(monkeypatch):
     key_aliases, team_aliases, global_aliases = {"k": "gpt-4.1"}, {"t": "gpt-4.1-mini"}, {"g": "gpt-4.1"}
     monkeypatch.setattr(litellm, "model_alias_map", global_aliases)
-    own_team = (team_aliases, key_aliases, global_aliases, key_aliases)
+    own_team = CallerAliases((team_aliases, key_aliases), (team_aliases, key_aliases, global_aliases, key_aliases))
     assert caller_alias_maps(key_aliases, team_aliases, "team-a", None) == own_team
     assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-a") == own_team
-    assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-b") == (
-        key_aliases,
-        global_aliases,
-        key_aliases,
+    assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-b") == CallerAliases(
+        (key_aliases,), (key_aliases, global_aliases, key_aliases)
     )
 
 
@@ -200,6 +212,15 @@ def test_global_alias_rewrites_between_the_two_key_passes_like_chat_completions(
 
     assert alias_target("a", maps) == "d"
     assert alias_listing_entries(entries, maps) == (*entries, ("a", "d"), ("b", "c"))
+
+
+def test_global_aliases_rewrite_but_are_not_listed_as_caller_rows(monkeypatch):
+    monkeypatch.setattr(litellm, "model_alias_map", {"g": "gpt-4.1-mini"})
+    entries = [("gpt-4.1-mini", "gpt-4.1-mini")]
+    maps = caller_alias_maps({"k": "g"}, None, "team-a", None)
+
+    assert alias_listing_entries(entries, maps) == (*entries, ("k", "gpt-4.1-mini"))
+    assert alias_target("g", maps) == "gpt-4.1-mini"
 
 
 def test_team_public_name_uses_the_same_scope_at_list_and_request():

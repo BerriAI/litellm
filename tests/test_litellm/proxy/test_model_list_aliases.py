@@ -119,6 +119,15 @@ async def test_v1_models_by_id_resolves_a_team_alias_to_its_target_metadata(rout
 
 
 @pytest.mark.asyncio
+async def test_v1_models_by_id_retrieves_the_listed_model_when_an_alias_collides_with_its_id(router):
+    caller = _team_member(aliases={"team-chat": "gpt-4.1"})
+
+    assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat"]
+    response = await proxy_server.model_info(model_id="team-chat", user_api_key_dict=caller)
+    assert response["id"] == "team-chat"
+
+
+@pytest.mark.asyncio
 async def test_v1_models_by_id_keeps_the_alias_as_id_when_it_targets_a_team_scoped_model(router):
     caller = _team_member(team_model_aliases={"chat": "team-chat"})
 

@@ -11181,7 +11181,7 @@ async def model_list(
     routing_names: Final = ClaudeCodeRoutingNames(
         llm_router,
         team_id or user_api_key_dict.team_id,
-        (*caller_aliases, view_aliases),
+        (*caller_aliases.rewrite, view_aliases),
     )
 
     # Validate scope parameter if provided
@@ -11411,6 +11411,10 @@ async def model_info(
         model_id,
         caller_alias_maps(
             user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+        ),
+        frozenset(
+            response_id
+            for response_id, _ in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
         ),
     )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(

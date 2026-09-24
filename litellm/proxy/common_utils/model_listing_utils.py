@@ -157,19 +157,27 @@ class ClaudeCodeRoutingNames:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CallerAliases:
+    """`own` are the caller's key and team alias maps, the names `/v1/models` lists for it.
+    `rewrite` are the maps `/chat/completions` rewrites its model through, in the order it
+    applies them: the team's, the key's in `add_litellm_data_to_request`, then the global
+    `model_alias_map` and the key's again in `common_processing_pre_call_logic`."""
+
+    own: tuple[object, ...]
+    rewrite: tuple[object, ...]
+
+
 def caller_alias_maps(
     key_aliases: object,
     team_aliases: object,
     key_team_id: str | None,
     listed_team_id: str | None,
-) -> tuple[object, ...]:
-    """The alias maps `/chat/completions` rewrites this caller's model through, in the order
-    it applies them: the team's first, only when listing the team the key authenticated as,
-    then the key's own in `add_litellm_data_to_request`, then the global `model_alias_map` and
-    the key's own again in `common_processing_pre_call_logic`."""
+) -> CallerAliases:
+    """Team aliases count only when listing the team the key authenticated as."""
     if listed_team_id is not None and listed_team_id != key_team_id:
-        return (key_aliases, litellm.model_alias_map, key_aliases)
-    return (team_aliases, key_aliases, litellm.model_alias_map, key_aliases)
+        return CallerAliases((key_aliases,), (key_aliases, litellm.model_alias_map, key_aliases))
+    return CallerAliases((team_aliases, key_aliases), (team_aliases, key_aliases, litellm.model_alias_map, key_aliases))
 
 
 def _alias_map(aliases: object) -> Mapping[str, str]:
@@ -191,23 +199,26 @@ def _rewrite(model_id: str, alias_maps: Sequence[Mapping[str, str]]) -> str | No
     return None if target == model_id else target
 
 
-def alias_target(model_id: str, alias_maps: Sequence[object]) -> str | None:
-    """The model group `/chat/completions` rewrites `model_id` to through the caller's key and
-    team aliases, applied in `alias_maps` order, else None."""
-    return _rewrite(model_id, tuple(_alias_map(aliases) for aliases in alias_maps))
+def alias_target(model_id: str, aliases: CallerAliases, listed: Container[str] = frozenset()) -> str | None:
+    """The model group `/chat/completions` rewrites `model_id` to, else None. A `model_id`
+    already `listed` keeps its own row, so it is never rewritten."""
+    if model_id in listed:
+        return None
+    return _rewrite(model_id, tuple(_alias_map(alias_map) for alias_map in aliases.rewrite))
 
 
 def alias_listing_entries(
     entries: Sequence[tuple[str, str]],
-    alias_maps: Sequence[object],
+    aliases: CallerAliases,
 ) -> tuple[tuple[str, str], ...]:
     """`entries` plus one `(alias, lookup_id)` row per key or team alias whose target is
     listed. An alias colliding with a listed id keeps the listed entry."""
-    maps: Final = tuple(_alias_map(aliases) for aliases in alias_maps)
+    maps: Final = tuple(_alias_map(alias_map) for alias_map in aliases.rewrite)
+    own: Final = tuple(_alias_map(alias_map) for alias_map in aliases.own)
     lookup_by_response: Final = MappingProxyType(dict(entries))
     lookup_ids: Final = frozenset(lookup_by_response.values())
     targets: Final = MappingProxyType(
-        {alias: _rewrite(alias, maps) for alias in _alias_names(maps) if alias not in lookup_by_response}
+        {alias: _rewrite(alias, maps) for alias in _alias_names(own) if alias not in lookup_by_response}
     )
     added: Final = tuple(
         (alias, lookup_by_response.get(target, target))
