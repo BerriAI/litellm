@@ -58821,6 +58821,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-mythos-preview": {
+        "deprecation_date": "2026-06-09",
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
