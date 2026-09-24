@@ -5608,6 +5608,79 @@ class TestEventStreamAllmPassthroughRoute:
         assert b"<PERSON_1>" not in result
 
     @pytest.mark.asyncio
+    async def test_anthropic_crlf_framed_stream_is_still_guarded(self):
+        sse = (
+            b"event: content_block_delta\r\n"
+            b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<PERSON_1>"}}\r\n\r\n'
+            b"event: message_stop\r\n"
+            b'data: {"type":"message_stop"}\r\n\r\n'
+        )
+
+        async def mock_hook(data, user_api_key_dict, response):
+            response = dict(response)
+            response["content"] = [{"type": "text", "text": "Alice"}]
+            return response
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_success_hook = mock_hook
+
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"custom_llm_provider": "anthropic", "endpoint": "/v1/messages"}
+        )
+        result = await processing_obj._handle_event_stream_allm_passthrough_route(
+            body_bytes=sse,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert b"<PERSON_1>" not in result
+        assert b"Alice" in result
+        assert result.endswith(b'data: {"type":"message_stop"}\r\n\r\n')
+        assert b"\r\n\r\n" in result.split(b"event: message_stop")[0]
+
+    @pytest.mark.asyncio
+    async def test_anthropic_text_blocks_keep_their_own_rewrites(self):
+        def text_delta(index, text):
+            payload = {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}}
+            return b"event: content_block_delta\ndata: " + json.dumps(payload, separators=(",", ":")).encode() + b"\n\n"
+
+        tool_delta = (
+            b"event: content_block_delta\n"
+            b'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n'
+        )
+        sse = text_delta(0, "<PERSON_") + text_delta(0, "1> said") + tool_delta + text_delta(2, "bye <PERSON_2>")
+
+        seen = {}
+
+        async def mock_hook(data, user_api_key_dict, response):
+            seen["texts"] = [block["text"] for block in response["content"]]
+            response = dict(response)
+            response["content"] = [{"type": "text", "text": "Alice said"}, {"type": "text", "text": "bye Bob"}]
+            return response
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_success_hook = mock_hook
+
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"custom_llm_provider": "anthropic", "endpoint": "/v1/messages"}
+        )
+        result = await processing_obj._handle_event_stream_allm_passthrough_route(
+            body_bytes=sse,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert seen["texts"] == ["<PERSON_1> said", "bye <PERSON_2>"]
+        frames = [frame for frame in result.split(b"\n\n") if frame]
+        payloads = [json.loads(frame.split(b"data: ", 1)[1]) for frame in frames]
+        assert [(p["index"], p["delta"].get("text")) for p in payloads] == [
+            (0, "Alice said"),
+            (0, ""),
+            (1, None),
+            (2, "bye Bob"),
+        ]
+
+    @pytest.mark.asyncio
     async def test_anthropic_supports_event_stream_de_anonymization_for_messages(self):
         from litellm.llms.pass_through.guardrail_translation.handler import (
             LlmPassthroughRouteHandler,
