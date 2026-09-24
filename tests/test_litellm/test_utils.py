@@ -39,10 +39,10 @@ from litellm.litellm_core_utils.thread_pool_executor import executor as logging_
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.litellm_params import ADDRESSED_RESPONSE_ID_FIELD
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
-    ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
     Choices,
     Delta,
@@ -1743,7 +1743,7 @@ class TestProxyFunctionCalling:
         direct_result = supports_function_calling(model=direct_model)
         proxy_result = supports_function_calling(model=proxy_model)
 
-        print(f"\nDemonstration of proxy model resolution:")
+        print("\nDemonstration of proxy model resolution:")
         print(f"Direct model '{direct_model}' supports function calling: {direct_result}")
         print(f"Proxy model '{proxy_model}' supports function calling: {proxy_result}")
 
@@ -5695,7 +5695,6 @@ async def test_success_deployment_hook_chains_past_callback_returning_response(
 
         async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
             self.seen.append(response)
-            return None
 
     replacer = ReplacingLogger()
     observer = ObservingLogger()

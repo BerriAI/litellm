@@ -1,5 +1,6 @@
 import inspect
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -17,6 +18,8 @@ from litellm.types.litellm_params import (
     ConnectionSettings,
     InternalState,
     LiteLLMOptions,
+    owned_wire_names,
+    wire,
     wire_names,
 )
 from litellm.types.router import CredentialLiteLLMParams, RouterConfig, UpdateRouterConfig
@@ -77,7 +80,6 @@ OPTION_NAMES: Final = (
     "use_litellm_proxy",
     "use_chat_completions_api",
     "use_in_pass_through",
-    "rust",
     "allowed_openai_params",
     "fallbacks",
     "context_window_fallback_dict",
@@ -220,7 +222,7 @@ BEDROCK_BATCH_NAMES: Final = (
     "bedrock_tags",
 )
 
-ARTIFACT_NAMES: Final = ("self", "use_client", "model_config")
+ARTIFACT_NAMES: Final = ("self", "use_client", "model_config", "rust")
 
 DECLARED_BY_ROOT: Final[Mapping[type, tuple[str, ...]]] = MappingProxyType(
     {ConnectionSettings: CONNECTION_NAMES, LiteLLMOptions: OPTION_NAMES, InternalState: INTERNAL_STATE_NAMES}
@@ -276,11 +278,38 @@ def test_every_owned_name_has_exactly_one_owner() -> None:
 
 @pytest.mark.parametrize("root", LITELLM_OWNED_ROOTS, ids=(root.__name__ for root in LITELLM_OWNED_ROOTS))
 def test_root_declares_exactly_the_names_that_live_on_its_object(root: type) -> None:
-    assert frozenset(wire_names(root)) == frozenset(DECLARED_BY_ROOT[root])
+    assert frozenset(owned_wire_names(root)) == frozenset(DECLARED_BY_ROOT[root])
 
 
-def test_kwarg_artifacts_are_the_three_names_with_no_field() -> None:
+def test_kwarg_artifacts_are_the_four_names_with_no_field() -> None:
     assert KWARG_ARTIFACTS == ARTIFACT_NAMES
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Leaf:
+    plain: int | None = None
+    renamed: int | None = field(default=None, metadata=wire("wire-name"))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _OtherLeaf:
+    plain: int | None = None
+    trailing: int | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Root:
+    first: _Leaf
+    direct: int | None = field(default=None, metadata=wire("_direct"))
+    second: _OtherLeaf
+
+
+def test_wire_names_are_the_field_names_in_declaration_order_unless_wire_renames_them() -> None:
+    assert wire_names(_Leaf) == ("plain", "wire-name")
+
+
+def test_owned_wire_names_walk_leaves_in_declaration_order_and_keep_every_occurrence() -> None:
+    assert owned_wire_names(_Root) == ("plain", "wire-name", "_direct", "plain", "trailing")
 
 
 def test_agentic_loop_names_concatenate_as_a_list() -> None:
@@ -335,7 +364,7 @@ TYPED_MODEL_OWNERS: Final[Mapping[str, tuple[tuple[type[BaseModel], ...], type]]
     }
 )
 
-DECLARED_NAMES: Final = frozenset(name for root in LITELLM_OWNED_ROOTS for name in wire_names(root))
+DECLARED_NAMES: Final = frozenset(name for root in LITELLM_OWNED_ROOTS for name in owned_wire_names(root))
 
 PROVIDER_CLIENT_SETTINGS_THE_ROUTER_CONFIG_ALSO_DECLARES: Final = frozenset(("max_retries",))
 
@@ -344,10 +373,12 @@ def _declared_names_of(source: str) -> tuple[str, ...]:
     models: Final = TYPED_MODEL_OWNERS[source][0]
     return tuple(
         sorted(
-            name
-            for model in models
-            for name in model.model_fields
-            if name in DECLARED_NAMES and name not in PROVIDER_CLIENT_SETTINGS_THE_ROUTER_CONFIG_ALSO_DECLARES
+            frozenset(
+                name
+                for model in models
+                for name in model.model_fields
+                if name in DECLARED_NAMES and name not in PROVIDER_CLIENT_SETTINGS_THE_ROUTER_CONFIG_ALSO_DECLARES
+            )
         )
     )
 
@@ -361,12 +392,50 @@ TYPED_MODEL_CASES: Final = tuple(
 
 @pytest.mark.parametrize(("source", "name"), TYPED_MODEL_CASES)
 def test_name_declared_by_a_typed_config_model_lives_on_that_models_object(source: str, name: str) -> None:
-    assert name in wire_names(TYPED_MODEL_OWNERS[source][1])
+    assert name in owned_wire_names(TYPED_MODEL_OWNERS[source][1])
+
+
+NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "credentials": (
+            "api_base",
+            "api_key",
+            "api_version",
+            "aws_batch_role_arn",
+            "azure_password",
+            "azure_scope",
+            "azure_username",
+            "bedrock_tags",
+            "client_id",
+            "client_secret",
+            "region_name",
+            "s3_access_key_id",
+            "s3_bucket_name",
+            "s3_bucket_owner",
+            "s3_encryption_key_id",
+            "s3_endpoint_url",
+            "s3_output_bucket_name",
+            "s3_region_name",
+            "s3_secret_access_key",
+            "tenant_id",
+        ),
+        "router": (
+            "caching_groups",
+            "cooldown_time",
+            "enable_tag_filtering",
+            "fallbacks",
+            "model_list",
+            "num_retries",
+            "retry_policy",
+            "routing_strategy",
+        ),
+    }
+)
 
 
 @pytest.mark.parametrize("source", TYPED_MODEL_OWNERS)
 def test_every_typed_config_model_shares_names_with_the_declarations(source: str) -> None:
-    assert _declared_names_of(source)
+    assert _declared_names_of(source) == NAMES_SHARED_WITH_TYPED_MODELS[source]
 
 
 @pytest.mark.parametrize("name", sorted(CustomPricingLiteLLMParams.model_fields))

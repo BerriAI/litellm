@@ -4,7 +4,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Final
 
-from litellm.types.utils import OTEL_SPAN_SCOPES, TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
+from litellm.types.litellm_params import TRUSTED_CALLBACK_VARS_FIELD
+from litellm.types.utils import OTEL_SPAN_SCOPES, StandardCallbackDynamicParams
 
 _CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
 _inherited_message_logging_disabled: Final[ContextVar[bool]] = ContextVar(
