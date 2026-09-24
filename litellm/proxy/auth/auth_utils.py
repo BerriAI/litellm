@@ -863,7 +863,6 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
             )
             return True
 
-        # Get the request body
         content_length: Final = request.headers.get("content-length")
 
         if content_length:
@@ -875,23 +874,50 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
                 raise ProxyException(
                     message=f"Request size is too large. Request size is {header_size_mb} MB. Max size is {max_request_size_mb} MB",
                     type=ProxyErrorTypes.bad_request_error.value,
-                    code=400,
+                    code=413,
                     param="content-length",
                 )
         else:
-            # If Content-Length is not available, read the body
-            body: Final = await request.body()
-            body_size: Final = len(body)
-            request_size_mb: Final = bytes_to_mb(bytes_value=body_size)
+            if hasattr(request, "_body") and getattr(request, "_body", None) is not None:
+                cached_body: Final[bytes] = request._body
+                cached_body_size: Final = len(cached_body)
+                cached_size_mb: Final = bytes_to_mb(bytes_value=cached_body_size)
+                if cached_size_mb > max_request_size_mb:
+                    raise ProxyException(
+                        message=f"Request size is too large. Request size is {cached_size_mb} MB. Max size is {max_request_size_mb} MB",
+                        type=ProxyErrorTypes.bad_request_error.value,
+                        code=413,
+                        param="content-length",
+                    )
+                return True
 
-            verbose_proxy_logger.debug("request body request size in MB=%s", request_size_mb)
-            if request_size_mb > max_request_size_mb:
-                raise ProxyException(
-                    message=f"Request size is too large. Request size is {request_size_mb} MB. Max size is {max_request_size_mb} MB",
-                    type=ProxyErrorTypes.bad_request_error.value,
-                    code=400,
-                    param="content-length",
+            content_type: Final[str] = request.headers.get("content-type", "").lower()
+            if content_type.startswith("multipart/"):
+                # Chunked multipart bodies without Content-Length cannot be safely buffered
+                # here: the ASGI receive stream may already be consumed by an upstream multipart
+                # parser, making request.body() raise RuntimeError: Stream consumed. Size
+                # enforcement for these requests is delegated to RequestSizeLimitMiddleware.
+                verbose_proxy_logger.debug(
+                    "Skipping request.body() read for chunked multipart request without Content-Length"
                 )
+                return True
+
+            try:
+                body: Final = await request.body()
+                body_size: Final = len(body)
+                request_size_mb: Final = bytes_to_mb(bytes_value=body_size)
+
+                verbose_proxy_logger.debug("request body request size in MB=%s", request_size_mb)
+                if request_size_mb > max_request_size_mb:
+                    raise ProxyException(
+                        message=f"Request size is too large. Request size is {request_size_mb} MB. Max size is {max_request_size_mb} MB",
+                        type=ProxyErrorTypes.bad_request_error.value,
+                        code=413,
+                        param="content-length",
+                    )
+            except RuntimeError as e:
+                verbose_proxy_logger.debug("Request body stream already consumed: %s", e)
+                return True
 
     return True
 
