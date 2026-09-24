@@ -1,4 +1,4 @@
-use std::{convert::Infallible, process::Command, task::Poll};
+use std::{convert::Infallible, ffi::OsString, process::Command, task::Poll};
 
 use litellm_host::{
     host::HostResult,
@@ -112,6 +112,28 @@ fn http_warning(py: Python<'_>) -> PyResult<()> {
     crate::http::call_config(py, &PyDict::new(py), false).map(|_| ())
 }
 
+fn build_interpreter_python_path() -> OsString {
+    let interpreter = std::env::var_os("PYO3_PYTHON").unwrap_or_else(|| "python3".into());
+    let output = Command::new(&interpreter)
+        .args([
+            "-c",
+            "import os, site; print(os.pathsep.join(site.getsitepackages()), end='')",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let site_packages = OsString::from(String::from_utf8(output.stdout).unwrap());
+    let inherited = std::env::var_os("PYTHONPATH").unwrap_or_default();
+    std::env::join_paths(
+        std::env::split_paths(&inherited).chain(std::env::split_paths(&site_packages)),
+    )
+    .unwrap()
+}
+
 #[test]
 fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication() {
     if std::env::var_os("LITELLM_LOGGER_TEST_PROCESS").is_none() {
@@ -122,6 +144,7 @@ fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication
                 "--nocapture",
             ])
             .env("LITELLM_LOGGER_TEST_PROCESS", "1")
+            .env("PYTHONPATH", build_interpreter_python_path())
             .output()
             .unwrap();
         assert!(
@@ -174,19 +197,6 @@ fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication
         locals
             .set_item("http_warning", wrap_pyfunction!(http_warning, py).unwrap())
             .unwrap();
-        let importable = py
-            .eval(
-                c"__import__('importlib.util', fromlist=['util']).find_spec('dotenv') is not None",
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap()
-            .is_truthy()
-            .unwrap();
-        if !importable {
-            eprintln!("SKIP: litellm package dependencies are not importable in this interpreter");
-            return;
-        }
         py.run(c"
 import asyncio
 import logging
