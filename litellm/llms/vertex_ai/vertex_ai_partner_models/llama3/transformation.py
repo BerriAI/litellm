@@ -18,7 +18,7 @@ from litellm.types.utils import (
     Usage,
 )
 
-from ...common_utils import VertexAIError
+from ...common_utils import VERTEX_OPENAI_COMPATIBLE_UNSUPPORTED_PARAMS, VertexAIError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -66,13 +66,12 @@ class VertexAILlama3Config(OpenAIGPTConfig):
             and v is not None
         }
 
-    def get_supported_openai_params(self, model: str):
-        supported_params: Final = super().get_supported_openai_params(model=model)
-        try:
-            supported_params.remove("max_retries")
-        except KeyError:
-            pass
-        return supported_params
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        return [  # mutable-ok: get_optional_params extends the returned list with allowed_openai_params
+            param
+            for param in super().get_supported_openai_params(model=model)
+            if param not in VERTEX_OPENAI_COMPATIBLE_UNSUPPORTED_PARAMS
+        ]
 
     def map_openai_params(
         self,

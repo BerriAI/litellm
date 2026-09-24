@@ -535,6 +535,89 @@ class TestVertexGemmaCompletion:
             assert instance["@requestFormat"] == "chatCompletions"
             assert "messages" in instance
 
+    @pytest.mark.parametrize(
+        "param",
+        [
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "safety_identifier",
+            "service_tier",
+            "store",
+            "web_search_options",
+            "modalities",
+            "prediction",
+            "audio",
+            "max_retries",
+        ],
+    )
+    def test_get_supported_openai_params_omits_params_the_predict_endpoint_rejects(self, param: str):
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+
+        assert param not in VertexGemmaConfig().get_supported_openai_params(model="gemma-2-2b-it")
+
+    @pytest.mark.asyncio
+    async def test_acompletion_drops_prompt_cache_key_when_drop_params_is_set(self):
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "PROJECT_ID"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = _make_gemma_vertex_response()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            await litellm.acompletion(
+                model="vertex_ai/gemma/gemma-2-2b-it",
+                messages=[{"role": "user", "content": "Test"}],
+                prompt_cache_key="session-lit8592",
+                service_tier="default",
+                max_completion_tokens=16,
+                drop_params=True,
+                api_base="https://test.us-central1-project.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                vertex_project="PROJECT_ID",
+                vertex_location="us-central1",
+            )
+
+            instance = mock_client.post.call_args.kwargs["json"]["instances"][0]
+            assert "prompt_cache_key" not in instance
+            assert "service_tier" not in instance
+            assert instance["max_tokens"] == 16
+            assert instance["messages"] == [{"role": "user", "content": "Test"}]
+
+    @pytest.mark.asyncio
+    async def test_acompletion_rejects_prompt_cache_key_before_calling_vertex(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "PROJECT_ID"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_client.post = AsyncMock()
+            mock_get_client.return_value = mock_client
+
+            with pytest.raises(litellm.UnsupportedParamsError, match="prompt_cache_key"):
+                await litellm.acompletion(
+                    model="vertex_ai/gemma/gemma-2-2b-it",
+                    messages=[{"role": "user", "content": "Test"}],
+                    prompt_cache_key="session-lit8592",
+                    drop_params=False,
+                    api_base="https://test.us-central1-project.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                    vertex_project="PROJECT_ID",
+                    vertex_location="us-central1",
+                )
+
+            mock_client.post.assert_not_called()
+
     def test_transform_request_strips_context_management(self):
         """
         Direct unit test for VertexGemmaConfig.transform_request: verify that

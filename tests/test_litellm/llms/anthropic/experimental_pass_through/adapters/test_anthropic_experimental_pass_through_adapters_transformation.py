@@ -1051,6 +1051,9 @@ def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: st
     [
         ("gemini/gemini-2.5-pro", "gemini"),
         ("vertex_ai/gemini-2.5-pro", "vertex_ai"),
+        ("vertex_ai/gemma/gemma-2-2b-it", "vertex_ai"),
+        ("vertex_ai/openai/mg-endpoint-lit8592", "vertex_ai"),
+        ("vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas", "vertex_ai"),
         ("anthropic/claude-sonnet-4-5", "anthropic"),
         ("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
         ("no-such-model-lit5875", "no-such-provider-lit5875"),

@@ -25,6 +25,21 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
+VERTEX_OPENAI_COMPATIBLE_UNSUPPORTED_PARAMS: Final = frozenset(
+    {
+        "audio",
+        "max_retries",
+        "modalities",
+        "prediction",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+        "safety_identifier",
+        "service_tier",
+        "store",
+        "web_search_options",
+    }
+)
+
 
 class VertexAILyriaModelInfo(TypedDict):
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"]]

@@ -56,6 +56,40 @@ class TestVertexAILlama3Config:
         assert response[0].message.tool_calls is not None
         assert response[0].finish_reason == "tool_calls"
 
+    @pytest.mark.parametrize(
+        "param",
+        [
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "safety_identifier",
+            "service_tier",
+            "store",
+            "web_search_options",
+            "modalities",
+            "prediction",
+            "audio",
+            "max_retries",
+        ],
+    )
+    def test_get_supported_openai_params_omits_params_vertex_openai_endpoints_reject(self, param: str):
+        assert param not in VertexAILlama3Config().get_supported_openai_params(model="llama3")
+
+    @pytest.mark.parametrize(
+        "param",
+        ["max_completion_tokens", "tools", "tool_choice", "response_format", "seed", "logprobs", "parallel_tool_calls"],
+    )
+    def test_get_supported_openai_params_keeps_params_vertex_openai_endpoints_accept(self, param: str):
+        assert param in VertexAILlama3Config().get_supported_openai_params(model="llama3")
+
+    def test_map_openai_params_drops_prompt_cache_key(self):
+        mapped = VertexAILlama3Config().map_openai_params(
+            {"prompt_cache_key": "session-lit8592", "max_completion_tokens": 10},
+            {},
+            "llama3",
+            drop_params=True,
+        )
+        assert mapped == {"max_tokens": 10}
+
 
 class TestVertexAILlama3StreamingHandler:
     def test_first_chunk_has_role_assistant_when_missing(self):
