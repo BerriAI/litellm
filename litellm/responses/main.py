@@ -1401,7 +1401,9 @@ def responses(
             optional_params={  # mutable-ok: update_from_kwargs stores a plain dict
                 **responses_api_request_params,
                 **(
-                    {"extra_body": extra_body} if extra_body else {}  # mutable-ok: update_from_kwargs stores a plain dict
+                    {"extra_body": extra_body}
+                    if extra_body
+                    else {}  # mutable-ok: update_from_kwargs stores a plain dict
                 ),
             },
             litellm_params={
@@ -2240,7 +2242,9 @@ def compact_responses(
             optional_params={  # mutable-ok: update_from_kwargs stores a plain dict
                 **responses_api_request_params,
                 **(
-                    {"extra_body": extra_body} if extra_body else {}  # mutable-ok: update_from_kwargs stores a plain dict
+                    {"extra_body": extra_body}
+                    if extra_body
+                    else {}  # mutable-ok: update_from_kwargs stores a plain dict
                 ),
             },
             litellm_params={

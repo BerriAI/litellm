@@ -190,14 +190,10 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         merged: Final = {  # mutable-ok: matches dict-typed base signature
             **optional_params,
             **{  # mutable-ok: matches dict-typed base signature
-                key: request_kwargs[key]
-                for key in ("service_tier", "extra_body")
-                if key in request_kwargs
+                key: request_kwargs[key] for key in ("service_tier", "extra_body") if key in request_kwargs
             },
         }
         translated: Final = _apply_service_tier_as_completion_window(merged)
         return {  # mutable-ok: matches dict-typed base signature
-            key: value
-            for key, value in translated.items()
-            if key not in ("service_tier", "extra_body")
+            key: value for key, value in translated.items() if key not in ("service_tier", "extra_body")
         }
