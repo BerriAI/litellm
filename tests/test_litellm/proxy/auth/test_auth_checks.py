@@ -5466,7 +5466,7 @@ async def test_virtual_key_max_budget_not_exceeded_does_not_raise():
 
 
 @pytest.mark.asyncio
-async def test_virtual_key_max_budget_enforced_via_budget_id_table():
+async def test_virtual_key_max_budget_enforced_via_budget_id_table() -> None:
     """Keys created with budget_id have max_budget None and carry the limit in
     litellm_budget_table. Spend above that table limit must raise, otherwise
     budget_id keys bypass enforcement entirely (BerriAI/litellm#26672)."""
@@ -5481,7 +5481,12 @@ async def test_virtual_key_max_budget_enforced_via_budget_id_table():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.budget_alerts = AsyncMock()
 
-    async def _spend_is_fallback(counter_key, fallback_spend, max_budget=None, **kwargs):
+    async def _spend_is_fallback(
+        counter_key: str,
+        fallback_spend: float,
+        max_budget: float | None = None,
+        **kwargs: object,
+    ) -> float:
         return fallback_spend
 
     with patch("litellm.proxy.proxy_server.get_current_spend", _spend_is_fallback):
@@ -5492,6 +5497,53 @@ async def test_virtual_key_max_budget_enforced_via_budget_id_table():
             )
     assert exc_info.value.current_cost == 99.104445
     assert exc_info.value.max_budget == 30.0
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_enforced_via_flattened_table_limit() -> None:
+    """Combined-view key lookups flatten the linked budget into max_budget.
+    That normal path must keep enforcing alongside the nested-table fallback
+    (BerriAI/litellm#26672)."""
+    valid_token = UserAPIKeyAuth(
+        token="flattened-budget-id-key",
+        key_alias="budget-id-key",
+        max_budget=None,
+        budget_id="budget-table-30",
+        litellm_budget_table_max_budget=30.0,
+        spend=99.104445,
+    )
+    assert valid_token.max_budget == 30.0
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=99.104445),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    assert exc_info.value.max_budget == 30.0
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_without_any_budget_does_not_raise() -> None:
+    """A key with neither max_budget nor a budget table must stay usable."""
+    valid_token = UserAPIKeyAuth(
+        token="unlimited-key",
+        key_alias="unlimited",
+        max_budget=None,
+        spend=99.104445,
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    await _virtual_key_max_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
 
 class _TTLCapturingInMemoryCache(InMemoryCache):
