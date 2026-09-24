@@ -118,7 +118,6 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
-from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.complexity_router.context_compaction import (
     arm_compaction,
@@ -1378,9 +1377,6 @@ class Router:
         `_init_routing_groups`) so repeated `update_settings` calls don't
         accumulate dead selectors that keep receiving callback events.
         """
-        for selector in selectors:
-            if isinstance(selector, BaseRoutingStrategy):
-                selector.retire()
         selector_ids: Final = {id(s) for s in selectors if s is not None}
         if not selector_ids:
             return
@@ -4235,7 +4231,7 @@ class Router:
         models: Final = [m.strip() for m in model.split(",")]
 
         async def _async_completion_no_exceptions(
-            model_name: str, messages: list[dict[str, str]], stream: bool, **kwargs: object
+            model_name: str, messages: list[dict[str, str]], stream: bool, **kwargs: Any
         ) -> ModelResponse | CustomStreamWrapper | Exception:
             """
             Wrapper around self.acompletion that catches exceptions and returns them as a result
@@ -4351,22 +4347,28 @@ class Router:
                 await asyncio.sleep(poll_interval)
                 curr_time = time.monotonic()
 
-        if make_request:
-            try:
-                _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
-                _response._hidden_params.setdefault("additional_headers", {})
-                _response._hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
-                return _response
-            except Exception as e:
-                setattr(e, "priority", priority)
-                raise e
-        else:
-            # Clean up the request from the scheduler queue also before raising the timeout exception
-            await self.scheduler.remove_request(request_id=item.request_id, model_name=item.model_name)
-            raise litellm.Timeout(
-                message="Request timed out while polling queue",
-                model=model,
-                llm_provider="openai",
+        try:
+            if make_request:
+                try:
+                    _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
+                    _response._hidden_params.setdefault("additional_headers", {})
+                    _response._hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
+                    return _response
+                except Exception as e:
+                    setattr(e, "priority", priority)
+                    raise e
+            else:
+                raise litellm.Timeout(
+                    message="Request timed out while polling queue",
+                    model=model,
+                    llm_provider="openai",
+                )
+        finally:
+            # Always drop the request's queue entry once it stops waiting,
+            # whether it was admitted, errored, or timed out. Otherwise
+            # admitted requests leak and keep the queue non-empty (#43059).
+            await self.scheduler.remove_request(
+                request_id=item.request_id, model_name=item.model_name
             )
 
     async def _schedule_factory(
@@ -4411,25 +4413,31 @@ class Router:
                 await asyncio.sleep(poll_interval)
                 curr_time = time.monotonic()
 
-        if make_request:
-            try:
-                _response: Final = await original_function(*args, **kwargs)
-                if isinstance(_response._hidden_params, dict):
-                    _response._hidden_params.setdefault("additional_headers", {})
-                    _response._hidden_params["additional_headers"].update(
-                        {"x-litellm-request-prioritization-used": True}
-                    )
-                return _response
-            except Exception as e:
-                setattr(e, "priority", priority)
-                raise e
-        else:
-            # Clean up the request from the scheduler queue also before raising the timeout exception
-            await self.scheduler.remove_request(request_id=item.request_id, model_name=item.model_name)
-            raise litellm.Timeout(
-                message="Request timed out while polling queue",
-                model=model,
-                llm_provider="openai",
+        try:
+            if make_request:
+                try:
+                    _response: Final = await original_function(*args, **kwargs)
+                    if isinstance(_response._hidden_params, dict):
+                        _response._hidden_params.setdefault("additional_headers", {})
+                        _response._hidden_params["additional_headers"].update(
+                            {"x-litellm-request-prioritization-used": True}
+                        )
+                    return _response
+                except Exception as e:
+                    setattr(e, "priority", priority)
+                    raise e
+            else:
+                raise litellm.Timeout(
+                    message="Request timed out while polling queue",
+                    model=model,
+                    llm_provider="openai",
+                )
+        finally:
+            # Always drop the request's queue entry once it stops waiting,
+            # whether it was admitted, errored, or timed out. Otherwise
+            # admitted requests leak and keep the queue non-empty (#43059).
+            await self.scheduler.remove_request(
+                request_id=item.request_id, model_name=item.model_name
             )
 
     def _is_prompt_management_model(self, model: str) -> bool:
@@ -5984,7 +5992,6 @@ class Router:
 
                 replace_model_in_jsonl_bool: Final = should_replace_model_in_jsonl(
                     purpose=purpose,
-                    passthrough=kwargs.get("passthrough") is True,
                 )
                 if replace_model_in_jsonl_bool:
                     file = replace_model_in_jsonl(
@@ -6741,7 +6748,7 @@ class Router:
         # Handle asynchronous call types
         async def async_wrapper(
             custom_llm_provider: str | None = None,
-            client: AsyncOpenAI | None = None,
+            client: Any | None = None,
             **kwargs,
         ):
             if call_type == "assistants":
@@ -8446,7 +8453,7 @@ class Router:
         return self._has_content_policy_fallback(model, kwargs)
 
     def _should_raise_anthropic_refusal_error(
-        self, model: str, original_generic_function: Callable, response: object, kwargs: Mapping[str, object]
+        self, model: str, original_generic_function: Callable, response: object, kwargs: Mapping[str, Any]
     ) -> bool:
         """
         The /v1/messages twin of _should_raise_content_policy_error: an Anthropic safeguard
@@ -10323,7 +10330,7 @@ class Router:
         )
 
     @staticmethod
-    def _widest_configured_limit(model_infos: Sequence[Mapping[str, object]], field: str) -> int | None:
+    def _widest_configured_limit(model_infos: Sequence[Mapping[str, Any]], field: str) -> int | None:
         """The largest usable value of ``field`` across a group's configured model_info blocks."""
         limits: Final = tuple(
             limit
@@ -12121,7 +12128,7 @@ class Router:
                                 )
                             rebuild_routing_groups = True
                     elif var == "routing_strategy_args":
-                        routing_args_updated = value != self.routing_strategy_args
+                        routing_args_updated = True
                     setattr(self, var, value)
             else:
                 verbose_router_logger.debug("Setting %s is not allowed", var)
@@ -13414,7 +13421,7 @@ class Router:
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, object]] | None,
+        messages: list[dict[str, Any]] | None,
     ) -> RoutingContext:
         """
         Build a RoutingContext for `model`, run it through `self.routing_plugins`

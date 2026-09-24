@@ -152,3 +152,33 @@ async def test_scheduler_queue_cleanup_on_timeout():
 
     # Verify remaining items are in correct priority order (0 should be first)
     assert queue_after[0][1] == "req-0", "Expected req-0 (priority 0) to be at front"
+
+@pytest.mark.asyncio
+async def test_admitted_request_leaves_queue():
+    """#43059: a request admitted because a deployment is healthy must be
+    removed from the priority queue once it stops waiting. Previously the
+    entry was only removed on the timeout branch, so every admitted request
+    leaked and kept the queue non-empty."""
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "demo-model",
+                "litellm_params": {
+                    "model": "openai/demo-model",
+                    "api_key": "sk-fake",
+                    "mock_response": "hi",
+                },
+            }
+        ],
+        timeout=5.0,
+    )
+
+    response = await router.acompletion(
+        model="demo-model", messages=[{"role": "user", "content": "hi"}], priority=1
+    )
+    assert response is not None
+
+    queue = await router.scheduler.get_queue("demo-model")
+    assert queue == [], f"expected empty queue after admitted request, got {queue!r}"
