@@ -3,7 +3,7 @@
 import os
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, get_args
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
@@ -22,7 +22,7 @@ from opentelemetry.trace.propagation.tracecontext import (
 
 from litellm.constants import OTEL_TENANT_SPAN_SCOPE_ENV
 from litellm.integrations.otel.model.semconv import HTTP
-from litellm.types.utils import OTEL_SPAN_SCOPES, OtelSpanScope
+from litellm.types.utils import OtelSpanScope
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
@@ -402,13 +402,18 @@ def tenant_destinations_are_additive() -> bool:
     return isinstance(configured, str) and configured.strip().lower() == ADDITIVE_DESTINATION_MODE
 
 
+_SCOPES: Final[tuple[OtelSpanScope, ...]] = get_args(OtelSpanScope)
+
+
 def tenant_span_scope_default() -> OtelSpanScope:
     """The ``span_scope`` a tenant destination gets when its own callback vars name none."""
     import litellm
 
     configured: Final = litellm.otel_tenant_span_scope or os.environ.get(OTEL_TENANT_SPAN_SCOPE_ENV)
-    if isinstance(configured, str) and configured.strip().lower() in OTEL_SPAN_SCOPES:
-        return configured.strip().lower()  # pyright: ignore[reportReturnType]  # membership check narrows to the literal
+    normalized: Final = configured.strip().lower() if isinstance(configured, str) else None
+    for scope in _SCOPES:
+        if scope == normalized:
+            return scope
     return "full"
 
 

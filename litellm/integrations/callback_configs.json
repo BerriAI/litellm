@@ -21,11 +21,7 @@
         "type": "select",
         "ui_name": "Span Scope",
         "description": "full sends the whole request trace, no_internal drops the proxy's own auth, cache and database spans, llm_only sends just the model-call spans",
-        "options": [
-          "full",
-          "no_internal",
-          "llm_only"
-        ],
+        "options": ["full", "no_internal", "llm_only"],
         "required": false
       }
     },
@@ -275,22 +271,7 @@
         "type": "select",
         "ui_name": "Span Scope",
         "description": "full sends the whole request trace, no_internal drops the proxy's own auth, cache and database spans, llm_only sends just the model-call spans",
-        "options": [
-          "full",
-          "no_internal",
-          "llm_only"
-        ],
-        "required": false
-      },
-      "otel_span_scope": {
-        "type": "select",
-        "ui_name": "Span Scope",
-        "description": "full sends the whole request trace, no_internal drops the proxy's own auth, cache and database spans, llm_only sends just the model-call spans",
-        "options": [
-          "full",
-          "no_internal",
-          "llm_only"
-        ],
+        "options": ["full", "no_internal", "llm_only"],
         "required": false
       }
     },
@@ -357,11 +338,7 @@
         "type": "select",
         "ui_name": "Span Scope",
         "description": "full sends the whole request trace, no_internal drops the proxy's own auth, cache and database spans, llm_only sends just the model-call spans",
-        "options": [
-          "full",
-          "no_internal",
-          "llm_only"
-        ],
+        "options": ["full", "no_internal", "llm_only"],
         "required": false
       }
     },
@@ -416,10 +393,7 @@
         "type": "select",
         "ui_name": "Export Protocol",
         "description": "OTLP wire format for trace exports. Use http/json for collectors that cannot decode protobuf",
-        "options": [
-          "http/protobuf",
-          "http/json"
-        ],
+        "options": ["http/protobuf", "http/json"],
         "required": false
       }
     },

@@ -4,7 +4,7 @@ import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
 
-test("team logging settings persist otel_span_scope no_internal through the callback editor", async ({
+test("team logging settings persist langfuse_span_scope no_internal through the callback editor", async ({
   page,
   request,
 }) => {
@@ -40,7 +40,7 @@ test("team logging settings persist otel_span_scope no_internal through the call
       .getByRole("option", { name: /Langfuse OTEL/ })
       .click();
     const spanScope = page.getByRole("combobox", {
-      name: "otel span scope",
+      name: "langfuse span scope",
     });
     await spanScope.click();
     await expect(
@@ -61,7 +61,7 @@ test("team logging settings persist otel_span_scope no_internal through the call
       {
         callback_name: "langfuse_otel",
         callback_type: "success",
-        callback_vars: { otel_span_scope: "no_internal" },
+        callback_vars: { langfuse_span_scope: "no_internal" },
       },
     ]);
     await expect(
@@ -71,7 +71,7 @@ test("team logging settings persist otel_span_scope no_internal through the call
       team_info: { metadata: { logging: any[] } };
     }>(page, `/team/info?team_id=${team.team_id}`);
     expect(
-      info.team_info.metadata.logging[0].callback_vars.otel_span_scope,
+      info.team_info.metadata.logging[0].callback_vars.langfuse_span_scope,
     ).toBe("no_internal");
   } finally {
     await post("/team/delete", { team_ids: [team.team_id] });

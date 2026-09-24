@@ -286,7 +286,7 @@ async def add_team_callbacks(
         - langfuse_host: The host for the Langfuse callback
         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "no_internal" holds back the proxy's own auth, cache and database spans, "llm_only" sends only the model-call spans
-        - otel_span_scope: For langfuse_otel, arize, weave_otel and newrelic, the same three scopes; a langfuse_otel entry may set either name, and otel_span_scope wins when they disagree; defaults to litellm_settings.otel_tenant_span_scope
+        - otel_span_scope: For langfuse_otel, arize, weave_otel and newrelic, the same three scopes; a langfuse_otel entry may set either name; different values on one entry are rejected; defaults to litellm_settings.otel_tenant_span_scope
         - gcs_bucket_name: The name of the GCS bucket
         - gcs_path_service_account: The path to the GCS service account
         - langsmith_api_key: The API key for the Langsmith callback

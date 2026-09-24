@@ -136,11 +136,9 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_host: "text",
       langfuse_environment: "text",
       langfuse_span_scope: "select",
-      otel_span_scope: "select",
     },
     dynamic_param_options: {
       langfuse_span_scope: ["full", "no_internal", "llm_only"],
-      otel_span_scope: ["full", "no_internal", "llm_only"],
     },
     description: "Langfuse v3 OTEL Logging Integration",
   },

@@ -216,7 +216,7 @@ describe("LoggingSettings", () => {
     expect(mockOnChange).toHaveBeenCalledWith([expect.objectContaining({ callback_type: "failure" })]);
   });
 
-  it("offers the Langfuse OTEL span scope as a pick between full and llm_only rather than free text", async () => {
+  it("offers the Langfuse OTEL span scope as a pick between full, no_internal and llm_only rather than free text", async () => {
     const user = userEvent.setup({ delay: null });
     const mockOnChange = vi.fn();
     const initialValue = [
@@ -230,6 +230,7 @@ describe("LoggingSettings", () => {
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
     expect(screen.queryByPlaceholderText("os.environ/LANGFUSE_SPAN_SCOPE")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "otel span scope" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("combobox", { name: "langfuse span scope" }));
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
       "full",
