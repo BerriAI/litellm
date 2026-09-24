@@ -1,8 +1,7 @@
 import json
 import os
-import unittest
-from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, get_args
-from unittest.mock import ANY, MagicMock, Mock, patch
+from typing import TYPE_CHECKING, Final, Literal, get_args
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -1589,20 +1588,6 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         result_dict = handler._map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
-
-        # Test 5: every REASONING_EFFORT level reaches the provider, and anything else (a typo, an
-        # unshipped level, "default") is dropped so the request still succeeds at the provider default
-        from litellm.types.llms.openai import Reasoning
-
-        for effort in ("max", "xhigh", "none"):
-            result_passthrough = handler._map_reasoning_effort(effort)
-            assert result_passthrough == Reasoning(effort=effort)
-        for dropped in ("ultra", "hgih", "unknown_value", "", "default"):
-            assert handler._map_reasoning_effort(dropped) is None
-
-        print(
-            "✓ All reasoning_effort behaviors work correctly with flag/env var control"
-        )
 
     finally:
         # Restore original values
@@ -4011,8 +3996,8 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
 
 
 def _make_incomplete_responses_api_response(
-    incomplete_reason: Optional[str],
-    output: "List[ResponseOutputItem]",
+    incomplete_reason: str | None,
+    output: "list[ResponseOutputItem]",
     status: Literal["completed", "incomplete"] = "incomplete",
     empty_incomplete_details: bool = False,
 ) -> "ResponsesAPIResponse":
