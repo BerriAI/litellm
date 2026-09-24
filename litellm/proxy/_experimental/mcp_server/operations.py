@@ -3103,9 +3103,7 @@ class GatewayOperations:
                 return await _execute_mcp_tool(
                     name=operation.name,
                     arguments=dict(operation.arguments),  # mutable-ok: existing tool hooks own mutable argument data
-                    allowed_mcp_servers=list(
-                        operation.allowed_mcp_servers
-                    ),  # mutable-ok: legacy dispatch list contract
+                    allowed_mcp_servers=list(operation.allowed_mcp_servers),
                     start_time=operation.start_time,
                     user_api_key_auth=auth,
                     mcp_auth_header=token,

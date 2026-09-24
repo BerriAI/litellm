@@ -621,7 +621,7 @@ def unconfigure_claude_settings(
     )
     target: Final = _write_target(settings_path)
     file_removed: Final = not settings and not (receipt.file_existed and target.exists())
-    kept_receipt: Final = (  # mutable-ok: pydantic serializes the update as given and rejects a mappingproxy
+    kept_receipt: Final = (
         receipt.model_copy(update={"written": {item.key: _fingerprint(absent) for item in withheld}})
         if withheld
         else None
