@@ -338,6 +338,7 @@ async def test_batch_status_sync_from_provider_to_database():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
         return_value=mock_db_batch
     )
@@ -449,6 +450,7 @@ async def test_batch_cancel_updates_database():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
         return_value=None
     )
@@ -528,6 +530,7 @@ async def test_batch_terminal_state_skip_provider_call():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
         return_value=mock_db_batch
     )
@@ -593,6 +596,7 @@ async def test_batch_no_status_change_skip_update():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
 
     # Mock managed_files_obj

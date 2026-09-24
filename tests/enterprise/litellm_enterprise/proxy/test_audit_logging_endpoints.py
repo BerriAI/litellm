@@ -37,6 +37,7 @@ def mock_prisma_client():
         mock.db.litellm_auditlog.find_many = AsyncMock()
         mock.db.litellm_auditlog.find_unique = AsyncMock()
         mock.db.litellm_auditlog.count = AsyncMock()
+        mock.replica_db = mock.db
         yield mock
 
 

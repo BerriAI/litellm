@@ -905,6 +905,7 @@ async def test_spend_report_cache(report_type):
         mock_prisma.db.query_raw = AsyncMock(
             side_effect=[mock_spend_data, mock_tag_data]
         )
+        mock_prisma.replica_db = mock_prisma.db
 
         slack_alerting = SlackAlerting(
             alerting=["webhook"], internal_usage_cache=DualCache()

@@ -141,6 +141,7 @@ async def test_reset_budget_keys_partial_failure():
     key6 = {"id": "key6", "spend": 35.0, "budget_duration": 60}  # Should be updated
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(
         return_value=[key1, key2, key3, key4, key5, key6]
     )
@@ -238,6 +239,7 @@ async def test_reset_budget_users_partial_failure():
     user6 = {"id": "user6", "spend": 45.0, "budget_duration": 120}  # Should be updated
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(
         return_value=[user1, user2, user3, user4, user5, user6]
     )
@@ -326,6 +328,7 @@ async def test_reset_budget_endusers_cascade_failure_is_all_or_nothing():
     )
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     async def get_data_mock(table_name, *args, **kwargs):
         if table_name == "budget":
@@ -385,6 +388,7 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance()
     )
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     async def get_data_mock(table_name, *args, **kwargs):
         if table_name == "budget":
@@ -437,6 +441,7 @@ async def test_reset_budget_teams_partial_failure():
     team2 = {"id": "team2", "spend": 35.0, "budget_duration": 180}  # Should be updated
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(return_value=[team1, team2])
     prisma_client.update_data = AsyncMock()
     batch_calls = _wire_batcher_for_test(prisma_client)
@@ -525,6 +530,7 @@ async def test_reset_budget_continues_other_categories_on_failure():
     )
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     async def fake_get_data(*, table_name, query_type, **kwargs):
         if table_name == "key":
@@ -663,6 +669,7 @@ async def test_service_logger_keys_success():
         ),
     ]
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(return_value=keys)
     prisma_client.update_data = AsyncMock()
     _wire_batcher_for_test(prisma_client)
@@ -720,6 +727,7 @@ async def test_service_logger_keys_failure():
         {"id": "key2", "spend": 15.0, "budget_duration": 60},
     ]
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(return_value=keys)
     prisma_client.update_data = AsyncMock()
 
@@ -786,6 +794,7 @@ async def test_service_logger_users_success():
         ),
     ]
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(return_value=users)
     prisma_client.update_data = AsyncMock()
     _wire_batcher_for_test(prisma_client)
@@ -839,6 +848,7 @@ async def test_service_logger_users_failure():
         {"id": "user2", "spend": 25.0, "budget_duration": 120},
     ]
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(return_value=users)
     prisma_client.update_data = AsyncMock()
 
@@ -902,6 +912,7 @@ async def test_service_logger_teams_success():
         ),
     ]
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(return_value=teams)
     prisma_client.update_data = AsyncMock()
     _wire_batcher_for_test(prisma_client)
@@ -955,6 +966,7 @@ async def test_service_logger_teams_failure():
         {"id": "team2", "spend": 35.0, "budget_duration": 180},
     ]
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(return_value=teams)
     prisma_client.update_data = AsyncMock()
 
@@ -1032,6 +1044,7 @@ async def test_service_logger_endusers_success():
         return []
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
     batch_calls = _wire_batcher_for_test(prisma_client)
@@ -1097,6 +1110,7 @@ async def test_service_logger_endusers_failure():
         return []
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
     _wire_batcher_for_test(prisma_client, fail_commit=True)
@@ -1154,6 +1168,7 @@ async def test_reset_budget_for_litellm_team_members_called():
     enduser1 = _attrify({"user_id": "user1", "spend": 25.0, "budget_id": "budget1"})
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
 
     async def fake_get_data(*, table_name, query_type, **kwargs):
         if table_name == "budget":

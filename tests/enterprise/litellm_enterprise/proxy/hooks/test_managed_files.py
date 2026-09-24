@@ -16,9 +16,14 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 
 
+def _prisma_double(client: MagicMock) -> MagicMock:
+    client.replica_db = client.db
+    return client
+
+
 def test_get_file_ids_from_messages():
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=_prisma_double(MagicMock())
     )
     messages = [
         {
@@ -42,7 +47,7 @@ def test_get_file_ids_from_messages():
 
 def test_get_file_ids_from_messages_skips_bedrock_content_blocks_without_type():
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=_prisma_double(MagicMock())
     )
     messages = [
         {
@@ -78,6 +83,7 @@ async def test_async_pre_call_hook_batch_retrieve():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     return_value = MagicMock()
     return_value.created_by = "123"
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = return_value
@@ -107,6 +113,7 @@ async def test_list_user_batches_limit_zero_returns_empty_page_without_db_query(
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = MagicMock()
+    prisma_client.replica_db = prisma_client.db
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
 
     page = await proxy_managed_files.list_user_batches(
@@ -127,7 +134,7 @@ async def test_async_pre_call_deployment_hook_resolves_model_id_from_litellm_met
     file ID is resolved to the provider-specific file ID.
     """
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=_prisma_double(MagicMock())
     )
 
     managed_file_id = "managed-file-abc"
@@ -161,7 +168,7 @@ async def test_async_pre_call_deployment_hook_prefers_top_level_model_info():
     should use it without falling back to litellm_metadata.
     """
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=_prisma_double(MagicMock())
     )
 
     managed_file_id = "managed-file-abc"
@@ -200,7 +207,7 @@ async def test_async_pre_call_deployment_hook_no_model_info_leaves_file_id_uncha
     the managed file ID should remain unchanged.
     """
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=_prisma_double(MagicMock())
     )
 
     managed_file_id = "managed-file-abc"
@@ -352,7 +359,7 @@ async def test_async_post_call_success_hook_for_unified_finetuning_job():
         "model_id": "gpt-3.5-turbo-0613",
     }
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=AsyncMock()
+        DualCache(), prisma_client=_prisma_double(AsyncMock())
     )
     data = {
         "user_api_key_dict": {"parent_otel_span": MagicMock()},
@@ -373,6 +380,7 @@ async def test_async_pre_call_hook_for_unified_finetuning_job():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     return_value = MagicMock()
     return_value.created_by = "123"
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = return_value
@@ -405,6 +413,7 @@ async def test_can_user_call_unified_file_id(call_type):
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     return_value = MagicMock()
     return_value.created_by = "123"
     prisma_client.db.litellm_managedfiletable.find_first.return_value = return_value
@@ -432,6 +441,7 @@ async def test_router_acreate_batch_only_selects_from_file_id_mapping(monkeypatc
     import litellm
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     return_value = MagicMock()
     return_value.created_by = "123"
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = return_value
@@ -523,7 +533,7 @@ async def test_output_file_id_for_batch_retrieve():
         "unified_batch_id": "litellm_proxy;model_id:12345679;llm_batch_id:batch_685c5e5d63988190b85bdb2147ba131d",
     }
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=AsyncMock()
+        DualCache(), prisma_client=_prisma_double(AsyncMock())
     )
 
     response = await proxy_managed_files.async_post_call_success_hook(
@@ -583,7 +593,7 @@ async def test_output_file_id_preserves_target_model_names_when_model_name_missi
     }
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=AsyncMock()
+        DualCache(), prisma_client=_prisma_double(AsyncMock())
     )
 
     provider_output_file = OpenAIFileObject(
@@ -659,7 +669,7 @@ async def test_error_file_id_for_failed_batch():
     }
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=AsyncMock()
+        DualCache(), prisma_client=_prisma_double(AsyncMock())
     )
 
     # Create a proper OpenAIFileObject for the error file
@@ -707,6 +717,7 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
 
     # Use AsyncMock instead of real database connection
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     batch = LiteLLMBatch(
         id="bGl0ZWxsbV9wcm94eTttb2RlbF9pZDoxMjM0NTY3OTtsbG1fYmF0Y2hfaWQ6YmF0Y2hfNjg1YzVlNWQ2Mzk4ODE5MGI4NWJkYjIxNDdiYTEzMWQ",
@@ -1105,7 +1116,7 @@ def test_get_file_ids_from_responses_tools():
     file IDs from the tools parameter.
     """
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=_prisma_double(MagicMock())
     )
 
     tools = [
@@ -1128,7 +1139,7 @@ def test_get_file_ids_from_responses_tools_multiple_tools():
     Test that get_file_ids_from_responses_tools handles multiple tools.
     """
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=_prisma_double(MagicMock())
     )
 
     tools = [
@@ -1162,7 +1173,7 @@ def test_get_file_ids_from_responses_tools_empty():
     Test that get_file_ids_from_responses_tools handles empty or None tools.
     """
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=_prisma_double(MagicMock())
     )
 
     # Test with None
@@ -1192,6 +1203,7 @@ async def test_check_file_ids_access_with_unified_file_ids():
 
     # Mock the access check to return True
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     internal_usage_cache = MagicMock()
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
@@ -1229,6 +1241,7 @@ async def test_check_file_ids_access_denied():
     unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     internal_usage_cache = MagicMock()
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
@@ -1266,6 +1279,7 @@ async def test_check_file_ids_access_with_regular_files_only():
     regular_file_id_2 = "file-xyz789"
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     internal_usage_cache = MagicMock()
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
@@ -1301,6 +1315,7 @@ async def test_completion_with_file_access_check():
     unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
 
     internal_usage_cache = MagicMock()
@@ -1361,6 +1376,7 @@ async def test_responses_with_file_access_check():
     unified_file_id_2 = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9qc29uO3VuaWZpZWRfaWQsNzc3Nzc3Nzc7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1YWVo7bGxtX291dHB1dF9maWxlX21vZGVsX2lkLG1vZGVsXzEyMw"
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
 
     internal_usage_cache = MagicMock()
@@ -1425,6 +1441,7 @@ async def test_store_unified_file_id_with_none_file_object():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedfiletable.upsert = AsyncMock(
         return_value=MagicMock()
     )
@@ -1460,6 +1477,7 @@ async def test_store_unified_file_id_updates_file_metadata_on_existing_row():
     from litellm.types.llms.openai import OpenAIFileObject
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedfiletable.upsert = AsyncMock(
         return_value=MagicMock()
     )
@@ -1525,6 +1543,7 @@ async def test_afile_delete_returns_provider_response_when_stored_file_object_no
     unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9qc29uO3VuaWZpZWRfaWQsdGVzdC1pZDt0YXJnZXRfbW9kZWxfbmFtZXMsZ3B0LTRvO2xsbV9vdXRwdXRfZmlsZV9pZCxmaWxlLXByb3ZpZGVyLXh5ejtsbG1fb3V0cHV0X2ZpbGVfbW9kZWxfaWQsbW9kZWwtMTIz"
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     db_record = MagicMock()
     db_record.model_mappings = '{"model-123": "file-provider-xyz"}'
     prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(
@@ -1586,6 +1605,7 @@ async def test_afile_retrieve_fetches_from_provider_when_file_object_none():
     from litellm.types.llms.openai import OpenAIFileObject
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     internal_usage_cache = MagicMock()
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
@@ -1640,6 +1660,7 @@ async def test_afile_retrieve_raises_error_when_no_router_and_file_object_none()
     and no llm_router is provided to fetch from the provider.
     """
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     internal_usage_cache = MagicMock()
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
@@ -1674,6 +1695,7 @@ async def test_afile_retrieve_returns_stored_file_object_when_exists():
     from litellm.types.llms.openai import OpenAIFileObject
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     internal_usage_cache = MagicMock()
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
@@ -1711,6 +1733,7 @@ async def test_afile_retrieve_raises_error_for_non_managed_file():
     in the managed files table.
     """
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     internal_usage_cache = MagicMock()
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
@@ -1737,6 +1760,7 @@ async def test_list_batches_from_managed_objects_table():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     batch_record_1 = MagicMock()
     batch_record_1.unified_object_id = "unified-batch-id-1"
@@ -1802,6 +1826,7 @@ async def test_list_batches_from_managed_objects_table_empty_list():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_many.return_value = []
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
@@ -1882,6 +1907,7 @@ async def test_list_batches_registers_and_returns_unified_output_file_ids():
     ).decode()
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_many.return_value = [
         _terminal_batch_record(
             unified_batch_uid, raw_input_file_id, raw_output_file_id, raw_error_file_id
@@ -1965,6 +1991,7 @@ async def test_list_batches_resolves_existing_managed_rows_without_minting():
     ]
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_many.return_value = records
 
     existing_rows = [
@@ -2000,6 +2027,7 @@ async def test_list_batches_caps_page_size_at_100():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_many.return_value = []
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
@@ -2023,6 +2051,7 @@ async def test_list_batches_from_managed_objects_table_provider_filter_raises_ex
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
@@ -2049,6 +2078,7 @@ async def test_list_batches_from_managed_objects_table_target_model_name_filter_
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
@@ -2075,6 +2105,7 @@ async def test_list_batches_from_managed_objects_table_filters_by_created_by():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     # Create batch for user1
     batch_user1 = MagicMock()
@@ -2155,6 +2186,7 @@ async def test_list_batches_pagination_uses_unified_object_id_cursor():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = MagicMock()
     prisma_client.db.litellm_managedobjecttable.find_many.return_value = []
 
@@ -2248,6 +2280,7 @@ async def test_list_batches_pagination_walks_all_pages_without_loops_or_gaps():
         )
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
         side_effect=fake_find_many
     )
@@ -2369,6 +2402,7 @@ async def test_list_batches_pagination_stable_when_created_at_ties():
         )
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
         side_effect=fake_find_many
     )
@@ -2447,6 +2481,7 @@ def _fake_managed_object_table(rows):
         )
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
         side_effect=find_many
     )
@@ -2486,6 +2521,7 @@ async def test_list_batches_rejects_unknown_after_cursor():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
         return_value=None
     )
@@ -2563,6 +2599,7 @@ async def test_list_batches_rejects_after_cursor_owned_by_another_user():
         return other_users_batch
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
         side_effect=find_first
     )
@@ -2783,6 +2820,7 @@ async def test_user_b_cannot_retrieve_user_a_batch():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     # Mock database to return User A as the creator
     batch_record = MagicMock()
@@ -2820,6 +2858,7 @@ async def test_user_b_cannot_cancel_user_a_batch():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     # Mock database to return User A as the creator
     batch_record = MagicMock()
@@ -2860,6 +2899,7 @@ async def test_user_a_can_retrieve_own_batch():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     # Mock database to return User A as the creator
     batch_record = MagicMock()
@@ -2898,6 +2938,7 @@ async def test_user_b_cannot_retrieve_user_a_file():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     # Mock database to return User A as the creator
     file_record = MagicMock()
@@ -2935,6 +2976,7 @@ async def test_user_b_cannot_download_user_a_file_content():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     # Mock database to return User A as the creator
     file_record = MagicMock()
@@ -2972,6 +3014,7 @@ async def test_user_b_cannot_delete_user_a_file():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     # Mock database to return User A as the creator
     file_record = MagicMock()
@@ -3011,6 +3054,7 @@ async def test_user_a_can_retrieve_own_file():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     # Mock database to return User A as the creator
     file_record = MagicMock()
@@ -3061,6 +3105,7 @@ async def test_list_batches_only_returns_user_own_batches():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     # Create batches for User A
     batch_user_a = MagicMock()
@@ -3114,6 +3159,7 @@ async def test_same_user_different_keys_can_access_batch():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
 
     # Mock database to return the user_id as creator
     batch_record = MagicMock()
@@ -3209,6 +3255,7 @@ async def test_team_b_cannot_access_team_a_provider_format_batch(
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
@@ -3250,6 +3297,7 @@ async def test_authorized_callers_can_access_provider_format_batch(caller_kwargs
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
@@ -3279,6 +3327,7 @@ async def test_provider_format_batch_without_ownership_row_stays_accessible():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = None
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
@@ -3305,6 +3354,7 @@ async def test_fine_tuning_provider_format_id_not_enforced():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
@@ -3342,6 +3392,7 @@ async def test_team_b_cannot_access_team_a_provider_format_file(
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedfiletable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
@@ -3370,6 +3421,7 @@ async def test_same_team_can_access_provider_format_file():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedfiletable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
@@ -3394,6 +3446,7 @@ async def test_provider_format_file_without_ownership_row_stays_accessible():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedfiletable.find_first.return_value = None
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         MagicMock(), prisma_client=prisma_client
@@ -3417,6 +3470,7 @@ async def test_post_call_batch_create_stores_ownership_row(batch_id):
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
     )
@@ -3451,6 +3505,7 @@ async def test_post_call_batch_sync_does_not_claim_ownership():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.update_many.return_value = 0
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
@@ -3473,6 +3528,7 @@ async def test_post_call_batch_sync_updates_existing_row():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.update_many.return_value = 1
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
@@ -3507,6 +3563,7 @@ async def test_post_call_batch_sync_stores_output_file_ownership_from_batch_row(
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedobjecttable.update_many.return_value = 1
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
@@ -3542,6 +3599,7 @@ async def test_post_call_batch_create_does_not_store_output_file_ownership():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
     )
@@ -3591,6 +3649,7 @@ async def test_file_list_cursors_are_scoped_to_the_caller():
     )
 
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedfiletable.find_many.return_value = []
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
@@ -3648,6 +3707,7 @@ async def test_file_list_cursors_follow_the_owner_scoped_page():
         "status": "processed",
     }
     prisma_client = AsyncMock()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_managedfiletable.find_many.return_value = [managed_row]
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
@@ -3672,7 +3732,7 @@ async def test_list_user_batches_provider_filter_rejected_with_400():
     from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=_prisma_double(MagicMock())
     )
 
     with pytest.raises(ProxyException) as exc:
@@ -3692,7 +3752,7 @@ async def test_list_user_batches_target_model_names_filter_rejected_with_400():
     from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
     proxy_managed_files = _PROXY_LiteLLMManagedFiles(
-        DualCache(), prisma_client=MagicMock()
+        DualCache(), prisma_client=_prisma_double(MagicMock())
     )
 
     with pytest.raises(ProxyException) as exc:
