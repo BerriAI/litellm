@@ -56,7 +56,7 @@ def wire(name: str) -> Mapping[str, str]:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ProviderConnection:
-    """How the SDK reaches the provider. Read by the HTTP and SDK client layers, never in the body."""
+    """How the SDK reaches the provider."""
 
     api_key: str | None = None
     api_base: str | None = None
@@ -85,7 +85,7 @@ class ProviderConnection:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BedrockBatchConnection:
-    """S3 and IAM settings a Bedrock batch deployment needs. Read by the Bedrock batch handlers."""
+    """S3 and IAM settings a Bedrock batch deployment needs."""
 
     aws_batch_role_arn: str | None = None
     s3_bucket_name: str | None = None
@@ -119,7 +119,7 @@ class DispatchOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RoutingOptions:
-    """Retries, fallbacks and deployment selection. Read by the Router and the retry wrappers."""
+    """Retries, fallbacks and deployment selection."""
 
     fallbacks: Sequence[str | Mapping[str, Sequence[str]]] | None = None
     context_window_fallback_dict: Mapping[str, str] | None = None
@@ -155,7 +155,7 @@ class DeploymentOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SpecializedRouterOptions:
-    """Configuration for the auto, complexity, adaptive and quality routers. Read by those router strategies."""
+    """Configuration for the auto, complexity, adaptive and quality routers."""
 
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
@@ -167,25 +167,25 @@ class SpecializedRouterOptions:
     complexity_router_config: Mapping[str, object] | None = None
     complexity_router_default_model: str | None = None
     adaptive_router_config: Mapping[str, object] | None = None
-    adaptive_router_default_model: str | None = None
+    adaptive_router_default_model: str | None = None  # TODO: nothing reads it; registered before this module existed
     quality_router_config: Mapping[str, object] | None = None
     quality_router_default_model: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CachingOptions:
-    """Response and prompt caching controls. Read by the cache layer and the cache key builder."""
+    """Response and prompt caching controls."""
 
     caching: bool | None = None
     cache: "DynamicCacheControl | None" = None
     ttl: float | None = None
     enable_prompt_caching: bool | None = None
-    caching_groups: Sequence[tuple[str, Sequence[str]]] | None = None
+    caching_groups: Sequence[Sequence[str]] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CostOptions:
-    """Cost attribution and budget controls. Read by the cost calculator and spend tracking."""
+    """Cost attribution and budget controls."""
 
     cost_per_query: float | None = None
     base_model: str | None = None
@@ -195,7 +195,7 @@ class CostOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ObservabilityOptions:
-    """Identifiers, metadata and logging switches. Read by the logging object and callbacks."""
+    """Identifiers, metadata and logging switches."""
 
     id: str | None = None
     metadata: MutableMapping[str, object] | None = None  # mutable-ok: the router and logging write keys into it
@@ -211,21 +211,21 @@ class ObservabilityOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgenticLoopOptions:
-    """Deployment-level ceiling on a server-side tool loop. Read by the interception handlers."""
+    """Deployment-level ceiling on a server-side tool loop."""
 
     max_agentic_loops: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GuardrailOptions:
-    """Which guardrails run on the call. Read by the guardrail hooks."""
+    """Which guardrails run on the call."""
 
     guardrails: Sequence[str] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PromptOptions:
-    """Prompt management and prompt template shaping. Read by the prompt manager and the prompt factory."""
+    """Prompt management and prompt template shaping."""
 
     prompt_id: str | None = None
     prompt_variables: Mapping[str, object] | None = None
@@ -248,7 +248,7 @@ class PromptOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResponseOptions:
-    """How LiteLLM shapes the response it hands back. Read by the response builders and stream wrappers."""
+    """How LiteLLM shapes the response it hands back."""
 
     merge_reasoning_content_in_choices: bool | None = None
     enable_json_schema_validation: bool | None = None
@@ -260,7 +260,7 @@ class ResponseOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MockOptions:
-    """Short-circuit the provider call with a canned result. Read by the mock handlers."""
+    """Short-circuit the provider call with a canned result."""
 
     mock_response: "MockResponse | None" = None
     mock_timeout: bool | None = None
@@ -351,7 +351,7 @@ class ProxyState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class EntrypointState:
-    """Which public entrypoint a call came through. Set by the SDK wrappers, read by the core."""
+    """Which public entrypoint a call came through."""
 
     acompletion: bool | None = None
     aembedding: bool | None = None
