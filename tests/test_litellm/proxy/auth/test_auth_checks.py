@@ -1924,6 +1924,66 @@ def test_can_object_call_model_key_alias_matches_global_rewritten_name(monkeypat
     )
 
 
+def test_can_object_call_model_chained_alias_requires_final_target(monkeypatch):
+    """When a key alias fires on the globally rewritten name, only the final target is dispatched."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"foo": "bar"})
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_key_alias_name_alone_is_not_enough():
+    """A key that may call the alias name but not its target cannot call the alias."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="bar",
+            llm_router=None,
+            models=["bar"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+    assert (
+        _can_object_call_model(
+            model="bar",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
 @pytest.mark.asyncio
 async def test_can_user_call_model_honors_key_alias():
     """A personal-scope key alias resolves to its target before the user allowlist check."""

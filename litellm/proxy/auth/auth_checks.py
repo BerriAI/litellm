@@ -4407,9 +4407,12 @@ def _can_object_call_model(
         key_model_aliases.get(litellm.model_alias_map.get(model, model)) if key_model_aliases is not None else None
     )
     potential_models: Final = (
-        *((model, compaction_parent) if compaction_parent is not None else (model,)),
-        *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
-        *((key_alias_target,) if key_alias_target else ()),
+        (key_alias_target,)
+        if key_alias_target is not None
+        else (
+            *((model, compaction_parent) if compaction_parent is not None else (model,)),
+            *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
+        )
     )
 
     ## check model access for alias + underlying model - allow if either is in allowed models
