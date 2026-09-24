@@ -27,7 +27,7 @@ def _marked(name):
     return f"{_encoded(name)}[1m]"
 
 
-def _caller(*maps):
+def _caller(*maps: object) -> CallerAliases:
     return CallerAliases(maps, maps)
 
 
@@ -132,7 +132,7 @@ def test_mutation_breaking_the_hex_name_cannot_route_to_the_source(source):
     assert claude_code_requested_group(_marked(source), router, None) == source
 
 
-def test_team_alias_is_listed_under_its_target_metadata_and_only_when_the_target_is_accessible():
+def test_team_alias_is_listed_under_its_target_metadata_and_only_when_the_target_is_accessible() -> None:
     entries = [("gpt-4.1-mini", "gpt-4.1-mini"), ("team-public", "model_name_team_1_abc")]
     aliases = (
         {"gpt-4.1-mini": "team-public"},
@@ -147,13 +147,13 @@ def test_team_alias_is_listed_under_its_target_metadata_and_only_when_the_target
     assert alias_listing_entries(entries, _caller(None, {})) == tuple(entries)
 
 
-def test_alias_target_resolves_the_requested_alias_across_key_and_team_maps():
+def test_alias_target_resolves_the_requested_alias_across_key_and_team_maps() -> None:
     maps = _caller({"o": "gpt-4.1"}, {"claude-sonnet-4-5": "gpt-4.1-mini"})
     assert alias_target("claude-sonnet-4-5", maps) == "gpt-4.1-mini"
     assert alias_target("gpt-4.1-mini", _caller(None, {"claude-sonnet-4-5": "gpt-4.1-mini"})) is None
 
 
-def test_alias_colliding_with_a_listed_id_keeps_the_listed_model_at_list_and_retrieval():
+def test_alias_colliding_with_a_listed_id_keeps_the_listed_model_at_list_and_retrieval() -> None:
     entries = [("fast", "fast"), ("gpt-4.1-mini", "gpt-4.1-mini")]
     maps = _caller({"fast": "gpt-4.1-mini"})
     listed = frozenset(response_id for response_id, _ in entries)
@@ -163,7 +163,7 @@ def test_alias_colliding_with_a_listed_id_keeps_the_listed_model_at_list_and_ret
     assert alias_target("fast", maps) == "gpt-4.1-mini"
 
 
-def test_alias_maps_apply_in_the_order_chat_completions_applies_them():
+def test_alias_maps_apply_in_the_order_chat_completions_applies_them() -> None:
     team_then_key = _caller({"fast": "gpt-4.1-mini", "hop": "mid"}, {"fast": "gpt-4.1", "mid": "gpt-4.1"})
     entries = [("gpt-4.1-mini", "gpt-4.1-mini"), ("gpt-4.1", "gpt-4.1")]
 
@@ -177,7 +177,7 @@ def test_alias_maps_apply_in_the_order_chat_completions_applies_them():
     )
 
 
-def test_one_bad_alias_entry_hides_only_itself():
+def test_one_bad_alias_entry_hides_only_itself() -> None:
     aliases = {"fast": "gpt-4.1-mini", "broken": 5, 7: "gpt-4.1-mini"}
     entries = [("gpt-4.1-mini", "gpt-4.1-mini")]
 
@@ -185,7 +185,7 @@ def test_one_bad_alias_entry_hides_only_itself():
     assert alias_target("fast", _caller(aliases)) == "gpt-4.1-mini"
 
 
-def test_chained_key_alias_is_listed_only_when_its_final_target_is_listable():
+def test_chained_key_alias_is_listed_only_when_its_final_target_is_listable() -> None:
     key_aliases = {"a": "b", "b": "hidden"}
     entries = [("b", "b")]
 
@@ -193,7 +193,9 @@ def test_chained_key_alias_is_listed_only_when_its_final_target_is_listable():
     assert alias_target("a", caller_alias_maps(key_aliases, None, "team-a", None)) == "hidden"
 
 
-def test_team_aliases_only_apply_when_listing_the_team_the_key_authenticated_as(monkeypatch):
+def test_team_aliases_only_apply_when_listing_the_team_the_key_authenticated_as(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     key_aliases, team_aliases, global_aliases = {"k": "gpt-4.1"}, {"t": "gpt-4.1-mini"}, {"g": "gpt-4.1"}
     monkeypatch.setattr(litellm, "model_alias_map", global_aliases)
     own_team = CallerAliases((team_aliases, key_aliases), (team_aliases, key_aliases, global_aliases, key_aliases))
@@ -204,7 +206,9 @@ def test_team_aliases_only_apply_when_listing_the_team_the_key_authenticated_as(
     )
 
 
-def test_global_alias_rewrites_between_the_two_key_passes_like_chat_completions(monkeypatch):
+def test_global_alias_rewrites_between_the_two_key_passes_like_chat_completions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "model_alias_map", {"b": "d"})
     key_aliases = {"a": "b", "b": "c"}
     entries = [("c", "c"), ("d", "d")]
@@ -214,7 +218,7 @@ def test_global_alias_rewrites_between_the_two_key_passes_like_chat_completions(
     assert alias_listing_entries(entries, maps) == (*entries, ("a", "d"), ("b", "c"))
 
 
-def test_global_aliases_rewrite_but_are_not_listed_as_caller_rows(monkeypatch):
+def test_global_aliases_rewrite_but_are_not_listed_as_caller_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_alias_map", {"g": "gpt-4.1-mini"})
     entries = [("gpt-4.1-mini", "gpt-4.1-mini")]
     maps = caller_alias_maps({"k": "g"}, None, "team-a", None)

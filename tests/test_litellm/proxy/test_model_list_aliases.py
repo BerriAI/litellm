@@ -21,7 +21,7 @@ def _deployment(model_name: str, model: str = "openai/gpt-4.1-mini", **model_inf
 
 
 @pytest.fixture
-def router(monkeypatch) -> Router:
+def router(monkeypatch: pytest.MonkeyPatch) -> Router:
     router = Router(
         model_list=[
             _deployment("gpt-4.1-mini"),
@@ -74,7 +74,7 @@ async def _v1_models(user_api_key_dict: UserAPIKeyAuth, request: Request | None 
 
 
 @pytest.mark.asyncio
-async def test_v1_models_lists_team_alias_next_to_its_target_in_both_shapes(router):
+async def test_v1_models_lists_team_alias_next_to_its_target_in_both_shapes(router: Router) -> None:
     caller = _team_member(team_model_aliases={"claude-sonnet-4-5": "gpt-4.1-mini"})
 
     assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat", "claude-sonnet-4-5"]
@@ -82,7 +82,7 @@ async def test_v1_models_lists_team_alias_next_to_its_target_in_both_shapes(rout
 
 
 @pytest.mark.asyncio
-async def test_claude_code_picker_lists_the_alias_under_its_own_name(router):
+async def test_claude_code_picker_lists_the_alias_under_its_own_name(router: Router) -> None:
     caller = _team_member(team_model_aliases={"claude-sonnet-4-5": "gpt-4.1-mini"})
 
     picker_ids = await _v1_models(caller, request=_claude_code_request())
@@ -90,14 +90,14 @@ async def test_claude_code_picker_lists_the_alias_under_its_own_name(router):
 
 
 @pytest.mark.asyncio
-async def test_v1_models_lists_key_alias_and_hides_alias_to_a_model_the_caller_cannot_list(router):
+async def test_v1_models_lists_key_alias_and_hides_alias_to_a_model_the_caller_cannot_list(router: Router) -> None:
     caller = _team_member(aliases={"mini": "gpt-4.1-mini", "big": "gpt-4.1"})
 
     assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat", "mini"]
 
 
 @pytest.mark.asyncio
-async def test_v1_models_resolves_a_team_alias_through_the_key_alias_like_chat_completions_does(router):
+async def test_v1_models_resolves_a_team_alias_through_the_key_alias_like_chat_completions_does(router: Router) -> None:
     caller = _team_member(team_model_aliases={"fast": "mid"}, aliases={"fast": "gpt-4.1", "mid": "gpt-4.1-mini"})
 
     assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat", "fast", "mid"]
@@ -106,14 +106,14 @@ async def test_v1_models_resolves_a_team_alias_through_the_key_alias_like_chat_c
 
 
 @pytest.mark.asyncio
-async def test_v1_models_skips_only_the_malformed_alias_entries(router):
+async def test_v1_models_skips_only_the_malformed_alias_entries(router: Router) -> None:
     caller = _team_member(team_model_aliases={"claude-sonnet-4-5": 5, "fast": "gpt-4.1-mini"})
 
     assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat", "fast"]
 
 
 @pytest.mark.asyncio
-async def test_v1_models_by_id_resolves_a_team_alias_to_its_target_metadata(router):
+async def test_v1_models_by_id_resolves_a_team_alias_to_its_target_metadata(router: Router) -> None:
     caller = _team_member(team_model_aliases={"claude-sonnet-4-5": "gpt-4.1-mini"})
 
     response = await proxy_server.model_info(model_id="claude-sonnet-4-5", user_api_key_dict=caller)
@@ -122,7 +122,7 @@ async def test_v1_models_by_id_resolves_a_team_alias_to_its_target_metadata(rout
 
 
 @pytest.mark.asyncio
-async def test_v1_models_by_id_retrieves_the_listed_model_when_an_alias_collides_with_its_id(router):
+async def test_v1_models_by_id_retrieves_the_listed_model_when_an_alias_collides_with_its_id(router: Router) -> None:
     caller = _team_member(aliases={"team-chat": "gpt-4.1"})
 
     assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat"]
@@ -131,7 +131,9 @@ async def test_v1_models_by_id_retrieves_the_listed_model_when_an_alias_collides
 
 
 @pytest.mark.asyncio
-async def test_v1_models_by_id_resolves_an_alias_named_like_an_undiscoverable_model_to_the_alias_target(router):
+async def test_v1_models_by_id_resolves_an_alias_named_like_an_undiscoverable_model_to_the_alias_target(
+    router: Router,
+) -> None:
     caller = _team_member(aliases={"hidden": "gpt-4.1-mini"}, models=["gpt-4.1-mini", "model_name_team1_abc", "hidden"])
 
     assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat", "hidden"]
@@ -141,7 +143,7 @@ async def test_v1_models_by_id_resolves_an_alias_named_like_an_undiscoverable_mo
 
 
 @pytest.mark.asyncio
-async def test_v1_models_by_id_keeps_the_alias_as_id_when_it_targets_a_team_scoped_model(router):
+async def test_v1_models_by_id_keeps_the_alias_as_id_when_it_targets_a_team_scoped_model(router: Router) -> None:
     caller = _team_member(team_model_aliases={"chat": "team-chat"})
 
     assert "chat" in await _v1_models(caller)
