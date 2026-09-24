@@ -37,6 +37,7 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     oauth_authorization_uses_gateway_credential,
 )
 from litellm.proxy._experimental.mcp_server.faults import (
+    MAX_WIRE_FIELD_CHARS,
     CallerRejected,
     CredentialSource,
     UpstreamProtocolFault,
@@ -999,6 +1000,44 @@ def _token_credential_source(mcp_server: MCPServer) -> CredentialSource:
     return "gateway_stored" if mcp_server.client_id else "caller_supplied"
 
 
+_NO_ACCESS_TOKEN_NOTE: Final = "the upstream token response has no usable access_token"
+_SENSITIVE_KEY_PARTS: Final = ("token", "secret", "password", "key")
+
+
+def _missing_access_token_fault(server_id: str, token_response: object) -> UpstreamProtocolFault:
+    if not isinstance(token_response, dict):
+        verbose_logger.warning(
+            "exchange_token_with_server: non-object token response from IdP for server=%s (first %s chars): %s",
+            server_id,
+            MAX_WIRE_FIELD_CHARS,
+            repr(token_response)[:MAX_WIRE_FIELD_CHARS],
+        )
+        return UpstreamProtocolFault(note=_NO_ACCESS_TOKEN_NOTE)
+
+    redacted: Final = {
+        key: "***" if any(part in str(key).lower() for part in _SENSITIVE_KEY_PARTS) else value
+        for key, value in token_response.items()
+    }
+    verbose_logger.warning(
+        "exchange_token_with_server: token response from IdP for server=%s has no usable access_token "
+        "(first %s chars): %s",
+        server_id,
+        MAX_WIRE_FIELD_CHARS,
+        str(redacted)[:MAX_WIRE_FIELD_CHARS],
+    )
+    upstream_detail: Final = " - ".join(
+        field
+        for field in (
+            token_response.get("error"),
+            token_response.get("error_description") or token_response.get("message"),
+        )
+        if isinstance(field, str) and field
+    )[:MAX_WIRE_FIELD_CHARS]
+    return UpstreamProtocolFault(
+        note=f"{_NO_ACCESS_TOKEN_NOTE}: {upstream_detail}" if upstream_detail else _NO_ACCESS_TOKEN_NOTE
+    )
+
+
 async def exchange_token_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -1288,7 +1327,7 @@ async def exchange_token_with_server(
 
     raw_access_token: Final = token_response.get("access_token") if isinstance(token_response, dict) else None
     if not isinstance(raw_access_token, str) or not raw_access_token:
-        return render_token_fault(UpstreamProtocolFault(note="the upstream token response has no usable access_token"))
+        return render_token_fault(_missing_access_token_fault(resolved_server.server_id, token_response))
 
     result: Final = {
         "access_token": raw_access_token,
