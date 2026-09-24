@@ -134,7 +134,7 @@ router: Final = APIRouter()
 
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
-_METADATA_CARRIERS: Final = frozenset(("litellm_metadata", "metadata"))
+_METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -583,19 +583,19 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         """
         _parsed_body = _parsed_body or {}
 
-        owned_in_body: Final = MappingProxyType(
+        litellm_keys_in_body: Final = MappingProxyType(
             {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
         )
         litellm_params_in_body: Final = MappingProxyType(
-            {k: v for k, v in owned_in_body.items() if k not in _METADATA_CARRIERS}
+            {k: v for k, v in litellm_keys_in_body.items() if k not in _METADATA_KEYS}
         )
 
         _metadata = dict(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
 
-        litellm_metadata: Final = owned_in_body.get("litellm_metadata")
-        metadata: Final = owned_in_body.get("metadata")
+        litellm_metadata: Final = litellm_keys_in_body.get("litellm_metadata")
+        metadata: Final = litellm_keys_in_body.get("metadata")
         if litellm_metadata:
             _metadata.update(litellm_metadata)
         if metadata:
