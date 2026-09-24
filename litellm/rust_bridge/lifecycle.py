@@ -46,7 +46,7 @@ class StreamClosed(Exception):
 async def _settle(execution: Execution, step: Step) -> Settled:
     while isinstance(step, Await):
         try:
-            value = await step.awaitable  # rebind-ok: each selected await produces the next protocol input
+            value = await step.awaitable
         except GeneratorExit:
             raise
         except BaseException as error:

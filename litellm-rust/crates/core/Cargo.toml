@@ -7,6 +7,7 @@ repository.workspace = true
 autotests = false
 
 [dependencies]
+litellm-secrets.workspace = true
 litellm-types.workspace = true
 litellm-core-utils.workspace = true
 litellm-host.workspace = true
@@ -36,7 +37,6 @@ url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
-litellm-secrets.workspace = true
 litellm-auth-gcp.workspace = true
 litellm-llms = { workspace = true, features = ["test-support"] }
 rstest.workspace = true

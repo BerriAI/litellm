@@ -90,6 +90,10 @@ class TestGetLitellmParamsKwargsExtraction:
         assert "s3_endpoint_url" not in result_without_s3_kwargs
         assert "s3_region_name" not in result_without_s3_kwargs
 
+    def test_stream_chunk_size_is_carried_as_a_litellm_param(self) -> None:
+        assert get_litellm_params(stream_chunk_size=64)["stream_chunk_size"] == 64
+        assert get_litellm_params()["stream_chunk_size"] is None
+
     def test_s3_credential_kwargs_are_forwarded_for_s3_signing(self):
         result = get_litellm_params(s3_access_key_id="s3-key", s3_secret_access_key="s3-secret")
         assert result["s3_access_key_id"] == "s3-key"
@@ -265,5 +269,7 @@ class TestMetadataFallsBackToLitellmMetadata:
     "value, expected",
     [("true", True), ("false", False), (" TRUE ", True), (True, True), (None, None), ("os.environ/DROP_PARAMS", None)],
 )
-def test_drop_params_strings_reach_litellm_params_as_flags(value, expected):
+def test_drop_params_strings_reach_litellm_params_as_flags(
+    value: str | bool | None, expected: bool | None
+) -> None:
     assert get_litellm_params(drop_params=value)["drop_params"] is expected

@@ -56,13 +56,23 @@ const SETTINGS_OBJECT: FieldSpec<Option<Py<PyAny>>> =
     FieldSpec::new("settings_object", |field| Ok(field.python_binding()));
 
 /// `litellm.secret_manager_client` as the bridge classifies it.
-#[derive(Debug)]
 pub(crate) enum SecretManagerClient {
     /// `None`: reads come from the process environment.
     Local,
     /// A custom manager, legacy compatible client, or manually assigned SDK client that keeps
     /// executing in Python.
     PythonCallback(Py<PyAny>),
+    Native(Box<SecretManager>),
+}
+
+impl std::fmt::Debug for SecretManagerClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Local => "Local",
+            Self::Native(_) => "Native",
+            Self::PythonCallback(_) => "PythonCallback",
+        })
+    }
 }
 
 /// One operation-local capture of the secret manager globals, taken while attached to Python.
@@ -79,6 +89,9 @@ pub(crate) struct SecretManagerSnapshot {
 impl SecretManagerSnapshot {
     pub(crate) fn into_state(self) -> Arc<SecretManagerState> {
         match self.client {
+            SecretManagerClient::Native(backend) => {
+                Arc::new(SecretManagerState::new(*backend, self.settings))
+            }
             SecretManagerClient::Local => Arc::new(SecretManagerState::default()),
             SecretManagerClient::PythonCallback(client) => Arc::new(SecretManagerState::new(
                 SecretManager::External(Arc::new(PythonSecretManager::new(
@@ -94,7 +107,32 @@ impl SecretManagerSnapshot {
 
 /// Reads and projects the secret manager settings group in one attached operation.
 pub(crate) fn read(py: Python<'_>) -> PyResult<SecretManagerSnapshot> {
-    Ok(project(&PythonSettings::SecretManagerBinding.read(py)?)?)
+    let snapshot = project(&PythonSettings::SecretManagerBinding.read(py)?)?;
+    let SecretManagerClient::PythonCallback(client) = &snapshot.client else {
+        return Ok(snapshot);
+    };
+    if matches!(
+        snapshot.system,
+        Some(KeyManagementSystem::Custom | KeyManagementSystem::Local)
+    ) {
+        return Ok(snapshot);
+    }
+    let Some(native) = super::runtime::NativeSecretManager::from_client(client.bind(py))? else {
+        return Ok(snapshot);
+    };
+    let backend = native.borrow(py).backend()?;
+    if snapshot
+        .system
+        .is_some_and(|system| system != backend.system())
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "native secret manager system does not match configuration",
+        ));
+    }
+    Ok(SecretManagerSnapshot {
+        client: SecretManagerClient::Native(Box::new(backend)),
+        ..snapshot
+    })
 }
 
 pub(crate) fn project(snapshot: &Snapshot<'_>) -> Result<SecretManagerSnapshot, ProjectionError> {

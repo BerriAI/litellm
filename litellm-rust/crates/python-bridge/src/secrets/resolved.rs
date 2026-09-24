@@ -1,10 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
-use futures_util::{future::BoxFuture, future::try_join_all};
-use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
-use litellm_llms::base_llm::inference::secrets::{SecretSource, Secrets};
+use futures_util::future::BoxFuture;
+use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_secrets::source::SecretSource;
 use litellm_secrets::{
-    Error, FailurePolicy, OidcResolver, Secret, SecretManagerState, SecretResolver,
+    Error, FailurePolicy, OidcResolver, SecretManagerState, SecretResolver, SecretValue,
 };
 
 use super::config::SecretManagerSnapshot;
@@ -20,7 +20,7 @@ impl ResolvedSecrets {
 
     fn from_state(state: Arc<SecretManagerState>) -> Self {
         Self {
-            resolver: SecretResolver::new(
+            resolver: SecretResolver::new_python_compatible(
                 state,
                 Arc::new(ProcessEnvironment),
                 OidcResolver::default(),
@@ -31,41 +31,11 @@ impl ResolvedSecrets {
 }
 
 impl SecretSource for ResolvedSecrets {
-    fn resolve<'a>(&'a self, names: &'a [&'static str]) -> BoxFuture<'a, Result<Secrets, Error>> {
-        Box::pin(async move {
-            let values = try_join_all(names.iter().map(|name| async move {
-                self.resolver
-                    .get_secret(name, None)
-                    .await
-                    .map(|secret| secret.map(|secret| ((*name).to_owned(), secret_value(secret))))
-            }))
-            .await?
-            .into_iter()
-            .flatten()
-            .collect::<HashMap<_, _>>();
-            Ok(Arc::new(ResolvedLookup { values }) as Secrets)
-        })
-    }
-}
-
-struct ResolvedLookup {
-    values: HashMap<String, String>,
-}
-
-impl Lookup for ResolvedLookup {
-    fn get(&self, name: &str) -> Option<String> {
-        self.values
-            .get(name)
-            .cloned()
-            .or_else(|| ProcessEnvironment.get(name))
-    }
-}
-
-fn secret_value(secret: Secret) -> String {
-    match secret {
-        Secret::String(value) => value.expose().to_owned(),
-        Secret::Bool(value) => if value { "True" } else { "False" }.to_owned(),
-        Secret::Json(value) => value.to_string(),
+    fn get_secret_str<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<SecretValue>, Error>> {
+        Box::pin(self.resolver.get_secret_str(name, None))
     }
 }
 
@@ -86,7 +56,7 @@ mod tests {
     };
 
     use super::ResolvedSecrets;
-    use litellm_llms::base_llm::inference::secrets::SecretSource;
+    use litellm_secrets::source::SecretSource;
 
     fn state(server: &MockServer, settings: KeyManagementSettings) -> Arc<SecretManagerState> {
         let client = Client::from_conf(
@@ -145,31 +115,75 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manager_failure_falls_back_to_environment() {
+    async fn aws_read_failure_preserves_absence_without_environment_fallback() {
         let name = "LITELLM_RUST_BRIDGE_MANAGER_FAILURE";
         unsafe { std::env::set_var(name, "env-key") };
         let server = MockServer::start().await;
         Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
             .respond_with(ResponseTemplate::new(500))
-            .expect(1)
+            .expect(2)
             .mount(&server)
             .await;
         let result = resolve(state(&server, KeyManagementSettings::default()), name).await;
+        let missing = resolve(
+            state(&server, KeyManagementSettings::default()),
+            "LITELLM_RUST_BRIDGE_MANAGER_FAILURE_MISSING",
+        )
+        .await;
         unsafe { std::env::remove_var(name) };
-        assert_eq!(result.as_deref(), Some("env-key"));
-        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(result, None);
+        assert_eq!(missing, None);
+    }
 
-        let missing_server = MockServer::start().await;
+    #[rstest::rstest]
+    #[case::capitalized_true("True")]
+    #[case::parenthesized_false("(False)")]
+    #[tokio::test]
+    async fn boolean_manager_values_are_absent_like_get_secret_str(#[case] value: &str) {
+        let name = "LITELLM_RUST_BRIDGE_BOOLEAN_VALUE";
+        let server = MockServer::start().await;
         Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
-            .respond_with(ResponseTemplate::new(500))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"SecretString": value})))
             .expect(1)
-            .mount(&missing_server)
+            .mount(&server)
             .await;
-        let missing =
-            ResolvedSecrets::from_state(state(&missing_server, KeyManagementSettings::default()))
-                .resolve(&["LITELLM_RUST_BRIDGE_MANAGER_FAILURE_MISSING"])
-                .await;
-        assert!(matches!(missing, Err(litellm_secrets::Error::Aws(_))));
+        assert_eq!(
+            resolve(state(&server, KeyManagementSettings::default()), name).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn undeclared_names_are_read_from_the_manager() {
+        let declared = "LITELLM_RUST_BRIDGE_DECLARED";
+        let undeclared = "LITELLM_RUST_BRIDGE_UNDECLARED_MANAGED";
+        unsafe { std::env::set_var(undeclared, "env-key") };
+        let server = MockServer::start().await;
+        Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
+            .and(body_partial_json(json!({"SecretId": declared})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"SecretString": "declared-key"})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
+            .and(body_partial_json(json!({"SecretId": undeclared})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"SecretString": "manager-key"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let source = ResolvedSecrets::from_state(state(&server, KeyManagementSettings::default()));
+        let snapshot = source.resolve(&[declared]).await.unwrap();
+        assert_eq!(snapshot.get(undeclared), None);
+        let result = source
+            .get_secret_str(undeclared)
+            .await
+            .unwrap()
+            .map(|value| value.expose().to_owned());
+        unsafe { std::env::remove_var(undeclared) };
+        assert_eq!(result.as_deref(), Some("manager-key"));
     }
 
     #[tokio::test]
@@ -230,7 +244,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn undeclared_names_still_read_the_process_environment() {
+    async fn names_excluded_by_hosted_keys_read_the_process_environment() {
         let name = "LITELLM_RUST_BRIDGE_UNDECLARED";
         unsafe { std::env::set_var(name, "env-key") };
         let server = MockServer::start().await;

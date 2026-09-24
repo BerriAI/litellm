@@ -6,7 +6,9 @@ import pytest
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.custom_httpx.http_handler import default_user_agent
-from litellm.rust_bridge import settings
+from litellm.rust_bridge import catalog, settings
+from litellm.rust_bridge.catalog import SecretManagerRule
+from litellm.rust_bridge.configuration import Rollout
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
@@ -79,6 +81,11 @@ class _VaultSecrets(CustomSecretManager):
         return self.secrets.get(secret_name)
 
 
+_RUST_FOR_CUSTOM: Final = (
+    SecretManagerRule(Rollout.RUST_REQUIRED, systems=frozenset({KeyManagementSystem.CUSTOM.value})),
+)
+
+
 @pytest.mark.parametrize(
     ("access_mode", "readable"),
     [("read_only", True), ("read_and_write", True), ("write_only", False)],
@@ -91,14 +98,46 @@ def test_secret_manager_is_readable_only_when_litellm_would_read_secrets_from_it
     monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
     monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode=access_mode))
 
-    assert settings.secret_manager() == settings.SecretManager(readable=readable)
+    assert settings.secret_manager(rules=()) == settings.SecretManager(readable=readable, native=False)
     assert (get_secret_str("MISTRAL_API_KEY") == "vault-key") is readable
+
+
+@pytest.mark.parametrize(
+    ("system", "access_mode", "rules", "native"),
+    [
+        (KeyManagementSystem.CUSTOM, "read_only", _RUST_FOR_CUSTOM, True),
+        (KeyManagementSystem.CUSTOM, "read_only", (), False),
+        (
+            KeyManagementSystem.CUSTOM,
+            "read_only",
+            (SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.CUSTOM.value})),),
+            False,
+        ),
+        (KeyManagementSystem.CUSTOM, "write_only", _RUST_FOR_CUSTOM, False),
+        (None, "read_only", _RUST_FOR_CUSTOM, False),
+        (KeyManagementSystem.AWS_SECRET_MANAGER, "read_only", _RUST_FOR_CUSTOM, False),
+    ],
+)
+def test_secret_manager_is_native_only_when_the_rules_select_rust_for_its_system(
+    monkeypatch: pytest.MonkeyPatch,
+    system: KeyManagementSystem | None,
+    access_mode: str,
+    rules: catalog.Rules,
+    native: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "secret_manager_client", _VaultSecrets({}))
+    monkeypatch.setattr(litellm, "_key_management_system", system)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode=access_mode))
+
+    assert settings.secret_manager(rules=rules) == settings.SecretManager(
+        readable=access_mode != "write_only", native=native
+    )
 
 
 def test_secret_manager_is_not_readable_without_a_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "secret_manager_client", None)
 
-    assert settings.secret_manager() == settings.SecretManager(readable=False)
+    assert settings.secret_manager(rules=_RUST_FOR_CUSTOM) == settings.SecretManager(readable=False, native=False)
 
 
 def test_secret_manager_projects_custom_settings(monkeypatch: pytest.MonkeyPatch) -> None:
