@@ -40,7 +40,7 @@ class TestPresetCacheKeyFix:
         # This should NOT raise TypeError
         try:
             result = cache.get_cache_key(**kwargs_with_preset)
-            assert result is not None
+            assert result is None
             assert isinstance(result, str)
         except TypeError as e:
             if "multiple values for keyword argument" in str(e):
