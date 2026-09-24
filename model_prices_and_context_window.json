@@ -301,7 +301,25 @@
         "supported_modalities": ["text", "image"],
         "supported_output_modalities": ["video"]
     },
+    "amazon.nova-reel-v1:1": {
+        "litellm_provider": "bedrock",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.012,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supported_endpoints": ["/v1/videos"],
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["video"]
+    },
     "us.amazon.nova-reel-v1:0": {
+        "litellm_provider": "bedrock",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.012,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supported_endpoints": ["/v1/videos"],
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["video"]
+    },
+    "us.amazon.nova-reel-v1:1": {
         "litellm_provider": "bedrock",
         "mode": "video_generation",
         "output_cost_per_second": 0.012,
