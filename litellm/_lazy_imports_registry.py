@@ -164,6 +164,8 @@ LLM_CONFIG_NAMES: Final = (
     "LlamaAPIConfig",
     "TogetherAITextCompletionConfig",
     "CloudflareChatConfig",
+    "CloudflareEmbeddingConfig",
+    "CloudflareRerankConfig",
     "NovitaConfig",
     "PetalsConfig",
     "OllamaChatConfig",
@@ -727,6 +729,14 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "CloudflareChatConfig": (
         ".llms.cloudflare.chat.transformation",
         "CloudflareChatConfig",
+    ),
+    "CloudflareEmbeddingConfig": (
+        ".llms.cloudflare.embedding.transformation",
+        "CloudflareEmbeddingConfig",
+    ),
+    "CloudflareRerankConfig": (
+        ".llms.cloudflare.rerank.transformation",
+        "CloudflareRerankConfig",
     ),
     "NovitaConfig": (".llms.novita.chat.transformation", "NovitaConfig"),
     "PetalsConfig": (".llms.petals.completion.transformation", "PetalsConfig"),
