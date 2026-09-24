@@ -50,7 +50,6 @@ crypto_markers() {
 
 is_waived() {
   case "$1" in
-    */cryptography/hazmat/bindings/_rust.abi3.so) ;;
     */grpc/_cython/cygrpc*.so) ;;
     */hf_xet/hf_xet.abi3.so) ;;
     */_awscrt.abi3.so) ;;
