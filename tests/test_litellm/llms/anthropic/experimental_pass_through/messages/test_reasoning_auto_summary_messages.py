@@ -38,7 +38,11 @@ def _call_handler_and_capture_optional_params(thinking=None, **extra_kwargs):
     ) as mock_pcm:
         # Make get_provider_anthropic_messages_config return a non-None config
         # so the handler takes the native Anthropic path
-        mock_pcm.get_provider_anthropic_messages_config.return_value = MagicMock()
+        provider_config = MagicMock()
+        provider_config.translate_passthrough_params.side_effect = (
+            lambda optional_params, request_kwargs: dict(optional_params)
+        )
+        mock_pcm.get_provider_anthropic_messages_config.return_value = provider_config
         mock_handler.anthropic_messages_handler.return_value = MagicMock()
 
         kwargs = dict(extra_kwargs)
