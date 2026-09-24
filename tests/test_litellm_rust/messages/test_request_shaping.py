@@ -202,3 +202,36 @@ async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(mess
     _, headers = sent(messages_server)
     assert headers["x-scoped"] == "yes"
     assert "x-other" not in headers
+
+
+@pytest.mark.asyncio
+async def test_scoped_headers_override_extra_headers_which_override_forwarded_headers(
+    messages_server: RecordingServer,
+) -> None:
+    await litellm.anthropic.messages.acreate(
+        **arguments(
+            messages_server,
+            headers={"x-priority": "forwarded", "x-forwarded-only": "kept"},
+            extra_headers={"x-priority": "extra", "x-extra-only": "kept"},
+            provider_specific_header={"custom_llm_provider": "anthropic", "extra_headers": {"x-priority": "scoped"}},
+        )
+    )
+
+    _, headers = sent(messages_server)
+    assert {name: headers.get(name) for name in ("x-priority", "x-forwarded-only", "x-extra-only")} == {
+        "x-priority": "scoped",
+        "x-forwarded-only": "kept",
+        "x-extra-only": "kept",
+    }
+
+
+@pytest.mark.asyncio
+async def test_non_string_metadata_user_id_is_rejected_before_the_provider_call(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.expected_requests = 0
+
+    with pytest.raises(litellm.BadRequestError, match="metadata.user_id must be a string"):
+        await litellm.anthropic.messages.acreate(**arguments(messages_server, metadata={"user_id": 123}))
+
+    assert messages_server.requests == []

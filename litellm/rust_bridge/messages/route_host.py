@@ -38,9 +38,6 @@ class ModelCapabilities:
 
 @dataclass(frozen=True, slots=True)
 class MessagesShaping:
-    """What the native Messages route needs from the Python side to shape a request the way
-    the Python handler does: the model's cost-map flags and the caller's LiteLLM settings."""
-
     capabilities: ModelCapabilities
     drop_params: bool
     reasoning_auto_summary: bool
@@ -77,8 +74,6 @@ def _resolved_provider(model: str, custom_llm_provider: str | None) -> tuple[str
 
 
 def model_capabilities(model: str, custom_llm_provider: str | None) -> ModelCapabilities:
-    """The flags Python's Anthropic transforms read from the cost map, resolved under the
-    caller's provider exactly as `AnthropicModelInfo._supports_model_capability` does."""
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 

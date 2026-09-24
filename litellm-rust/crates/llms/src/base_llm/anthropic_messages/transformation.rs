@@ -25,8 +25,6 @@ impl MessagesAuthStrategy {
     }
 }
 
-/// What a provider transformation knows about the call beyond the request body: the
-/// model's capability flags and the caller's `drop_params` choice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessagesTransformContext {
     pub thinking: ThinkingContext,
@@ -71,8 +69,6 @@ pub trait BaseAnthropicMessagesConfig: Sync {
         false
     }
 
-    /// The forwarded headers with the provider credential applied. A request that already
-    /// carries the provider's auth header (or a bearer the provider accepts) is left alone.
     fn authenticate(
         &self,
         headers: Headers,
@@ -102,8 +98,188 @@ pub trait BaseAnthropicMessagesConfig: Sync {
         ]
     }
 
-    /// Headers the transformed request's features call for, such as `anthropic-beta`.
     fn request_headers(&self, headers: Headers, _request: &AnthropicMessagesRequest) -> Headers {
         headers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    const X_API_KEY: MessagesAuthStrategy = MessagesAuthStrategy::Header("x-api-key");
+
+    struct StubConfig {
+        strategy: MessagesAuthStrategy,
+        accepts_bearer: bool,
+    }
+
+    impl BaseAnthropicMessagesConfig for StubConfig {
+        fn get_complete_url(
+            &self,
+            _api_base: Option<&str>,
+            _model: &str,
+            _env_lookup: &dyn Fn(&str) -> Option<String>,
+        ) -> Result<String, Error> {
+            Ok(String::new())
+        }
+
+        fn resolve_api_key(
+            &self,
+            api_key: Option<&str>,
+            _env_lookup: &dyn Fn(&str) -> Option<String>,
+        ) -> Result<String, Error> {
+            api_key
+                .map(str::to_string)
+                .ok_or(Error::MissingField("api_key"))
+        }
+
+        fn auth_strategy(&self) -> MessagesAuthStrategy {
+            self.strategy
+        }
+
+        fn accepts_bearer_auth(&self) -> bool {
+            self.accepts_bearer
+        }
+    }
+
+    struct DefaultsConfig;
+
+    impl BaseAnthropicMessagesConfig for DefaultsConfig {
+        fn get_complete_url(
+            &self,
+            _api_base: Option<&str>,
+            _model: &str,
+            _env_lookup: &dyn Fn(&str) -> Option<String>,
+        ) -> Result<String, Error> {
+            Ok(String::new())
+        }
+
+        fn resolve_api_key(
+            &self,
+            api_key: Option<&str>,
+            _env_lookup: &dyn Fn(&str) -> Option<String>,
+        ) -> Result<String, Error> {
+            api_key
+                .map(str::to_string)
+                .ok_or(Error::MissingField("api_key"))
+        }
+    }
+
+    #[test]
+    fn default_config_adds_its_key_next_to_a_forwarded_bearer() {
+        assert_eq!(
+            DefaultsConfig.authenticate(
+                headers(&[("authorization", "Bearer forwarded")]),
+                Some("sk"),
+                &|_| None
+            ),
+            Ok(headers(&[
+                ("authorization", "Bearer forwarded"),
+                ("x-api-key", "sk")
+            ]))
+        );
+    }
+
+    #[test]
+    fn default_request_headers_are_the_given_headers() {
+        let request: AnthropicMessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "claude",
+            "max_tokens": 16,
+            "speed": "fast",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .unwrap();
+        assert_eq!(
+            DefaultsConfig.request_headers(headers(&[("x-api-key", "sk")]), &request),
+            headers(&[("x-api-key", "sk")])
+        );
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> Headers {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[rstest]
+    #[case::own_header_is_kept(
+        X_API_KEY,
+        false,
+        headers(&[("x-api-key", "forwarded")]),
+        None,
+        Ok(headers(&[("x-api-key", "forwarded")]))
+    )]
+    #[case::own_header_in_any_casing_is_kept(
+        X_API_KEY,
+        false,
+        headers(&[("X-Api-Key", "forwarded")]),
+        None,
+        Ok(headers(&[("X-Api-Key", "forwarded")]))
+    )]
+    #[case::accepted_bearer_is_kept(
+        X_API_KEY,
+        true,
+        headers(&[("authorization", "Bearer forwarded")]),
+        None,
+        Ok(headers(&[("authorization", "Bearer forwarded")]))
+    )]
+    #[case::bearer_the_provider_does_not_accept_gets_the_key_too(
+        X_API_KEY,
+        false,
+        headers(&[("authorization", "Bearer forwarded")]),
+        Some("sk"),
+        Ok(headers(&[("authorization", "Bearer forwarded"), ("x-api-key", "sk")]))
+    )]
+    #[case::blank_bearer_gets_the_key(
+        X_API_KEY,
+        true,
+        headers(&[("authorization", "Bearer  ")]),
+        Some("sk"),
+        Ok(headers(&[("authorization", "Bearer  "), ("x-api-key", "sk")]))
+    )]
+    #[case::key_goes_in_the_provider_header(
+        X_API_KEY,
+        false,
+        headers(&[("content-type", "application/json")]),
+        Some("sk"),
+        Ok(headers(&[("content-type", "application/json"), ("x-api-key", "sk")]))
+    )]
+    #[case::key_goes_in_a_bearer(
+        MessagesAuthStrategy::Bearer,
+        false,
+        headers(&[]),
+        Some("sk"),
+        Ok(headers(&[("authorization", "Bearer sk")]))
+    )]
+    #[case::bearer_strategy_keeps_a_forwarded_authorization(
+        MessagesAuthStrategy::Bearer,
+        false,
+        headers(&[("authorization", "Bearer forwarded")]),
+        None,
+        Ok(headers(&[("authorization", "Bearer forwarded")]))
+    )]
+    #[case::missing_key_is_an_error(
+        X_API_KEY,
+        false,
+        headers(&[]),
+        None,
+        Err(Error::MissingField("api_key"))
+    )]
+    fn default_authenticate_applies_the_key_unless_a_credential_is_forwarded(
+        #[case] strategy: MessagesAuthStrategy,
+        #[case] accepts_bearer: bool,
+        #[case] forwarded: Headers,
+        #[case] api_key: Option<&str>,
+        #[case] expected: Result<Headers, Error>,
+    ) {
+        let config = StubConfig {
+            strategy,
+            accepts_bearer,
+        };
+        assert_eq!(config.authenticate(forwarded, api_key, &|_| None), expected);
     }
 }

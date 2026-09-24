@@ -21,12 +21,8 @@ use crate::{
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
-/// Set on a request rejected before the provider was called, so the Python host maps it to
-/// the public 400 rather than a connection failure.
 const REQUEST_ERROR_MARKER: &str = "messages_request_error";
 
-/// The Anthropic Messages body fields a caller may pass besides `model` and `messages`,
-/// as `AnthropicMessagesRequestOptionalParams` declares them.
 const BODY_FIELDS: [&str; 22] = [
     "max_tokens",
     "metadata",
@@ -52,7 +48,6 @@ const BODY_FIELDS: [&str; 22] = [
     "safeguards",
 ];
 
-/// One `provider_specific_header` entry: headers scoped to a comma separated provider list.
 #[derive(Deserialize)]
 struct ProviderSpecificHeader {
     #[serde(default)]
@@ -83,6 +78,38 @@ impl ProviderSpecificHeaders {
                     .any(|scoped| scoped.trim() == provider)
             })
             .flat_map(|entry| entry.extra_headers)
+    }
+}
+
+fn merge_headers(
+    forwarded: Option<Map<String, Value>>,
+    extra_headers: Option<Map<String, Value>>,
+    scoped: impl IntoIterator<Item = (String, Value)>,
+) -> Option<Map<String, Value>> {
+    let merged: Map<String, Value> = forwarded
+        .into_iter()
+        .flatten()
+        .chain(extra_headers.into_iter().flatten())
+        .chain(scoped)
+        .collect();
+    (!merged.is_empty()).then_some(merged)
+}
+
+fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
+    match error {
+        Error::Transport(TransportError::Http { status, body }) => {
+            let error = RustUpstreamError::new_err((status, body));
+            error
+                .value(py)
+                .setattr("headers", Vec::<(String, String)>::new())?;
+            Ok(error)
+        }
+        Error::InvalidRequest(message) => {
+            let error = PyValueError::new_err(message);
+            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
+            Ok(error)
+        }
+        other => Ok(messages_error_to_pyerr(other)),
     }
 }
 
@@ -141,8 +168,6 @@ impl MessagesRouteHost {
         })
     }
 
-    /// Python's handler merges the forwarded `headers`, `extra_headers` and the
-    /// `provider_specific_header` entries scoped to this provider, in that order.
     fn merged_headers(
         &self,
         py: Python<'_>,
@@ -162,13 +187,11 @@ impl MessagesRouteHost {
             .transpose()?
             .into_iter()
             .flat_map(|headers| headers.matching(&provider));
-        let merged: Map<String, Value> = mapping("headers")?
-            .into_iter()
-            .flatten()
-            .chain(mapping("extra_headers")?.into_iter().flatten())
-            .chain(scoped)
-            .collect();
-        Ok((!merged.is_empty()).then_some(merged))
+        Ok(merge_headers(
+            mapping("headers")?,
+            mapping("extra_headers")?,
+            scoped,
+        ))
     }
 
     fn shaping(
@@ -250,22 +273,7 @@ impl RouteHost for MessagesRouteHost {
     }
 
     fn classify(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        let native = match error {
-            Error::Transport(TransportError::Http { status, body }) => {
-                let error = RustUpstreamError::new_err((status, body));
-                error
-                    .value(py)
-                    .setattr("headers", Vec::<(String, String)>::new())?;
-                error
-            }
-            Error::InvalidRequest(message) => {
-                let error = PyValueError::new_err(message);
-                error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
-                error
-            }
-            other => messages_error_to_pyerr(other),
-        };
-        Ok(self.map_failure(py, native))
+        Ok(self.map_failure(py, native_error(py, error)?))
     }
 
     fn host_error(error: &PyErr) -> Error {
@@ -276,5 +284,134 @@ impl RouteHost for MessagesRouteHost {
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::*;
+
+    fn map(value: Value) -> Map<String, Value> {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[rstest]
+    #[case::single_entry_for_the_provider(
+        json!({"custom_llm_provider": "anthropic", "extra_headers": {"Authorization": "Bearer t", "Custom-Header": "v"}}),
+        json!({"Authorization": "Bearer t", "Custom-Header": "v"}),
+    )]
+    #[case::single_entry_for_another_provider(
+        json!({"custom_llm_provider": "openai", "extra_headers": {"Authorization": "Bearer t"}}),
+        json!({}),
+    )]
+    #[case::provider_in_a_comma_separated_scope(
+        json!({"custom_llm_provider": "bedrock,anthropic,vertex_ai", "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"}}),
+        json!({"anthropic-beta": "context-1m-2025-08-07"}),
+    )]
+    #[case::provider_missing_from_a_comma_separated_scope(
+        json!({"custom_llm_provider": "bedrock,vertex_ai", "extra_headers": {"anthropic-beta": "test"}}),
+        json!({}),
+    )]
+    #[case::scope_with_spaces(
+        json!({"custom_llm_provider": "bedrock, anthropic , vertex_ai", "extra_headers": {"anthropic-beta": "test"}}),
+        json!({"anthropic-beta": "test"}),
+    )]
+    #[case::scope_names_must_match_exactly(
+        json!({"custom_llm_provider": "anthropic_text", "extra_headers": {"anthropic-beta": "test"}}),
+        json!({}),
+    )]
+    #[case::entries_scope_independently(
+        json!([
+            {"custom_llm_provider": "anthropic,bedrock,vertex_ai", "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"}},
+            {"custom_llm_provider": "bedrock", "extra_headers": {"x-bedrock-only": "no"}},
+            {"custom_llm_provider": "anthropic", "extra_headers": {"authorization": "Bearer sk-ant-oat01-fake-token"}}
+        ]),
+        json!({"anthropic-beta": "context-1m-2025-08-07", "authorization": "Bearer sk-ant-oat01-fake-token"}),
+    )]
+    #[case::later_entries_win(
+        json!([
+            {"custom_llm_provider": "anthropic", "extra_headers": {"x-scoped": "first"}},
+            {"custom_llm_provider": "anthropic", "extra_headers": {"x-scoped": "second"}}
+        ]),
+        json!({"x-scoped": "second"}),
+    )]
+    #[case::empty_list(json!([]), json!({}))]
+    #[case::entry_without_scope(json!({"extra_headers": {"x-scoped": "yes"}}), json!({}))]
+    #[case::entry_without_headers(json!({"custom_llm_provider": "anthropic"}), json!({}))]
+    fn provider_specific_headers_match_the_scoped_provider(
+        #[case] configured: Value,
+        #[case] expected: Value,
+    ) {
+        let headers: ProviderSpecificHeaders = serde_json::from_value(configured).unwrap();
+        assert_eq!(
+            headers
+                .matching("anthropic")
+                .collect::<Map<String, Value>>(),
+            map(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::scoped_over_extra_over_forwarded(
+        Some(json!({"X-Priority": "forwarded", "X-Forwarded-Only": "keep"})),
+        Some(json!({"X-Priority": "extra", "X-Extra-Only": "also-keep"})),
+        json!({"X-Priority": "provider", "X-Provider-Only": "keep-this-too"}),
+        Some(json!({
+            "X-Priority": "provider",
+            "X-Forwarded-Only": "keep",
+            "X-Extra-Only": "also-keep",
+            "X-Provider-Only": "keep-this-too"
+        })),
+    )]
+    #[case::extra_over_forwarded(
+        Some(json!({"X-Priority": "forwarded"})),
+        Some(json!({"X-Priority": "extra"})),
+        json!({}),
+        Some(json!({"X-Priority": "extra"})),
+    )]
+    #[case::only_extra_headers(
+        None,
+        Some(json!({"X-Custom-Header": "from-kwargs", "X-Auth-Token": "token123"})),
+        json!({}),
+        Some(json!({"X-Custom-Header": "from-kwargs", "X-Auth-Token": "token123"})),
+    )]
+    #[case::only_scoped(None, None, json!({"x-scoped": "yes"}), Some(json!({"x-scoped": "yes"})))]
+    #[case::nothing(None, Some(json!({})), json!({}), None)]
+    fn headers_merge_forwarded_then_extra_then_scoped(
+        #[case] forwarded: Option<Value>,
+        #[case] extra_headers: Option<Value>,
+        #[case] scoped: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            merge_headers(forwarded.map(map), extra_headers.map(map), map(scoped)),
+            expected.map(map)
+        );
+    }
+
+    #[rstest]
+    #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
+    #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
+    #[case::upstream_failure(
+        Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),
+        false,
+    )]
+    fn only_request_rejections_carry_the_request_error_marker(
+        #[case] error: Error,
+        #[case] marked: bool,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let native = native_error(py, error).unwrap();
+            let marker = native
+                .value(py)
+                .getattr_opt(REQUEST_ERROR_MARKER)
+                .unwrap()
+                .map(|value| value.extract::<bool>().unwrap());
+            assert_eq!(marker.unwrap_or(false), marked);
+        });
     }
 }

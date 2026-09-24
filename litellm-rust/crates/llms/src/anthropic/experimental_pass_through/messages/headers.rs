@@ -1,6 +1,3 @@
-//! Request headers for the direct Anthropic Messages API: credential resolution, including
-//! OAuth tokens, and the `anthropic-beta` values a request's features call for.
-
 use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
 use serde_json::Value;
 
@@ -35,8 +32,16 @@ fn without(headers: Headers, names: &[&str]) -> Headers {
         .collect()
 }
 
+fn existing_betas(headers: &[(String, String)]) -> impl Iterator<Item = String> + '_ {
+    headers
+        .iter()
+        .filter(|(header, _)| header.eq_ignore_ascii_case(BETA_HEADER))
+        .flat_map(|(_, value)| split_beta_values(Some(value)))
+}
+
 fn with_oauth_bearer(headers: Headers, bearer: String) -> Headers {
-    let beta = merge_oauth_beta(header_value(&headers, BETA_HEADER));
+    let beta =
+        join_beta_values(existing_betas(&headers).chain([ANTHROPIC_OAUTH_BETA_HEADER.to_string()]));
     without(headers, &[API_KEY_HEADER, AUTHORIZATION, BETA_HEADER])
         .into_iter()
         .chain([
@@ -47,20 +52,10 @@ fn with_oauth_bearer(headers: Headers, bearer: String) -> Headers {
         .collect()
 }
 
-fn merge_oauth_beta(existing: Option<&str>) -> String {
-    join_beta_values(
-        split_beta_values(existing).chain(std::iter::once(ANTHROPIC_OAUTH_BETA_HEADER.to_string())),
-    )
-}
-
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-/// Python's `validate_anthropic_messages_environment` credential steps: an OAuth token in
-/// the forwarded `authorization` header or in `api_key` is the whole credential; otherwise a
-/// forwarded auth header is kept, else the key (`ANTHROPIC_API_KEY`) or the bearer token
-/// (`ANTHROPIC_AUTH_TOKEN`) is resolved.
 pub fn authenticate(
     headers: Headers,
     api_key: Option<&str>,
@@ -140,8 +135,6 @@ fn messages_carry_output_config(request: &AnthropicMessagesRequest) -> bool {
         .any(|message| message.extra.contains_key("output_config"))
 }
 
-/// The `anthropic-beta` values the request's features need, as Python's
-/// `_update_headers_with_anthropic_beta` derives them for the direct API.
 pub fn feature_betas(request: &AnthropicMessagesRequest) -> Vec<&'static str> {
     let tools = request.tools.as_deref();
     [
@@ -161,10 +154,8 @@ pub fn feature_betas(request: &AnthropicMessagesRequest) -> Vec<&'static str> {
     .collect()
 }
 
-/// Merge the request's feature betas into the outgoing headers. Headers without any beta
-/// value are returned untouched.
 pub fn with_feature_betas(headers: Headers, request: &AnthropicMessagesRequest) -> Headers {
-    let existing = split_beta_values(header_value(&headers, BETA_HEADER)).collect::<Vec<_>>();
+    let existing = existing_betas(&headers).collect::<Vec<_>>();
     let features = feature_betas(request);
     if existing.is_empty() && features.is_empty() {
         return headers;
@@ -182,10 +173,17 @@ pub fn with_feature_betas(headers: Headers, request: &AnthropicMessagesRequest) 
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::json;
 
     use super::*;
+
+    const OAUTH_TOKEN: &str = "sk-ant-oat01-token";
+    const OAUTH_BEARER: &str = "Bearer sk-ant-oat01-token";
+    const REGULAR_KEY: &str = "sk-ant-api03-regular";
+    const BROWSER_ACCESS: (&str, &str) = ("anthropic-dangerous-direct-browser-access", "true");
+
+    type Env = &'static [(&'static str, &'static str)];
 
     fn request(fields: Value) -> AnthropicMessagesRequest {
         let mut body =
@@ -196,137 +194,448 @@ mod tests {
         serde_json::from_value(body).unwrap()
     }
 
-    fn header(name: &str, value: &str) -> (String, String) {
-        (name.to_string(), value.to_string())
+    fn headers(pairs: &[(&str, &str)]) -> Headers {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
     }
 
-    fn no_env(_: &str) -> Option<String> {
-        None
+    fn betas(values: &[&str]) -> String {
+        values.join(",")
     }
 
-    #[test]
-    fn forwarded_oauth_bearer_replaces_the_key_and_adds_oauth_headers() {
-        let headers = authenticate(
-            vec![
-                header("X-Api-Key", "sk-ant-api03-deployment"),
-                header("Authorization", "Bearer sk-ant-oat01-token"),
-                header("anthropic-beta", "web-search-2025-03-05"),
-            ],
-            Some("sk-ant-api03-deployment"),
-            &no_env,
-        )
-        .unwrap();
-        assert_eq!(header_value(&headers, "x-api-key"), None);
-        assert_eq!(
-            header_value(&headers, "authorization"),
-            Some("Bearer sk-ant-oat01-token")
-        );
-        assert_eq!(
-            header_value(&headers, "anthropic-beta"),
-            Some("oauth-2025-04-20,web-search-2025-03-05")
-        );
-        assert_eq!(
-            header_value(&headers, DIRECT_BROWSER_ACCESS_HEADER),
-            Some("true")
-        );
+    #[fixture]
+    fn no_env() -> Env {
+        &[]
     }
 
-    #[test]
-    fn oauth_api_key_authenticates_as_a_bearer() {
-        let headers = authenticate(vec![], Some("sk-ant-oat01-token"), &no_env).unwrap();
-        assert_eq!(
-            header_value(&headers, "authorization"),
-            Some("Bearer sk-ant-oat01-token")
-        );
-        assert_eq!(
-            header_value(&headers, "anthropic-beta"),
-            Some("oauth-2025-04-20")
-        );
-        assert_eq!(header_value(&headers, "x-api-key"), None);
+    #[fixture]
+    fn full_env() -> Env {
+        &[
+            ("ANTHROPIC_API_KEY", "sk-env"),
+            ("ANTHROPIC_AUTH_TOKEN", "env-token"),
+        ]
     }
 
-    #[test]
-    fn forwarded_auth_headers_are_kept_without_resolving_a_key() {
-        let forwarded = vec![header("Authorization", "Bearer some-proxy-token")];
-        let headers = authenticate(forwarded.clone(), None, &no_env).unwrap();
-        assert_eq!(headers, forwarded);
-        let keyed = vec![header("x-api-key", "caller-key")];
-        assert_eq!(
-            authenticate(keyed.clone(), Some("sk-other"), &no_env).unwrap(),
-            keyed
-        );
-    }
-
-    #[rstest]
-    #[case(Some("sk-param"), &[], "x-api-key", "sk-param")]
-    #[case(Some("  "), &[("ANTHROPIC_API_KEY", "sk-env")], "x-api-key", "sk-env")]
-    #[case(None, &[("ANTHROPIC_AUTH_TOKEN", "tok")], "authorization", "Bearer tok")]
-    #[case(None, &[("ANTHROPIC_API_KEY", "sk-ant-oat01-env")], "authorization", "Bearer sk-ant-oat01-env")]
-    fn credential_resolution_order_matches_python(
-        #[case] api_key: Option<&str>,
-        #[case] env: &[(&str, &str)],
-        #[case] expected_header: &str,
-        #[case] expected_value: &str,
-    ) {
+    fn authenticate_with(
+        forwarded: &[(&str, &str)],
+        api_key: Option<&str>,
+        env: Env,
+    ) -> Result<Headers, litellm_auth::Error> {
         let lookup = |name: &str| {
             env.iter()
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.to_string())
         };
-        let headers = authenticate(vec![], api_key, &lookup).unwrap();
-        assert_eq!(headers, vec![header(expected_header, expected_value)]);
+        authenticate(headers(forwarded), api_key, &lookup)
     }
 
-    #[test]
-    fn missing_credentials_are_an_auth_error() {
+    #[rstest]
+    #[case::forwarded_bearer_drops_forwarded_and_deployment_keys(
+        &[("X-Api-Key", REGULAR_KEY), ("Authorization", OAUTH_BEARER)],
+        Some(REGULAR_KEY),
+        OAUTH_BEARER,
+        &[],
+    )]
+    #[case::forwarded_bearer_in_uppercase_authorization_header(
+        &[("AUTHORIZATION", OAUTH_BEARER)],
+        None,
+        OAUTH_BEARER,
+        &[],
+    )]
+    #[case::forwarded_bearer_keeps_unrelated_headers_in_place(
+        &[("anthropic-version", "2023-06-01"), ("authorization", OAUTH_BEARER)],
+        None,
+        OAUTH_BEARER,
+        &[("anthropic-version", "2023-06-01")],
+    )]
+    #[case::forwarded_bearer_wins_over_an_oauth_api_key(
+        &[("authorization", OAUTH_BEARER)],
+        Some("sk-ant-oat01-deployment"),
+        OAUTH_BEARER,
+        &[],
+    )]
+    #[case::api_key_authenticates_as_a_bearer(&[], Some(OAUTH_TOKEN), OAUTH_BEARER, &[])]
+    #[case::api_key_removes_a_forwarded_x_api_key(
+        &[("x-api-key", OAUTH_TOKEN)],
+        Some(OAUTH_TOKEN),
+        OAUTH_BEARER,
+        &[],
+    )]
+    #[case::api_key_replaces_a_forwarded_non_oauth_bearer(
+        &[("Authorization", "Bearer some-proxy-token")],
+        Some(OAUTH_TOKEN),
+        OAUTH_BEARER,
+        &[],
+    )]
+    fn oauth_token_is_the_whole_credential(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] api_key: Option<&str>,
+        #[case] expected_bearer: &str,
+        #[case] kept: &[(&str, &str)],
+        full_env: Env,
+    ) {
+        let expected = kept
+            .iter()
+            .copied()
+            .chain([
+                ("authorization", expected_bearer),
+                ("anthropic-beta", ANTHROPIC_OAUTH_BETA_HEADER),
+                BROWSER_ACCESS,
+            ])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            authenticate_with(forwarded, api_key, full_env).unwrap(),
+            headers(&expected)
+        );
+    }
+
+    #[rstest]
+    #[case::forwarded_bearer_merges_a_differently_cased_beta_header(
+        &[("Anthropic-Beta", "web-search-2025-03-05"), ("authorization", OAUTH_BEARER)],
+        None,
+    )]
+    #[case::forwarded_bearer_dedupes_an_existing_oauth_beta(
+        &[("anthropic-beta", "web-search-2025-03-05, oauth-2025-04-20"), ("authorization", OAUTH_BEARER)],
+        None,
+    )]
+    #[case::api_key_merges_the_existing_beta_header(
+        &[("anthropic-beta", " web-search-2025-03-05 ,")],
+        Some(OAUTH_TOKEN),
+    )]
+    #[case::forwarded_bearer_unions_every_beta_header_casing(
+        &[("anthropic-beta", "oauth-2025-04-20"), ("ANTHROPIC-BETA", "web-search-2025-03-05"), ("authorization", OAUTH_BEARER)],
+        None,
+    )]
+    fn oauth_beta_merges_into_existing_betas(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] api_key: Option<&str>,
+        no_env: Env,
+    ) {
+        assert_eq!(
+            authenticate_with(forwarded, api_key, no_env).unwrap(),
+            headers(&[
+                ("authorization", OAUTH_BEARER),
+                (
+                    "anthropic-beta",
+                    &betas(&[ANTHROPIC_OAUTH_BETA_HEADER, "web-search-2025-03-05"])
+                ),
+                BROWSER_ACCESS,
+            ])
+        );
+    }
+
+    #[rstest]
+    #[case::x_api_key_over_the_deployment_key(&[("x-api-key", "caller-key")], Some("sk-other"))]
+    #[case::uppercase_x_api_key(&[("X-API-KEY", "caller-key")], None)]
+    #[case::non_oauth_bearer(&[("Authorization", "Bearer some-proxy-token")], None)]
+    #[case::non_oauth_bearer_over_a_regular_api_key(
+        &[("authorization", "Bearer sk-ant-api03-forwarded")],
+        Some(REGULAR_KEY),
+    )]
+    #[case::oauth_token_without_the_bearer_scheme(&[("authorization", OAUTH_TOKEN)], None)]
+    #[case::oauth_token_behind_a_lowercase_bearer_scheme(
+        &[("authorization", "bearer sk-ant-oat01-token")],
+        None,
+    )]
+    fn forwarded_auth_header_is_kept_untouched(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] api_key: Option<&str>,
+        full_env: Env,
+    ) {
+        assert_eq!(
+            authenticate_with(forwarded, api_key, full_env).unwrap(),
+            headers(forwarded)
+        );
+    }
+
+    #[rstest]
+    #[case::api_key_param(Some("sk-param"), &[], ("x-api-key", "sk-param"))]
+    #[case::api_key_param_over_env_key_and_auth_token(
+        Some("sk-param"),
+        &[("ANTHROPIC_API_KEY", "sk-env"), ("ANTHROPIC_AUTH_TOKEN", "env-token")],
+        ("x-api-key", "sk-param"),
+    )]
+    #[case::env_key_without_a_param(None, &[("ANTHROPIC_API_KEY", "sk-env")], ("x-api-key", "sk-env"))]
+    #[case::env_key_when_the_param_is_empty(Some(""), &[("ANTHROPIC_API_KEY", "sk-env")], ("x-api-key", "sk-env"))]
+    #[case::env_key_when_the_param_is_whitespace(
+        Some("  "),
+        &[("ANTHROPIC_API_KEY", "sk-env")],
+        ("x-api-key", "sk-env"),
+    )]
+    #[case::env_key_over_auth_token(
+        None,
+        &[("ANTHROPIC_API_KEY", "sk-env"), ("ANTHROPIC_AUTH_TOKEN", "env-token")],
+        ("x-api-key", "sk-env"),
+    )]
+    #[case::auth_token_as_a_bearer(
+        None,
+        &[("ANTHROPIC_AUTH_TOKEN", "env-token")],
+        ("authorization", "Bearer env-token"),
+    )]
+    #[case::auth_token_when_the_env_key_is_whitespace(
+        None,
+        &[("ANTHROPIC_API_KEY", " \t"), ("ANTHROPIC_AUTH_TOKEN", "env-token")],
+        ("authorization", "Bearer env-token"),
+    )]
+    #[case::oauth_env_key_as_a_plain_bearer(
+        None,
+        &[("ANTHROPIC_API_KEY", "sk-ant-oat01-env")],
+        ("authorization", "Bearer sk-ant-oat01-env"),
+    )]
+    fn credential_is_resolved_after_the_existing_headers(
+        #[case] api_key: Option<&str>,
+        #[case] env: Env,
+        #[case] expected: (&str, &str),
+    ) {
+        let forwarded = [("anthropic-beta", "web-search-2025-03-05")];
+        assert_eq!(
+            authenticate_with(&forwarded, api_key, env).unwrap(),
+            headers(&[forwarded[0], expected])
+        );
+    }
+
+    #[rstest]
+    #[case::no_credentials(&[], None, &[])]
+    #[case::empty_api_key(&[], Some(""), &[])]
+    #[case::whitespace_only_env_values(
+        &[],
+        None,
+        &[("ANTHROPIC_API_KEY", "  "), ("ANTHROPIC_AUTH_TOKEN", " \t")],
+    )]
+    #[case::unrelated_forwarded_headers(&[("anthropic-beta", "web-search-2025-03-05")], None, &[])]
+    fn missing_credentials_are_an_auth_error(
+        #[case] forwarded: &[(&str, &str)],
+        #[case] api_key: Option<&str>,
+        #[case] env: Env,
+    ) {
         assert!(matches!(
-            authenticate(vec![], None, &no_env),
-            Err(litellm_auth::Error::MissingApiKey { .. })
+            authenticate_with(forwarded, api_key, env),
+            Err(litellm_auth::Error::MissingApiKey {
+                provider: "Anthropic",
+                environment_variable: "ANTHROPIC_API_KEY",
+            })
         ));
     }
 
     #[rstest]
-    #[case(json!({}), &[])]
-    #[case(json!({"output_format": {"type": "json_schema"}}), &[beta::STRUCTURED_OUTPUT])]
-    #[case(json!({"output_config": {"format": {"type": "json_schema"}}}), &[beta::STRUCTURED_OUTPUT])]
-    #[case(json!({"output_config": {"effort": "high"}}), &[])]
-    #[case(json!({"speed": "fast"}), &[beta::FAST_MODE_2026_02_01])]
-    #[case(json!({"speed": "standard"}), &[])]
-    #[case(json!({"compaction": {"enabled": true}}), &[beta::COMPACT_2026_09_04])]
-    #[case(json!({"tools": [{"type": "advisor_20260301"}]}), &[beta::ADVISOR_TOOL_2026_03_01])]
-    #[case(json!({"tools": [{"type": "tool_search_tool_regex_20251119"}]}), &[beta::ADVANCED_TOOL_USE_2025_11_20])]
-    #[case(
+    #[case::no_features(json!({}), &[])]
+    #[case::output_format(json!({"output_format": {"type": "json_schema"}}), &[beta::STRUCTURED_OUTPUT])]
+    #[case::null_output_format(json!({"output_format": null}), &[])]
+    #[case::output_config_format(
+        json!({"output_config": {"format": {"type": "json_schema"}, "effort": "xhigh"}}),
+        &[beta::STRUCTURED_OUTPUT]
+    )]
+    #[case::null_output_config_format(json!({"output_config": {"format": null}}), &[])]
+    #[case::top_level_output_config_without_format(json!({"output_config": {"effort": "high"}}), &[])]
+    #[case::fast_speed(json!({"speed": "fast"}), &[beta::FAST_MODE_2026_02_01])]
+    #[case::standard_speed(json!({"speed": "standard"}), &[])]
+    #[case::compaction_param(json!({"compaction": {"enabled": true}}), &[beta::COMPACT_2026_09_04])]
+    #[case::empty_compaction_param(json!({"compaction": {}}), &[beta::COMPACT_2026_09_04])]
+    #[case::signed_compaction_block_in_history(
+        json!({"messages": [
+            {"role": "assistant", "content": [{"type": "compaction", "content": "summary", "signature": "sig"}]},
+            {"role": "user", "content": "Continue"},
+        ]}),
+        &[beta::COMPACT_2026_09_04]
+    )]
+    #[case::unsigned_compaction_block_in_history(
+        json!({"messages": [
+            {"role": "assistant", "content": [{"type": "compaction", "content": "summary", "signature": ""}]},
+            {"role": "user", "content": "Continue"},
+        ]}),
+        &[]
+    )]
+    #[case::advisor_tool(
+        json!({"tools": [{"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-4-6"}]}),
+        &[beta::ADVISOR_TOOL_2026_03_01]
+    )]
+    #[case::no_tools(json!({"tools": []}), &[])]
+    #[case::regex_tool_search(
+        json!({"tools": [{"type": "tool_search_tool_regex_20251119"}]}),
+        &[beta::ADVANCED_TOOL_USE_2025_11_20]
+    )]
+    #[case::bm25_tool_search(
+        json!({"tools": [{"type": "tool_search_tool_bm25_20251119"}]}),
+        &[beta::ADVANCED_TOOL_USE_2025_11_20]
+    )]
+    #[case::unrelated_server_tool(json!({"tools": [{"type": "web_search_20250305", "name": "web_search"}]}), &[])]
+    #[case::only_compact_edits(
+        json!({"context_management": {"edits": [{"type": "compact_20260112"}]}}),
+        &[beta::COMPACT_2026_01_12]
+    )]
+    #[case::only_other_edits(
+        json!({"context_management": {"edits": [{"type": "clear_tool_uses_20250919", "keep": {"type": "tool_uses", "value": 3}}]}}),
+        &[beta::CONTEXT_MANAGEMENT_2025_06_27]
+    )]
+    #[case::compact_and_other_edits(
         json!({"context_management": {"edits": [{"type": "compact_20260112"}, {"type": "clear_tool_uses_20250919"}]}}),
         &[beta::COMPACT_2026_01_12, beta::CONTEXT_MANAGEMENT_2025_06_27]
     )]
-    #[case(
+    #[case::edit_without_a_type(json!({"context_management": {"edits": [{}]}}), &[beta::CONTEXT_MANAGEMENT_2025_06_27])]
+    #[case::empty_edits(json!({"context_management": {"edits": []}}), &[])]
+    #[case::context_management_without_edits(json!({"context_management": {}}), &[])]
+    #[case::per_message_output_config(
         json!({"messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}]}),
+        &[beta::PER_TURN_CONTROL_2026_07_01]
+    )]
+    #[case::per_message_null_output_config(
+        json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &[beta::PER_TURN_CONTROL_2026_07_01]
     )]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), expected);
     }
 
+    #[rstest]
+    #[case::no_betas(&[("x-api-key", "k"), ("anthropic-version", "2023-06-01")], json!({}))]
+    #[case::blank_beta_header(&[("Anthropic-Beta", " , "), ("x-api-key", "k")], json!({}))]
+    fn headers_without_any_beta_value_are_untouched(
+        #[case] input: &[(&str, &str)],
+        #[case] fields: Value,
+    ) {
+        assert_eq!(
+            with_feature_betas(headers(input), &request(fields)),
+            headers(input)
+        );
+    }
+
+    #[rstest]
+    #[case::feature_beta_is_appended(
+        &[("x-api-key", "k")],
+        json!({"speed": "fast"}),
+        &[("x-api-key", "k"), ("anthropic-beta", beta::FAST_MODE_2026_02_01)],
+    )]
+    #[case::existing_betas_are_normalized_without_features(
+        &[("Anthropic-Beta", "web-search-2025-03-05, interleaved-thinking-2025-05-14 ,web-search-2025-03-05"), ("x-api-key", "k")],
+        json!({}),
+        &[("x-api-key", "k"), ("anthropic-beta", "interleaved-thinking-2025-05-14,web-search-2025-03-05")],
+    )]
+    #[case::existing_advisor_beta_is_kept_without_an_advisor_tool(
+        &[("anthropic-beta", beta::ADVISOR_TOOL_2026_03_01)],
+        json!({"tools": []}),
+        &[("anthropic-beta", beta::ADVISOR_TOOL_2026_03_01)],
+    )]
+    #[case::feature_already_sent_is_not_duplicated(
+        &[("anthropic-beta", beta::FAST_MODE_2026_02_01)],
+        json!({"speed": "fast"}),
+        &[("anthropic-beta", beta::FAST_MODE_2026_02_01)],
+    )]
+    fn feature_betas_merge_into_the_headers(
+        #[case] input: &[(&str, &str)],
+        #[case] fields: Value,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        assert_eq!(
+            with_feature_betas(headers(input), &request(fields)),
+            headers(expected)
+        );
+    }
+
     #[test]
-    fn feature_betas_merge_into_the_existing_header_sorted() {
-        let headers = with_feature_betas(
-            vec![header(
-                "Anthropic-Beta",
-                "web-search-2025-03-05, compact-2026-09-04",
-            )],
+    fn differently_cased_beta_header_is_replaced_by_one_sorted_header() {
+        let merged = with_feature_betas(
+            headers(&[("Anthropic-Beta", "interleaved-thinking-2025-05-14")]),
+            &request(
+                json!({"messages": [{"role": "system", "content": "env", "output_config": {"effort": "low"}}]}),
+            ),
+        );
+        assert_eq!(
+            merged,
+            headers(&[(
+                "anthropic-beta",
+                &betas(&[
+                    "interleaved-thinking-2025-05-14",
+                    beta::PER_TURN_CONTROL_2026_07_01
+                ])
+            )])
+        );
+    }
+
+    #[test]
+    fn every_beta_header_casing_is_unioned_into_one_header() {
+        let merged = with_feature_betas(
+            headers(&[
+                ("anthropic-beta", "interleaved-thinking-2025-05-14"),
+                ("Anthropic-Beta", "web-search-2025-03-05"),
+            ]),
             &request(json!({"speed": "fast"})),
         );
         assert_eq!(
-            headers,
-            vec![header(
+            merged,
+            headers(&[(
                 "anthropic-beta",
-                "compact-2026-09-04,fast-mode-2026-02-01,web-search-2025-03-05"
-            )]
+                &betas(&[
+                    beta::FAST_MODE_2026_02_01,
+                    "interleaved-thinking-2025-05-14",
+                    "web-search-2025-03-05"
+                ])
+            )])
         );
-        let untouched = vec![header("x-api-key", "k")];
+    }
+
+    #[test]
+    fn unknown_client_betas_survive_alongside_the_added_one() {
+        let client_betas = [
+            "claude-code-20250219",
+            "interleaved-thinking-2025-05-14",
+            beta::CONTEXT_MANAGEMENT_2025_06_27,
+            beta::PER_TURN_CONTROL_2026_07_01,
+            "effort-2025-11-24",
+        ];
+        let merged = with_feature_betas(
+            headers(&[("anthropic-beta", &betas(&client_betas))]),
+            &request(
+                json!({"messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}]}),
+            ),
+        );
         assert_eq!(
-            with_feature_betas(untouched.clone(), &request(json!({}))),
-            untouched
+            merged,
+            headers(&[(
+                "anthropic-beta",
+                &betas(&[
+                    "claude-code-20250219",
+                    beta::CONTEXT_MANAGEMENT_2025_06_27,
+                    "effort-2025-11-24",
+                    "interleaved-thinking-2025-05-14",
+                    beta::PER_TURN_CONTROL_2026_07_01,
+                ])
+            )])
+        );
+    }
+
+    #[test]
+    fn every_feature_merges_with_the_oauth_beta_sorted_and_last() {
+        let oauth_headers = authenticate_with(&[], Some(OAUTH_TOKEN), &[]).unwrap();
+        let all_features = request(json!({
+            "compaction": {"enabled": true},
+            "output_format": {"type": "json_schema"},
+            "speed": "fast",
+            "tools": [{"type": "advisor_20260301"}, {"type": "tool_search_tool_bm25_20251119"}],
+            "context_management": {"edits": [{"type": "compact_20260112"}, {"type": "clear_thinking_20251015"}]},
+            "messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}],
+        }));
+        assert_eq!(
+            with_feature_betas(oauth_headers, &all_features),
+            headers(&[
+                ("authorization", OAUTH_BEARER),
+                BROWSER_ACCESS,
+                (
+                    "anthropic-beta",
+                    &betas(&[
+                        beta::ADVANCED_TOOL_USE_2025_11_20,
+                        beta::ADVISOR_TOOL_2026_03_01,
+                        beta::COMPACT_2026_01_12,
+                        beta::COMPACT_2026_09_04,
+                        beta::CONTEXT_MANAGEMENT_2025_06_27,
+                        beta::FAST_MODE_2026_02_01,
+                        ANTHROPIC_OAUTH_BETA_HEADER,
+                        beta::PER_TURN_CONTROL_2026_07_01,
+                        beta::STRUCTURED_OUTPUT,
+                    ])
+                ),
+            ])
         );
     }
 }
