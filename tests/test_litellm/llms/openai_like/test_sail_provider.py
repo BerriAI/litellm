@@ -15,6 +15,7 @@ from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 SAIL_BASE_URL = "https://api.sailresearch.com/v1"
 SAIL_CHAT_COMPLETIONS = f"{SAIL_BASE_URL}/chat/completions"
 SAIL_RESPONSES = f"{SAIL_BASE_URL}/responses"
+SAIL_MESSAGES = f"{SAIL_BASE_URL}/messages"
 
 MODEL = "sail/zai-org/GLM-5.3"
 
@@ -73,6 +74,19 @@ def _responses_payload() -> dict:
         "parallel_tool_calls": True,
         "usage": {"input_tokens": 2, "output_tokens": 2, "total_tokens": 4},
         "error": None,
+    }
+
+
+def _messages_payload() -> dict:
+    return {
+        "id": "msg_sail",
+        "type": "message",
+        "role": "assistant",
+        "model": "zai-org/GLM-5.3-Flash",
+        "content": [{"type": "text", "text": "sail response"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 2, "output_tokens": 2},
     }
 
 
@@ -235,6 +249,41 @@ class TestSailRequestShape:
             litellm.transcription(model=MODEL, file=wav)
 
         assert not route.called
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_sail_anthropic_messages_posts_to_messages_endpoint(self, respx_mock: respx.Router):
+        respx_mock.post(SAIL_MESSAGES).respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(
+            model="sail/zai-org/GLM-5.3-Flash",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=50,
+        )
+
+        assert len(respx_mock.calls) == 1
+        request = respx_mock.calls[0].request
+        assert request.url == SAIL_MESSAGES
+        assert request.headers["Authorization"] == "Bearer sk-sail-test"
+        body = json.loads(request.content)
+        assert body["model"] == "zai-org/GLM-5.3-Flash"
+        assert body["max_tokens"] == 50
+
+    @pytest.mark.asyncio
+    @pytest.mark.respx()
+    async def test_sail_anthropic_messages_honors_api_base_env(
+        self, respx_mock: respx.Router, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("SAIL_API_BASE", "https://sail.internal.example/v2")
+        route = respx_mock.post("https://sail.internal.example/v2/v1/messages").respond(json=_messages_payload())
+
+        await litellm.anthropic_messages(
+            model="sail/zai-org/GLM-5.3-Flash",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=50,
+        )
+
+        assert route.called
 
 
 class TestSailCostTracking:

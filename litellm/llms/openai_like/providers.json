@@ -205,7 +205,7 @@
     "base_url": "https://api.sailresearch.com/v1",
     "api_key_env": "SAIL_API_KEY",
     "api_base_env": "SAIL_API_BASE",
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"],
     "param_mappings": {
       "max_tokens": "max_completion_tokens"
     }
