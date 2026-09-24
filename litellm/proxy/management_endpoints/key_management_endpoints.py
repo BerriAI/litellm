@@ -79,6 +79,10 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    LegacyEncryptionUnavailableError,
+    require_legacy_reader,
+)
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -5174,6 +5178,11 @@ async def _rotate_master_key(
     import prisma
 
     from litellm.proxy.proxy_server import proxy_config
+
+    try:
+        require_legacy_reader("rotate the master key")
+    except LegacyEncryptionUnavailableError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": str(error)}) from error
 
     try:
         models: list | None = cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence

@@ -29,6 +29,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
     is_versioned_gcm,
     legacy_encryption_available,
+    require_legacy_reader,
 )
 from litellm.proxy.common_utils.fips import FipsModeError
 
@@ -177,7 +178,7 @@ def test_versioned_gcm_values_never_import_nacl(monkeypatch):
     assert decrypt_value_helper(legacy_v2, key="t") == "v2-secret"
 
 
-def test_legacy_ciphertext_without_pynacl_logs_the_reencrypt_path_and_keeps_the_stored_value(monkeypatch, caplog):
+def test_legacy_ciphertext_without_pynacl_logs_the_reencrypt_path_and_never_returns_the_blob(monkeypatch, caplog):
     legacy = _legacy_nacl_ciphertext("legacy-secret", _sha256_key())
     assert legacy_encryption_available()
     monkeypatch.setitem(sys.modules, "nacl", None)
@@ -185,7 +186,7 @@ def test_legacy_ciphertext_without_pynacl_logs_the_reencrypt_path_and_keeps_the_
     assert not legacy_encryption_available()
 
     with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-        assert decrypt_value_helper(legacy, key="t", exception_type="debug", return_original_value=True) == legacy
+        assert decrypt_value_helper(legacy, key="t", exception_type="debug", return_original_value=True) is None
         assert decrypt_value_helper(legacy, key="t", exception_type="debug") is None
         assert decrypt_if_encrypted_with(legacy, _SALT_KEY) is None
     assert len(caplog.records) == 3, caplog.text
@@ -195,6 +196,15 @@ def test_legacy_ciphertext_without_pynacl_logs_the_reencrypt_path_and_keeps_the_
         assert "legacy-encryption" in message
         assert "/credentials/migrate-encryption" in message
     assert "legacy-secret" not in caplog.text
+
+
+def test_require_legacy_reader_refuses_rewrite_passes_without_pynacl(monkeypatch):
+    require_legacy_reader("rotate the master key")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    with pytest.raises(LegacyEncryptionUnavailableError, match="rotate the master key.*legacy-encryption"):
+        require_legacy_reader("rotate the master key")
 
 
 def test_legacy_opt_in_without_pynacl_fails_the_write_not_silently(monkeypatch):

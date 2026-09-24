@@ -42,7 +42,6 @@ if TYPE_CHECKING:
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _ALGO_AES_GCM,
     _ENCRYPTION_ALGORITHM_SETTING,
-    _LEGACY_ENCRYPTION_HELP,
     SecretMapDecodeError,
     _get_encryption_algorithm,
     _get_salt_key,
@@ -50,7 +49,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
     is_versioned_gcm,
-    legacy_encryption_available,
+    require_legacy_reader,
 )
 
 ValueClass = Literal["migrated", "legacy", "plaintext", "undecryptable", "not-a-string"]
@@ -203,15 +202,6 @@ def _assert_aes_gate_enabled() -> None:
             f"Encryption migration requires general_settings.{_ENCRYPTION_ALGORITHM_SETTING}: "
             f"'{_ALGO_AES_GCM}' (the default). Current value: {algo!r}. Remove the legacy opt-in before migrating "
             "so re-encrypted values are written in the AES-256-GCM format."
-        )
-
-
-def _assert_legacy_reader_available() -> None:
-    """Fail fast when PyNaCl is missing: without it every unprefixed value is unreadable and would be
-    miscounted as plaintext, so the scan cannot attest anything and the migration cannot rewrite legacy rows."""
-    if not legacy_encryption_available():
-        raise RuntimeError(
-            f"Encryption scan and migration need PyNaCl to read legacy values. {_LEGACY_ENCRYPTION_HELP}"
         )
 
 
@@ -644,7 +634,7 @@ async def migrate_encryption(
     net-new walkers run in dry-run mode.
     """
     _assert_aes_gate_enabled()
-    _assert_legacy_reader_available()
+    require_legacy_reader("migrate stored encryption")
 
     report: Final = MigrationReport()
 
@@ -677,7 +667,7 @@ async def check_encryption(prisma_client: object) -> MigrationReport:
     config rows, SSO config). Reports how many values are still ``legacy``;
     ``residual_legacy == 0`` across this full scan is the compliance attestation.
     """
-    _assert_legacy_reader_available()
+    require_legacy_reader("scan stored encryption")
     report: Final = MigrationReport()
 
     # Rotation-covered tables (read-only classification).

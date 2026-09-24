@@ -403,6 +403,7 @@ from litellm.proxy.common_utils.discoverable_model_filter import discoverable_ro
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
+    require_legacy_reader,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.fips import (
@@ -7325,6 +7326,7 @@ class ProxyConfig:
         _decrypt_and_set_db_env_variables): this is a write path, and
         loading values into os.environ is the read path's responsibility.
         """
+        require_legacy_reader("re-encrypt environment variables for the config save")
         decrypted_env_vars: Final = self._decrypt_db_variables(environment_variables)
         return self._encrypt_env_variables(
             environment_variables=decrypted_env_vars,
