@@ -1234,7 +1234,7 @@ async def get_daily_activity_export_rows(
     raw_rows: Final = await _query_raw_optional(prisma_client, (sql_query, sql_params))
     records: Final = tuple(_ExportRow(**row) for row in (raw_rows or ()))
 
-    if export_type == "daily" or export_type == "daily_with_models":
+    if export_type in ("daily", "daily_with_models"):
         return await asyncio.to_thread(
             lambda: tuple(_export_base_row(record, entity_metadata_field) for record in records)
         )
