@@ -25,12 +25,16 @@ vi.mock("@/components/molecules/cost_optimization_feedback_banner", () => ({ def
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
+const teamInfoProps = vi.hoisted(() => vi.fn());
 vi.mock("@/components/team/TeamInfo", () => ({
-  default: ({ teamId, is_team_admin }: { teamId: string; is_team_admin: boolean }) => (
-    <div data-testid="team-info" data-team-admin={String(is_team_admin)}>
-      team:{teamId}
-    </div>
-  ),
+  default: (props: { teamId: string; is_team_admin: boolean; is_proxy_admin: boolean }) => {
+    teamInfoProps(props);
+    return (
+      <div data-testid="team-info" data-team-admin={String(props.is_team_admin)}>
+        team:{props.teamId}
+      </div>
+    );
+  },
 }));
 
 const mockUseAuthorized = vi.fn();
@@ -105,6 +109,18 @@ describe("ModelsAndEndpointsPage", () => {
     renderPage();
     expect(screen.getByTestId("team-info")).toHaveTextContent("team:team-9");
     expect(screen.getByTestId("team-info")).toHaveAttribute("data-team-admin", "true");
+  });
+
+  // useAuthorized().userRole is the formatted session role: effectiveSessionRole maps a
+  // proxy_admin session to "Admin", never "Proxy Admin". The drill-in must treat "Admin" as
+  // the proxy-admin signal, or TeamInfo hides admin-only controls like the global-guardrail
+  // kill switch from real proxy admins.
+  it("passes is_proxy_admin for an admin session on the ?team drill-in", () => {
+    detailState.teamId = "team-a1b2";
+    renderPage();
+    expect(teamInfoProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ is_proxy_admin: true, is_team_admin: true }),
+    );
   });
 
   it("opens the ?team drill-in without edit rights for a view-only admin", () => {
