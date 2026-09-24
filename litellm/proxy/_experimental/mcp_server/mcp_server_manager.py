@@ -6700,7 +6700,7 @@ class MCPServerManager:
                 health_check_error = "Health check was cancelled"
                 status = "unknown"
             except Exception as e:
-                health_check_error = str(e)
+                health_check_error = "OpenAPI spec health check failed" if server.spec_path else str(e)
                 status = "unhealthy"
 
         return LiteLLM_MCPServerTable(
