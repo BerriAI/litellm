@@ -20,7 +20,8 @@ from litellm.constants import (
 )
 from litellm.types.utils import StandardLoggingPayload
 
-_S3_LOG_PROMPTS_ONLY: Final = TypeAdapter(bool)
+_S3_BOOL: Final = TypeAdapter(bool)
+_UPLOAD_BOUND: Final = TypeAdapter(int)
 
 
 def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] | None = None) -> bool:
@@ -29,10 +30,40 @@ def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] |
     if raw is None or raw == "":
         return False
     try:
-        return _S3_LOG_PROMPTS_ONLY.validate_python(raw.strip() if isinstance(raw, str) else raw)
+        return _S3_BOOL.validate_python(raw.strip() if isinstance(raw, str) else raw)
     except ValidationError:
         verbose_logger.warning("s3 logging: s3_log_prompts_only=%r is not a boolean, logging prompts only", raw)
         return True
+
+
+def resolve_s3_max_concurrent_uploads(configured: object, fallback: int) -> int:
+    if configured is None or configured == "":
+        return fallback
+    try:
+        bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_max_concurrent_uploads=%r is not an integer, using %s", configured, fallback
+        )
+        return fallback
+    if bound < 1:
+        verbose_logger.warning(
+            "s3 logging: s3_max_concurrent_uploads=%r must be at least 1, using %s", configured, fallback
+        )
+        return fallback
+    return bound
+
+
+def resolve_s3_batch_file_upload(configured: object) -> bool:
+    if configured is None or configured == "":
+        return False
+    try:
+        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_batch_file_upload=%r is not a boolean, keeping per-request objects", configured
+        )
+        return False
 
 
 def prompts_only_payload(payload: StandardLoggingPayload) -> StandardLoggingPayload:
