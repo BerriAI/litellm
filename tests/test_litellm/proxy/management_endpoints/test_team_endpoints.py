@@ -14646,6 +14646,218 @@ async def test_get_team_daily_activity_aggregated_rejects_bad_ranges(
         mock_aggregated.assert_not_called()
 
 
+def _key_search_team_setup(mock_db_client, user_id: str, team_id: str):
+    mock_user_info = LiteLLM_UserTable(
+        user_id=user_id,
+        teams=[team_id],
+        max_budget=1000.0,
+        spend=0.0,
+        user_email="test@example.com",
+        user_role="internal_user",
+    )
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = team_id
+    mock_team.team_alias = "Test Team"
+    mock_team.members_with_roles = [Member(user_id=user_id, role="user")]
+    mock_team.model_dump.return_value = {
+        "team_id": team_id,
+        "team_alias": "Test Team",
+        "members_with_roles": [{"user_id": user_id, "role": "user"}],
+    }
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
+    return mock_user_info
+
+
+@pytest.mark.asyncio
+async def test_search_team_daily_activity_keys_scopes_where_before_take(mock_db_client):
+    """A member's search must put the team and own-key scoping inside the same
+    Prisma where as the term, because `take` trims rows before Python sees them:
+    scoped outside the where, the top-N slice could be spent entirely on keys
+    the caller is not allowed to see."""
+    from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        search_team_daily_activity_keys,
+    )
+
+    user_id = "test_user_123"
+    team_id = "test_team_456"
+    user_api_key_dict = UserAPIKeyAuth(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER)
+    mock_user_info = _key_search_team_setup(mock_db_client, user_id, team_id)
+
+    user_key_1 = MagicMock()
+    user_key_1.token = "user_key_1"
+    matched = MagicMock()
+    matched.token = "user_key_1"
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(side_effect=[[user_key_1], [matched]])
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+    ) as mock_get_user_object:
+        mock_get_user_object.return_value = mock_user_info
+
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+            new_callable=AsyncMock,
+        ) as mock_aggregated:
+            mock_aggregated.return_value = MagicMock()
+
+            await search_team_daily_activity_keys(
+                user_api_key_dict=user_api_key_dict,
+                search="Needle",
+                team_ids=team_id,
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                exclude_team_ids=None,
+                timezone=480,
+            )
+
+            token_calls = mock_db_client.db.litellm_verificationtoken.find_many.call_args_list
+            assert len(token_calls) == 2
+            search_kwargs = token_calls[1][1]
+            assert search_kwargs["where"] == {
+                "team_id": {"in": (team_id,)},
+                "token": {"in": ("user_key_1",)},
+                "OR": (
+                    {"token": "Needle"},
+                    {"key_alias": {"contains": "Needle", "mode": "insensitive"}},
+                    {"user_id": {"contains": "Needle", "mode": "insensitive"}},
+                ),
+            }
+            assert search_kwargs["take"] == USAGE_TOP_API_KEYS_LIMIT
+            assert search_kwargs["order"] == {"spend": "desc"}
+
+            call_kwargs = mock_aggregated.call_args[1]
+            assert call_kwargs["api_key"] == ["user_key_1"]
+            assert call_kwargs["entity_id"] == [team_id]
+            assert call_kwargs["table_name"] == "litellm_dailyteamspend"
+            assert call_kwargs["include_entity_breakdown"] is True
+            assert call_kwargs["timezone_offset_minutes"] == 480
+            assert call_kwargs["model"] is None
+            assert call_kwargs["entity_metadata_field"] == {team_id: {"team_alias": "Test Team"}}
+
+
+@pytest.mark.asyncio
+async def test_search_team_daily_activity_keys_admin_unscoped_where(mock_db_client):
+    """An admin's search has no caller scoping, so the where is the bare OR over
+    token, key alias and user id; every matched hash is passed through to the
+    aggregation."""
+    from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        search_team_daily_activity_keys,
+    )
+
+    match_1 = MagicMock()
+    match_1.token = "h1"
+    match_2 = MagicMock()
+    match_2.token = "h2"
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[match_1, match_2])
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_aggregated:
+        mock_aggregated.return_value = MagicMock()
+
+        await search_team_daily_activity_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            search="Needle",
+            team_ids=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_team_ids=None,
+            timezone=None,
+        )
+
+        search_kwargs = mock_db_client.db.litellm_verificationtoken.find_many.call_args[1]
+        assert search_kwargs["where"] == {
+            "OR": (
+                {"token": "Needle"},
+                {"key_alias": {"contains": "Needle", "mode": "insensitive"}},
+                {"user_id": {"contains": "Needle", "mode": "insensitive"}},
+            )
+        }
+        assert search_kwargs["take"] == USAGE_TOP_API_KEYS_LIMIT
+        assert mock_aggregated.call_args[1]["api_key"] == ["h1", "h2"]
+
+
+@pytest.mark.asyncio
+async def test_search_team_daily_activity_keys_no_match_returns_empty_without_aggregating(
+    mock_db_client,
+):
+    """A term matching no key still owes the caller the standard metadata shape
+    (api_key_limit, total_api_keys), and the aggregated query must not run."""
+    from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        search_team_daily_activity_keys,
+    )
+
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_aggregated:
+        result = await search_team_daily_activity_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            search="Needle",
+            team_ids=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_team_ids=None,
+            timezone=None,
+        )
+
+        assert result.results == []
+        assert result.metadata.total_api_keys == 0
+        assert result.metadata.api_key_limit == USAGE_TOP_API_KEYS_LIMIT
+        mock_aggregated.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_team_daily_activity_keys_excludes_teams_in_where(mock_db_client):
+    """The dashboard always sends exclude_team_ids=litellm-dashboard; if that
+    filter stayed out of the where, matching keys in excluded teams could fill
+    the take=N slice and push visible matches out."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        search_team_daily_activity_keys,
+    )
+
+    matched = MagicMock()
+    matched.token = "h1"
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[matched])
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_aggregated:
+        mock_aggregated.return_value = MagicMock()
+
+        await search_team_daily_activity_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            search="Needle",
+            team_ids=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_team_ids="litellm-dashboard",
+            timezone=None,
+        )
+
+        search_kwargs = mock_db_client.db.litellm_verificationtoken.find_many.call_args[1]
+        assert search_kwargs["where"] == {
+            "team_id": {"notIn": ("litellm-dashboard",)},
+            "OR": (
+                {"token": "Needle"},
+                {"key_alias": {"contains": "Needle", "mode": "insensitive"}},
+                {"user_id": {"contains": "Needle", "mode": "insensitive"}},
+            ),
+        }
+        assert mock_aggregated.call_args[1]["exclude_entity_ids"] == ["litellm-dashboard"]
+
+
 def _wire_new_team_prisma(mock_db_client):
     mock_db_client.jsonify_team_object = lambda db_data: db_data
     mock_db_client.get_data = AsyncMock(return_value=None)

@@ -1467,6 +1467,31 @@ export const teamDailyActivityAggregatedCall = async (
   }
 };
 
+export const teamDailyActivityKeySearchCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [search: string, teamIds?: string[] | null]
+) => {
+  const [search, teamIds = null] = options;
+  try {
+    return await apiClient.get(`/team/daily/activity/aggregated/search`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        search,
+        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
+        exclude_team_ids: "litellm-dashboard",
+      },
+    });
+  } catch (error) {
+    console.error("Failed to search team daily activity keys:", error);
+    throw error;
+  }
+};
+
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 
 export const teamSpendByUserCall = async (
