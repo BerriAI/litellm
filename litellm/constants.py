@@ -508,7 +508,9 @@ NON_LLM_CONNECTION_TIMEOUT: Final = int(
 MAX_EXCEPTION_MESSAGE_LENGTH: Final = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
 MAX_STRING_LENGTH_PROMPT_IN_DB: Final = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE: Final = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
-BEDROCK_MAX_TOOL_NAME_LENGTH: Final = int(os.getenv("BEDROCK_MAX_TOOL_NAME_LENGTH", 64))
+# Bedrock Runtime hard-limits tool names to 64 characters; this is a fixed AWS API
+# constraint, not a tunable, so it is a plain constant rather than an env var.
+BEDROCK_MAX_TOOL_NAME_LENGTH: Final = 64
 # One entry per distinct AWS credential-argument set. Per-user cost attribution passes the attributed
 # identity as aws_session_name, so this bounds how many attributed identities keep a cached STS session.
 BEDROCK_IAM_CACHE_MAX_ENTRIES: Final = 1000
