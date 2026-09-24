@@ -218,7 +218,7 @@ ProxyRouteType: TypeAlias = Literal[
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
-StreamChunkSerializer = Callable[[Any], str]
+StreamChunkSerializer = Callable[[object], str]
 # Type alias for streaming error serializer (ProxyException -> wire format)
 StreamErrorSerializer = Callable[[ProxyException], str]
 
@@ -459,7 +459,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     return True
 
 
-async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
+async def _cancel_pending_gather_tasks(tasks: Sequence["asyncio.Task[object]"]) -> None:
     pending_tasks: Final = [task for task in tasks if not task.done()]
     for task in pending_tasks:
         task.cancel()
@@ -3145,7 +3145,7 @@ class ProxyBaseLLMRequestProcessing:
 
         logging_obj._on_detached_stream_failure = _on_detached_stream_failure
 
-    def _is_streaming_response(self, response: Any) -> bool:
+    def _is_streaming_response(self, response: object) -> bool:
         """
         Check if the response object is actually a streaming response by inspecting its type.
 
@@ -3259,7 +3259,7 @@ class ProxyBaseLLMRequestProcessing:
 
     async def _handle_non_streaming_allm_passthrough_route(
         self,
-        response: Any,
+        response: _UpstreamHttpResponse,
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
         custom_headers: Mapping[str, str],
@@ -3852,7 +3852,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     async def async_streaming_data_generator(
-        response: Any,
+        response: object,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
@@ -3993,7 +3993,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def async_sse_data_generator(
-        response: Any,
+        response: object,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
