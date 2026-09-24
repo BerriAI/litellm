@@ -89,6 +89,8 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         if not api_base:
             api_base = "https://api.moonshot.ai/v1"
 
+        api_base = api_base.rstrip("/")
+
         if not api_base.endswith("/chat/completions"):
             api_base = f"{api_base}/chat/completions"
 

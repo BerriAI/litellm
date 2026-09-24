@@ -71,6 +71,8 @@ class HerokuChatConfig(OpenAIGPTConfig):
                 "No api base was set. Please provide an api_base, or set the HEROKU_API_BASE environment variable."
             )
 
+        api_base = api_base.rstrip("/")
+
         if not api_base.endswith("/v1/chat/completions"):
             api_base = f"{api_base}/v1/chat/completions"
 

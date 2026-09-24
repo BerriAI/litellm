@@ -55,6 +55,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         if api_base:
+            api_base = api_base.rstrip("/")
             if not api_base.endswith("/multimodalembeddings"):
                 api_base = f"{api_base}/multimodalembeddings"
             return api_base

@@ -470,6 +470,7 @@ class OllamaConfig(BaseConfig):
         """
         if api_base is None:
             api_base = "http://localhost:11434"
+        api_base = api_base.rstrip("/")
         if api_base.endswith("/api/generate"):
             url = api_base
         else:

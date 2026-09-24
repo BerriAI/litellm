@@ -82,6 +82,8 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
         if not api_base:
             api_base = self.DEFAULT_BASE_URL
 
+        api_base = api_base.rstrip("/")
+
         if not api_base.endswith("/chat/completions"):
             api_base = f"{api_base}/chat/completions"
 

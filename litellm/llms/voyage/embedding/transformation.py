@@ -46,6 +46,7 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         if api_base:
+            api_base = api_base.rstrip("/")
             if not api_base.endswith("/embeddings"):
                 api_base = f"{api_base}/embeddings"
             return api_base

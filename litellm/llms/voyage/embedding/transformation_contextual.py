@@ -55,6 +55,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         if api_base:
+            api_base = api_base.rstrip("/")
             if not api_base.endswith("/contextualizedembeddings"):
                 api_base = f"{api_base}/contextualizedembeddings"
             return api_base

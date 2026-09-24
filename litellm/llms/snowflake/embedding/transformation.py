@@ -26,6 +26,8 @@ class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
+        if api_base:
+            api_base = api_base.rstrip("/")
 
         return f"{api_base}/cortex/inference:embed"
 
