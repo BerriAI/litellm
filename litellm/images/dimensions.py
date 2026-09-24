@@ -18,6 +18,12 @@ _JPEG_FIRST_SEGMENT_OFFSET: Final = 2
 _JPEG_SOF_PAYLOAD_SIZE: Final = 5
 _JPEG_FILL_CHUNK: Final = 64 * 1024
 
+_PNG_IHDR: Final = b"IHDR"
+_WEBP_VP8_START_CODE: Final = b"\x9d\x01\x2a"
+_WEBP_VP8L_SIGNATURE: Final = 0x2F
+_BMP_CORE_DIB_SIZE: Final = 12
+_BMP_KNOWN_DIB_SIZES: Final = frozenset({12, 40, 52, 56, 64, 108, 124})
+
 
 @dataclass(frozen=True, slots=True)
 class ImageDimensions:
@@ -30,7 +36,11 @@ class ImageDimensions:
 
 
 def total_reference_pixels(images: Sequence[FileTypes]) -> int | None:
-    measured: Final = tuple(read_image_dimensions(image) for image in images)
+    """All-or-nothing sum of measured reference pixels; never raises."""
+    try:
+        measured: Final = tuple(read_image_dimensions(image) for image in images)
+    except Exception:  # noqa: BLE001  # a billing helper must fall back, never fail the request
+        return None
     dimensions: Final = tuple(size for size in measured if size is not None)
     if len(dimensions) != len(measured):
         verbose_logger.debug(
@@ -44,10 +54,13 @@ def total_reference_pixels(images: Sequence[FileTypes]) -> int | None:
 
 def read_image_dimensions(image: FileTypes) -> ImageDimensions | None:
     try:
-        content = image[1] if isinstance(image, tuple) else image
-        if isinstance(content, (str, os.PathLike)):
+        content: Final = cast(
+            "IO[bytes] | bytes | str | os.PathLike[str] | None",
+            image[1] if isinstance(image, tuple) else image,
+        )
+        if content is None or isinstance(content, (str, os.PathLike)):
             return None
-        stream = BytesIO(content) if isinstance(content, bytes) else content
+        stream = BytesIO(content) if isinstance(content, (bytes, bytearray, memoryview)) else content
         if not stream.seekable():
             return None
         position = stream.tell()
@@ -58,13 +71,15 @@ def read_image_dimensions(image: FileTypes) -> ImageDimensions | None:
         if dimensions is None or dimensions.width <= 0 or dimensions.height <= 0:
             return None
         return dimensions
-    except (OSError, ValueError, AttributeError, struct.error):
+    except Exception:  # noqa: BLE001  # an odd stream or malformed file must fall back, never raise
         return None
 
 
 def _header_dimensions(stream: IO[bytes], position: int) -> ImageDimensions | None:
     stream.seek(position)
-    head: Final = stream.read(_HEADER_READ_SIZE)
+    head: Final = cast("bytes | None", stream.read(_HEADER_READ_SIZE))
+    if head is None:
+        return None
     match get_image_type(head):  # pyright: ignore[reportMatchNotExhaustive]  # unmatched types fall through to the None below
         case "png":
             return _png_dimensions(head)
@@ -80,7 +95,7 @@ def _header_dimensions(stream: IO[bytes], position: int) -> ImageDimensions | No
 
 
 def _png_dimensions(head: bytes) -> ImageDimensions | None:
-    if len(head) < 24:
+    if len(head) < 24 or head[12:16] != _PNG_IHDR:
         return None
     width, height = cast(tuple[int, int], struct.unpack(">II", head[16:24]))
     return ImageDimensions(width=width, height=height)
@@ -97,7 +112,10 @@ def _gif_dimensions(head: bytes) -> ImageDimensions | None:
 def _bmp_dimensions(head: bytes) -> ImageDimensions | None:
     if len(head) < 26:
         return None
-    if int.from_bytes(head[14:18], "little") == 12:
+    dib_size: Final = int.from_bytes(head[14:18], "little")
+    if dib_size not in _BMP_KNOWN_DIB_SIZES:
+        return None
+    if dib_size == _BMP_CORE_DIB_SIZE:
         core_width: Final = int.from_bytes(head[18:20], "little")
         core_height: Final = int.from_bytes(head[20:22], "little")
         return ImageDimensions(width=core_width, height=core_height)
@@ -116,9 +134,13 @@ def _webp_dimensions(head: bytes) -> ImageDimensions | None:
                 height=int.from_bytes(head[27:30], "little") + 1,
             )
         case b"VP8 ":
+            if head[23:26] != _WEBP_VP8_START_CODE:
+                return None
             width, height = cast(tuple[int, int], struct.unpack("<HH", head[26:30]))
             return ImageDimensions(width=width & 0x3FFF, height=height & 0x3FFF)
         case b"VP8L":
+            if head[20] != _WEBP_VP8L_SIGNATURE:
+                return None
             bits: Final = int.from_bytes(head[21:25], "little")
             return ImageDimensions(width=(bits & 0x3FFF) + 1, height=((bits >> 14) & 0x3FFF) + 1)
     return None

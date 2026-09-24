@@ -129,7 +129,24 @@ def _dims(width: int, height: int) -> ImageDimensions:
         pytest.param(_webp_chunk(b"VP8X", VP8X_BODY), _dims(700, 350), id="webp-vp8x-extended"),
         pytest.param(_webp_chunk(b"VP8Z", bytes(10)), None, id="webp-unknown-fourcc"),
         pytest.param(_webp_chunk(b"VP8X", VP8X_BODY)[:29], None, id="webp-shorter-than-30-bytes"),
+        pytest.param(
+            _webp_chunk(b"VP8 ", bytes(3) + bytes(3) + struct.pack("<HH", 0xC000 | 500, 0xC000 | 250) + bytes(4)),
+            None,
+            id="webp-vp8-missing-start-code",
+        ),
+        pytest.param(
+            _webp_chunk(b"VP8L", bytes(1) + (299 | (199 << 14)).to_bytes(4, "little") + bytes(5)),
+            None,
+            id="webp-vp8l-missing-signature",
+        ),
         pytest.param(b"\x89PNG\r\n\x1a\n" + bytes(10), None, id="png-shorter-than-24-bytes"),
+        pytest.param(
+            b"\x89PNG\r\n\x1a\n"
+            + _png_chunk(b"CgBI", struct.pack(">II", 4000, 3000) + bytes(8))
+            + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", 1024, 1024, 8, 0, 0, 0, 0)),
+            None,
+            id="png-cgbi-first-chunk",
+        ),
         pytest.param(_gif(b"GIF89a", 1024, 768), _dims(1024, 768), id="gif89a"),
         pytest.param(_gif(b"GIF87a", 320, 200), _dims(320, 200), id="gif87a"),
         pytest.param(b"GIF89a" + bytes(2), None, id="gif-shorter-than-10-bytes"),
@@ -138,6 +155,11 @@ def _dims(width: int, height: int) -> ImageDimensions:
         pytest.param(_bmp(-1024, 768), None, id="bmp-negative-width"),
         pytest.param(_bmp(0, 768), None, id="bmp-zero-width"),
         pytest.param(b"BM" + bytes(18), None, id="bmp-shorter-than-26-bytes"),
+        pytest.param(
+            b"BM" + bytes(12) + struct.pack("<I", 999) + struct.pack("<ii", 640, 480) + bytes(6),
+            None,
+            id="bmp-unknown-dib-size",
+        ),
         pytest.param(
             b"BM" + bytes(12) + struct.pack("<I", 12) + struct.pack("<HH", 640, 480) + bytes(4),
             _dims(640, 480),
@@ -229,6 +251,25 @@ def test_read_image_dimensions_skips_non_sof_c_range_markers(skipped_marker: int
 class _ReadOnlyObject:
     def read(self, size: int = -1) -> bytes:
         return b""
+
+
+class _NonBlockingStream(io.BytesIO):
+    def read(self, size: int = -1) -> bytes | None:
+        return None
+
+
+def test_read_image_dimensions_returns_none_when_read_returns_none():
+    assert read_image_dimensions(cast(Any, _NonBlockingStream(_png(64, 64)))) is None
+
+
+def test_read_image_dimensions_returns_none_for_short_and_none_tuples():
+    assert read_image_dimensions(("ref.png",)) is None
+    assert read_image_dimensions(("ref.png", None)) is None
+
+
+def test_total_reference_pixels_returns_none_instead_of_raising():
+    assert total_reference_pixels([("ref.png",)]) is None
+    assert total_reference_pixels(cast(Any, 123)) is None
 
 
 def test_total_reference_pixels_returns_none_for_closed_and_read_only_streams():

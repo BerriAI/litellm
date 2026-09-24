@@ -268,6 +268,55 @@ class TestImageEditCustomPricing:
         litellm_params = {"litellm_call_id": "test-call-id"}
         assert use_custom_pricing_for_model(litellm_params) is False
 
+    def test_image_edit_forwards_custom_pricing_kwargs_to_logging(self):
+        """Pricing a deployment declares under litellm_params (e.g. input_cost_per_pixel)
+        reaches self.litellm_params so use_custom_pricing_for_model fires on image edits."""
+        from litellm.images.main import image_edit
+
+        captured_litellm_params = {}
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {}
+
+        original_update = mock_logging_obj.update_from_kwargs
+
+        def capturing_update(**update_kwargs):
+            captured_litellm_params.update(update_kwargs.get("litellm_params", {}))
+            return original_update(**update_kwargs)
+
+        mock_logging_obj.update_from_kwargs = capturing_update
+
+        with (
+            patch(
+                "litellm.images.main.get_llm_provider",
+                return_value=("test-model", "openai", None, None),
+            ),
+            patch(
+                "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.images.main._get_ImageEditRequestUtils",
+                return_value=MagicMock(
+                    get_requested_image_edit_optional_param=MagicMock(return_value={}),
+                    get_optional_params_image_edit=MagicMock(return_value={}),
+                ),
+            ),
+            patch("litellm.images.main.base_llm_http_handler") as mock_handler,
+        ):
+            mock_handler.image_edit_handler.return_value = MagicMock()
+
+            image_edit(
+                image=b"fake-image-data",
+                prompt="test prompt",
+                model="openai/test-model",
+                litellm_logging_obj=mock_logging_obj,
+                input_cost_per_pixel=4.76837158203125e-08,
+            )
+
+        assert captured_litellm_params["input_cost_per_pixel"] == pytest.approx(4.76837158203125e-08)
+        assert use_custom_pricing_for_model(captured_litellm_params) is True
+
 
 class TestImageEditHandlerCredentialsForwarding:
     """
