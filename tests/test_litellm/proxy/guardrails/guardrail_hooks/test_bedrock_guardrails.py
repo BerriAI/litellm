@@ -7167,7 +7167,7 @@ def test_apply_masking_to_messages_masks_tool_result_inner_list_items() -> None:
 @pytest.mark.asyncio
 async def test_during_call_hook_refuses_serialized_tool_output_attachment():
     """A tool message's JSON-serialized output list can hide an attachment part that
-    never becomes a leaf; the unscoped pass has to refuse it before any scan."""
+    never becomes a leaf; on the Responses bridge the unscoped pass refuses it."""
     guardrail = BedrockGuardrail(
         guardrail_name="bedrock-tool-output-file",
         guardrailIdentifier="test-guardrail",
@@ -7177,21 +7177,20 @@ async def test_during_call_hook_refuses_serialized_tool_output_attachment():
     )
     data = {
         "model": "gpt-4o-mini",
-        "messages": [
+        "input": [
+            {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
             {
-                "role": "tool",
-                "tool_call_id": "c1",
-                "content": json.dumps(
-                    [
-                        {
-                            "type": "input_file",
-                            "filename": "a.pdf",
-                            "file_data": "data:application/pdf;base64,JVBERi0=",
-                        }
-                    ]
-                ),
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [
+                    {
+                        "type": "input_file",
+                        "filename": "a.pdf",
+                        "file_data": "data:application/pdf;base64,JVBERi0=",
+                    }
+                ],
             },
-            {"role": "user", "content": "hi"},
+            {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
         ],
     }
 
@@ -7202,11 +7201,54 @@ async def test_during_call_hook_refuses_serialized_tool_output_attachment():
         await guardrail.async_moderation_hook(
             data=data,
             user_api_key_dict=UserAPIKeyAuth(),
-            call_type=CallTypes.acompletion.value,
+            call_type=CallTypes.aresponses.value,
         )
 
     assert exc_info.value.status_code == 400
     mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_chat_tool_output_attachment_scans_as_text():
+    """On a plain chat call a serialized tool output reaches the model as text, so the
+    serialized pass must not refuse it even when a member carries attachment bytes."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-chat-tool-string",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    tool_output = json.dumps(
+        [{"type": "input_file", "filename": "a.pdf", "file_data": "data:application/pdf;base64,JVBERi0="}]
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "tool", "tool_call_id": "c1", "content": tool_output},
+            {"role": "user", "content": "hi"},
+        ],
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -7372,16 +7414,17 @@ async def test_during_call_hook_refuses_tool_output_file_id_and_scoped_media():
         {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
     ):
         data = {
-            "messages": [
-                {"role": "tool", "content": json.dumps([member])},
-                {"role": "user", "content": "summarize"},
+            "input": [
+                {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": [member]},
+                {"role": "user", "content": [{"type": "input_text", "text": "summarize"}]},
             ]
         }
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.async_moderation_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(),
-                call_type=CallTypes.acompletion.value,
+                call_type=CallTypes.aresponses.value,
             )
         assert exc_info.value.status_code == 400
 
@@ -7550,3 +7593,139 @@ async def test_during_call_hook_tool_output_metadata_only_parts_scan_as_text():
     sent_body = json.loads(mock_post.call_args.kwargs["data"])
     sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
     assert tool_output in sent_texts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "member",
+    [
+        {"type": "file", "name": "README.md", "path": "README.md", "size": 1200},
+        {"type": "file", "name": "README.md", "url": "https://api.github.com/repos/o/r/contents/README.md"},
+        {"type": "image", "title": "Golden Gate", "source": "wikimedia.org"},
+        {"type": "document", "id": "kb-17", "source": "confluence", "text": "Refund policy"},
+    ],
+)
+async def test_during_call_hook_chat_tool_output_metadata_members_scan_as_text(member):
+    """Metadata-shaped members in a chat tool string are plain text to the scan."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-chat-tool-metadata",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    data = {
+        "messages": [
+            {"role": "tool", "tool_call_id": "t1", "content": json.dumps([member])},
+            {"role": "user", "content": "summarize"},
+        ]
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "member",
+    [
+        {"type": "document", "id": "kb-17", "source": "confluence"},
+        {"type": "file", "name": "README.md", "url": "https://api.github.com/repos/o/r/contents/README.md"},
+    ],
+)
+async def test_during_call_hook_responses_tool_output_metadata_members_scan_as_text(member):
+    """On the Responses bridge only structural payloads refuse; plain metadata strings
+    in a serialized tool output are still scanned as text."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-resp-tool-metadata",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    data = {
+        "input": [
+            {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": [member]},
+            {"role": "user", "content": [{"type": "input_text", "text": "summarize"}]},
+        ]
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.aresponses.value,
+        )
+
+    mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "member",
+    [
+        {"type": "document", "id": "kb-17", "source": {"type": "base64", "data": "x"}},
+        {"type": "input_file", "filename": "a.pdf", "file_data": "data:application/pdf;base64,AA=="},
+        {"type": "input_image", "file_id": "f1"},
+        {"type": "file", "name": "clip", "url": "data:video/mp4;base64,AA=="},
+    ],
+)
+async def test_during_call_hook_responses_tool_output_payload_members_refused(member):
+    """Structural attachment payloads in a serialized tool output refuse on the
+    Responses bridge: a mapping source, inline file bytes, or a file reference."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-resp-tool-payloads",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    data = {
+        "input": [
+            {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": [member]},
+            {"role": "user", "content": [{"type": "input_text", "text": "summarize"}]},
+        ]
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.aresponses.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()

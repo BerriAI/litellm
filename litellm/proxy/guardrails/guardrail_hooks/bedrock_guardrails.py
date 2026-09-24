@@ -260,6 +260,21 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
 
 
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+_RESPONSES_API_CALL_TYPE_VALUES: Final[frozenset[str]] = frozenset(
+    call_type.value for call_type in _RESPONSES_API_CALL_TYPES
+)
+_TOOL_OUTPUT_REFERENCE_KEYS: Final[frozenset[str]] = frozenset(("file_id", "file_url", "file_data", "image_url"))
+
+
+def _is_attachment_payload(key: str, value: object) -> bool:
+    """Inline bytes or an attachment reference, never a plain metadata string."""
+    if isinstance(value, Mapping):
+        return bool(value)
+    if not isinstance(value, str) or not value:
+        return False
+    if key in _TOOL_OUTPUT_REFERENCE_KEYS:
+        return True
+    return value.startswith("data:")
 
 
 def _decoded_base64_length(encoded: str) -> int:
@@ -715,7 +730,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
             self._refuse_unscannable_image_ref(image_url=image_ref)
 
-    def _refuse_unscannable_leaf_parts(self, messages: "Sequence[AllMessageValues]") -> None:
+    def _refuse_unscannable_leaf_parts(
+        self, messages: "Sequence[AllMessageValues]", *, bridged_tool_output: bool
+    ) -> None:
         """Raise the attachment refusal for any leaf part the guardrail cannot scan.
 
         Runs on the unscoped message list so an attachment hiding in a message role
@@ -725,10 +742,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         for message in messages:
             for leaf in _content_leaf_parts(message.get("content")):
                 self._refuse_unscannable_part(part=leaf)
-            self._refuse_serialized_tool_output(message=message)
+            if bridged_tool_output:
+                self._refuse_serialized_tool_output(message=message)
 
     def _refuse_serialized_tool_output(self, message: Mapping[str, object]) -> None:
-        """Refuse an attachment hiding in a ``tool`` message's serialized output."""
+        """Refuse an attachment hiding in a ``tool`` message's serialized output.
+
+        A chat tool string reaches the model as text and is scanned as text; only the
+        Responses to chat bridge serializes attachment parts into a string.
+        """
         if message.get("role") != "tool":
             return
         content: Final = message.get("content")
@@ -736,7 +758,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return
         for part in _serialized_tool_output_parts(content):
             if part.get("type") in _TOOL_OUTPUT_ATTACHMENT_TYPES and any(
-                part.get(key) for key in _TOOL_OUTPUT_PAYLOAD_KEYS
+                _is_attachment_payload(key, part.get(key)) for key in _TOOL_OUTPUT_PAYLOAD_KEYS
             ):
                 self._handle_unscannable_attachment(reason="a tool output attachment cannot be scanned")
 
@@ -2970,7 +2992,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # A file or unscannable image is refused even when role scoping below drops
         # its message from the scan set; the ApplyGuardrail call itself stays scoped
-        self._refuse_unscannable_leaf_parts(messages=new_messages)
+        self._refuse_unscannable_leaf_parts(
+            messages=new_messages, bridged_tool_output=call_type in _RESPONSES_API_CALL_TYPE_VALUES
+        )
 
         filter_result: Final = self._prepare_guardrail_messages_for_role(messages=new_messages)
         filtered_messages: Final = filter_result.payload_messages
