@@ -170,9 +170,7 @@ def _embedded_image_values(value: object, depth: int = 0) -> Iterator[bytes]:
 
 
 def _is_image_signature(head: bytes) -> bool:
-    return len(head) >= _IMAGE_SIGNATURE_BYTES and (
-        get_image_type(head) in _IMAGE_SIGNATURES or head[:2] == b"BM"
-    )
+    return len(head) >= _IMAGE_SIGNATURE_BYTES and (get_image_type(head) in _IMAGE_SIGNATURES or head[:2] == b"BM")
 
 
 def _header_dimensions(stream: IO[bytes], position: int) -> ImageDimensions | None:

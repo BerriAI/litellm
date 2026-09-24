@@ -2021,11 +2021,7 @@ def _deployment_model_info(
     litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
     if litellm_params is None:
         return None
-    declared: Final = {
-        key: value
-        for key in _DEPLOYMENT_PRICING_KEYS
-        if (value := litellm_params.get(key)) is not None
-    }
+    declared: Final = {key: value for key in _DEPLOYMENT_PRICING_KEYS if (value := litellm_params.get(key)) is not None}
     nested: Final = next(
         (
             model_info
