@@ -42,8 +42,6 @@ pub enum CostError {
     TokenCount,
     #[error("token counts overflow a u64")]
     TokenCountOverflow,
-    #[error("call type has no cost path")]
-    UnsupportedCallType,
     #[error("provider has no image cost path")]
     UnsupportedProvider,
 }

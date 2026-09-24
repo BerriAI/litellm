@@ -238,65 +238,60 @@ fn cost_call<'a>(
     request_model: Option<&'a str>,
     empty_params: &'a Value,
 ) -> Result<CostCall<'a>, CostError> {
-    match call_type {
-        "speech" | "aspeech" => Ok(CostCall::Speech {
+    let deployment_info = || {
+        request
+            .input
+            .model_selection
+            .custom_pricing
+            .then_some(request.deployment_info)
+            .flatten()
+    };
+    match call_type.parse::<CallTypes>().ok() {
+        Some(CallTypes::speech | CallTypes::aspeech) => Ok(CostCall::Speech {
             prompt_characters: request.prompt_characters.or_else(|| {
                 request
                     .speech_prompt
                     .map(|prompt| count_characters(prompt) as f64)
             }),
         }),
-        "transcription" | "atranscription" => Ok(CostCall::Transcription {
+        Some(CallTypes::transcription | CallTypes::atranscription) => Ok(CostCall::Transcription {
             duration_seconds: duration(request),
         }),
-        "rerank" | "arerank" => Ok(CostCall::Rerank {
+        Some(CallTypes::rerank | CallTypes::arerank) => Ok(CostCall::Rerank {
             billed_units: request
                 .input
                 .model_selection
                 .response
                 .and_then(|response| response.pointer("/meta/billed_units")),
         }),
-        "vector_store_search" | "avector_store_search" => Ok(CostCall::VectorStoreSearch {
-            api_type: model
-                .split_once('/')
-                .and_then(|(prefix, api_type)| (prefix == "vertex_ai").then_some(api_type)),
-        }),
-        "search" | "asearch" => Ok(CostCall::Search {
+        Some(CallTypes::vector_store_search | CallTypes::avector_store_search) => {
+            Ok(CostCall::VectorStoreSearch {
+                api_type: model
+                    .split_once('/')
+                    .and_then(|(prefix, api_type)| (prefix == "vertex_ai").then_some(api_type)),
+            })
+        }
+        Some(CallTypes::search | CallTypes::asearch) => Ok(CostCall::Search {
             number_of_queries: Some(number_of_queries(request.input.optional_params)),
             optional_params: request.input.optional_params.unwrap_or(empty_params),
         }),
-        "ocr" | "aocr" => Ok(CostCall::Ocr {
+        Some(CallTypes::ocr | CallTypes::aocr) => Ok(CostCall::Ocr {
             response: request
                 .input
                 .model_selection
                 .response
                 .ok_or(CostError::MissingUsage)?,
-            deployment_info: request
-                .input
-                .model_selection
-                .custom_pricing
-                .then_some(request.deployment_info)
-                .flatten(),
+            deployment_info: deployment_info(),
         }),
-        "retrieve_batch" | "aretrieve_batch" => Ok(CostCall::Batch {
-            deployment_info: request
-                .input
-                .model_selection
-                .custom_pricing
-                .then_some(request.deployment_info)
-                .flatten(),
+        Some(CallTypes::retrieve_batch | CallTypes::aretrieve_batch) => Ok(CostCall::Batch {
+            deployment_info: deployment_info(),
         }),
-        "completion" | "acompletion" | "embedding" | "aembedding" | "text_completion"
-        | "atext_completion" | "responses" | "aresponses" | "moderation" | "amoderation"
-        | "generate_content" | "agenerate_content" | "video_retrieve" | "avideo_retrieve" => {
-            Ok(CostCall::Token {
-                call_type,
-                prompt_characters: request.prompt_characters,
-                completion_characters: request.completion_characters,
-                request_model,
-            })
-        }
-        _ => Err(CostError::UnsupportedCallType),
+        _ => Ok(CostCall::Token {
+            call_type,
+            prompt_characters: request.prompt_characters,
+            completion_characters: request.completion_characters,
+            request_model,
+        }),
     }
 }
 

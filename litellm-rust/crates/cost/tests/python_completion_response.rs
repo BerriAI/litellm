@@ -1485,36 +1485,36 @@ fn empty_responses_websocket_applies_one_fixed_margin() {
 }
 
 #[rstest]
-fn unsupported_call_does_not_silently_bill_as_tokens() {
-    let catalog = ModelInfoCatalog::new(HashMap::new());
-    let response = json!({"model": "image"});
+#[case::anthropic_messages("anthropic_messages")]
+#[case::pass_through_endpoint("pass_through_endpoint")]
+#[case::image_generation_without_an_image_response("image_generation")]
+#[case::unknown_call_type("not_a_call_type")]
+fn unlisted_call_types_fall_through_to_token_pricing_like_python(#[case] call_type: &str) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/model".to_owned(),
+        json!({"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}),
+    )]));
+    let response = json!({"model": "model", "usage": {"prompt_tokens": 3, "completion_tokens": 4}});
     let empty = json!({});
-    assert_eq!(
-        completion_cost_from_response(
-            &catalog,
-            CompletionResponseCostRequest {
-                input: CompletionInputRequest {
-                    call_type: Some("image_generation"),
-                    ..request(
-                        Some(&response),
-                        Some("image"),
-                        Some("openai"),
-                        &empty,
-                        &empty
-                    )
-                    .input
-                },
-                ..request(
-                    Some(&response),
-                    Some("image"),
-                    Some("openai"),
-                    &empty,
-                    &empty
-                )
-            }
-        ),
-        Err(CostError::UnsupportedCallType)
+    let base = request(
+        Some(&response),
+        Some("model"),
+        Some("openai"),
+        &empty,
+        &empty,
     );
+    let result = completion_cost_from_response(
+        &catalog,
+        CompletionResponseCostRequest {
+            input: CompletionInputRequest {
+                call_type: Some(call_type),
+                ..base.input
+            },
+            ..base
+        },
+    )
+    .unwrap();
+    assert!((result.cost.total - 11.0).abs() < 1e-12);
 }
 
 #[rstest]
