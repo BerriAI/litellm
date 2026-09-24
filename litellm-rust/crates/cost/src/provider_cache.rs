@@ -5,7 +5,7 @@ use crate::provider::LlmProviders;
 fn rate(value: Option<&Value>) -> Option<f64> {
     match value? {
         Value::Number(value) => value.as_f64(),
-        Value::String(value) => value.parse().ok(),
+        Value::String(value) => value.trim().parse().ok(),
         _ => None,
     }
 }

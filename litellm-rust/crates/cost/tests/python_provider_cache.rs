@@ -68,3 +68,34 @@ fn model_info_catalog_uses_fireworks_default_for_cached_tokens() {
     .unwrap();
     assert!((actual.0 - (60.0 * 2e-6 + 40.0 * 1e-6)).abs() < 1e-12);
 }
+
+#[rstest]
+#[case::numeric_string(json!(" 2e-6 "), Some(json!(1e-6)))]
+#[case::integer(json!(2), Some(json!(1.0)))]
+#[case::boolean_is_not_a_rate(json!(true), None)]
+#[case::unparseable_string(json!("free"), None)]
+#[case::null(json!(null), None)]
+fn with_default_cache_read_rate_coerces_input_rate_like_python_as_rate(
+    #[case] input_rate: serde_json::Value,
+    #[case] expected: Option<serde_json::Value>,
+) {
+    let info = json!({"input_cost_per_token": input_rate});
+    assert_eq!(
+        with_default_cache_read_rate(&info)
+            .get("cache_read_input_token_cost")
+            .cloned(),
+        expected
+    );
+}
+
+#[rstest]
+fn with_default_cache_read_rate_falls_back_to_base_rate_for_off_peak_without_input_rate() {
+    let info = json!({
+        "input_cost_per_token": 2e-6,
+        "off_peak_pricing": {"hours_utc": "16:00-20:00"}
+    });
+    assert_eq!(
+        with_default_cache_read_rate(&info)["off_peak_pricing"]["cache_read_input_token_cost"],
+        json!(1e-6)
+    );
+}

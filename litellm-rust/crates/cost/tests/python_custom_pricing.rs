@@ -265,3 +265,46 @@ fn catalog_custom_pricing_falls_back_and_rejects_invalid_rates() {
         Err(CostError::InvalidRate)
     );
 }
+
+#[rstest]
+#[case::negative_prompt_tokens(usage(-1.0, 0.0), None)]
+#[case::nan_completion_tokens(usage(0.0, f64::NAN), None)]
+#[case::negative_detail_cache_tokens(RawUsage { details_cached_tokens: Some(-1.0), ..usage(10.0, 0.0) }, None)]
+#[case::infinite_fallback_tokens(RawUsage { fallback_cache_read_tokens: Some(f64::INFINITY), ..usage(10.0, 0.0) }, None)]
+#[case::overflowing_prompt_sum(RawUsage { top_level_cache_read_tokens: Some(f64::MAX), top_level_cache_creation_tokens: Some(f64::MAX), ..usage(f64::MAX, 0.0) }, None)]
+#[case::valid_usage(usage(10.0, 2.0), Some((10.0, 2.0)))]
+fn normalize_cache_usage_rejects_negative_or_non_finite_counts(
+    #[case] raw: RawUsage,
+    #[case] expected: Option<(f64, f64)>,
+) {
+    let normalized = normalize_cache_usage(raw);
+    match expected {
+        Some((prompt, completion)) => {
+            let normalized = normalized.unwrap();
+            assert_eq!(
+                (normalized.prompt_tokens, normalized.completion_tokens),
+                (prompt, completion)
+            );
+        }
+        None => assert_eq!(normalized, Err(CostError::InvalidUsage)),
+    }
+}
+
+#[rstest]
+#[case::negative_token_rate(CustomPricing { token: Some(rates(0.1, -0.1, None, None)), per_second: None }, None, CostError::InvalidRate)]
+#[case::nan_cache_read_rate(CustomPricing { token: Some(rates(0.1, 0.1, Some(f64::NAN), None)), per_second: None }, None, CostError::InvalidRate)]
+#[case::negative_second_rate(CustomPricing { token: None, per_second: Some(-0.5) }, Some(10.0), CostError::InvalidRate)]
+#[case::negative_duration(CustomPricing { token: None, per_second: Some(0.5) }, Some(-10.0), CostError::InvalidDuration)]
+#[case::infinite_duration(CustomPricing { token: None, per_second: Some(0.5) }, Some(f64::INFINITY), CostError::InvalidDuration)]
+#[case::overflowing_token_cost(CustomPricing { token: Some(rates(f64::MAX, 0.0, None, None)), per_second: None }, None, CostError::NonFiniteCost)]
+fn cost_per_token_custom_pricing_helper_rejects_unusable_rates_and_durations(
+    #[case] pricing: CustomPricing,
+    #[case] response_time_ms: Option<f64>,
+    #[case] expected: CostError,
+) {
+    let normalized = normalize_cache_usage(usage(1000.0, 0.0)).unwrap();
+    assert_eq!(
+        cost_per_token_custom_pricing_helper(normalized, pricing, response_time_ms),
+        Err(expected)
+    );
+}
