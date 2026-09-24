@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 
 if TYPE_CHECKING:
@@ -28,6 +30,7 @@ CLAUDE_CODE_CLIENT: Final = "claude-code"
 _CLAUDE_CODE_ALIAS_PREFIX: Final = "claude-router-"
 _ONE_MILLION_SUFFIX: Final = "[1m]"
 _ONE_MILLION_TOKENS: Final = 1_000_000
+_ALIAS_MAP: Final = TypeAdapter(Mapping[str, str])
 
 
 def configured_display_names(
@@ -165,14 +168,17 @@ def caller_alias_maps(
     return (key_aliases, team_aliases)
 
 
+def _string_pairs(aliases: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(aliases, Mapping):
+        return ()
+    try:
+        return tuple(_ALIAS_MAP.validate_python(aliases, strict=True).items())
+    except ValidationError:
+        return ()
+
+
 def _alias_pairs(alias_maps: Sequence[object]) -> tuple[tuple[str, str], ...]:
-    return tuple(
-        (alias, target)
-        for aliases in alias_maps
-        if isinstance(aliases, Mapping)
-        for alias, target in cast(Mapping[object, object], aliases).items()  # any-ok: checked per pair
-        if isinstance(alias, str) and isinstance(target, str)
-    )
+    return tuple(pair for aliases in alias_maps for pair in _string_pairs(aliases))
 
 
 def alias_target(model_id: str, alias_maps: Sequence[object]) -> str | None:
@@ -183,17 +189,19 @@ def alias_target(model_id: str, alias_maps: Sequence[object]) -> str | None:
 def alias_listing_entries(
     entries: Sequence[tuple[str, str]],
     alias_maps: Sequence[object],
-) -> list[tuple[str, str]]:
+) -> tuple[tuple[str, str], ...]:
     """`entries` plus one `(alias, lookup_id)` row per key or team alias whose target is
     listed. An alias colliding with a listed id keeps the listed entry."""
-    lookup_by_response: Final = dict(entries)
+    lookup_by_response: Final = MappingProxyType(dict(entries))
     lookup_ids: Final = frozenset(lookup_by_response.values())
-    added: Final = {
-        alias: lookup_by_response.get(target, target)
-        for alias, target in _alias_pairs(alias_maps)
-        if alias not in lookup_by_response and (target in lookup_by_response or target in lookup_ids)
-    }
-    return [*entries, *added.items()]
+    added: Final = MappingProxyType(
+        {
+            alias: lookup_by_response.get(target, target)
+            for alias, target in _alias_pairs(alias_maps)
+            if alias not in lookup_by_response and (target in lookup_by_response or target in lookup_ids)
+        }
+    )
+    return (*entries, *added.items())
 
 
 def claude_code_requested_group(

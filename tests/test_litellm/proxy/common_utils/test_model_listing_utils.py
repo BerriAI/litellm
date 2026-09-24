@@ -135,12 +135,12 @@ def test_team_alias_is_listed_under_its_target_metadata_and_only_when_the_target
         None,
         {"gpt-4.1-mini": "team-public"},
     )
-    assert alias_listing_entries(entries, aliases) == [
+    assert alias_listing_entries(entries, aliases) == (
         *entries,
         ("claude-sonnet-4-5", "gpt-4.1-mini"),
         ("via-public", "model_name_team_1_abc"),
-    ]
-    assert alias_listing_entries(entries, (None, {})) == entries
+    )
+    assert alias_listing_entries(entries, (None, {})) == tuple(entries)
 
 
 def test_alias_target_resolves_the_requested_alias_across_key_and_team_maps():
