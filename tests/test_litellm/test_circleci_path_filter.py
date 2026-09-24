@@ -107,7 +107,7 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
         ),
         (
             "cost-map-only",
-            ["model_prices_and_context_window.json", "tests/proxy_unit_tests/test_y.py"],
+            ["model_prices_and_context_window.json", "tests/unit/proxy/test_y.py"],
             "run",
         ),
         (

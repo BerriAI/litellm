@@ -31,7 +31,7 @@ while IFS= read -r file || [ -n "$file" ]; do
   case "$file" in
     model_prices_and_context_window.json | litellm/model_prices_and_context_window_backup.json | model_prices_and_context_window.schema.json)
       has_cost_map=true ;;
-    tests/test_litellm/* | tests/proxy_unit_tests/*) : ;;
+    tests/test_litellm/* | tests/proxy_unit_tests/* | tests/unit/proxy/*) : ;;
     *) outside_cost_map_set=true ;;
   esac
 done

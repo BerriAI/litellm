@@ -317,7 +317,35 @@ workflows:
           reruns: 2
           matrix:
             parameters:
-              flag: [enterprise-package, proxy-infra]
+              flag:
+                - enterprise-package
+                - proxy-infra
+                - proxy-db-auth-checks
+                - proxy-db-jwt-and-keys
+                - proxy-db-proxy-server-core
+                - proxy-db-proxy-runtime
+                - proxy-db-custom-logging
+                - proxy-db-logging-misc
+                - proxy-db-db-and-spend
+                - proxy-db-guardrails-hooks
+                - proxy-db-budgets
+                - proxy-db-endpoints-and-responses
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
+          name: unit-proxy-db-proxy-utils
+          flag: proxy-db-proxy-utils
+          shards: 1
+          reruns: 2
+          dist: worksteal
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
+          name: unit-proxy-db-key-generation
+          flag: proxy-db-key-generation
+          shards: 1
+          workers: 0
+          reruns: 2
           base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
           pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
       - documentation
