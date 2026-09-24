@@ -51184,6 +51184,7 @@
     },
     "openai/sora-2-pro-high-res": {
         "litellm_provider": "openai",
+        "deprecation_date": "2026-09-24",
         "mode": "video_generation",
         "output_cost_per_video_per_second": 0.5,
         "source": "https://platform.openai.com/docs/api-reference/videos",
@@ -55392,6 +55393,7 @@
     },
     "sora-2-pro-high-res": {
         "litellm_provider": "openai",
+        "deprecation_date": "2026-09-24",
         "mode": "video_generation",
         "output_cost_per_video_per_second": 0.5,
         "source": "https://developers.openai.com/api/docs/pricing",
