@@ -697,7 +697,7 @@
       "count": 6
     },
     "react-hooks/set-state-in-effect": {
-      "count": 4
+      "count": 3
     }
   },
   "src/app/(dashboard)/playground/components/chat_ui/CodeInterpreterOutput.tsx": {
@@ -725,9 +725,6 @@
     },
     "no-nested-ternary": {
       "count": 4
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/playground/components/compareUI/components/ComparisonPanel.tsx": {
