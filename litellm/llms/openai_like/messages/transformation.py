@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 import litellm
@@ -196,12 +197,10 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
             request_kwargs.get("drop_params") is True,
         )
         passthrough_keys: Final = ("extra_body",) if drop_service_tier else ("service_tier", "extra_body")
-        merged: Final = {  # mutable-ok: matches dict-typed base signature
-            **optional_params,
-            **{  # mutable-ok: matches dict-typed base signature
-                key: request_kwargs[key] for key in passthrough_keys if key in request_kwargs
-            },
-        }
+        passthrough: Final = MappingProxyType(
+            {key: request_kwargs[key] for key in passthrough_keys if key in request_kwargs}
+        )
+        merged: Final = MappingProxyType({**optional_params, **passthrough})
         translated: Final = _apply_service_tier_as_completion_window(merged)
         return {  # mutable-ok: matches dict-typed base signature
             key: value for key, value in translated.items() if key not in ("service_tier", "extra_body")

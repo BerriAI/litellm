@@ -269,9 +269,7 @@ def create_config_class(provider: SimpleProviderConfig):
                 provider, non_default_params.get("service_tier"), model, drop_params
             )
             params_to_map: Final = (
-                {  # mutable-ok: drop_params strips the tier into a fresh dict
-                    key: value for key, value in non_default_params.items() if key != "service_tier"
-                }
+                MappingProxyType({key: value for key, value in non_default_params.items() if key != "service_tier"})
                 if drop_service_tier
                 else non_default_params
             )
