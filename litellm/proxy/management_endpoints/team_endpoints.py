@@ -6962,9 +6962,7 @@ async def get_team_daily_activity_export(
 
     if format == "json":
         return JSONResponse(
-            content=TeamDailyActivityExportResponse(metadata=metadata, data=list(rows)).model_dump(
-                mode="json"
-            )  # mutable-ok: response model field type
+            content=TeamDailyActivityExportResponse(metadata=metadata, data=rows).model_dump(mode="json")
         )
     return Response(
         content=_team_export_csv(export_type, rows),
