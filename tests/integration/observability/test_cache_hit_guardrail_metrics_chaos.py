@@ -153,15 +153,21 @@ def _fire(rig: Rig, bodies: tuple[tuple[str, dict], ...]) -> tuple[tuple[int, st
         return tuple(pool.map(call, bodies))
 
 
-def _expect_exactly_once(rig: Rig, model_names: tuple[str, ...], deployment_ids: tuple[str, ...], four_xx: int) -> None:
+def _expect_counted_within(
+    rig: Rig, model_names: tuple[str, ...], deployment_ids: tuple[str, ...], low: int, high: int
+) -> None:
     def converged() -> tuple:
         samples: Final = _samples(rig.candidate, model_names)
         populated: Final = sum(_populated(samples, deployment) for deployment in deployment_ids)
-        if populated == four_xx and _blank(samples) == 0:
+        if low <= populated <= high and _blank(samples) == 0:
             return samples
         return ()
 
     eventually(converged, bool, seconds=70)
+
+
+def _expect_exactly_once(rig: Rig, model_names: tuple[str, ...], deployment_ids: tuple[str, ...], four_xx: int) -> None:
+    _expect_counted_within(rig, model_names, deployment_ids, four_xx, four_xx)
 
 
 def test_burst_cache_hit_rejects_count_exactly_once(gateway: Gateway, tmp_path: Path) -> None:
@@ -248,7 +254,7 @@ def test_redis_outage_keeps_serving_in_memory_hits(gateway: Gateway, tmp_path: P
 
 
 def test_worker_kill_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path) -> None:
-    """X3: workers=2, SIGKILL one uvicorn child mid-burst; survivors still reject exactly once."""
+    """X3: workers=2, SIGKILL one uvicorn child mid-burst; survivors keep rejecting; the count is answered plus at most the in-flight requests the killed worker had already counted."""
     marker: Final = uuid.uuid4().hex
     with _rig(gateway, tmp_path, marker, workers=2) as rig:
         bodies: Final = _burst_bodies(rig, marker, None)
@@ -273,7 +279,7 @@ def test_worker_kill_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path) 
             statuses,
             transport_lost,
         )
-        _expect_exactly_once(rig, (rig.model_name,), (rig.deployment_id,), answered)
+        _expect_counted_within(rig, (rig.model_name,), (rig.deployment_id,), answered, answered + transport_lost)
 
 
 def test_proxy_restart_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path) -> None:
