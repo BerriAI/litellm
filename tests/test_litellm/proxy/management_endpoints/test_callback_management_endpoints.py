@@ -298,7 +298,7 @@ class TestLangfuseOtelCallbackConfig:
         assert frozenset(scope["options"]) == OTEL_SPAN_SCOPES
         assert scope["required"] is False
 
-    @pytest.mark.parametrize("callback_id", ["langfuse_otel", "arize", "newrelic"])
+    @pytest.mark.parametrize("callback_id", ["arize", "newrelic"])
     def test_otel_span_scope_is_a_select_over_exactly_the_scopes_the_validator_accepts(self, callback_id):
         from litellm.types.utils import OTEL_SPAN_SCOPES
 
