@@ -253,30 +253,15 @@ class VertexAIBatchTransformation:
         return uris[0]
 
     @classmethod
-    def _get_output_file_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
+    def _get_output_file_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str | None:
         """
-        Gets the output file id from the Vertex AI Batch response
+        Gets the output file id from the Vertex AI Batch response, None until Vertex reports outputInfo
         """
-
         output_info: Final = response.get("outputInfo") or OutputInfo()
-        output_file_id: str = output_info.get("gcsOutputDirectory", "")
-        if output_file_id:
-            output_file_id = output_file_id.rstrip("/") + "/predictions.jsonl"
-        if output_file_id and output_file_id != "/predictions.jsonl":
-            return output_file_id
-
-        output_config: Final = response.get("outputConfig")
-        if output_config is None:
-            return output_file_id
-
-        gcs_destination: Final = output_config.get("gcsDestination")
-        if gcs_destination is None:
-            return output_file_id
-
-        output_uri_prefix: Final = gcs_destination.get("outputUriPrefix", "")
-        if output_uri_prefix.endswith("/predictions.jsonl"):
-            return output_uri_prefix
-        return output_uri_prefix.rstrip("/") + "/predictions.jsonl"
+        gcs_output_directory: Final = output_info.get("gcsOutputDirectory", "").rstrip("/")
+        if not gcs_output_directory:
+            return None
+        return f"{gcs_output_directory}/predictions.jsonl"
 
     @classmethod
     def _get_batch_job_status_from_vertex_ai_batch_response(
