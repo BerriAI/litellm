@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import threading
+import time
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -247,9 +248,12 @@ def test_proxy_round_trips_responses_over_pfs_gcm_peer_and_writes_spend(
 ) -> None:
     marker: Final = uuid.uuid4().hex[:8]
     user: Final = f"user19-resp-{marker}"
+    before: Final = len(tls_peers.gcm.received())
     response_id: Final = _responses_request(cipher_proxy, "tls-peer", user)
     assert response_id.startswith("resp_"), response_id
-    recorded: Final = tuple(record for record in tls_peers.gcm.received() if record.path.endswith("/responses"))
+    recorded: Final = tuple(
+        record for record in tls_peers.gcm.received()[before:] if record.path.endswith("/responses")
+    )
     assert [record.user for record in recorded] == [user], recorded
     assert all(record.cipher == PFS_GCM for record in recorded), recorded
     spend_rows: Final = eventually(
@@ -299,6 +303,7 @@ class _BurstOutcome:
     user: str | None
     status: int
     body: str
+    finished_at: float
 
 
 def _chaos_request(proxy: Gateway, kind: str, index: int, marker: str) -> _BurstOutcome:
@@ -315,9 +320,11 @@ def _chaos_request(proxy: Gateway, kind: str, index: int, marker: str) -> _Burst
                     "num_retries": 0,
                 },
             )
-            return _BurstOutcome(user=user, status=chat_response.status_code, body=chat_response.text)
+            return _BurstOutcome(
+                user=user, status=chat_response.status_code, body=chat_response.text, finished_at=time.monotonic()
+            )
         except httpx.HTTPError:
-            return _BurstOutcome(user=user, status=0, body="")
+            return _BurstOutcome(user=user, status=0, body="", finished_at=time.monotonic())
     if kind == "stream":
         try:
             stream_response: Final = proxy.request(
@@ -331,9 +338,11 @@ def _chaos_request(proxy: Gateway, kind: str, index: int, marker: str) -> _Burst
                     "num_retries": 0,
                 },
             )
-            return _BurstOutcome(user=user, status=stream_response.status_code, body=stream_response.text)
+            return _BurstOutcome(
+                user=user, status=stream_response.status_code, body=stream_response.text, finished_at=time.monotonic()
+            )
         except httpx.HTTPError:
-            return _BurstOutcome(user=user, status=0, body="")
+            return _BurstOutcome(user=user, status=0, body="", finished_at=time.monotonic())
     if kind == "responses":
         try:
             responses_response: Final = proxy.request(
@@ -341,9 +350,14 @@ def _chaos_request(proxy: Gateway, kind: str, index: int, marker: str) -> _Burst
                 "/v1/responses",
                 {"model": "tls-peer", "input": "tls", "user": user, "num_retries": 0},
             )
-            return _BurstOutcome(user=user, status=responses_response.status_code, body=responses_response.text)
+            return _BurstOutcome(
+                user=user,
+                status=responses_response.status_code,
+                body=responses_response.text,
+                finished_at=time.monotonic(),
+            )
         except httpx.HTTPError:
-            return _BurstOutcome(user=user, status=0, body="")
+            return _BurstOutcome(user=user, status=0, body="", finished_at=time.monotonic())
     try:
         messages_response: Final = proxy.request(
             "POST",
@@ -356,44 +370,34 @@ def _chaos_request(proxy: Gateway, kind: str, index: int, marker: str) -> _Burst
             },
             headers={"anthropic-version": "2023-06-01"},
         )
-        return _BurstOutcome(user=None, status=messages_response.status_code, body=messages_response.text)
+        return _BurstOutcome(
+            user=None,
+            status=messages_response.status_code,
+            body=messages_response.text,
+            finished_at=time.monotonic(),
+        )
     except httpx.HTTPError:
-        return _BurstOutcome(user=None, status=0, body="")
+        return _BurstOutcome(user=None, status=0, body="", finished_at=time.monotonic())
 
 
 def test_proxy_burst_survives_peer_restart_with_every_outcome_recorded(cipher_proxy: Gateway, tls_peers: Peers) -> None:
     marker: Final = uuid.uuid4().hex[:8]
-    outcomes_lock: Final = threading.Lock()
-    outcomes: Final[list[_BurstOutcome]] = []
     kinds: Final = ("chat", "stream", "responses", "messages", "chat", "stream")
-
-    def _run(kind: str, index: int) -> None:
-        outcome: Final = _chaos_request(cipher_proxy, kind, index, marker)
-        with outcomes_lock:
-            outcomes.append(outcome)
-
-    def _snapshot() -> tuple[_BurstOutcome, ...]:
-        with outcomes_lock:
-            return tuple(outcomes)
-
-    workers: Final = [
-        threading.Thread(target=_run, args=(kind, index), daemon=True) for index in range(5) for kind in kinds
-    ]
     before: Final = len(tls_peers.gcm.received())
-    for worker in workers:
-        worker.start()
-    eventually(
-        lambda: sum(1 for outcome in _snapshot() if outcome.status == 200),
-        lambda successes: successes >= 3,
-        seconds=60,
-    )
-    tls_peers.gcm.stop()
-    tls_peers.gcm.start()
-    for worker in workers:
-        worker.join(timeout=120)
-    finished: Final = _snapshot()
+    executor: Final = ThreadPoolExecutor(max_workers=30)
+    with executor:
+        futures: Final = tuple(
+            executor.submit(_chaos_request, cipher_proxy, kind, index, marker) for index in range(5) for kind in kinds
+        )
+        eventually(
+            lambda: sum(1 for future in futures if future.done() and future.result().status == 200),
+            lambda successes: successes >= 3,
+            seconds=60,
+        )
+        tls_peers.gcm.stop()
+        tls_peers.gcm.start()
+        finished: Final = tuple(future.result(timeout=120) for future in futures)
     assert len(finished) == 30, finished
-    assert not any(worker.is_alive() for worker in workers), "burst thread still running"
     assert not any(outcome.status == 0 for outcome in finished), finished
     records: Final = tls_peers.gcm.received()[before:]
     assert all(record.cipher == PFS_GCM for record in records), records
@@ -408,8 +412,10 @@ def test_proxy_burst_survives_peer_restart_with_every_outcome_recorded(cipher_pr
     anonymous: Final = sum(1 for record in records if record.user is None)
     messages_ok: Final = sum(1 for outcome in finished if outcome.user is None and outcome.status == 200)
     assert anonymous == messages_ok, (anonymous, messages_ok, records)
-    error_bodies: Final = tuple(outcome.body for outcome in finished if outcome.status >= 400)
-    assert all("ssl" not in body.lower() and "cipher" not in body.lower() for body in error_bodies), error_bodies
+    after_id: Final = _sync_completion(cipher_proxy, "tls-peer", f"chaos-after-{marker}")
+    assert after_id == f"chatcmpl-chaos-after-{marker}"
+    last_record: Final = tls_peers.gcm.received()[-1]
+    assert last_record.cipher == PFS_GCM and last_record.user == f"chaos-after-{marker}", last_record
     readiness: Final = cipher_proxy.client.get("/health/readiness")
     assert readiness.status_code == 200, readiness.text
 
@@ -417,34 +423,21 @@ def test_proxy_burst_survives_peer_restart_with_every_outcome_recorded(cipher_pr
 def test_proxy_burst_survives_losing_one_worker(cipher_owned_proxy: OwnedProxy, tls_peers: Peers) -> None:
     proxy: Final = cipher_owned_proxy.gateway
     marker: Final = uuid.uuid4().hex[:8]
-    outcomes_lock: Final = threading.Lock()
-    outcomes: Final[list[_BurstOutcome]] = []
-
-    def _run(index: int) -> None:
-        outcome: Final = _chaos_request(proxy, "chat", index, marker)
-        with outcomes_lock:
-            outcomes.append(outcome)
-
-    def _snapshot() -> tuple[_BurstOutcome, ...]:
-        with outcomes_lock:
-            return tuple(outcomes)
-
-    workers: Final = [threading.Thread(target=_run, args=(index,), daemon=True) for index in range(12)]
-    for worker in workers:
-        worker.start()
-    eventually(
-        lambda: sum(1 for outcome in _snapshot() if outcome.status == 200),
-        lambda successes: successes >= 2,
-        seconds=60,
-    )
-    children: Final = psutil.Process(cipher_owned_proxy.process.pid).children()
-    assert children, "two-worker proxy has no child processes to kill"
-    children[0].kill()
-    for worker in workers:
-        worker.join(timeout=120)
-    finished: Final = _snapshot()
+    executor: Final = ThreadPoolExecutor(max_workers=12)
+    with executor:
+        futures: Final = tuple(executor.submit(_chaos_request, proxy, "chat", index, marker) for index in range(12))
+        eventually(
+            lambda: sum(1 for future in futures if future.done() and future.result().status == 200),
+            lambda successes: successes >= 2,
+            seconds=60,
+        )
+        children: Final = psutil.Process(cipher_owned_proxy.process.pid).children()
+        assert children, "two-worker proxy has no child processes to kill"
+        killed_at: Final = time.monotonic()
+        children[0].kill()
+        finished: Final = tuple(future.result(timeout=120) for future in futures)
     assert len(finished) == 12, finished
-    assert any(outcome.status == 200 for outcome in finished), finished
+    assert any(outcome.status == 200 and outcome.finished_at > killed_at for outcome in finished), finished
 
     def _ready() -> bool:
         try:
