@@ -27,7 +27,7 @@ pytestmark = pytest.mark.e2e
 
 CONVERSE_REGIONAL_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 INVOKE_REGIONAL_BACKEND = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
-OPENAI_FAMILY_UNMAPPED_BACKEND = "bedrock/global.openai.gpt-6-sol"
+OPENAI_FAMILY_BACKEND = "bedrock/global.openai.gpt-6-sol"
 PROVIDER_HEADER_PREFIX = "llm_provider-"
 BEDROCK_REQUEST_ID_HEADER = "llm_provider-x-amzn-requestid"
 
@@ -209,7 +209,7 @@ class TestBedrockOpenAIFamilyDefaultRoute:
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model = _register_bedrock_model(
-            client, resources, "e2e-bedrock-openai-family", OPENAI_FAMILY_UNMAPPED_BACKEND
+            client, resources, "e2e-bedrock-openai-family", OPENAI_FAMILY_BACKEND
         )
         key = resources.key()
 
