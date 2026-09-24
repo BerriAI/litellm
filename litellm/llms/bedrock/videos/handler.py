@@ -15,7 +15,8 @@ Mirrors the URL + signing conventions of
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Coroutine, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, TypeAlias
 from urllib.parse import quote
 
 import httpx
@@ -23,6 +24,11 @@ import httpx
 import litellm
 from litellm.llms.bedrock.videos.transformation import BedrockNovaReelVideoConfig
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.bedrock import (
+    BedrockAsyncInvokeOutputDataConfig,
+    BedrockAsyncInvokeS3OutputDataConfig,
+    BedrockGetAsyncInvokeResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import decode_video_id_with_provider
@@ -37,11 +43,10 @@ from ..base_aws_llm import (
 from ..common_utils import BedrockError
 
 if TYPE_CHECKING:
-    from botocore.awsrequest import AWSPreparedRequest as _AWSPreparedRequest
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-else:
-    _AWSPreparedRequest = Any
+
+_LitellmParamsDict: TypeAlias = dict[str, object]
+_ExtraHeadersDict: TypeAlias = dict[str, object]
 
 DEFAULT_VIDEO_REGION: Final = "us-west-2"
 NOVA_REEL_OUTPUT_FILENAME: Final = "output.mp4"
@@ -50,7 +55,7 @@ NOVA_REEL_OUTPUT_FILENAME: Final = "output.mp4"
 def _sign_get_request(
     credentials: Credentials | None,
     url: str,
-    headers: dict[str, str],
+    headers: Mapping[str, str],
     aws_region_name: str,
     bearer_token: str | None = None,
 ) -> AWSPreparedRequest:
@@ -60,13 +65,20 @@ def _sign_get_request(
     except ImportError:
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-    if bearer_token is not None:
-        headers = {**headers, "Authorization": f"Bearer {bearer_token}"}
-        request: Final = AWSRequest(method="GET", url=url, data=None, headers=headers)
-        return request.prepare()
-
-    request = AWSRequest(method="GET", url=url, data=None, headers=headers)
-    if credentials is not None:
+    request: Final = AWSRequest(
+        method="GET",
+        url=url,
+        data=None,
+        headers=(
+            {  # mutable-ok: merged headers dict carries the bearer token
+                **headers,
+                "Authorization": f"Bearer {bearer_token}",
+            }
+            if bearer_token is not None
+            else headers
+        ),
+    )
+    if credentials is not None and bearer_token is None:
         SigV4Auth(credentials, "bedrock", aws_region_name).add_auth(request)
     return request.prepare()
 
@@ -89,15 +101,28 @@ def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
     return bucket, prefix
 
 
-def _params_to_dict(litellm_params: GenericLiteLLMParams | dict | None) -> dict:
+def _s3_uri_from_output_config(
+    output_config: BedrockAsyncInvokeOutputDataConfig | None,
+) -> str | None:
+    """s3Uri from the invocation's outputDataConfig.s3OutputDataConfig, if present."""
+    if output_config is None:
+        return None
+    s3_config: Final[BedrockAsyncInvokeS3OutputDataConfig | None] = output_config.get("s3OutputDataConfig")
+    if s3_config is None:
+        return None
+    s3_uri: Final[str | None] = s3_config.get("s3Uri")
+    return s3_uri
+
+
+def _params_to_dict(litellm_params: GenericLiteLLMParams | Mapping[str, object] | None) -> _LitellmParamsDict:
     """GenericLiteLLMParams is a pydantic model with dict-like access; copy to a real dict."""
     if litellm_params is None:
-        return {}
+        return {}  # mutable-ok: empty params dict for None input
     if isinstance(litellm_params, dict):
-        return dict(litellm_params)
-    if hasattr(litellm_params, "model_dump"):
+        return dict(litellm_params)  # mutable-ok: aws_* keys are popped in place downstream
+    if isinstance(litellm_params, GenericLiteLLMParams):
         return litellm_params.model_dump(exclude_none=True)
-    return dict(litellm_params)
+    return dict(litellm_params)  # mutable-ok: aws_* keys are popped in place downstream
 
 
 class BedrockVideoGeneration(BaseAWSLLM):
@@ -137,12 +162,12 @@ class BedrockVideoGeneration(BaseAWSLLM):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
+        optional_params: _LitellmParamsDict,
         api_base: str | None,
-        extra_headers: dict | None,
+        extra_headers: _ExtraHeadersDict | None,
         logging_obj: LiteLLMLogging | None,
         api_key: str | None = None,
-    ) -> tuple[str, _AWSPreparedRequest, bytes, dict]:
+    ) -> tuple[str, AWSPreparedRequest, bytes, _LitellmParamsDict]:
         """
         Returns (endpoint_url, prepped_request, body, data) for POST /async-invoke.
         """
@@ -170,17 +195,17 @@ class BedrockVideoGeneration(BaseAWSLLM):
             api_base=endpoint_url,
             video_create_optional_request_params=optional_params,
             litellm_params=GenericLiteLLMParams(),
-            headers={},
+            headers={},  # mutable-ok: transform never reads headers for Nova Reel
         )
         # The transform returns the model name it was given; make sure the
         # envelope carries the resolved Bedrock model id.
         data["modelId"] = model_id
 
         body: Final = json.dumps(data).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
-        if extra_headers is not None:
-            headers = {"Content-Type": "application/json", **extra_headers}
-
+        headers: Final[_ExtraHeadersDict] = {
+            "Content-Type": "application/json",
+            **(extra_headers or {}),
+        }
         prepped: Final = self.get_request_headers(
             credentials=boto3_credentials_info.credentials,
             aws_region_name=boto3_credentials_info.aws_region_name,
@@ -195,7 +220,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
             logging_obj.pre_call(
                 input=prompt,
                 api_key="",
-                additional_args={
+                additional_args={  # mutable-ok: logging payload dict built for this call
                     "complete_input_dict": data,
                     "api_base": endpoint_url,
                     "headers": prepped.headers,
@@ -207,7 +232,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
         self,
         model: str,
         response: httpx.Response,
-        data: dict,
+        data: Mapping[str, object],
         logging_obj: LiteLLMLogging | None,
     ) -> VideoObject:
         if logging_obj is not None:
@@ -215,7 +240,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
                 input="",
                 api_key="",
                 original_response=response.text,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": data},  # mutable-ok: logging payload dict built for this call
             )
         if response.status_code not in (200, 201):
             raise BedrockError(
@@ -236,17 +261,18 @@ class BedrockVideoGeneration(BaseAWSLLM):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
+        optional_params: _LitellmParamsDict,
         logging_obj: LiteLLMLogging | None,
         timeout: float | httpx.Timeout | None,
         avideo_generation: bool = False,
-        client: Any = None,
+        client: httpx.Client | httpx.AsyncClient | None = None,
         api_base: str | None = None,
-        extra_headers: dict | None = None,
+        extra_headers: _ExtraHeadersDict | None = None,
         api_key: str | None = None,
-    ) -> VideoObject:
+    ) -> VideoObject | Coroutine[object, object, VideoObject]:
+        """Returns a VideoObject, or a coroutine resolving to one when avideo_generation is set."""
         if avideo_generation:
-            return self.async_video_generation(  # type: ignore[no-any-return]
+            return self.async_video_generation(
                 model=model,
                 prompt=prompt,
                 optional_params=optional_params,
@@ -269,7 +295,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
         )
         from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
-        sync_client = client if isinstance(client, httpx.Client) else _get_httpx_client()
+        sync_client: Final = client if isinstance(client, httpx.Client) else _get_httpx_client()
         try:
             response: Final = sync_client.post(
                 url=endpoint_url,
@@ -292,12 +318,12 @@ class BedrockVideoGeneration(BaseAWSLLM):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
+        optional_params: _LitellmParamsDict,
         logging_obj: LiteLLMLogging | None,
         timeout: float | httpx.Timeout | None,
-        client: Any = None,
+        client: httpx.Client | httpx.AsyncClient | None = None,
         api_base: str | None = None,
-        extra_headers: dict | None = None,
+        extra_headers: _ExtraHeadersDict | None = None,
         api_key: str | None = None,
     ) -> VideoObject:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -311,12 +337,12 @@ class BedrockVideoGeneration(BaseAWSLLM):
             logging_obj=logging_obj,
             api_key=api_key,
         )
-        async_client = (
+        async_client: Final = (
             client
             if isinstance(client, httpx.AsyncClient)
             else get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.BEDROCK,
-                params={"timeout": timeout},
+                params={"timeout": timeout},  # mutable-ok: per-call timeout kwargs for the shared client factory
             )
         )
         try:
@@ -364,7 +390,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
         prepped: Final = _sign_get_request(
             credentials=credentials,
             url=status_url,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},  # mutable-ok: SigV4 signs a plain headers dict
             aws_region_name=aws_region_name,
             bearer_token=bearer_token,
         )
@@ -398,7 +424,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
         model: str,
         video_id: str,
         logging_obj: LiteLLMLogging | None,
-    ) -> tuple[VideoObject, dict]:
+    ) -> tuple[VideoObject, BedrockGetAsyncInvokeResponse]:
         if response.status_code != 200:
             raise BedrockError(
                 status_code=response.status_code,
@@ -406,7 +432,7 @@ class BedrockVideoGeneration(BaseAWSLLM):
                 headers=response.headers,
                 response=response,
             )
-        raw: Final[dict] = response.json()
+        raw: Final[BedrockGetAsyncInvokeResponse] = response.json()
         config: Final = BedrockNovaReelVideoConfig()
         video_obj = config.transform_video_status_retrieve_response(
             raw_response=response,
@@ -419,19 +445,18 @@ class BedrockVideoGeneration(BaseAWSLLM):
     def video_status(
         self,
         video_id: str,
-        litellm_params: GenericLiteLLMParams | dict | None = None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None = None,
         logging_obj: LiteLLMLogging | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
         astatus: bool = False,
-    ) -> VideoObject:
+    ) -> VideoObject | Coroutine[object, object, VideoObject]:
+        """Returns a VideoObject, or a coroutine resolving to one when astatus is set."""
         invocation_arn, model = self._decode_status_context(video_id)
-        optional_params: Final[dict] = _params_to_dict(litellm_params)
+        optional_params: Final[_LitellmParamsDict] = _params_to_dict(litellm_params)
         _, prepped = self._status_request_parts(invocation_arn, optional_params, api_base, api_key=api_key)
         if astatus:
-            return self.async_video_status(  # type: ignore[no-any-return]
-                prepped=prepped, model=model, video_id=video_id, logging_obj=logging_obj
-            )
+            return self.async_video_status(prepped=prepped, model=model, video_id=video_id, logging_obj=logging_obj)
         response: Final = self._sync_get(prepped)
         video_obj, _ = self._map_status_response(response, model, video_id, logging_obj)
         return video_obj
@@ -450,14 +475,14 @@ class BedrockVideoGeneration(BaseAWSLLM):
     def video_content(
         self,
         video_id: str,
-        litellm_params: GenericLiteLLMParams | dict | None = None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None = None,
         logging_obj: LiteLLMLogging | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
     ) -> bytes:
         """Download output.mp4 from the S3 output location once the job completed."""
         invocation_arn, model = self._decode_status_context(video_id)
-        optional_params: Final[dict] = _params_to_dict(litellm_params)
+        optional_params: Final[_LitellmParamsDict] = _params_to_dict(litellm_params)
         _, prepped = self._status_request_parts(invocation_arn, optional_params, api_base, api_key=api_key)
         response: Final = self._sync_get(prepped)
         video_obj, raw = self._map_status_response(response, model, video_id, logging_obj)
@@ -467,46 +492,48 @@ class BedrockVideoGeneration(BaseAWSLLM):
                 f"(status={video_obj.status}). Check video_status() before downloading."
             )
 
-        output_config: Final = (raw.get("outputDataConfig") or {}).get("s3OutputDataConfig") or {}
-        s3_uri: Final = output_config.get("s3Uri")
+        s3_uri: Final[str | None] = _s3_uri_from_output_config(raw.get("outputDataConfig"))
         if not s3_uri:
             raise ValueError(f"No S3 output location on completed invocation: {raw}")
 
         bucket, prefix = _parse_s3_uri(s3_uri)
         # Nova writes output.mp4 into a per-invocation folder (v1:1 docs); older
         # v1:0 flows placed it directly under the configured prefix.
-        key_candidates: Final = [
+        key_candidates: Final = [  # mutable-ok: candidate S3 keys are tried in order
             f"{prefix}/{invocation_arn.rsplit('/', 1)[-1]}/{NOVA_REEL_OUTPUT_FILENAME}".lstrip("/"),
             f"{prefix}/{NOVA_REEL_OUTPUT_FILENAME}".lstrip("/"),
         ]
-        return self._download_s3_object(bucket, key_candidates, _params_to_dict(litellm_params), raw)
+        return self._download_s3_object(bucket, key_candidates, litellm_params, raw)
 
-    def _download_s3_object(self, bucket: str, key_candidates: list[str], litellm_params: dict, raw: dict) -> bytes:
+    def _download_s3_object(
+        self,
+        bucket: str,
+        key_candidates: Sequence[str],
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
+        raw: BedrockGetAsyncInvokeResponse,
+    ) -> bytes:
         try:
             import boto3
             from botocore.exceptions import ClientError
         except ImportError:
             raise ImportError("Missing boto3 to download Nova Reel output. Run 'pip install boto3'.")
 
-        optional_params: Final[dict] = _params_to_dict(litellm_params)
+        optional_params: Final[_LitellmParamsDict] = _params_to_dict(litellm_params)
         credentials, region = self._load_credentials(optional_params)
-        session_kwargs: Final[dict[str, Any]] = {"region_name": region}
+        session_kwargs: Final[dict[str, str]] = {"region_name": region}  # mutable-ok: credential keys are added below
         if credentials is not None:
-            session_kwargs.update(
-                {
-                    "aws_access_key_id": credentials.access_key,
-                    "aws_secret_access_key": credentials.secret_key,
-                    **({"aws_session_token": credentials.token} if credentials.token else {}),
-                }
-            )
+            session_kwargs["aws_access_key_id"] = credentials.access_key
+            session_kwargs["aws_secret_access_key"] = credentials.secret_key
+            if credentials.token:
+                session_kwargs["aws_session_token"] = credentials.token
         session: Final = boto3.Session(**session_kwargs)
         s3_client: Final = session.client("s3")
 
-        errors: list[str] = []
+        errors: list[str] = []  # mutable-ok: error strings accumulate across candidate keys
         for key in key_candidates:
             try:
-                obj: Final = s3_client.get_object(Bucket=bucket, Key=key)
-                content: Final = obj["Body"].read()
+                obj = s3_client.get_object(Bucket=bucket, Key=key)
+                content = obj["Body"].read()
                 return bytes(content)
             except ClientError as err:
                 errors.append(f"s3://{bucket}/{key}: {err}")
@@ -516,5 +543,5 @@ class BedrockVideoGeneration(BaseAWSLLM):
                 "Nova Reel output video not found in the S3 output location. "
                 f"Tried: {key_candidates}. Errors: {errors}. Raw invocation: {raw}"
             ),
-            headers={},
+            headers={},  # mutable-ok: synthesized 404 carries no provider headers
         )

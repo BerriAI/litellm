@@ -247,11 +247,17 @@ def video_generation(
         if custom_llm_provider == "bedrock":
             from litellm.llms.bedrock.videos.handler import BedrockVideoGeneration
 
-            bedrock_optional_params: Final[dict] = dict(video_generation_request_params)
+            bedrock_optional_params: Final[dict] = (
+                dict(  # mutable-ok: aws_* params are merged in before the handler call
+                    video_generation_request_params
+                )
+            )
             # aws_* auth params ride on litellm_params; surface them for the handler
             # (mirrors how images/main.py merges non_default_params for bedrock).
             bedrock_optional_params.update(
-                {k: v for k, v in litellm_params.model_dump(exclude_none=True).items() if k.startswith("aws_")}
+                {  # mutable-ok: aws_* auth params merged into the bedrock params
+                    k: v for k, v in litellm_params.model_dump(exclude_none=True).items() if k.startswith("aws_")
+                }
             )
             return BedrockVideoGeneration().video_generation(
                 model=model,

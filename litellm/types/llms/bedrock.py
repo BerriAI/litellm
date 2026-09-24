@@ -917,23 +917,25 @@ class AmazonNovaCanvasTextToImageParams(TypedDict, total=False):
 
     conditionImage + controlMode + controlStrength enable conditioned editing
     (SEGMENTATION derives a segmentation mask from the condition image;
-    CANNY_EDGE follows its prominent contours — the AWS default).
+    CANNY_EDGE follows its prominent contours and is the AWS default).
     """
 
     text: str
     negativeText: str
     controlStrength: float
-    controlMode: Literal["CANNY_EDGE", "SEGMENTATION"]
+    controlMode: ReadOnly[Literal["CANNY_EDGE", "SEGMENTATION"]]
     conditionImage: str
-    style: Literal[
-        "3D_ANIMATED_FAMILY_FILM",
-        "DESIGN_SKETCH",
-        "FLAT_VECTOR_ILLUSTRATION",
-        "GRAPHIC_NOVEL_ILLUSTRATION",
-        "MAXIMALISM",
-        "MIDCENTURY_RETRO",
-        "PHOTOREALISM",
-        "SOFT_DIGITAL_PAINTING",
+    style: ReadOnly[
+        Literal[
+            "3D_ANIMATED_FAMILY_FILM",
+            "DESIGN_SKETCH",
+            "FLAT_VECTOR_ILLUSTRATION",
+            "GRAPHIC_NOVEL_ILLUSTRATION",
+            "MAXIMALISM",
+            "MIDCENTURY_RETRO",
+            "PHOTOREALISM",
+            "SOFT_DIGITAL_PAINTING",
+        ]
     ]
 
 
@@ -1027,8 +1029,8 @@ class AmazonNovaReelS3Location(TypedDict, total=False):
     Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-req-resp-structure.html
     """
 
-    uri: str
-    bucketOwner: str
+    uri: ReadOnly[str]
+    bucketOwner: ReadOnly[str]
 
 
 class AmazonNovaReelImageSourceLocation(TypedDict, total=False):
@@ -1036,8 +1038,8 @@ class AmazonNovaReelImageSourceLocation(TypedDict, total=False):
     Location of a Nova Reel input image: inline base64 bytes or S3.
     """
 
-    bytes: str  # base64 encoded image
-    s3Location: AmazonNovaReelS3Location
+    bytes: ReadOnly[str]  # base64 encoded image
+    s3Location: ReadOnly[AmazonNovaReelS3Location]
 
 
 class AmazonNovaReelImageSource(TypedDict, total=False):
@@ -1045,8 +1047,8 @@ class AmazonNovaReelImageSource(TypedDict, total=False):
     Image source for Nova Reel textToVideoParams.images entries.
     """
 
-    format: Literal["png", "jpeg"]
-    source: AmazonNovaReelImageSourceLocation
+    format: ReadOnly[Literal["png", "jpeg"]]
+    source: ReadOnly[AmazonNovaReelImageSourceLocation]
 
 
 class AmazonNovaReelTextToVideoParams(TypedDict, total=False):
@@ -1056,8 +1058,8 @@ class AmazonNovaReelTextToVideoParams(TypedDict, total=False):
     Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-req-resp-structure.html
     """
 
-    text: str
-    images: list[AmazonNovaReelImageSource]
+    text: ReadOnly[str]
+    images: ReadOnly[Sequence[AmazonNovaReelImageSource]]
 
 
 class AmazonNovaReelVideoGenerationConfig(TypedDict, total=False):
@@ -1069,10 +1071,10 @@ class AmazonNovaReelVideoGenerationConfig(TypedDict, total=False):
     (v1:0 also supports "720x1280"). seed: 0-2147483646, AWS default 42.
     """
 
-    durationSeconds: int
-    fps: int
-    dimension: str
-    seed: int
+    durationSeconds: ReadOnly[int]
+    fps: ReadOnly[int]
+    dimension: ReadOnly[str]
+    seed: ReadOnly[int]
 
 
 class AmazonNovaReelModelInput(TypedDict, total=False):
@@ -1080,9 +1082,9 @@ class AmazonNovaReelModelInput(TypedDict, total=False):
     modelInput body for Nova Reel StartAsyncInvoke.
     """
 
-    taskType: NOVA_REEL_TASK_TYPES
-    textToVideoParams: AmazonNovaReelTextToVideoParams
-    videoGenerationConfig: AmazonNovaReelVideoGenerationConfig
+    taskType: ReadOnly[NOVA_REEL_TASK_TYPES]
+    textToVideoParams: ReadOnly[AmazonNovaReelTextToVideoParams]
+    videoGenerationConfig: ReadOnly[AmazonNovaReelVideoGenerationConfig]
 
 
 class BedrockAsyncInvokeS3OutputDataConfig(TypedDict, total=False):
@@ -1092,9 +1094,9 @@ class BedrockAsyncInvokeS3OutputDataConfig(TypedDict, total=False):
     Ref: bedrock-runtime service model (StartAsyncInvokeRequest.outputDataConfig)
     """
 
-    s3Uri: str
-    kmsKeyId: str
-    bucketOwner: str
+    s3Uri: ReadOnly[str]
+    kmsKeyId: ReadOnly[str]
+    bucketOwner: ReadOnly[str]
 
 
 class BedrockAsyncInvokeOutputDataConfig(TypedDict, total=False):
@@ -1102,7 +1104,7 @@ class BedrockAsyncInvokeOutputDataConfig(TypedDict, total=False):
     Output data config for Bedrock StartAsyncInvoke.
     """
 
-    s3OutputDataConfig: BedrockAsyncInvokeS3OutputDataConfig
+    s3OutputDataConfig: ReadOnly[BedrockAsyncInvokeS3OutputDataConfig]
 
 
 class BedrockStartAsyncInvokeRequest(TypedDict, total=False):
@@ -1112,10 +1114,10 @@ class BedrockStartAsyncInvokeRequest(TypedDict, total=False):
     Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-access.html
     """
 
-    modelId: str
-    modelInput: AmazonNovaReelModelInput
-    outputDataConfig: BedrockAsyncInvokeOutputDataConfig
-    clientRequestToken: str
+    modelId: ReadOnly[str]
+    modelInput: ReadOnly[AmazonNovaReelModelInput]
+    outputDataConfig: ReadOnly[BedrockAsyncInvokeOutputDataConfig]
+    clientRequestToken: ReadOnly[str]
 
 
 class BedrockStartAsyncInvokeResponse(TypedDict, total=False):
@@ -1123,7 +1125,7 @@ class BedrockStartAsyncInvokeResponse(TypedDict, total=False):
     Response body for POST {runtime}/async-invoke.
     """
 
-    invocationArn: str
+    invocationArn: ReadOnly[str]
 
 
 BEDROCK_ASYNC_INVOKE_STATUSES = Literal["InProgress", "Completed", "Failed"]
@@ -1138,15 +1140,15 @@ class BedrockGetAsyncInvokeResponse(TypedDict, total=False):
     present when status is Failed.
     """
 
-    invocationArn: str
-    modelArn: str
-    clientRequestToken: str
-    status: BEDROCK_ASYNC_INVOKE_STATUSES
-    failureMessage: str
-    submitTime: float
-    lastModifiedTime: float
-    endTime: float
-    outputDataConfig: BedrockAsyncInvokeOutputDataConfig
+    invocationArn: ReadOnly[str]
+    modelArn: ReadOnly[str]
+    clientRequestToken: ReadOnly[str]
+    status: ReadOnly[BEDROCK_ASYNC_INVOKE_STATUSES]
+    failureMessage: ReadOnly[str]
+    submitTime: ReadOnly[float]
+    lastModifiedTime: ReadOnly[float]
+    endTime: ReadOnly[float]
+    outputDataConfig: ReadOnly[BedrockAsyncInvokeOutputDataConfig]
 
 
 if TYPE_CHECKING:

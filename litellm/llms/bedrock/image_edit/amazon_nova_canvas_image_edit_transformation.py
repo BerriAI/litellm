@@ -4,7 +4,7 @@ Amazon Nova Canvas image edit on Bedrock (InvokeModel).
 Maps OpenAI-style image edit (image + prompt, optional mask) to Nova Canvas task types:
 - With mask: INPAINTING (inPaintingParams per AWS docs)
 - Without mask: IMAGE_VARIATION (imageVariationParams)
-- TEXT_IMAGE: conditioned editing — the input image conditions layout via
+- TEXT_IMAGE: conditioned editing where the input image conditions layout via
   textToImageParams.conditionImage + controlMode (CANNY_EDGE | SEGMENTATION) +
   controlStrength (issue #39552)
 
@@ -94,7 +94,7 @@ def _nova_canvas_task_body(
             raise ValueError(
                 f"Unsupported Amazon Nova Canvas controlMode: {control_mode!r}. Use one of {NOVA_CANVAS_CONTROL_MODES}."
             )
-        t2i_params: Final[dict[str, object]] = {
+        t2i_params: Final[dict[str, object]] = {  # mutable-ok: optional conditioned-editing keys are set below
             "text": text,
             "conditionImage": image_b64,
         }
@@ -104,7 +104,7 @@ def _nova_canvas_task_body(
             t2i_params["controlMode"] = control_mode
         if control_strength is not None:
             t2i_params["controlStrength"] = control_strength
-        return {
+        return {  # mutable-ok: InvokeModel JSON body is a plain dict
             "taskType": "TEXT_IMAGE",
             "textToImageParams": t2i_params,
         }

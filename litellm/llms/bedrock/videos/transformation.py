@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 import httpx
 from httpx._types import FileContent, RequestFiles
@@ -30,6 +32,10 @@ from httpx._types import FileContent, RequestFiles
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.types.llms.bedrock import (
+    BedrockGetAsyncInvokeResponse,
+    BedrockStartAsyncInvokeResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.types.videos.utils import (
@@ -39,7 +45,14 @@ from litellm.types.videos.utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.videos.main import VideoObject
+
+_SupportedParams: TypeAlias = list[str]
+_VideoParams: TypeAlias = dict[str, object]
+_VideoHeaders: TypeAlias = dict[str, str]
+_VideoStringParams: TypeAlias = dict[str, str]
 
 NOVA_REEL_DEFAULT_DURATION_SECONDS: Final = 6
 NOVA_REEL_DEFAULT_FPS: Final = 24
@@ -47,11 +60,13 @@ NOVA_REEL_DEFAULT_DIMENSION: Final = "1280x720"
 
 # AWS async-invoke status enum (bedrock-runtime service model) -> OpenAI-style
 # VideoObject.status values used across LiteLLM video providers.
-NOVA_REEL_STATUS_MAP: Final[dict[str, str]] = {
-    "InProgress": "processing",
-    "Completed": "completed",
-    "Failed": "failed",
-}
+NOVA_REEL_STATUS_MAP: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "InProgress": "processing",
+        "Completed": "completed",
+        "Failed": "failed",
+    }
+)
 
 _UNSUPPORTED_MESSAGE: Final = (
     "video {operation} is not supported for Bedrock Nova Reel; Nova Reel exposes "
@@ -87,13 +102,32 @@ def _file_content_to_b64_and_format(image: FileContent) -> tuple[str, str]:
     return base64.b64encode(image_bytes).decode("utf-8"), image_format
 
 
+def _duration_seconds_from_request(request_data: Mapping[str, object] | None) -> float | None:
+    """durationSeconds from the StartAsyncInvoke request envelope, for cost calculation."""
+    if request_data is None:
+        return None
+    model_input: Final[object | None] = request_data.get("modelInput")
+    if not isinstance(model_input, Mapping):
+        return None
+    generation_config: Final[object | None] = model_input.get("videoGenerationConfig")
+    if not isinstance(generation_config, Mapping):
+        return None
+    duration: Final[object | None] = generation_config.get("durationSeconds")
+    if not isinstance(duration, (int, float, str)):
+        return None
+    try:
+        return float(duration)
+    except ValueError:
+        return None
+
+
 class BedrockNovaReelVideoConfig(BaseVideoConfig):
     """
     Video config for amazon.nova-reel-v1:0 (and regional variants) on Bedrock.
     """
 
-    def get_supported_openai_params(self, model: str) -> list:
-        return [
+    def get_supported_openai_params(self, model: str) -> _SupportedParams:
+        return [  # mutable-ok: BaseVideoConfig requires a list
             "seconds",
             "size",
             "seed",
@@ -111,21 +145,21 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> _VideoParams:
         # All supported params pass through untouched; Nova Reel-specific keys
         # keep their AWS names (durationSeconds etc. are built in
         # transform_video_create_request from seconds/size).
-        return dict(video_create_optional_params)
+        return dict(video_create_optional_params)  # mutable-ok: BaseVideoConfig requires a mutable param mapping
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: _VideoHeaders,
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
+    ) -> _VideoHeaders:
         if headers is None:
-            headers = {}
+            headers = {}  # mutable-ok: None headers start empty before Content-Type is added
         if "Content-Type" not in headers:
             headers["Content-Type"] = "application/json"
         return headers
@@ -143,7 +177,7 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: _VideoParams,
     ) -> str:
         raise NotImplementedError(
             "Nova Reel video URLs are built in BedrockVideoGeneration "
@@ -156,17 +190,19 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: dict,
+        video_create_optional_request_params: _VideoParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles, str]:
+        headers: _VideoHeaders,
+    ) -> tuple[_VideoParams, RequestFiles, str]:
         """
         Build the StartAsyncInvoke request body.
 
-        Returns (request_body, None, "POST") where request_body is the wrapped
+        Returns (request_body, files, "POST") where request_body is the wrapped
         async-invoke envelope {modelId, modelInput, outputDataConfig}.
         """
-        op: Final = dict(video_create_optional_request_params)
+        op: Final[_VideoParams] = dict(  # mutable-ok: request params are popped in place while building modelInput
+            video_create_optional_request_params
+        )
 
         output_s3_uri: Final = op.pop("output_s3_uri", None)
         if not output_s3_uri or not str(output_s3_uri).strip():
@@ -178,26 +214,30 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
 
         task_type: Final = op.pop("taskType", "TEXT_VIDEO")
 
-        text_to_video_params: Final[dict[str, object]] = {"text": prompt}
+        text_to_video_params: Final[_VideoParams] = {"text": prompt}
         input_reference: Final = op.pop("input_reference", None) or op.pop("image", None)
         if input_reference is not None:
             if isinstance(input_reference, dict):
                 # Pre-built provider shape: {"format": ..., "source": {...}}
-                text_to_video_params["images"] = [input_reference]
+                text_to_video_params["images"] = [input_reference]  # mutable-ok: AWS images param is a list
             else:
-                image_b64, image_format = _file_content_to_b64_and_format(input_reference)
-                text_to_video_params["images"] = [{"format": image_format, "source": {"bytes": image_b64}}]
+                image_b64, image_format = _file_content_to_b64_and_format(
+                    input_reference  # pyright: ignore[reportArgumentType]  # request params are untyped user input; the helper validates and raises for unsupported shapes
+                )
+                text_to_video_params["images"] = [  # mutable-ok: AWS images param is a list
+                    {"format": image_format, "source": {"bytes": image_b64}}  # mutable-ok: nested AWS image payload
+                ]
 
-        generation_config: Final[dict[str, object]] = {
+        generation_config: Final[_VideoParams] = {
             "durationSeconds": NOVA_REEL_DEFAULT_DURATION_SECONDS,
             "fps": NOVA_REEL_DEFAULT_FPS,
             "dimension": NOVA_REEL_DEFAULT_DIMENSION,
         }
         seconds: Final = op.pop("seconds", None)
-        if seconds is not None:
+        if isinstance(seconds, (int, float, str)):
             try:
                 generation_config["durationSeconds"] = int(float(seconds))
-            except (TypeError, ValueError):
+            except ValueError:
                 verbose_logger.debug("Nova Reel ignoring non-numeric seconds=%r", seconds)
         size: Final = op.pop("size", None)
         if size is not None and isinstance(size, str) and "x" in size:
@@ -212,7 +252,7 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         if seed is not None:
             generation_config["seed"] = seed
 
-        model_input: Final[dict[str, object]] = {
+        model_input: Final[_VideoParams] = {
             "taskType": task_type,
             "textToVideoParams": text_to_video_params,
             "videoGenerationConfig": generation_config,
@@ -222,25 +262,25 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         # through verbatim on the modelInput body.
         model_input.update(op)
 
-        request_body: Final[dict[str, object]] = {
+        request_body: Final[_VideoParams] = {
             "modelId": model,
             "modelInput": model_input,
             "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
         }
-        return request_body, None, "POST"
+        return request_body, [], "POST"  # mutable-ok: HTTP files payload requires a list
 
     def transform_video_create_response(
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLogging | None,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
     ) -> VideoObject:
         from litellm.types.videos.main import VideoObject
 
-        response_data: Final = raw_response.json()
-        invocation_arn: Final = response_data.get("invocationArn")
+        response_data: Final[BedrockStartAsyncInvokeResponse] = raw_response.json()
+        invocation_arn: Final[str | None] = response_data.get("invocationArn")
         if not invocation_arn:
             raise ValueError(f"Nova Reel async-invoke response missing invocationArn: {response_data}")
         video_obj = VideoObject(
@@ -250,16 +290,11 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
             model=model,
             created_at=_epoch_now(),
         )
-        usage: Final[dict[str, object]] = {}
-        duration: Final = (
-            ((request_data or {}).get("modelInput") or {}).get("videoGenerationConfig", {}).get("durationSeconds")
-        )
-        if duration is not None:
+        duration_seconds: Final[float | None] = _duration_seconds_from_request(request_data)
+        if duration_seconds is not None:
             # Mirrors the Vertex video config: lets the video cost calculator
             # compute cost from output_cost_per_second * duration_seconds.
-            usage["duration_seconds"] = float(duration)
-        if usage:
-            video_obj.usage = usage
+            video_obj.usage = {"duration_seconds": duration_seconds}  # mutable-ok: VideoObject.usage payload dict
         return video_obj
 
     def transform_video_status_retrieve_request(
@@ -267,8 +302,8 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: _VideoHeaders,
+    ) -> tuple[str, _VideoParams]:
         raise NotImplementedError(
             "Nova Reel status URLs are built and signed in BedrockVideoGeneration "
             "(GET /async-invoke/{arn}). Do not use this transform for this config."
@@ -277,21 +312,22 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
     def transform_video_status_retrieve_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLogging | None,
         custom_llm_provider: str | None = None,
-        client: Any = None,
+        client: HTTPHandler | None = None,
         model: str | None = None,
         video_id: str | None = None,
     ) -> VideoObject:
         from litellm.types.videos.main import VideoObject
 
-        response_data: Final[dict] = raw_response.json()
-        invocation_arn: Final = response_data.get("invocationArn")
+        response_data: Final[BedrockGetAsyncInvokeResponse] = raw_response.json()
+        invocation_arn: Final[str | None] = response_data.get("invocationArn")
         if not invocation_arn:
             raise ValueError(f"Nova Reel get-async-invoke response missing invocationArn: {response_data}")
-        raw_status: Final = str(response_data.get("status") or response_data.get("invocationStatus") or "InProgress")
-        status: Final = NOVA_REEL_STATUS_MAP.get(raw_status, "processing")
+        raw_status: Final[str] = str(response_data.get("status") or "InProgress")
+        status: Final[str] = NOVA_REEL_STATUS_MAP.get(raw_status, "processing")
 
+        failure_message: Final[str | None] = response_data.get("failureMessage")
         video_obj = VideoObject(
             id=encode_video_id_with_provider(invocation_arn, "bedrock", model),
             object="video",
@@ -300,15 +336,18 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
             created_at=_to_epoch(response_data.get("submitTime")),
             completed_at=(_to_epoch(response_data.get("endTime")) if status == "completed" else None),
             error=(
-                {"message": response_data["failureMessage"]}
-                if status == "failed" and response_data.get("failureMessage")
+                {"message": failure_message}  # mutable-ok: VideoObject.error accepts a plain payload dict
+                if status == "failed" and failure_message
                 else None
             ),
         )
-        output_config: Final = (response_data.get("outputDataConfig") or {}).get("s3OutputDataConfig") or {}
-        s3_uri: Final = output_config.get("s3Uri")
-        if s3_uri:
-            video_obj.usage = {"output_s3_uri": s3_uri}
+        output_config: Final = response_data.get("outputDataConfig")
+        if output_config is not None:
+            s3_config: Final = output_config.get("s3OutputDataConfig")
+            if s3_config is not None:
+                s3_uri: Final[str | None] = s3_config.get("s3Uri")
+                if s3_uri:
+                    video_obj.usage = {"output_s3_uri": s3_uri}  # mutable-ok: VideoObject.usage payload dict
         return video_obj
 
     def transform_video_content_request(
@@ -316,9 +355,9 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: _VideoHeaders,
         variant: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, _VideoParams]:
         raise NotImplementedError(
             "Nova Reel video content is downloaded from the S3 output location in "
             "BedrockVideoGeneration. Do not use this transform for this config."
@@ -327,7 +366,7 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
     def transform_video_content_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLogging | None,
     ) -> bytes:
         return raw_response.content
 
@@ -337,15 +376,15 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         prompt: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-        extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+        headers: _VideoHeaders,
+        extra_body: Mapping[str, object] | None = None,
+    ) -> tuple[str, _VideoParams]:
         raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="remix"))
 
     def transform_video_remix_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLogging | None,
         custom_llm_provider: str | None = None,
     ) -> VideoObject:
         raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="remix"))
@@ -354,20 +393,20 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: _VideoHeaders,
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+        extra_query: Mapping[str, object] | None = None,
+    ) -> tuple[str, _VideoParams]:
         raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="list"))
 
     def transform_video_list_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLogging | None,
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:
+    ) -> _VideoStringParams:
         raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="list"))
 
     def transform_video_delete_request(
@@ -375,14 +414,14 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: _VideoHeaders,
+    ) -> tuple[str, _VideoParams]:
         raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="delete"))
 
     def transform_video_delete_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLogging | None,
     ) -> VideoObject:
         raise NotImplementedError(_UNSUPPORTED_MESSAGE.format(operation="delete"))
 
@@ -400,7 +439,7 @@ def _epoch_now() -> int:
     return int(time.time())
 
 
-def _to_epoch(timestamp: Any) -> int | None:
+def _to_epoch(timestamp: str | float | None) -> int | None:
     if timestamp is None:
         return None
     try:
