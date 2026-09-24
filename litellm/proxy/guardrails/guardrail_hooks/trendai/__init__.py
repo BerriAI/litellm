@@ -29,7 +29,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         app_name=settings.app_name,
         fallback_on_error=settings.fallback_on_error,
         timeout=settings.timeout,
-        stream_batch_size=settings.stream_batch_size,
         stream_overlap_size=settings.stream_overlap_size,
         response_content_chunk_size_bytes=settings.response_content_chunk_size_bytes,
         logging_only_scan=settings.logging_only_scan,

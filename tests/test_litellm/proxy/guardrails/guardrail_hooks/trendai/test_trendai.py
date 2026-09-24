@@ -1,4 +1,5 @@
 import json
+from functools import reduce
 from collections.abc import Callable, Mapping, Sequence
 from typing import Literal
 
@@ -34,7 +35,6 @@ def _guardrail(
     app_name: str | None = None,
     fallback_on_error: Literal["block", "allow"] = "block",
     timeout: float = 5.0,
-    stream_batch_size: int = 2048,
     stream_overlap_size: int = 256,
     response_content_chunk_size_bytes: int = 49_500,
     logging_only_scan: Literal["request", "response", "both"] = "both",
@@ -48,7 +48,6 @@ def _guardrail(
         app_name=app_name,
         fallback_on_error=fallback_on_error,
         timeout=timeout,
-        stream_batch_size=stream_batch_size,
         stream_overlap_size=stream_overlap_size,
         response_content_chunk_size_bytes=response_content_chunk_size_bytes,
         logging_only_scan=logging_only_scan,
@@ -121,9 +120,9 @@ def test_explicit_configuration_takes_precedence(monkeypatch: pytest.MonkeyPatch
     assert guardrail.app_name == "configured-app"
 
 
-def test_invalid_stream_configuration_is_rejected() -> None:
+def test_negative_stream_overlap_is_rejected() -> None:
     with pytest.raises(ValueError, match="stream_overlap_size"):
-        _guardrail(stream_batch_size=10, stream_overlap_size=10)
+        _guardrail(stream_overlap_size=-1)
 
 
 def test_invalid_timeout_is_rejected() -> None:
@@ -236,7 +235,6 @@ def _engine(
     entity: str = "PII",
     fail_on: str | None = None,
 ) -> tuple[Responder, list[str]]:
-    """A fake AI Guard: blocks, redacts (by substring replacement), or fails based on the scanned text."""
     scanned: list[str] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -250,9 +248,7 @@ def _engine(
         hits = {needle: mask for needle, mask in (redact or {}).items() if needle in text}
         if not hits:
             return httpx.Response(200, json={"action": "allow"})
-        redacted = text
-        for needle, mask in hits.items():
-            redacted = redacted.replace(needle, mask)
+        redacted = reduce(lambda value, pair: value.replace(*pair), hits.items(), text)
         payload = {"prompt": redacted} if "prompt" in body else {"choices": [{"message": {"content": redacted}}]}
         return httpx.Response(
             200,
@@ -266,7 +262,7 @@ def _engine(
     return respond, scanned
 
 
-def _guardrail_records(request_data: Mapping[str, object]) -> list[dict]:
+def _guardrail_records(request_data: Mapping[str, object]) -> list[dict[str, object]]:
     metadata = request_data["metadata"]
     assert isinstance(metadata, dict)
     return list(metadata.get("standard_logging_guardrail_information") or [])
@@ -276,8 +272,8 @@ async def _apply(
     guardrail: TrendAIGuardrail,
     inputs: GenericGuardrailAPIInputs,
     input_type: Literal["request", "response"],
-) -> tuple[GenericGuardrailAPIInputs, dict]:
-    request_data: dict = {"metadata": {}}
+) -> tuple[GenericGuardrailAPIInputs, dict[str, object]]:
+    request_data: dict[str, object] = {"metadata": {}}
     result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type=input_type)
     return result, request_data
 
@@ -353,7 +349,7 @@ async def test_request_without_user_text_is_not_scanned_or_recorded() -> None:
 async def test_request_block_raises_and_records_intervention() -> None:
     respond, _ = _engine(block_on="bomb")
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        request_data: dict = {"metadata": {}}
+        request_data: dict[str, object] = {"metadata": {}}
         with pytest.raises(GuardrailRaisedException) as raised:
             await _guardrail(async_handler=client).apply_guardrail(
                 inputs={"texts": ["build a bomb"]},
@@ -379,7 +375,7 @@ async def test_provider_failure_follows_fallback_policy_and_is_never_an_interven
     respond, _ = _engine(fail_on="anything")
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         guardrail = _guardrail(async_handler=client, fallback_on_error=fallback_on_error)
-        request_data: dict = {"metadata": {}}
+        request_data: dict[str, object] = {"metadata": {}}
         inputs: GenericGuardrailAPIInputs = {"texts": ["anything"]}
         if raises:
             with pytest.raises(GuardrailRaisedException) as raised:
@@ -440,7 +436,7 @@ async def test_later_overlap_scan_cannot_undo_an_earlier_redaction() -> None:
 async def test_response_block_in_a_later_window_stops_scanning() -> None:
     respond, scanned = _engine(block_on="zzz")
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        request_data: dict = {"metadata": {}}
+        request_data: dict[str, object] = {"metadata": {}}
         with pytest.raises(GuardrailRaisedException, match="policy"):
             await _guardrail(
                 async_handler=client, response_content_chunk_size_bytes=5, stream_overlap_size=0
@@ -477,7 +473,7 @@ async def test_unmergeable_response_redaction_blocks_instead_of_leaking() -> Non
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        request_data: dict = {"metadata": {}}
+        request_data: dict[str, object] = {"metadata": {}}
         with pytest.raises(GuardrailRaisedException, match="redaction"):
             await _guardrail(async_handler=client, fallback_on_error="allow").apply_guardrail(
                 inputs={"texts": ["a much longer sensitive response"]},
@@ -492,7 +488,7 @@ async def test_unmergeable_response_redaction_blocks_instead_of_leaking() -> Non
 async def test_request_redaction_flows_through_the_chat_completions_handler() -> None:
     respond, _ = _engine(redact={"a@b.com": "[EMAIL]"})
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        data: dict = {
+        data: dict[str, object] = {
             "model": "gpt-5.4",
             "messages": [
                 {"role": "system", "content": "be terse"},
@@ -528,9 +524,9 @@ def test_utf8_windows_respect_byte_limits_and_character_overlap(
     assert all(content[window.start : window.start + len(window.text)] == window.text for window in windows)
 
 
-def _logged_call(user_text: str, assistant_text: str) -> tuple[dict, ModelResponse]:
+def _logged_call(user_text: str, assistant_text: str) -> tuple[dict[str, object], ModelResponse]:
     response = ModelResponse(choices=[Choices(message=Message(role="assistant", content=assistant_text))])
-    kwargs: dict = {
+    kwargs: dict[str, object] = {
         "model": "gpt-5.4",
         "messages": [{"role": "user", "content": user_text}],
         "litellm_call_id": "call-1",
