@@ -791,4 +791,50 @@ describe("ChatUI", () => {
       expect(screen.getByPlaceholderText("Select a Model")).toBeEnabled();
     });
   });
+
+  it("scrolls only the chat pane on streamed tokens, without scrollIntoView", async () => {
+    const scrollTopSetter = vi.spyOn(HTMLElement.prototype, "scrollTop", "set");
+    let streamChunk: ((chunk: string, model?: string) => void) | undefined;
+    vi.mocked(makeOpenAIChatCompletionRequest).mockImplementation(async (...args) => {
+      streamChunk = args[1] as (chunk: string, model?: string) => void;
+    });
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await selectComboboxOption("Select an endpoint", "/v1/chat/completions");
+    await selectComboboxOption("Select a Model", "Model 1");
+    const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+    await act(async () => {
+      fireEvent.change(messageInput, { target: { value: "hello" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+    });
+
+    await waitFor(() => {
+      expect(makeOpenAIChatCompletionRequest).toHaveBeenCalledTimes(1);
+    });
+
+    const scrollIntoViewMock = vi.mocked(Element.prototype.scrollIntoView);
+    const scrollIntoViewCallsBeforeTokens = scrollIntoViewMock.mock.calls.length;
+
+    await act(async () => {
+      streamChunk?.("Hello world", "Model 1");
+    });
+
+    expect(scrollIntoViewMock.mock.calls.length).toBe(scrollIntoViewCallsBeforeTokens);
+    expect(scrollTopSetter).toHaveBeenCalled();
+  });
 });

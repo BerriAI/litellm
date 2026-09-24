@@ -287,6 +287,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
 
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
   // Fetch MCP servers and toolsets
   const loadMCPServers = async () => {
     const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
@@ -512,6 +514,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     loadAgents();
   }, [accessToken, apiKeySource, apiKey, endpointType, customProxyBaseUrl, selectedAgent]);
+
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chatHistory]);
 
   const handleCancelRequest = () => {
     if (abortControllerRef.current) {
@@ -1786,7 +1793,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     )}
                   </div>
                 </div>
-                <div className="min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0">
+                <div
+                  ref={chatScrollRef}
+                  className="min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0"
+                >
                   {chatHistory.length === 0 && (
                     <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
                       <Bot className="mb-4 size-12" aria-hidden="true" />
