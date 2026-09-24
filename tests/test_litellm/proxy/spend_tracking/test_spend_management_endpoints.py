@@ -7297,6 +7297,10 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
     reps = [
         _session_representative_row("req-solo", None),
         _session_representative_row("req-1", "sess-1"),
+        # The plain-column predicate admits the cross product of session ids and
+        # api keys, so the endpoint must drop rows whose (session_key, api_key)
+        # pair was never requested.
+        _session_representative_row("req-cross-product", "sess-unrequested"),
     ]
     mock_prisma = _session_grouped_mock_prisma(page_rows, 3, reps)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
@@ -7346,6 +7350,12 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
             f"ORDER BY {SESSION_GROUP_KEY_SQL}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC"
             in rep_call[0]
         ), "the session representative must prefer the newest non-MCP call"
+        assert "session_id = ANY(" in rep_call[0] and "OR request_id = ANY(" in rep_call[0], (
+            "the representative lookup must filter on the plain session_id/request_id columns so the "
+            "(startTime, session_id, request_id, api_key, status) index applies; a row-tuple IN on the "
+            "COALESCE group key forces a full window scan (the 40s+ logs page)"
+        )
+        assert f"({SESSION_GROUP_KEY_SQL}) IN" not in rep_call[0]
         assert rep_call[-2] == ["sess-1", "req-solo"]
         assert rep_call[-1] == ["hashed-key", "hashed-key"]
     finally:
@@ -7635,8 +7645,9 @@ async def test_ui_view_spend_logs_group_by_session_offset_for_non_starttime_sort
         assert "next_session_cursor" not in data
         emitted_sql = [call.args[0] for call in mock_prisma.db.query_raw.await_args_list]
         assert "HAVING" not in " ".join(emitted_sql)
-        assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in emitted_sql[1]
-        assert "OFFSET" in emitted_sql[1]
+        page_sql = [sql for sql in emitted_sql if f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in sql]
+        assert len(page_sql) == 1
+        assert "OFFSET" in page_sql[0]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

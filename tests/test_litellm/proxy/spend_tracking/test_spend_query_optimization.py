@@ -203,18 +203,29 @@ async def test_spend_logs_ui_wraps_params_in_at_time_zone_utc(monkeypatch):
 
 def _make_ui_spend_logs_mock(count_total, page_rows):
     """
-    Build a prisma mock whose first `query_raw` (the bounded count) returns
-    `count_total` and whose second `query_raw` (the page data) returns
-    `page_rows`.
+    Build a prisma mock whose bounded-count `query_raw` returns `count_total`
+    and whose page-data `query_raw` returns `page_rows`, dispatching on the
+    SQL so the two queries may run in either order (they run concurrently).
     """
+
+    async def mock_query_raw(sql_query, *params):
+        if "COUNT(*) AS total_count" in sql_query:
+            return [{"total_count": count_total}]
+        return page_rows
+
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(
-        side_effect=[[{"total_count": count_total}], page_rows]
-    )
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
     return mock_prisma
+
+
+def _query_raw_call_matching(mock_prisma, sql_fragment):
+    """Return the single query_raw call whose SQL contains ``sql_fragment``."""
+    matches = [call for call in mock_prisma.db.query_raw.call_args_list if sql_fragment in call[0][0]]
+    assert len(matches) == 1, f"expected exactly one query containing {sql_fragment!r}, got {len(matches)}"
+    return matches[0]
 
 
 @pytest.mark.asyncio
@@ -260,21 +271,17 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
 
     mock_prisma.db.litellm_spendlogs.count.assert_not_called()
 
-    count_call = mock_prisma.db.query_raw.call_args_list[0]
+    count_call = _query_raw_call_matching(mock_prisma, "COUNT(*) AS total_count")
     count_sql = count_call[0][0]
     assert "COUNT(*) OVER ()" not in count_sql
     assert "LIMIT" in count_sql and "FROM (" in count_sql, (
-        "the total must come from a bounded subquery count, not a full-window "
-        f"scan. SQL was:\n{count_sql}"
+        f"the total must come from a bounded subquery count, not a full-window scan. SQL was:\n{count_sql}"
     )
-    assert count_call[0][-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1, (
-        "the bounded count must probe at most cap+1 rows"
-    )
+    assert count_call[0][-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1, "the bounded count must probe at most cap+1 rows"
 
-    page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
+    page_sql = _query_raw_call_matching(mock_prisma, "ORDER BY")[0][0]
     assert "COUNT(*) OVER ()" not in page_sql, (
-        "the page query must not carry a window count that forces a full-window "
-        f"scan. SQL was:\n{page_sql}"
+        f"the page query must not carry a window count that forces a full-window scan. SQL was:\n{page_sql}"
     )
     assert "GROUP BY" not in count_sql and "DISTINCT ON" not in page_sql, (
         "without group_by_session the endpoint must keep raw per-call pagination"
@@ -302,9 +309,7 @@ async def test_spend_logs_ui_caps_total_for_large_result_sets(monkeypatch):
     )
 
     page_rows = [{"request_id": "req-1", "metadata": "{}", "session_id": None}]
-    mock_prisma = _make_ui_spend_logs_mock(
-        count_total=SPEND_LOGS_PAGINATION_COUNT_CAP + 1, page_rows=page_rows
-    )
+    mock_prisma = _make_ui_spend_logs_mock(count_total=SPEND_LOGS_PAGINATION_COUNT_CAP + 1, page_rows=page_rows)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
@@ -343,13 +348,7 @@ async def test_spend_logs_ui_empty_page_reports_zero_total(monkeypatch):
         ui_view_spend_logs,
     )
 
-    # First query_raw call is the bounded count (0 matches), second is the empty
-    # page.
-    mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": 0}], []])
-    mock_prisma.db.litellm_spendlogs = MagicMock()
-    mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
+    mock_prisma = _make_ui_spend_logs_mock(count_total=0, page_rows=[])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -391,13 +390,7 @@ async def test_spend_logs_ui_out_of_range_page_keeps_total(monkeypatch):
         ui_view_spend_logs,
     )
 
-    # First query_raw call is the bounded count (7 matches), second is the
-    # out-of-range page (empty).
-    mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": 7}], []])
-    mock_prisma.db.litellm_spendlogs = MagicMock()
-    mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
+    mock_prisma = _make_ui_spend_logs_mock(count_total=7, page_rows=[])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -634,10 +627,10 @@ async def test_spend_logs_ui_group_by_session_offset_pages_for_other_sorts(monke
     )
 
     group_key = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
-    count_sql = mock_prisma.db.query_raw.call_args_list[0][0][0]
+    count_sql = _query_raw_call_matching(mock_prisma, "COUNT(*) AS total_count")[0][0]
     assert f"GROUP BY {group_key}" in count_sql
 
-    page_call = mock_prisma.db.query_raw.call_args_list[1][0]
+    page_call = _query_raw_call_matching(mock_prisma, f"DISTINCT ON ({group_key})")[0]
     page_sql = page_call[0]
     assert f"DISTINCT ON ({group_key})" in page_sql
     assert "ORDER BY spend DESC" in page_sql
@@ -682,7 +675,7 @@ async def test_spend_logs_ui_request_id_lookup_with_grouping_returns_exact_row(m
         group_by_session=True,
     )
 
-    page_call = mock_prisma.db.query_raw.call_args_list[1]
+    page_call = _query_raw_call_matching(mock_prisma, "DISTINCT ON")
     assert "request_id = $" in page_call[0][0], "the request_id equality filter must survive grouping"
     assert "req-deep-link" in page_call[0]
     assert [row["request_id"] for row in response["data"]] == ["req-deep-link"]

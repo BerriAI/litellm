@@ -684,6 +684,7 @@ model LiteLLM_SpendLogs {
   @@index([session_id])
   @@index([litellm_call_id])
   @@index([api_key, startTime])
+  @@index([startTime, session_id, request_id, api_key, status], map: "LiteLLM_SpendLogs_session_window_idx")
 }
 
 model LiteLLM_BudgetWindowSpend {
