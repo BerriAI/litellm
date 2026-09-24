@@ -64,7 +64,6 @@ RUN --mount=type=secret,id=cgr-token \
     bash \
     gcc \
     rust \
-    cargo \
     pkgconf \
     python-3.13 \
     python-3.13-dev \

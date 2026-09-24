@@ -20,7 +20,9 @@ pytestmark = pytest.mark.skipif(not DOCKERFILE_PATH.exists(), reason="Dockerfile
 
 
 def _builder_stage() -> str:
-    match: Final = re.search(r"^FROM \S+ AS builder\n(.*?)(?=^FROM )", DOCKERFILE_PATH.read_text(), re.MULTILINE | re.DOTALL)
+    match: Final = re.search(
+        r"^FROM \S+ AS builder\n(.*?)(?=^FROM )", DOCKERFILE_PATH.read_text(), re.MULTILINE | re.DOTALL
+    )
     assert match, "Dockerfile.fips has no `FROM ... AS builder` stage"
     return match.group(1)
 
@@ -33,17 +35,14 @@ def _apk_packages(stage: str) -> frozenset[str]:
     apk_runs: Final = tuple(i for i in _instructions(stage) if i.startswith("RUN") and "apk add" in i)
     assert apk_runs, "builder stage installs nothing with apk"
     return frozenset(
-        word
-        for run in apk_runs
-        for word in shlex.split(run.split("apk add", 1)[1])
-        if not word.startswith("-")
+        word for run in apk_runs for word in shlex.split(run.split("apk add", 1)[1]) if not word.startswith("-")
     )
 
 
 def test_builder_installs_the_toolchain_cryptography_needs_to_compile_against_system_openssl() -> None:
     packages: Final = _apk_packages(_builder_stage())
 
-    assert {"rust", "cargo", "pkgconf", "openssl-dev"} <= packages, sorted(packages)
+    assert {"rust", "pkgconf", "openssl-dev"} <= packages, sorted(packages)
 
 
 def test_builder_forbids_the_cryptography_wheel_before_the_first_uv_sync() -> None:
