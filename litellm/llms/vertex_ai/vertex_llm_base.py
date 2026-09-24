@@ -127,27 +127,48 @@ class VertexBase:
     ) -> tuple[_VertexCredentialsObject | None, str]:
         if credentials is not None:
             if isinstance(credentials, str):
-                _is_path: Final = os.path.exists(
-                    credentials
-                )  # credentials is from server config (litellm_params), not user input
                 verbose_logger.debug(
-                    "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s",
-                    _is_path,
+                    "Vertex: Loading vertex credentials, current dir %s",
                     os.getcwd(),
                 )
 
-                try:
-                    if _is_path:
+                # Decide by value shape, not os.path.exists(): exists()
+                # swallows every OSError (missing, unreadable, transient),
+                # which previously misreported all of them as invalid JSON.
+                if credentials.lstrip().startswith("{"):
+                    try:
+                        json_obj = json.loads(credentials)
+                    except json.JSONDecodeError as e:
+                        raise Exception(
+                            "Unable to load vertex credentials from environment. "
+                            "Ensure the JSON is valid (check for unescaped newlines in private_key). "
+                            f"Parse error: {type(e).__name__}: {e}"
+                        ) from e
+                else:
+                    try:
                         with open(credentials) as f:
                             json_obj = json.load(f)
-                    else:
-                        json_obj = json.loads(credentials)
-                except Exception as e:
-                    raise Exception(
-                        "Unable to load vertex credentials from environment. "
-                        "Ensure the JSON is valid (check for unescaped newlines in private_key). "
-                        f"Parse error: {type(e).__name__}"
-                    )
+                    except FileNotFoundError as e:
+                        raise Exception(
+                            f"Unable to load vertex credentials from file path: {credentials}. File not found. ({e})"
+                        ) from e
+                    except PermissionError as e:
+                        raise Exception(
+                            "Unable to load vertex credentials from file path: "
+                            f"{credentials}. File not readable (permission denied). ({e})"
+                        ) from e
+                    except OSError as e:
+                        raise Exception(
+                            "Unable to load vertex credentials from file path: "
+                            f"{credentials}. Unable to read file. ({e})"
+                        ) from e
+                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                        raise Exception(
+                            "Unable to load vertex credentials from file path: "
+                            f"{credentials}. Ensure the JSON is valid "
+                            "(check for unescaped newlines in private_key). "
+                            f"Parse error: {type(e).__name__}: {e}"
+                        ) from e
             elif isinstance(credentials, dict):
                 json_obj = credentials
             else:
