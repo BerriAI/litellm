@@ -94,25 +94,14 @@ def create_config_class(provider: SimpleProviderConfig):
             that don't support function calling."""
             from litellm.utils import supports_function_calling, supports_reasoning
 
-            supported_params: Final = [
-                param
-                for param in super().get_supported_openai_params(model=model)
-                if param not in provider.unsupported_params
-            ]
+            base_params: Final = super().get_supported_openai_params(model=model)
 
             _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 
+            tool_params: Final = (
+                () if _supports_fc else ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls")
+            )
             if not _supports_fc:
-                tool_params: Final = [
-                    "tools",
-                    "tool_choice",
-                    "function_call",
-                    "functions",
-                    "parallel_tool_calls",
-                ]
-                for param in tool_params:
-                    if param in supported_params:
-                        supported_params.remove(param)
                 verbose_logger.debug(
                     "Model %s on provider %s does not support function calling — removed tool-related params from supported params.",
                     model,
@@ -120,10 +109,16 @@ def create_config_class(provider: SimpleProviderConfig):
                 )
 
             _supports_reasoning: Final = supports_reasoning(model=model, custom_llm_provider=provider.slug)
-            if _supports_reasoning and "reasoning_effort" not in supported_params:
-                supported_params.append("reasoning_effort")
+            extra_params: Final = (
+                ("reasoning_effort",) if _supports_reasoning and "reasoning_effort" not in base_params else ()
+            )
 
-            return supported_params
+            excluded_params: Final = frozenset(tool_params) | frozenset(provider.unsupported_params)
+            supported_params: Final = tuple(
+                param for param in (*base_params, *extra_params) if param not in excluded_params
+            )
+
+            return list(supported_params)
 
         def map_openai_params(
             self,
