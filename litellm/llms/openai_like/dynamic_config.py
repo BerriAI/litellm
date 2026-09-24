@@ -2,8 +2,9 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from collections.abc import Coroutine
-from typing import Any, Final, Literal, overload
+from collections.abc import Coroutine, Mapping
+from types import MappingProxyType
+from typing import Any, Final, Literal, cast, overload
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -13,8 +14,36 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ServiceTier
 
 from .json_loader import SimpleProviderConfig
+
+_SERVICE_TIER_TO_COMPLETION_WINDOW: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        ServiceTier.FLEX.value: "flex",
+        ServiceTier.BALANCED.value: "balanced",
+        ServiceTier.PRIORITY.value: "asap",
+        "default": "asap",
+    }
+)
+
+
+def _apply_service_tier_as_completion_window(body: Mapping[str, object]) -> dict[str, object]:
+    service_tier: Final = body.get("service_tier")
+    window: Final[str | None] = (
+        _SERVICE_TIER_TO_COMPLETION_WINDOW.get(service_tier.lower()) if isinstance(service_tier, str) else None
+    )
+    metadata: Final[dict[str, object]] = (
+        cast(dict[str, object], body["metadata"]) if isinstance(body.get("metadata"), dict) else {}
+    )
+    new_body: Final[dict[str, object]] = {key: value for key, value in body.items() if key != "service_tier"}
+    if window is None or "completion_window" in metadata:
+        return new_body
+    return {**new_body, "metadata": {**metadata, "completion_window": window}}
+
+
+def _service_tier_as_completion_window_enabled(provider: SimpleProviderConfig) -> bool:
+    return provider.special_handling.get("service_tier_as_completion_window") is True
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -88,6 +117,28 @@ def create_config_class(provider: SimpleProviderConfig):
                 api_base = f"{api_base}/chat/completions"
 
             return api_base
+
+        def transform_request(
+            self,
+            model: str,
+            messages: list[AllMessageValues],
+            optional_params: dict[str, object],
+            litellm_params: dict[str, object],
+            headers: dict[str, object],
+        ) -> dict[str, object]:
+            body: Final[dict[str, object]] = cast(
+                dict[str, object],
+                super().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                ),
+            )
+            if _service_tier_as_completion_window_enabled(provider):
+                return _apply_service_tier_as_completion_window(body)
+            return body
 
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
@@ -225,19 +276,25 @@ def create_responses_config_class(provider: SimpleProviderConfig):
             self,
             model: str,
             input: str | ResponseInputParam,
-            response_api_optional_request_params: dict,
+            response_api_optional_request_params: dict[str, object],
             litellm_params: GenericLiteLLMParams,
-            headers: dict,
-        ) -> dict:
+            headers: dict[str, object],
+        ) -> dict[str, object]:
             if provider.special_handling.get("force_store_false"):
                 response_api_optional_request_params["store"] = False
-            return super().transform_responses_api_request(
-                model=model,
-                input=input,
-                response_api_optional_request_params=response_api_optional_request_params,
-                litellm_params=litellm_params,
-                headers=headers,
+            body: Final[dict[str, object]] = cast(
+                dict[str, object],
+                super().transform_responses_api_request(
+                    model=model,
+                    input=input,
+                    response_api_optional_request_params=response_api_optional_request_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                ),
             )
+            if _service_tier_as_completion_window_enabled(provider):
+                return _apply_service_tier_as_completion_window(body)
+            return body
 
     _responses_config_cache[provider.slug] = JSONProviderResponsesConfig
     return JSONProviderResponsesConfig
