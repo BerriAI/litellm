@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
@@ -5598,6 +5598,27 @@ async def _virtual_key_max_budget_alert_check(
 
 
 TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY: Final = "team_member_max_budget_alert_emails"
+_TEAM_MEMBER_ALERT_CONFIG_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _is_valid_alert_threshold_pct(pct: str) -> bool:
+    return pct.isdigit() and len(pct) <= 3 and 1 <= int(pct) <= 100
+
+
+def _alert_recipients(raw: object) -> Sequence[str] | None:
+    if isinstance(raw, str) or isinstance(raw, Sequence):
+        return _parse_email_list(raw)
+    return None
+
+
+def _valid_alert_threshold_config(raw_config: object) -> Mapping[str, str | Sequence[object] | None] | None:
+    try:
+        config: Final = _TEAM_MEMBER_ALERT_CONFIG_ADAPTER.validate_python(raw_config)
+    except ValidationError:
+        return None
+    return MappingProxyType(
+        {pct: _alert_recipients(emails) for pct, emails in config.items() if _is_valid_alert_threshold_pct(pct)}
+    )
 
 
 def _team_member_max_budget_alert_check(
@@ -5611,16 +5632,10 @@ def _team_member_max_budget_alert_check(
     spend: float,
     max_budget: float,
 ) -> None:
-    raw_config: Final = (team_metadata or {}).get(TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY)
-    merged_config: Final = _merge_budget_alert_email_configs(
-        global_cfg=None,
-        per_key_cfg=raw_config if isinstance(raw_config, Mapping) else None,
+    raw_config: Final = team_metadata.get(TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY) if team_metadata else None
+    alert_email_config: Final = _merge_budget_alert_email_configs(
+        global_cfg=None, per_key_cfg=_valid_alert_threshold_config(raw_config)
     )
-    alert_email_config: Final = {
-        pct: emails
-        for pct, emails in (merged_config or {}).items()
-        if pct.isdigit() and len(pct) <= 3 and 1 <= int(pct) <= 100
-    }
     if not alert_email_config or spend <= 0:
         return
     min_pct: Final = min(int(pct) for pct in alert_email_config)
