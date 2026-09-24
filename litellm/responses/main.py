@@ -1394,18 +1394,15 @@ def responses(
             drop_params=normalize_drop_params(request_drop_params),
         )
 
+        logging_optional_params: Final = {  # mutable-ok: update_from_kwargs stores a plain dict
+            **responses_api_request_params,
+            **({"extra_body": extra_body} if extra_body else {}),  # mutable-ok: update_from_kwargs stores a plain dict
+        }
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
             user=user,
-            optional_params={  # mutable-ok: update_from_kwargs stores a plain dict
-                **responses_api_request_params,
-                **(
-                    {"extra_body": extra_body}
-                    if extra_body
-                    else {}  # mutable-ok: update_from_kwargs stores a plain dict
-                ),
-            },
+            optional_params=logging_optional_params,
             litellm_params={
                 **responses_api_request_params,
                 "aresponses": _is_async,
@@ -2242,10 +2239,8 @@ def compact_responses(
             optional_params={  # mutable-ok: update_from_kwargs stores a plain dict
                 **responses_api_request_params,
                 **(
-                    {"extra_body": extra_body}
-                    if extra_body
-                    else {}  # mutable-ok: update_from_kwargs stores a plain dict
-                ),
+                    {"extra_body": extra_body} if extra_body else {}
+                ),  # mutable-ok: update_from_kwargs stores a plain dict
             },
             litellm_params={
                 **responses_api_request_params,
