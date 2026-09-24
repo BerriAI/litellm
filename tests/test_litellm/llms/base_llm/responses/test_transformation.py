@@ -49,3 +49,19 @@ def test_merge_extra_body_is_a_shallow_merge_by_default():
     }
     assert request == {"model": "gpt-5", "metadata": {"completion_window": "flex", "trace_id": "a"}}
     assert cfg.merge_extra_body(request, None) == request
+
+
+def test_default_merge_extra_body_shallow_merges_and_lets_extra_body_replace_nested_metadata():
+    cfg = OpenAIResponsesAPIConfig()
+    request = {"model": "m", "input": "hi", "metadata": {"from_request": "1"}, "max_output_tokens": 5}
+    extra_body = {"metadata": {"from_extra_body": "2"}, "vendor_only_field": "x"}
+
+    assert cfg.merge_extra_body(dict(request), extra_body) == {
+        "model": "m",
+        "input": "hi",
+        "metadata": {"from_extra_body": "2"},
+        "max_output_tokens": 5,
+        "vendor_only_field": "x",
+    }
+    assert cfg.merge_extra_body(dict(request), None) == request
+    assert cfg.merge_extra_body(dict(request), {}) == request

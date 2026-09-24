@@ -4,8 +4,10 @@ over the wire and surface provider errors correctly. Expected JSON bodies are st
 in expected_responses_api_request/.
 """
 
+import asyncio
 import copy
 import json
+import re
 from pathlib import Path
 from importlib import import_module
 from typing import Final
@@ -16,6 +18,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
@@ -240,6 +243,70 @@ async def test_aresponses_forwards_non_enum_reasoning_effort(
     request_body: Final = json.loads(upstream.calls[0].request.read())
     assert request_body["reasoning"] == {"effort": 5}
     assert response.output[0].content[0].text == "Done."
+
+
+class _OptionalParamsCapture(CustomLogger):
+    def __init__(self, litellm_call_id: str) -> None:
+        super().__init__()
+        self.litellm_call_id: Final = litellm_call_id
+        self.logged: tuple[dict, ...] = ()
+        self.seen: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        if kwargs["litellm_call_id"] != self.litellm_call_id:
+            return
+        self.logged = (*self.logged, kwargs["optional_params"])
+        self.seen.set()
+
+
+def _latest_openai_responses_model() -> str:
+    return max(
+        (
+            name
+            for name, row in litellm.model_cost.items()
+            if name.startswith("gpt-")
+            and row.get("litellm_provider") == "openai"
+            and row.get("mode") == "chat"
+            and "/v1/responses" in row.get("supported_endpoints", ())
+        ),
+        key=lambda name: tuple(float(part) for part in re.findall(r"\d+(?:\.\d+)?", name)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_aresponses_logs_extra_body_once_in_optional_params_and_leaves_the_wire_body_alone(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    capture: Final = _OptionalParamsCapture("extra-body-logging-call")
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    model: Final = _latest_openai_responses_model()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_extra_body", model))
+    )
+    extra_body: Final = {"metadata": {"from_extra_body": "1"}, "vendor_only_field": "x"}
+
+    await litellm.aresponses(
+        model=f"openai/{model}",
+        input="hi",
+        max_output_tokens=50,
+        metadata={"from_kwarg": "0"},
+        extra_body=copy.deepcopy(extra_body),
+        litellm_call_id=capture.litellm_call_id,
+    )
+    await asyncio.wait_for(capture.seen.wait(), timeout=10)
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.read()) == {
+        "model": model,
+        "input": "hi",
+        "max_output_tokens": 50,
+        "metadata": {"from_extra_body": "1"},
+        "vendor_only_field": "x",
+    }
+    assert capture.logged == ({"max_output_tokens": 50, "metadata": {"from_kwarg": "0"}, "extra_body": extra_body},)
 
 
 @pytest.mark.asyncio

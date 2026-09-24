@@ -250,6 +250,7 @@ class TestSailRequestShape:
             f"litellm.BadRequestError: sail does not support audio transcription. Model: {MODEL.split('/', 1)[1]}"
         )
         assert not route.called
+        assert respx_mock.calls.call_count == 0
 
     @pytest.mark.respx(assert_all_called=False)
     @pytest.mark.asyncio
@@ -262,6 +263,7 @@ class TestSailRequestShape:
         assert exc_info.value.status_code == 400
         assert "sail does not support audio transcription" in str(exc_info.value)
         assert not route.called
+        assert respx_mock.calls.call_count == 0
 
     @pytest.mark.respx()
     def test_sail_unsupported_params_dropped_with_drop_params(self, respx_mock: respx.Router):

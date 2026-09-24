@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -236,6 +237,44 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
     assert expected_key in litellm.model_cost
     info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     assert info["key"] == expected_key
+
+
+_BALANCED_MODEL_INFO_FIELDS: Final = (
+    "input_cost_per_token_balanced",
+    "output_cost_per_token_balanced",
+    "cache_read_input_token_cost_balanced",
+    "cache_creation_input_token_cost_balanced",
+    "output_cost_per_reasoning_token_balanced",
+)
+
+
+def _latest_chat_row(prefix: str, custom_llm_provider: str, *required_keys: str) -> str:
+    return max(
+        (
+            name
+            for name, row in litellm.model_cost.items()
+            if name.startswith(prefix)
+            and row.get("litellm_provider") == custom_llm_provider
+            and row.get("mode") == "chat"
+            and all(key in row for key in required_keys)
+        ),
+        key=lambda name: tuple(float(part) for part in re.findall(r"\d+(?:\.\d+)?", name)),
+    )
+
+
+def test_get_model_info_reports_balanced_tier_prices_only_where_the_row_has_them(local_model_cost_map: None) -> None:
+    gpt_row: Final = _latest_chat_row("gpt-", "openai")
+    sail_row: Final = _latest_chat_row("sail/", "sail", "input_cost_per_token_balanced")
+    assert all(field not in litellm.model_cost[gpt_row] for field in _BALANCED_MODEL_INFO_FIELDS)
+
+    gpt_info: Final = litellm.get_model_info(model=gpt_row, custom_llm_provider="openai")
+    sail_info: Final = litellm.get_model_info(model=sail_row, custom_llm_provider="sail")
+
+    assert tuple(gpt_info[field] for field in _BALANCED_MODEL_INFO_FIELDS) == (None,) * len(_BALANCED_MODEL_INFO_FIELDS)
+    assert tuple(sail_info[field] for field in _BALANCED_MODEL_INFO_FIELDS) == tuple(
+        litellm.model_cost[sail_row].get(field) for field in _BALANCED_MODEL_INFO_FIELDS
+    )
+    assert sail_info["input_cost_per_token_balanced"] != sail_info["input_cost_per_token"]
 
 
 def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:

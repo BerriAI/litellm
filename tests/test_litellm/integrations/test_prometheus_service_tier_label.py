@@ -16,6 +16,7 @@ import pytest
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.service_tier_utils import (
     KNOWN_REQUEST_SERVICE_TIERS,
+    get_requested_service_tier,
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.types.integrations.prometheus import (
@@ -230,6 +231,40 @@ async def test_success_event_emits_service_tier_on_latency_and_spend_metrics():
             )
     finally:
         _clear_prometheus_registry()
+
+
+def test_requested_tier_recognizes_balanced_and_drops_garbage_without_touching_the_other_tiers():
+    tiers_before_balanced = (
+        "auto",
+        "batch",
+        "default",
+        "fast",
+        "flex",
+        "priority",
+        "scale",
+        "standard",
+        "standard_only",
+        "ultrafast",
+    )
+    garbage = ("balanced ", "Balanced", "balanced_tier", "", "asap", 1, None, ["balanced"])
+
+    assert KNOWN_REQUEST_SERVICE_TIERS == frozenset((*tiers_before_balanced, "balanced"))
+    assert (
+        get_requested_service_tier(_standard_logging_payload(model_parameters={"service_tier": "balanced"}))
+        == "balanced"
+    )
+    assert (
+        tuple(
+            get_requested_service_tier(_standard_logging_payload(model_parameters={"service_tier": tier}))
+            for tier in tiers_before_balanced
+        )
+        == tiers_before_balanced
+    )
+    assert tuple(
+        get_requested_service_tier(_standard_logging_payload(model_parameters={"service_tier": value}))
+        for value in garbage
+    ) == (None,) * len(garbage)
+    assert get_requested_service_tier(_standard_logging_payload(model_parameters="balanced")) is None
 
 
 def test_allowlist_covers_every_modeled_service_tier():

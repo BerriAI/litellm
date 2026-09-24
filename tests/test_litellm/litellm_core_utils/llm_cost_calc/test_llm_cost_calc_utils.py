@@ -2431,33 +2431,39 @@ def test_threshold_keys_exclude_service_tier_variants():
 def test_get_cost_per_unit_falls_back_from_balanced_key_to_base():
     from litellm.litellm_core_utils.llm_cost_calc.utils import _get_cost_per_unit
 
-    model_info = {"input_cost_per_token": 2e-6}
-    assert _get_cost_per_unit(model_info, "input_cost_per_token_balanced") == 2e-6
-    model_info_direct = {
-        "input_cost_per_token_balanced": 5e-6,
-        "input_cost_per_token": 2e-6,
-    }
-    assert _get_cost_per_unit(model_info_direct, "input_cost_per_token_balanced") == 5e-6
+    without_balanced: Final = cast(ModelInfo, {"input_cost_per_token": 2e-6})
+    with_balanced: Final = cast(ModelInfo, {"input_cost_per_token_balanced": 5e-6, "input_cost_per_token": 2e-6})
+
+    assert _get_cost_per_unit(without_balanced, "input_cost_per_token_balanced") == 2e-6
+    assert _get_cost_per_unit(with_balanced, "input_cost_per_token_balanced") == 5e-6
+    assert _get_cost_per_unit(with_balanced, "input_cost_per_token") == 2e-6
 
 
-def test_threshold_keys_exclude_balanced_tier_variants():
-    from typing import cast
-
-    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_token_base_cost
-    from litellm.types.utils import ModelInfo, Usage
-
-    model_info = cast(
+def test_threshold_keys_exclude_balanced_variants_and_still_parse_k_thresholds():
+    model_info: Final = cast(
         ModelInfo,
         {
             "input_cost_per_token": 1e-6,
-            "input_cost_per_token_above_200k_tokens": 3e-6,
+            "input_cost_per_token_above_128k_tokens": 3e-6,
+            "input_cost_per_token_above_200k_tokens": 4e-6,
+            "input_cost_per_token_above_200k_tokens_balanced": 7e-6,
             "input_cost_per_token_above_300k_tokens_balanced": 9e-6,
             "output_cost_per_token": 2e-6,
+            "output_cost_per_token_above_128k_tokens": 5e-6,
+            "output_cost_per_token_above_200k_tokens": 6e-6,
+            "output_cost_per_token_above_200k_tokens_balanced": 14e-6,
+            "output_cost_per_token_above_300k_tokens_balanced": 18e-6,
         },
     )
-    usage = Usage(prompt_tokens=350_000, completion_tokens=1_000, total_tokens=351_000)
-    prompt_base, *_ = _get_token_base_cost(model_info=model_info, usage=usage)
-    assert prompt_base == 3e-6
+
+    above_300k: Final = Usage(prompt_tokens=350_000, completion_tokens=1_000, total_tokens=351_000)
+    between_128k_and_200k: Final = Usage(prompt_tokens=150_000, completion_tokens=1_000, total_tokens=151_000)
+    below_128k: Final = Usage(prompt_tokens=100_000, completion_tokens=1_000, total_tokens=101_000)
+
+    assert _get_token_base_cost(model_info=model_info, usage=above_300k)[:2] == (4e-6, 6e-6)
+    assert _get_token_base_cost(model_info=model_info, usage=between_128k_and_200k)[:2] == (3e-6, 5e-6)
+    assert _get_token_base_cost(model_info=model_info, usage=below_128k)[:2] == (1e-6, 2e-6)
+    assert _get_token_base_cost(model_info=model_info, usage=above_300k, service_tier="balanced")[:2] == (7e-6, 14e-6)
 
 
 @pytest.mark.parametrize(

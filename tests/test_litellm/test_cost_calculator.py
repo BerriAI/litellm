@@ -1,5 +1,9 @@
 import datetime
+import json
+import math
+import re
 import time
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
@@ -4699,45 +4703,6 @@ def test_completion_cost_is_zero_when_explicit_rates_are_zero(monkeypatch: pytes
     assert cost == 0.0
 
 
-@pytest.mark.parametrize(
-    "model,provider",
-    [
-        ("gpt-5.5", "openai"),
-        ("claude-haiku-4-5", "anthropic"),
-        ("gemini-3.1-pro-preview", "gemini"),
-        ("anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock"),
-        ("groq/openai/gpt-oss-120b", "groq"),
-        ("azure/gpt-5.5", "azure"),
-    ],
-)
-@pytest.mark.parametrize(
-    "usage",
-    [
-        Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
-        Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=40),
-        ),
-    ],
-    ids=["plain", "cached"],
-)
-def test_balanced_tier_bills_base_price_on_models_without_balanced_keys(
-    _local_model_cost_map: None, model: str, provider: str, usage: Usage
-) -> None:
-    def _cost(tier: str | None) -> float:
-        response: Final = ModelResponse(model=model, choices=[], usage=usage)
-        return completion_cost(
-            completion_response=response,
-            model=model,
-            custom_llm_provider=provider,
-            service_tier=tier,
-        )
-
-    assert _cost("balanced") == _cost(None) == _cost("some_unknown_tier")
-
-
 def test_balanced_cost_keys_exist_only_on_sail_rows(_local_model_cost_map: None) -> None:
     offenders: Final = [
         f"{model}:{key}"
@@ -4753,3 +4718,144 @@ def test_balanced_cost_keys_exist_only_on_sail_rows(_local_model_cost_map: None)
     ]
     assert offenders == []
     assert missing_base == []
+
+
+
+
+_PRICES_PATH: Final = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+_PRICES: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(json.loads(_PRICES_PATH.read_text()))
+_BALANCED_PARITY_FAMILIES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "openai": ("openai",),
+        "anthropic": ("anthropic",),
+        "gemini": ("gemini",),
+        "bedrock": ("bedrock", "bedrock_converse"),
+        "groq": ("groq",),
+        "azure": ("azure",),
+    }
+)
+
+
+def _version_key(name: str) -> tuple[float, ...]:
+    return tuple(float(part) for part in re.findall(r"\d+(?:\.\d+)?", name))
+
+
+def _priced_chat_rows(providers: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            name
+            for name, row in _PRICES.items()
+            if row.get("litellm_provider") in providers
+            and row.get("mode") == "chat"
+            and isinstance(row.get("input_cost_per_token"), float)
+            and row["input_cost_per_token"] > 0
+            and isinstance(row.get("cache_read_input_token_cost"), float)
+        )
+    )
+
+
+def _latest_row(prefix: str, provider: str, *required_keys: str) -> str:
+    return max(
+        (
+            name
+            for name, row in _PRICES.items()
+            if name.startswith(prefix)
+            and row.get("litellm_provider") == provider
+            and row.get("mode") == "chat"
+            and all(key in row for key in required_keys)
+        ),
+        key=_version_key,
+    )
+
+
+def _plain_usage() -> Usage:
+    return Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+
+
+def _cached_tier_usage() -> Usage:
+    return Usage(
+        prompt_tokens=1000,
+        completion_tokens=200,
+        total_tokens=1200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=300),
+    )
+
+
+def _cost_for_tier(model: str, custom_llm_provider: str, usage: Usage, service_tier: str | None) -> float:
+    return completion_cost(
+        completion_response=ModelResponse(model=model, choices=[], usage=usage),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        optional_params={"service_tier": service_tier} if service_tier is not None else None,
+    )
+
+
+@pytest.mark.parametrize("usage_factory", [_plain_usage, _cached_tier_usage], ids=["plain", "cached"])
+@pytest.mark.parametrize("family", sorted(_BALANCED_PARITY_FAMILIES))
+def test_completion_cost_balanced_tier_bills_standard_rates_on_rows_without_balanced_keys(
+    _local_model_cost_map, family: str, usage_factory: Callable[[], Usage]
+):
+    """A row without ``*_balanced`` keys bills ``balanced`` and an unknown tier exactly like no tier."""
+    rows: Final = _priced_chat_rows(_BALANCED_PARITY_FAMILIES[family])
+    assert rows, f"no priced chat rows for {family}"
+    costs: Final = tuple(
+        (
+            name,
+            _cost_for_tier(name, family, usage_factory(), None),
+            _cost_for_tier(name, family, usage_factory(), "balanced"),
+            _cost_for_tier(name, family, usage_factory(), "not-a-tier"),
+        )
+        for name in rows
+    )
+    drifted: Final = tuple(
+        entry
+        for entry in costs
+        if not math.isclose(entry[2], entry[1], rel_tol=1e-9) or not math.isclose(entry[3], entry[1], rel_tol=1e-9)
+    )
+    assert drifted == (), f"(model, no tier, balanced, unknown tier) rows that disagree: {drifted}"
+    assert min(entry[1] for entry in costs if entry[1] > 0) > 0
+    assert len([entry for entry in costs if entry[1] > 0]) >= len(costs) - 1
+
+
+def test_completion_cost_infers_sail_from_model_before_the_completion_window_gate(_local_model_cost_map):
+    model: Final = _latest_row("sail/", "sail", "input_cost_per_token_flex", "output_cost_per_token_flex")
+    row: Final = _PRICES[model]
+    usage: Final = _plain_usage()
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model=model, choices=[], usage=usage),
+        model=model,
+        optional_params={"metadata": {"completion_window": "flex"}},
+    )
+
+    expected: Final = usage.prompt_tokens * cast(
+        float, row["input_cost_per_token_flex"]
+    ) + usage.completion_tokens * cast(float, row["output_cost_per_token_flex"])
+    assert cost == pytest.approx(expected, rel=1e-9)
+    assert cost != pytest.approx(
+        usage.prompt_tokens * cast(float, row["input_cost_per_token"])
+        + usage.completion_tokens * cast(float, row["output_cost_per_token"]),
+        rel=1e-9,
+    )
+
+
+def test_completion_cost_ignores_completion_window_for_openai(_local_model_cost_map):
+    model: Final = _latest_row("gpt-", "openai", "input_cost_per_token_flex", "output_cost_per_token_flex")
+    row: Final = _PRICES[model]
+    usage: Final = _plain_usage()
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model=model, choices=[], usage=usage),
+        model=f"openai/{model}",
+        optional_params={"metadata": {"completion_window": "flex"}},
+    )
+
+    expected: Final = usage.prompt_tokens * cast(float, row["input_cost_per_token"]) + usage.completion_tokens * cast(
+        float, row["output_cost_per_token"]
+    )
+    assert cost == pytest.approx(expected, rel=1e-9)
+    assert cost != pytest.approx(
+        usage.prompt_tokens * cast(float, row["input_cost_per_token_flex"])
+        + usage.completion_tokens * cast(float, row["output_cost_per_token_flex"]),
+        rel=1e-9,
+    )
