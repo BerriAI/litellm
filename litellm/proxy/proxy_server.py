@@ -8697,9 +8697,9 @@ class ProxyConfig:
 
     @staticmethod
     def _merge_config_and_db_search_tools(
-        config_search_tools: list[SearchToolTypedDict],
-        db_search_tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+        config_search_tools: Sequence[SearchToolTypedDict],
+        db_search_tools: Sequence[dict[str, object]],
+    ) -> list[dict[str, object]]:
         db_tool_names: Final = {tool.get("search_tool_name") for tool in db_search_tools}
         return [
             *[
@@ -9270,10 +9270,10 @@ _EMPTY_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 async def _iter_with_keepalive(
-    aiter: AsyncIterator[Any],
+    aiter: AsyncIterator[object],
     resolve_keepalive_seconds: Callable[[object], float],
     keepalive_seconds: float,
-) -> AsyncGenerator[Any, None]:
+) -> AsyncGenerator[object, None]:
     """Wrap `aiter` with idle-gap heartbeats, re-resolving the interval after each
     real chunk via `resolve_keepalive_seconds`. A mid-stream router fallback can
     swap in a deployment with a different keepalive policy, including one that
@@ -9284,7 +9284,7 @@ async def _iter_with_keepalive(
     actually produced it, in both directions. While the interval is <= 0, no
     task is created and no timeout is awaited: a chunk is forwarded the moment
     it arrives, at the same cost as a bare `async for`."""
-    pending: asyncio.Task[Any] | None = None  # rebind-ok: rebound each loop iteration
+    pending: asyncio.Task[object] | None = None  # rebind-ok: rebound each loop iteration
     current_keepalive_seconds = keepalive_seconds  # rebind-ok: re-resolved after each chunk
     try:
         while True:
