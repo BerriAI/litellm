@@ -14,6 +14,7 @@ Endpoints for /organization operations
 #### ORGANIZATION MANAGEMENT ####
 
 from collections.abc import Mapping, Sequence
+from datetime import timedelta
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -1004,28 +1005,29 @@ async def delete_organization(
         )
 
     requested_ids: Final = tuple(dict.fromkeys(data.organization_ids))
-    existing_rows: Final = await _table(OrganizationRepository(prisma_client)).find_many(
-        where={"organization_id": {"in": list(requested_ids)}}  # mutable-ok: Prisma filter
-    )
-    existing_ids: Final = frozenset(row.organization_id for row in existing_rows)
-    missing: Final = tuple(organization_id for organization_id in requested_ids if organization_id not in existing_ids)
-    if missing:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Organization(s) not found: {', '.join(missing)}"},  # mutable-ok: error envelope
-        )
-
-    keys_to_delete: Final = await _table(VerificationTokenRepository(prisma_client)).find_many(
-        where={"organization_id": {"in": list(requested_ids)}}  # mutable-ok: Prisma filter
-    )
-    hashed_tokens_to_delete: Final = tuple(key.token for key in keys_to_delete)
-    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
-        hashed_tokens=hashed_tokens_to_delete,
-        prisma_client=prisma_client,
-    )
-
-    tx_manager: Final[_TransactionManager] = prisma_client.db.tx()
+    tx_manager: Final[_TransactionManager] = prisma_client.db.tx(timeout=timedelta(minutes=2))
     async with tx_manager as tx:
+        existing_rows: Final = await tx.litellm_organizationtable.find_many(
+            where={"organization_id": {"in": list(requested_ids)}}  # mutable-ok: Prisma filter
+        )
+        existing_ids: Final = frozenset(row.organization_id for row in existing_rows)
+        missing: Final = tuple(
+            organization_id for organization_id in requested_ids if organization_id not in existing_ids
+        )
+        if missing:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Organization(s) not found: {', '.join(missing)}"},  # mutable-ok: error envelope
+            )
+
+        keys_to_delete: Final = await tx.litellm_verificationtoken.find_many(
+            where={"organization_id": {"in": list(requested_ids)}}  # mutable-ok: Prisma filter
+        )
+        hashed_tokens_to_delete: Final = tuple(key.token for key in keys_to_delete)
+        jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
+            hashed_tokens=hashed_tokens_to_delete,
+            prisma_client=prisma_client,
+        )
         deleted_orgs: Final = await _delete_organizations_in_tx(tx=tx, organization_ids=requested_ids)
 
     await delete_cache_key_objects(
