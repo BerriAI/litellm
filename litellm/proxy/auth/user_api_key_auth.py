@@ -2674,6 +2674,9 @@ def is_no_auth_dev_mode(master_key: str | None, general_settings: Mapping[str, o
     )
 
 
+_FORCE_PROXY_ADMIN_ROLE: Final = MappingProxyType({"user_role": LitellmUserRoles.PROXY_ADMIN})
+
+
 @tracer.wrap()
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
@@ -2920,13 +2923,17 @@ async def _run_centralized_common_checks(
     # same user_id (e.g. litellm_proxy_admin_name = "default_user_id")
     # may have a non-admin user_role and would otherwise demote the
     # caller. The token is the source of truth for these paths — force
-    # the admin user_object whenever the token says PROXY_ADMIN, even
-    # if a DB row was fetched.
+    # the admin role whenever the token says PROXY_ADMIN, while keeping the
+    # fetched row so its budget fields still reach common_checks.
     if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN:
-        user_object = LiteLLM_UserTable(
-            user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            spend=user_object.spend if user_object is not None else 0.0,
+        user_object = (
+            user_object.model_copy(update=_FORCE_PROXY_ADMIN_ROLE)
+            if user_object is not None
+            else LiteLLM_UserTable(
+                user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                spend=0.0,
+            )
         )
 
     if project_object is not None:
