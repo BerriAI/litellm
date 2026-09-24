@@ -75,6 +75,34 @@ def _completion_body(identifier: str, model: str) -> dict[str, JsonValue]:
     }
 
 
+def _response_body(identifier: str, model: str) -> dict[str, JsonValue]:
+    return {
+        "id": identifier,
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": model,
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "temperature": 1.0,
+        "truncation": "disabled",
+        "store": True,
+        "metadata": {},
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_x",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "tls ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+    }
+
+
 def _chunk_body(
     identifier: str, model: str, content: str, role: str | None, finish_reason: str | None
 ) -> dict[str, JsonValue]:
@@ -115,6 +143,15 @@ class _CipherPeerHandler(BaseHTTPRequestHandler):
         identifier: Final = f"chatcmpl-{user or ''}"
         model_value: Final = body.get("model")
         model: Final = model_value if isinstance(model_value, str) else "gpt-4o-mini"
+        if self.path.endswith("/responses"):
+            response_id: Final = f"resp_{user or ''}"
+            responses_payload: Final = json.dumps(_response_body(response_id, model)).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(responses_payload)))
+            self.end_headers()
+            self.wfile.write(responses_payload)
+            return
         if body.get("stream") is True:
             chunks: Final = (
                 f"data: {json.dumps(_chunk_body(identifier, model, 'tls', 'assistant', None))}\n\n"

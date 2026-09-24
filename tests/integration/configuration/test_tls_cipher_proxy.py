@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+import httpx
+import psutil
 import pytest
 import yaml
+from anthropic import Anthropic
+from anthropic import APIStatusError as AnthropicAPIStatusError
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 from pydantic import JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
 from tests.integration._support.tls import TlsPeer, tls_peer, write_self_signed_cert
 
 CHACHA20: Final = "ECDHE-RSA-CHACHA20-POLY1305"
@@ -55,8 +60,10 @@ def cipher_proxy(
     base_config: Final = JSON_OBJECT.validate_python(
         yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     )
+    base_settings: Final = JSON_OBJECT.validate_python(base_config.get("litellm_settings", {}))
     config: Final = {
         **base_config,
+        "litellm_settings": {**base_settings, "cache": False},
         "model_list": [
             {
                 "model_name": "tls-peer",
@@ -186,3 +193,263 @@ def test_proxy_reports_ssl_error_for_non_pfs_peer(cipher_proxy: Gateway, tls_pee
     assert readiness.status_code == 200, readiness.text
     recovered: Final = _sync_completion(cipher_proxy, "tls-peer", f"user15-ok-{marker}")
     assert recovered == f"chatcmpl-user15-ok-{marker}"
+
+
+@pytest.fixture(scope="module")
+def cipher_owned_proxy(
+    tls_cert: tuple[Path, Path], tls_peers: Peers, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[OwnedProxy]:
+    cert_file, _ = tls_cert
+    directory: Final = tmp_path_factory.mktemp("tlsproxyworkers")
+    base_config: Final = JSON_OBJECT.validate_python(
+        yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    )
+    base_settings: Final = JSON_OBJECT.validate_python(base_config.get("litellm_settings", {}))
+    config: Final = {
+        **base_config,
+        "litellm_settings": {**base_settings, "cache": False},
+        "model_list": [
+            {
+                "model_name": "tls-peer",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": f"{tls_peers.gcm.url}/v1",
+                    "api_key": "sk-peer",
+                },
+            }
+        ],
+    }
+    config_path: Final = directory / "tls_cipher_workers_config.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    with gateway_from_environment() as gateway:
+        with owned_proxy_process(
+            gateway, directory, {"SSL_CERT_FILE": str(cert_file)}, config=config_path, workers=2
+        ) as owned:
+            yield owned
+
+
+def _responses_request(proxy: Gateway, model: str, user: str) -> str:
+    response: Final = proxy.request("POST", "/v1/responses", {"model": model, "input": "tls", "user": user})
+    assert response.status_code == 200, response.text
+    return str(JSON_OBJECT.validate_json(response.text)["id"])
+
+
+def _messages_request(proxy: Gateway, model: str) -> str:
+    with Anthropic(api_key=proxy.key, base_url=str(proxy.client.base_url), max_retries=0, timeout=60) as client:
+        message: Final = client.messages.create(
+            model=model, max_tokens=8, messages=[{"role": "user", "content": "tls"}]
+        )
+        return message.id
+
+
+def test_proxy_round_trips_responses_over_pfs_gcm_peer_and_writes_spend(
+    cipher_proxy: Gateway, tls_peers: Peers
+) -> None:
+    marker: Final = uuid.uuid4().hex[:8]
+    user: Final = f"user19-resp-{marker}"
+    response_id: Final = _responses_request(cipher_proxy, "tls-peer", user)
+    assert response_id.startswith("resp_"), response_id
+    recorded: Final = tuple(record for record in tls_peers.gcm.received() if record.path.endswith("/responses"))
+    assert [record.user for record in recorded] == [user], recorded
+    assert all(record.cipher == PFS_GCM for record in recorded), recorded
+    spend_rows: Final = eventually(
+        lambda: read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (response_id,)),
+        lambda values: len(values) == 1,
+        seconds=70,
+    )
+    assert spend_rows[0]["request_id"] == response_id
+
+
+def test_proxy_reports_ssl_error_for_responses_on_chacha20_only_peer(cipher_proxy: Gateway, tls_peers: Peers) -> None:
+    before: Final = len(tls_peers.chacha.received())
+    response: Final = cipher_proxy.request(
+        "POST",
+        "/v1/responses",
+        {"model": "tls-chacha-peer", "input": "tls", "user": f"user20-{uuid.uuid4().hex[:8]}"},
+    )
+    assert response.status_code >= 400, response.text
+    assert "ssl" in response.text.lower() or "connection error" in response.text.lower(), response.text
+    assert len(tls_peers.chacha.received()) == before
+    readiness: Final = cipher_proxy.client.get("/health/readiness")
+    assert readiness.status_code == 200, readiness.text
+
+
+def test_proxy_round_trips_messages_over_pfs_gcm_peer(cipher_proxy: Gateway, tls_peers: Peers) -> None:
+    before: Final = len(tls_peers.gcm.received())
+    message_id: Final = _messages_request(cipher_proxy, "tls-peer")
+    assert message_id, "messages response carried no id"
+    recorded: Final = tls_peers.gcm.received()
+    assert len(recorded) - before == 1, recorded[before:]
+    assert recorded[-1].cipher == PFS_GCM, recorded[-1]
+
+
+def test_proxy_reports_ssl_error_for_messages_on_chacha20_only_peer(cipher_proxy: Gateway, tls_peers: Peers) -> None:
+    before: Final = len(tls_peers.chacha.received())
+    with pytest.raises(AnthropicAPIStatusError) as raised:
+        _messages_request(cipher_proxy, "tls-chacha-peer")
+    assert raised.value.status_code >= 400
+    assert "ssl" in str(raised.value).lower() or "connection error" in str(raised.value).lower(), str(raised.value)
+    assert len(tls_peers.chacha.received()) == before
+    readiness: Final = cipher_proxy.client.get("/health/readiness")
+    assert readiness.status_code == 200, readiness.text
+
+
+@dataclass(frozen=True, slots=True)
+class _BurstOutcome:
+    user: str | None
+    status: int
+    body: str
+
+
+def _chaos_request(proxy: Gateway, kind: str, index: int, marker: str) -> _BurstOutcome:
+    user: Final = f"chaos-{kind}-{index}-{marker}"
+    if kind == "chat":
+        try:
+            chat_response: Final = proxy.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": "tls-peer",
+                    "messages": [{"role": "user", "content": "tls"}],
+                    "user": user,
+                    "num_retries": 0,
+                },
+            )
+            return _BurstOutcome(user=user, status=chat_response.status_code, body=chat_response.text)
+        except httpx.HTTPError:
+            return _BurstOutcome(user=user, status=0, body="")
+    if kind == "stream":
+        try:
+            stream_response: Final = proxy.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": "tls-peer",
+                    "messages": [{"role": "user", "content": "tls"}],
+                    "user": user,
+                    "stream": True,
+                    "num_retries": 0,
+                },
+            )
+            return _BurstOutcome(user=user, status=stream_response.status_code, body=stream_response.text)
+        except httpx.HTTPError:
+            return _BurstOutcome(user=user, status=0, body="")
+    if kind == "responses":
+        try:
+            responses_response: Final = proxy.request(
+                "POST",
+                "/v1/responses",
+                {"model": "tls-peer", "input": "tls", "user": user, "num_retries": 0},
+            )
+            return _BurstOutcome(user=user, status=responses_response.status_code, body=responses_response.text)
+        except httpx.HTTPError:
+            return _BurstOutcome(user=user, status=0, body="")
+    try:
+        messages_response: Final = proxy.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": "tls-peer",
+                "max_tokens": 8,
+                "messages": [{"role": "user", "content": f"tls {user}"}],
+                "num_retries": 0,
+            },
+            headers={"anthropic-version": "2023-06-01"},
+        )
+        return _BurstOutcome(user=None, status=messages_response.status_code, body=messages_response.text)
+    except httpx.HTTPError:
+        return _BurstOutcome(user=None, status=0, body="")
+
+
+def test_proxy_burst_survives_peer_restart_with_every_outcome_recorded(cipher_proxy: Gateway, tls_peers: Peers) -> None:
+    marker: Final = uuid.uuid4().hex[:8]
+    outcomes_lock: Final = threading.Lock()
+    outcomes: Final[list[_BurstOutcome]] = []
+    kinds: Final = ("chat", "stream", "responses", "messages", "chat", "stream")
+
+    def _run(kind: str, index: int) -> None:
+        outcome: Final = _chaos_request(cipher_proxy, kind, index, marker)
+        with outcomes_lock:
+            outcomes.append(outcome)
+
+    def _snapshot() -> tuple[_BurstOutcome, ...]:
+        with outcomes_lock:
+            return tuple(outcomes)
+
+    workers: Final = [
+        threading.Thread(target=_run, args=(kind, index), daemon=True) for index in range(5) for kind in kinds
+    ]
+    before: Final = len(tls_peers.gcm.received())
+    for worker in workers:
+        worker.start()
+    eventually(
+        lambda: sum(1 for outcome in _snapshot() if outcome.status == 200),
+        lambda successes: successes >= 3,
+        seconds=60,
+    )
+    tls_peers.gcm.stop()
+    tls_peers.gcm.start()
+    for worker in workers:
+        worker.join(timeout=120)
+    finished: Final = _snapshot()
+    assert len(finished) == 30, finished
+    assert not any(worker.is_alive() for worker in workers), "burst thread still running"
+    assert not any(outcome.status == 0 for outcome in finished), finished
+    records: Final = tls_peers.gcm.received()[before:]
+    assert all(record.cipher == PFS_GCM for record in records), records
+    successful_users: Final = {
+        outcome.user for outcome in finished if outcome.status == 200 and outcome.user is not None
+    }
+    failed_users: Final = {outcome.user for outcome in finished if outcome.status != 200 and outcome.user is not None}
+    assert all(any(record.user == user for record in records) for user in successful_users), (successful_users, records)
+    assert all(not any(record.user == user for record in records) for user in failed_users), (failed_users, records)
+    recorded_users: Final = {record.user for record in records if record.user is not None}
+    assert recorded_users <= successful_users, (recorded_users - successful_users, records)
+    anonymous: Final = sum(1 for record in records if record.user is None)
+    messages_ok: Final = sum(1 for outcome in finished if outcome.user is None and outcome.status == 200)
+    assert anonymous == messages_ok, (anonymous, messages_ok, records)
+    error_bodies: Final = tuple(outcome.body for outcome in finished if outcome.status >= 400)
+    assert all("ssl" not in body.lower() and "cipher" not in body.lower() for body in error_bodies), error_bodies
+    readiness: Final = cipher_proxy.client.get("/health/readiness")
+    assert readiness.status_code == 200, readiness.text
+
+
+def test_proxy_burst_survives_losing_one_worker(cipher_owned_proxy: OwnedProxy, tls_peers: Peers) -> None:
+    proxy: Final = cipher_owned_proxy.gateway
+    marker: Final = uuid.uuid4().hex[:8]
+    outcomes_lock: Final = threading.Lock()
+    outcomes: Final[list[_BurstOutcome]] = []
+
+    def _run(index: int) -> None:
+        outcome: Final = _chaos_request(proxy, "chat", index, marker)
+        with outcomes_lock:
+            outcomes.append(outcome)
+
+    def _snapshot() -> tuple[_BurstOutcome, ...]:
+        with outcomes_lock:
+            return tuple(outcomes)
+
+    workers: Final = [threading.Thread(target=_run, args=(index,), daemon=True) for index in range(12)]
+    for worker in workers:
+        worker.start()
+    eventually(
+        lambda: sum(1 for outcome in _snapshot() if outcome.status == 200),
+        lambda successes: successes >= 2,
+        seconds=60,
+    )
+    children: Final = psutil.Process(cipher_owned_proxy.process.pid).children()
+    assert children, "two-worker proxy has no child processes to kill"
+    children[0].kill()
+    for worker in workers:
+        worker.join(timeout=120)
+    finished: Final = _snapshot()
+    assert len(finished) == 12, finished
+    assert any(outcome.status == 200 for outcome in finished), finished
+
+    def _ready() -> bool:
+        try:
+            return proxy.client.get("/health/readiness").status_code == 200
+        except httpx.TransportError:
+            return False
+
+    eventually(_ready, lambda ready: ready, seconds=60)
