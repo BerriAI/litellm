@@ -224,3 +224,46 @@ fn zero_cost_reason_labels_match_python_literal(
     assert_eq!(reason.as_str(), label);
     assert_eq!(reason.to_string(), label);
 }
+
+#[rstest]
+#[case::named_group(
+    Some("group"),
+    Some("provider"),
+    "model_group=group model=model provider=provider"
+)]
+#[case::empty_group_falls_back_to_model(
+    Some(""),
+    Some("provider"),
+    "model_group=model model=model provider=provider"
+)]
+#[case::missing_group(
+    None,
+    Some("provider"),
+    "model_group=model model=model provider=provider"
+)]
+#[case::empty_provider_is_unknown(
+    Some("group"),
+    Some(""),
+    "model_group=group model=model provider=unknown"
+)]
+#[case::missing_provider_is_unknown(
+    Some("group"),
+    None,
+    "model_group=group model=model provider=unknown"
+)]
+fn zero_cost_warning_uses_python_or_fallbacks(
+    #[case] model_group: Option<&str>,
+    #[case] provider: Option<&str>,
+    #[case] expected: &str,
+) {
+    let usage = usage(json!({"prompt_tokens": 10, "completion_tokens": 20}));
+    let diagnostic = diagnose_zero_cost(
+        &usage,
+        "deployment",
+        &json!({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}),
+        true,
+    )
+    .unwrap();
+    let warning = zero_cost_warning(&diagnostic, model_group, "model", provider, &usage);
+    assert!(warning.contains(expected), "{warning}");
+}

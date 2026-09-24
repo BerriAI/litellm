@@ -111,15 +111,7 @@ pub fn zero_cost_finding(
         pricing_entry,
         request.calculation_failed,
     )?;
-    let model = request
-        .model_selection
-        .model
-        .or_else(|| response.get("model").and_then(Value::as_str))?;
-    let provider = catalog.get_provider_for_cost_calc(
-        Some(model),
-        request.model_selection.provider,
-        request.model_selection.known_providers,
-    );
+    let model = request.model_selection.model.unwrap_or("None");
     let warning = zero_cost_warning(
         &diagnostic,
         request
@@ -127,7 +119,7 @@ pub fn zero_cost_finding(
             .and_then(|metadata| metadata.get("model_group"))
             .and_then(Value::as_str),
         model,
-        provider.as_deref(),
+        request.model_selection.provider,
         &usage,
     );
     Some((diagnostic, warning))
@@ -245,9 +237,13 @@ pub fn zero_cost_warning(
     };
     format!(
         "Billable request priced at $0 and logged as such (model_group={} model={} provider={} prompt_tokens={} completion_tokens={}): {}. Counted in {}{{reason=\"{}\"}}",
-        model_group.unwrap_or(model),
+        model_group
+            .filter(|group| !group.is_empty())
+            .unwrap_or(model),
         model,
-        provider.unwrap_or("unknown"),
+        provider
+            .filter(|provider| !provider.is_empty())
+            .unwrap_or("unknown"),
         usage.prompt_tokens,
         usage.completion_tokens,
         cause,
