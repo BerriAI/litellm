@@ -11,9 +11,10 @@ use litellm_cost::billed_token_rates::{
 };
 use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::custom_pricing::CustomTokenRates;
+use litellm_cost::responses_usage::{ChatUsage, CompletionTokenDetails, PromptTokenDetails};
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn at(value: &str) -> Timestamp {
     value.parse().unwrap()
@@ -236,4 +237,58 @@ fn token_type_cost_breakdown_is_provider_agnostic_for_perplexity() {
     );
     assert!((breakdown.reasoning_cost - 400.0 * 4e-6).abs() < 1e-12);
     assert!((breakdown.cache_read_cost - 0.0).abs() < 1e-12);
+}
+
+fn breakdown_rates() -> Value {
+    json!({
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 1e-7,
+        "cache_creation_input_token_cost": 1.25e-6,
+        "output_cost_per_reasoning_token": 3e-6
+    })
+}
+
+fn usage_with_zero_details(private: (&str, Value)) -> ChatUsage {
+    ChatUsage {
+        prompt_tokens: 100,
+        completion_tokens: 100,
+        total_tokens: 200,
+        prompt_tokens_details: Some(PromptTokenDetails::default()),
+        completion_tokens_details: Some(CompletionTokenDetails {
+            reasoning_tokens: Some(0),
+            ..CompletionTokenDetails::default()
+        }),
+        extra: [(private.0.to_owned(), private.1)].into_iter().collect(),
+        ..ChatUsage::default()
+    }
+}
+
+#[rstest]
+#[case::cache_read("_cache_read_input_tokens", json!(40), (0.0, 40.0 * 1e-7, 0.0))]
+#[case::cache_creation("_cache_creation_input_tokens", json!(40), (0.0, 0.0, 40.0 * 1.25e-6))]
+#[case::reasoning("reasoning_tokens", json!(40), (40.0 * 3e-6, 0.0, 0.0))]
+#[case::bool_counts_as_one("reasoning_tokens", json!(true), (3e-6, 0.0, 0.0))]
+#[case::float_is_not_an_int("reasoning_tokens", json!(40.0), (0.0, 0.0, 0.0))]
+#[case::negative_counts_nothing("_cache_read_input_tokens", json!(-5), (0.0, 0.0, 0.0))]
+fn calculate_token_type_cost_breakdown_falls_back_to_private_counters_when_details_are_zero(
+    #[case] counter: &str,
+    #[case] value: Value,
+    #[case] expected: (f64, f64, f64),
+) {
+    let model_info = breakdown_rates();
+    let usage = usage_with_zero_details((counter, value));
+    let breakdown = calculate_token_type_cost_breakdown(BilledRatesRequest {
+        model_info: Some(&model_info),
+        usage: &usage,
+        provider: Some("openai"),
+        service_tier: None,
+        data_residency: None,
+        vertex_location: None,
+        at: at("2026-01-01T12:00Z"),
+        custom_cost_per_token: None,
+    });
+    assert!((breakdown.reasoning_cost - expected.0).abs() < 1e-15);
+    assert!((breakdown.cache_read_cost - expected.1).abs() < 1e-15);
+    assert!((breakdown.cache_creation_cost - expected.2).abs() < 1e-15);
 }

@@ -42,10 +42,7 @@ use crate::speech_cost::{
     SpeechCostMetric, cost_per_second, generic_cost_per_character, lyria_generation_cost,
     select_cost_metric_for_model, transcription_usage_has_token_details,
 };
-use crate::together_cost::{
-    TogetherThresholds, get_model_params_and_category, has_together_registry_pricing,
-    together_ai_cost_per_token,
-};
+use crate::together_cost::together_pricing_model;
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
 use crate::vertex_cost::{cost_per_token as vertex_cost_per_token, vertex_cost};
 use crate::xai_cost::{cost_per_token as xai_cost_per_token, reported_cost as xai_reported_cost};
@@ -118,15 +115,6 @@ pub fn cost_per_token_for_call(
                     prompt_characters,
                     completion_characters,
                 );
-            }
-            if provider == Some(LlmProviders::TOGETHER_AI)
-                && matches!(
-                    call_type.parse::<crate::call_type::CallTypes>().ok(),
-                    Some(crate::call_type::CallTypes::embedding)
-                        | Some(crate::call_type::CallTypes::aembedding)
-                )
-            {
-                return together_ai_cost_per_token(catalog, request, call_type);
             }
             if provider == Some(LlmProviders::AZURE_AI) {
                 return azure_ai_cost_per_token(catalog, request, request_model);
@@ -231,25 +219,16 @@ pub fn cost_per_token(
     {
         return Ok((0.0, cost));
     }
-    let needs_together_fallback = (provider == Some(LlmProviders::TOGETHER_AI)
-        || request.model.contains("togethercomputer")
-        || request.model.contains("together_ai"))
-        && !has_together_registry_pricing(request.model, catalog.entries());
-    let together_fallback = needs_together_fallback.then(|| {
-        get_model_params_and_category(request.model, "completion", TogetherThresholds::default())
-    });
-    let key = match together_fallback.as_deref() {
-        Some(category) => catalog.select_model_key(category, None, request.region),
-        None => catalog.select_model_key(request.model, request.provider, request.region),
-    }
-    .or_else(|| {
-        (provider == Some(LlmProviders::FIREWORKS_AI))
-            .then(|| get_base_model_for_pricing(request.model, FireworksThresholds::default()))
-            .and_then(|category| {
-                catalog.select_model_key(category, request.provider, request.region)
-            })
-    })
-    .ok_or(CostError::ModelNotFound)?;
+    let key = catalog
+        .select_model_key(request.model, request.provider, request.region)
+        .or_else(|| {
+            (provider == Some(LlmProviders::FIREWORKS_AI))
+                .then(|| get_base_model_for_pricing(request.model, FireworksThresholds::default()))
+                .and_then(|category| {
+                    catalog.select_model_key(category, request.provider, request.region)
+                })
+        })
+        .ok_or(CostError::ModelNotFound)?;
     let model_info =
         apply_provider_cache_read_default(catalog.entry_for_key(key), request.provider);
     if let Some(cost) = per_second_pricing_cost(&model_info, request.response_time_ms) {
@@ -537,7 +516,19 @@ pub fn completion_cost(
     catalog: &ModelInfoCatalog,
     request: CompletionCostRequest<'_>,
 ) -> Result<CompletionCost, CostError> {
-    let (prompt, output) = cost_per_token(catalog, request.token)?;
+    let pricing_model = together_pricing_model(
+        catalog,
+        request.token.model,
+        request.token.provider,
+        "completion",
+    );
+    let (prompt, output) = cost_per_token(
+        catalog,
+        ModelCostRequest {
+            model: &pricing_model,
+            ..request.token
+        },
+    )?;
     let built_in_tools = match request.built_in_tools {
         BuiltInToolCharge::Provided(cost) => cost,
         BuiltInToolCharge::FromResponse(tool_request) => get_cost_for_built_in_tools(

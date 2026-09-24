@@ -2,7 +2,6 @@
 // mirrors: local_testing/test_completion_cost.py::test_together_ai_qwen_completion_cost
 use litellm_cost::cost_calculator::cost_per_token;
 use litellm_cost::error::CostError;
-use litellm_cost::together_cost::together_ai_cost_per_token;
 
 use std::collections::HashMap;
 
@@ -10,7 +9,7 @@ use jiff::Timestamp;
 use litellm_cost::catalog::{ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::together_cost::{
     TogetherThresholds, get_model_params_and_category, get_model_params_and_category_embeddings,
-    has_together_registry_pricing,
+    has_together_registry_pricing, together_pricing_model,
 };
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
@@ -31,6 +30,21 @@ fn request<'a>(
         at: "2026-01-01T12:00Z".parse::<Timestamp>().unwrap(),
         response_time_ms: None,
     }
+}
+
+fn priced_as_completion_cost(
+    catalog: &ModelInfoCatalog,
+    request: ModelCostRequest<'_>,
+    call_type: &str,
+) -> Result<(f64, f64), CostError> {
+    let pricing_model = together_pricing_model(catalog, request.model, request.provider, call_type);
+    cost_per_token(
+        catalog,
+        ModelCostRequest {
+            model: &pricing_model,
+            ..request
+        },
+    )
 }
 
 fn usage() -> litellm_cost::responses_usage::ChatUsage {
@@ -132,7 +146,8 @@ fn catalog_uses_exact_price_or_chat_category(
         ),
     ]));
     let usage = usage();
-    let (prompt, completion) = cost_per_token(&catalog, request("model-7b", &usage)).unwrap();
+    let (prompt, completion) =
+        priced_as_completion_cost(&catalog, request("model-7b", &usage), "completion").unwrap();
     assert!((prompt - 100.0 * expected_input_rate).abs() < 1e-12);
     let output_rate = if exact_has_input_rate { 6e-6 } else { 3e-6 };
     assert!((completion - 20.0 * output_rate).abs() < 1e-12);
@@ -146,7 +161,7 @@ fn catalog_routes_embedding_to_size_category() {
     )]));
     let usage = usage();
     let (prompt, completion) =
-        together_ai_cost_per_token(&catalog, request("model-200m", &usage), "aembedding").unwrap();
+        priced_as_completion_cost(&catalog, request("model-200m", &usage), "aembedding").unwrap();
     assert!((prompt - 100.0 * 4e-8).abs() < 1e-12);
     assert_eq!(completion, 0.0);
 }
@@ -159,7 +174,84 @@ fn catalog_does_not_price_metadata_only_exact_row_when_category_is_missing() {
     )]));
     let usage = usage();
     assert_eq!(
-        cost_per_token(&catalog, request("model-7b", &usage)),
+        priced_as_completion_cost(&catalog, request("model-7b", &usage), "completion"),
         Err(CostError::ModelNotFound)
+    );
+}
+
+#[rstest]
+fn an_embedding_without_a_megabyte_size_is_not_remapped_as_chat() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "together-ai-4.1b-8b".to_owned(),
+        json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 3e-6}),
+    )]));
+    let usage = usage();
+    assert_eq!(
+        priced_as_completion_cost(&catalog, request("foo-7b-embed", &usage), "embedding"),
+        Err(CostError::ModelNotFound)
+    );
+}
+
+#[rstest]
+fn per_second_pricing_is_read_from_the_size_category_not_the_unpriced_model() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "together_ai/foo-7b".to_owned(),
+            json!({"input_cost_per_second": 0.01}),
+        ),
+        (
+            "together-ai-4.1b-8b".to_owned(),
+            json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 3e-6}),
+        ),
+    ]));
+    let usage = usage();
+    let (prompt, completion) = priced_as_completion_cost(
+        &catalog,
+        ModelCostRequest {
+            response_time_ms: Some(1000.0),
+            ..request("foo-7b", &usage)
+        },
+        "completion",
+    )
+    .unwrap();
+    assert!((prompt - 100.0 * 2e-6).abs() < 1e-12);
+    assert!((completion - 20.0 * 3e-6).abs() < 1e-12);
+}
+
+#[rstest]
+#[case::registry_priced_model_keeps_its_name(Some("together_ai"), "model-7b", true, "model-7b")]
+#[case::unpriced_together_model_maps_to_size(
+    Some("together_ai"),
+    "model-7b",
+    false,
+    "together-ai-4.1b-8b"
+)]
+#[case::together_name_without_provider(
+    None,
+    "togethercomputer/model-7b",
+    false,
+    "together-ai-4.1b-8b"
+)]
+#[case::other_provider_keeps_its_name(Some("openai"), "model-7b", false, "model-7b")]
+fn together_pricing_model_maps_only_unpriced_together_models(
+    #[case] provider: Option<&str>,
+    #[case] model: &str,
+    #[case] registry_priced: bool,
+    #[case] expected: &str,
+) {
+    let catalog = ModelInfoCatalog::new(
+        registry_priced
+            .then(|| {
+                (
+                    format!("together_ai/{model}"),
+                    json!({"input_cost_per_token": 1e-6}),
+                )
+            })
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(
+        together_pricing_model(&catalog, model, provider, "completion"),
+        expected
     );
 }

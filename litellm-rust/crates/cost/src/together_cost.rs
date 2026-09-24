@@ -1,11 +1,12 @@
-use crate::catalog::{ModelCostRequest, ModelInfoCatalog};
-use crate::cost_calculator::cost_per_token;
-use crate::error::CostError;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use regex::Regex;
 use serde_json::Value;
+
+use crate::catalog::ModelInfoCatalog;
+use crate::provider::LlmProviders;
 
 static CHAT_SIZE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+)b").unwrap());
 static EMBEDDING_SIZE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+)m").unwrap());
@@ -87,22 +88,22 @@ pub fn get_model_params_and_category_embeddings(
     .to_owned()
 }
 
-pub fn together_ai_cost_per_token(
+pub fn together_pricing_model<'a>(
     catalog: &ModelInfoCatalog,
-    request: ModelCostRequest<'_>,
+    model: &'a str,
+    provider: Option<&str>,
     call_type: &str,
-) -> Result<(f64, f64), CostError> {
-    if has_together_registry_pricing(request.model, catalog.entries()) {
-        return cost_per_token(catalog, request);
+) -> Cow<'a, str> {
+    let is_together = LlmProviders::TOGETHER_AI.matches(provider)
+        || model.contains("togethercomputer")
+        || model.contains("together_ai");
+    if is_together && !has_together_registry_pricing(model, catalog.entries()) {
+        Cow::Owned(get_model_params_and_category(
+            model,
+            call_type,
+            TogetherThresholds::default(),
+        ))
+    } else {
+        Cow::Borrowed(model)
     }
-    let category =
-        get_model_params_and_category(request.model, call_type, TogetherThresholds::default());
-    cost_per_token(
-        catalog,
-        ModelCostRequest {
-            model: &category,
-            provider: Some("together_ai"),
-            ..request
-        },
-    )
 }

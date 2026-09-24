@@ -121,8 +121,12 @@ pub fn calculate_billed_token_rates(request: BilledRatesRequest<'_>) -> Option<B
     )
 }
 
-fn count(value: Option<&Value>) -> u64 {
-    value.and_then(Value::as_u64).unwrap_or(0)
+fn coerce_token_count(value: Option<&Value>) -> u64 {
+    match value {
+        Some(Value::Bool(true)) => 1,
+        Some(Value::Number(number)) => number.as_u64().unwrap_or(0),
+        _ => 0,
+    }
 }
 
 pub fn calculate_token_type_cost_breakdown(
@@ -145,7 +149,7 @@ pub fn calculate_token_type_cost_breakdown(
         .as_ref()
         .map(|details| details.cache_hit_tokens)
         .filter(|tokens| *tokens > 0)
-        .unwrap_or_else(|| count(request.usage.extra.get("_cache_read_input_tokens")));
+        .unwrap_or_else(|| coerce_token_count(request.usage.extra.get("_cache_read_input_tokens")));
     let cached_audio = prompt
         .as_ref()
         .map_or(0, |details| details.cache_hit_audio_tokens);
@@ -153,14 +157,16 @@ pub fn calculate_token_type_cost_breakdown(
         .as_ref()
         .map(|details| details.cache_creation_tokens)
         .filter(|tokens| *tokens > 0)
-        .unwrap_or_else(|| count(request.usage.extra.get("_cache_creation_input_tokens")));
+        .unwrap_or_else(|| {
+            coerce_token_count(request.usage.extra.get("_cache_creation_input_tokens"))
+        });
     let reasoning = request
         .usage
         .completion_tokens_details
         .as_ref()
         .map(|_| parse_completion_tokens_details(request.usage).reasoning_tokens)
         .filter(|tokens| *tokens > 0)
-        .unwrap_or_else(|| count(request.usage.extra.get("reasoning_tokens")));
+        .unwrap_or_else(|| coerce_token_count(request.usage.extra.get("reasoning_tokens")));
     let cache_creation_cost = if request.custom_cost_per_token.is_some() {
         cache_creation as f64 * rates.cache_creation_input_token_cost
     } else {

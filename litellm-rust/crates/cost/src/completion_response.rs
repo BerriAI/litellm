@@ -31,6 +31,7 @@ use crate::realtime_cost::{
 };
 use crate::responses_usage::ChatUsage;
 use crate::speech_cost::count_characters;
+use crate::together_cost::together_pricing_model;
 use crate::tool_call_cost_tracking::{DefaultToolRates, ResponseKind as ToolResponseKind};
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
 
@@ -795,15 +796,17 @@ pub fn completion_cost_from_response(
                 } else {
                     request_model
                 };
+            let pricing_model =
+                together_pricing_model(catalog, model, provider, &prepared.call_type);
             let call = cost_call(
                 &prepared.call_type,
                 request,
-                model,
+                &pricing_model,
                 token_request_model,
                 &empty_params,
             )?;
             let cost_request = ModelCostRequest {
-                model,
+                model: &pricing_model,
                 provider,
                 region,
                 usage,

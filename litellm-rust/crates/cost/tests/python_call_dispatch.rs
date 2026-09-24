@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use litellm_cost::catalog::{CostCall, ModelCostRequest, ModelInfoCatalog};
 use litellm_cost::responses_usage::ChatUsage;
+use litellm_cost::together_cost::together_pricing_model;
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
 use serde_json::json;
@@ -111,10 +112,12 @@ fn token_call_routes_together_embedding_and_azure_router() {
         ),
     ]));
     let usage = usage();
+    let together_model =
+        together_pricing_model(&catalog, "model-200m", Some("together_ai"), "aembedding");
     assert_eq!(
         cost_per_token_for_call(
             &catalog,
-            request("model-200m", Some("together_ai"), &usage),
+            request(&together_model, Some("together_ai"), &usage),
             token("aembedding", None),
         )
         .unwrap(),
