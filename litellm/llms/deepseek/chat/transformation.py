@@ -225,6 +225,24 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         )
 
     @staticmethod
+    def _normalize_thinking_tool_choice(
+        optional_params: dict[str, object], model: str, drop_params: bool
+    ) -> dict[str, object]:
+        tool_choice: Final = optional_params.get("tool_choice")
+        if tool_choice is None or tool_choice in ("none", "auto"):
+            return optional_params
+        if not drop_params:
+            raise litellm.UnsupportedParamsError(
+                message=(
+                    "DeepSeek thinking mode does not support forced `tool_choice` values. "
+                    "To relax it to `auto`, set `drop_params=True`."
+                ),
+                model=model,
+                llm_provider="deepseek",
+            )
+        return {**optional_params, "tool_choice": "auto"}
+
+    @staticmethod
     def _drop_unsupported_tools(optional_params: dict) -> dict:
         """
         DeepSeek's /chat/completions only accepts tools of type "function".
@@ -310,13 +328,22 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         (user explicitly enabled it), preventing spurious injection on models
         like deepseek-v3.2 that support thinking as opt-in but not always-on.
         """
-        optional_params = self._drop_unsupported_tools(optional_params)
-        if self._thinking_mode_active(model=model, optional_params=optional_params):
-            messages = self._fill_reasoning_content(messages)
+        sanitized_optional_params: Final = self._drop_unsupported_tools(optional_params)
+        thinking_mode_active: Final = self._thinking_mode_active(model=model, optional_params=sanitized_optional_params)
+        transformed_optional_params: Final = (
+            self._normalize_thinking_tool_choice(
+                optional_params=sanitized_optional_params,
+                model=model,
+                drop_params=litellm.drop_params or litellm_params.get("drop_params") is True,
+            )
+            if thinking_mode_active
+            else sanitized_optional_params
+        )
+        transformed_messages: Final = self._fill_reasoning_content(messages) if thinking_mode_active else messages
         return super().transform_request(
             model=model,
-            messages=messages,
-            optional_params=optional_params,
+            messages=transformed_messages,
+            optional_params=transformed_optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -333,13 +360,22 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Async equivalent of transform_request — applies the same reasoning_content
         fix for multi-turn thinking-mode conversations.
         """
-        optional_params = self._drop_unsupported_tools(optional_params)
-        if self._thinking_mode_active(model=model, optional_params=optional_params):
-            messages = self._fill_reasoning_content(messages)
+        sanitized_optional_params: Final = self._drop_unsupported_tools(optional_params)
+        thinking_mode_active: Final = self._thinking_mode_active(model=model, optional_params=sanitized_optional_params)
+        transformed_optional_params: Final = (
+            self._normalize_thinking_tool_choice(
+                optional_params=sanitized_optional_params,
+                model=model,
+                drop_params=litellm.drop_params or litellm_params.get("drop_params") is True,
+            )
+            if thinking_mode_active
+            else sanitized_optional_params
+        )
+        transformed_messages: Final = self._fill_reasoning_content(messages) if thinking_mode_active else messages
         return await super().async_transform_request(
             model=model,
-            messages=messages,
-            optional_params=optional_params,
+            messages=transformed_messages,
+            optional_params=transformed_optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )

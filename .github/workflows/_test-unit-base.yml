@@ -13,6 +13,11 @@ on:
           have its path existence-checked like any other token.
         required: true
         type: string
+      additional-test-path:
+        description: "Pytest path(s) to run separately while appending coverage"
+        required: false
+        type: string
+        default: ""
       workers:
         description: "Number of pytest-xdist workers"
         required: false
@@ -205,6 +210,44 @@ jobs:
             --rerun-except "from pytest-timeout" \
             --durations=20 \
             --cov=./litellm --cov=./enterprise/litellm_enterprise \
+            --cov-report=xml:coverage.xml \
+            --cov-config=pyproject.toml
+          status=$?
+          set -e
+          if [ "$status" -eq 5 ]; then
+            echo "pytest collected no tests from ${TEST_PATH}; passing"
+            exit 0
+          fi
+          exit "$status"
+
+      - name: Run additional tests
+        if: steps.changes.outputs.decision != 'skip' && inputs.additional-test-path != ''
+        timeout-minutes: ${{ inputs.timeout-minutes }}
+        env:
+          TEST_PATH: ${{ inputs.additional-test-path }}
+          MAX_FAILURES: ${{ inputs.max-failures }}
+          WORKERS: ${{ inputs.workers }}
+          RERUNS: ${{ inputs.reruns }}
+          TEST_TIMEOUT_SECONDS: ${{ inputs.test-timeout-seconds }}
+          DIST: ${{ inputs.dist }}
+          COVERAGE_CORE: sysmon
+        run: |
+          xdist_args=()
+          if [ "${WORKERS}" != "0" ]; then
+            xdist_args=(-n "${WORKERS}" --dist="${DIST}")
+          fi
+          set +e
+          uv run --no-sync pytest ${TEST_PATH:?} \
+            --tb=short -vv \
+            --maxfail="${MAX_FAILURES}" \
+            "${xdist_args[@]}" \
+            --reruns "${RERUNS}" \
+            --reruns-delay 1 \
+            --timeout="${TEST_TIMEOUT_SECONDS}" \
+            --rerun-except "from pytest-timeout" \
+            --durations=20 \
+            --cov=./litellm --cov=./enterprise/litellm_enterprise \
+            --cov-append \
             --cov-report=xml:coverage.xml \
             --cov-config=pyproject.toml
           status=$?

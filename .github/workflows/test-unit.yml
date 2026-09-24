@@ -93,6 +93,7 @@ jobs:
           - shard: All Other Providers
             artifact-name: llm-other-providers
             test-path: "tests/test_litellm/llms --ignore=tests/test_litellm/llms/vertex_ai"
+            additional-test-path: "tests/unit/llms/deepseek/chat/test_deepseek_chat_transformation.py"
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -246,6 +247,7 @@ jobs:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: ${{ matrix.test-path }}
+      additional-test-path: ${{ matrix.additional-test-path || '' }}
       workers: ${{ matrix.workers }}
       reruns: ${{ matrix.reruns }}
       timeout-minutes: ${{ matrix.timeout-minutes }}
