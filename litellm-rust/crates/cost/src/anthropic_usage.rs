@@ -28,7 +28,7 @@ fn count(value: Option<&Value>) -> Result<u64, UsageError> {
             })
             .ok_or(UsageError::InvalidUsage),
         Some(Value::Bool(value)) => Ok(u64::from(*value)),
-        _ => Err(UsageError::InvalidUsage),
+        _ => Ok(0),
     }
 }
 
@@ -153,11 +153,21 @@ pub fn transform_anthropic_usage_to_chat_usage(
         cache_creation_token_details: cache_creation_details(object, &iterations, cache_creation)?,
         ..PromptTokenDetails::default()
     });
-    let extra: BTreeMap<_, _> = object
+    let mut extra: BTreeMap<_, _> = object
         .iter()
         .filter(|(key, _)| !matches!(key.as_str(), "input_tokens" | "output_tokens"))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
+    extra.insert("cache_read_input_tokens".to_string(), cache_read.into());
+    extra.insert(
+        "cache_creation_input_tokens".to_string(),
+        cache_creation.into(),
+    );
+    extra.insert("_cache_read_input_tokens".to_string(), cache_read.into());
+    extra.insert(
+        "_cache_creation_input_tokens".to_string(),
+        cache_creation.into(),
+    );
     Ok(ChatUsage {
         prompt_tokens: prompt,
         completion_tokens: output,

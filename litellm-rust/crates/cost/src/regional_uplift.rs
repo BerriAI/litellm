@@ -45,6 +45,15 @@ pub fn get_provider_specific_geo_multiplier(
         .unwrap_or(1.0)
 }
 
+pub fn regional_totals_multiplier(
+    model_info: &Value,
+    data_residency: Option<&str>,
+    vertex_location: Option<&str>,
+) -> f64 {
+    get_regional_uplift_multiplier(model_info, data_residency)
+        * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+}
+
 pub fn combined_regional_multiplier(
     model_info: &Value,
     inference_geo: Option<&str>,

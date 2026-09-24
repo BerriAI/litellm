@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value};
 
 use crate::responses_usage::{ChatUsage, CompletionTokenDetails, PromptTokenDetails, UsageError};
@@ -166,6 +168,17 @@ pub fn transform_interactions_usage_object(usage: &Value) -> Result<ChatUsage, U
             image_tokens: output.image,
             video_tokens: output.video,
         });
+    let mut extra = BTreeMap::new();
+    if total_cached > 0 {
+        extra.insert(
+            "cache_read_input_tokens".to_string(),
+            Value::from(total_cached),
+        );
+        extra.insert(
+            "_cache_read_input_tokens".to_string(),
+            Value::from(total_cached),
+        );
+    }
     Ok(ChatUsage {
         prompt_tokens,
         completion_tokens,
@@ -173,6 +186,6 @@ pub fn transform_interactions_usage_object(usage: &Value) -> Result<ChatUsage, U
         prompt_tokens_details,
         completion_tokens_details,
         cost: None,
-        extra: Default::default(),
+        extra,
     })
 }

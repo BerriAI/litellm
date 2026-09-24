@@ -96,18 +96,63 @@ fn chat_usage_coerces_numeric_strings_and_bools_like_pydantic() {
         "completion_tokens": true,
         "total_tokens": 151,
         "cache_read_input_tokens": "40",
-        "cache_creation_input_tokens": true,
-        "reasoning_tokens": "12"
+        "cache_creation_input_tokens": true
     }}))
     .unwrap()
     .unwrap();
     assert_eq!(usage.prompt_tokens, 150);
     assert_eq!(usage.completion_tokens, 1);
     let prompt = usage.prompt_tokens_details.expect("details");
-    assert_eq!(prompt.cached_tokens, 40);
+    assert_eq!(
+        prompt.cached_tokens, 0,
+        "string cache_read_input_tokens fails Python's isinstance(int) guard and is not folded"
+    );
     assert_eq!(prompt.cache_creation_tokens, Some(1));
+    assert_eq!(
+        usage
+            .extra
+            .get("_cache_creation_input_tokens")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert!(!usage.extra.contains_key("_cache_read_input_tokens"));
+}
+
+#[test]
+fn chat_usage_folds_deepseek_prompt_cache_hit_tokens() {
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 5,
+        "prompt_cache_hit_tokens": 40
+    }}))
+    .unwrap()
+    .unwrap();
+    let prompt = usage.prompt_tokens_details.expect("details");
+    assert_eq!(prompt.cached_tokens, 40);
+    assert_eq!(
+        usage
+            .extra
+            .get("_cache_read_input_tokens")
+            .and_then(Value::as_u64),
+        Some(40)
+    );
+}
+
+#[test]
+fn chat_usage_reasoning_string_parses_where_python_raises() {
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 5,
+        "reasoning_tokens": "12"
+    }}))
+    .unwrap()
+    .unwrap();
     let completion = usage.completion_tokens_details.expect("details");
-    assert_eq!(completion.reasoning_tokens, Some(12));
+    assert_eq!(
+        completion.reasoning_tokens,
+        Some(12),
+        "divergence: Python's Usage.__init__ raises TypeError on a string reasoning_tokens here"
+    );
 }
 
 #[test]

@@ -5,8 +5,8 @@
 use jiff::Timestamp;
 use litellm_cost::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use litellm_cost::regional_uplift::{
-    combined_regional_multiplier, get_provider_specific_geo_multiplier,
-    get_regional_uplift_multiplier, get_vertex_regional_endpoint_uplift,
+    get_provider_specific_geo_multiplier, get_regional_uplift_multiplier,
+    get_vertex_regional_endpoint_uplift, regional_totals_multiplier,
 };
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
@@ -99,8 +99,11 @@ fn calculate_generic_cost_from_model_info_with_region_scales_both_sides() {
         Some("us-east5"),
         at,
     );
-    let multiplier =
-        combined_regional_multiplier(&model_info, Some("us"), Some("eu"), Some("us-east5"));
+    let multiplier = regional_totals_multiplier(&model_info, Some("eu"), Some("us-east5"));
     assert!((actual.0 - 100.0 * 2e-6 * multiplier).abs() < 1e-12);
     assert!((actual.1 - 50.0 * 4e-6 * multiplier).abs() < 1e-12);
+    assert!(
+        (multiplier - 1.2 * 1.3).abs() < 1e-12,
+        "generic totals exclude the provider-specific geo multiplier; only the anthropic wrapper applies it"
+    );
 }

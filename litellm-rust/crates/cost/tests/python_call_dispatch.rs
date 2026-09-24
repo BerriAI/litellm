@@ -458,3 +458,82 @@ fn batch_call_invalid_highest_tier_falls_back_to_flat_rate() {
         (201.0 * 1e-6, 0.0)
     );
 }
+
+#[rstest]
+fn generic_token_cost_is_gated_on_token_or_tiered_pricing() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "audio-only/model".to_owned(),
+        json!({"input_cost_per_audio_token": 1e-5, "output_cost_per_audio_token": 2e-5}),
+    )]));
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "prompt_tokens_details": {"audio_tokens": 100},
+        "completion_tokens_details": {"audio_tokens": 20}
+    }}))
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        catalog
+            .cost_per_token_for_call(
+                request("audio-only/model", Some("mistral"), &usage),
+                token("completion", None),
+            )
+            .unwrap(),
+        (0.0, 0.0),
+        "providers without a dedicated calculator bill zero when no token or tiered pricing exists"
+    );
+    let (input, output) = catalog
+        .cost_per_token_for_call(
+            request("audio-only/model", Some("anthropic"), &usage),
+            token("completion", None),
+        )
+        .unwrap();
+    assert!(
+        (input - 100.0 * 1e-5).abs() < 1e-12 && (output - 20.0 * 2e-5).abs() < 1e-12,
+        "anthropic dispatches before the gate in Python and still bills modality rates"
+    );
+}
+
+#[rstest]
+fn anthropic_totals_apply_the_geo_multiplier_other_providers_do_not() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "anthropic/model".to_owned(),
+        json!({
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 4e-6,
+            "provider_specific_entry": {"us": 1.4}
+        }),
+    )]));
+    let usage = get_usage_object(&json!({"usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "inference_geo": "us"
+    }}))
+    .unwrap()
+    .unwrap();
+    let (input, output) = catalog
+        .cost_per_token_for_call(
+            request("model", Some("anthropic"), &usage),
+            token("completion", None),
+        )
+        .unwrap();
+    assert!((input - 100.0 * 2e-6 * 1.4).abs() < 1e-12);
+    assert!((output - 50.0 * 4e-6 * 1.4).abs() < 1e-12);
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/model".to_owned(),
+        json!({
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 4e-6,
+            "provider_specific_entry": {"us": 1.4}
+        }),
+    )]));
+    let (input, output) = catalog
+        .cost_per_token_for_call(
+            request("model", Some("openai"), &usage),
+            token("completion", None),
+        )
+        .unwrap();
+    assert!((input - 100.0 * 2e-6).abs() < 1e-12);
+    assert!((output - 50.0 * 4e-6).abs() < 1e-12);
+}

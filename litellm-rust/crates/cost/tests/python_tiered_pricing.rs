@@ -43,8 +43,9 @@ fn select_tier_for_input_skips_invalid_ranges_and_chooses_first_matching_tier() 
 #[case(json!({"cache_read_input_token_cost": 0, "input_cost_per_token": "4e-07"}), "cache_read_input_token_cost", Some("input_cost_per_token"), 0.0)]
 #[case(json!({"input_cost_per_token": "4e-07"}), "cache_read_input_token_cost", Some("input_cost_per_token"), 4e-7)]
 #[case(json!({"input_cost_per_token": "bad"}), "input_cost_per_token", None, 0.0)]
-#[case(json!({"output_cost_per_token": "bad", "input_cost_per_token": "4e-07"}), "output_cost_per_token", Some("input_cost_per_token"), 4e-7)]
-#[case(json!({"output_cost_per_token": ["bad"], "input_cost_per_token": "4e-07"}), "output_cost_per_token", Some("input_cost_per_token"), 4e-7)]
+#[case(json!({"output_cost_per_token": " 4e-07 "}), "output_cost_per_token", Some("input_cost_per_token"), 4e-7)]
+#[case(json!({"output_cost_per_token": "bad", "input_cost_per_token": "4e-07"}), "output_cost_per_token", Some("input_cost_per_token"), 0.0)]
+#[case(json!({"output_cost_per_token": ["bad"], "input_cost_per_token": "4e-07"}), "output_cost_per_token", Some("input_cost_per_token"), 0.0)]
 fn tier_rate_preserves_zero_and_coerces_yaml_strings(
     #[case] tier: Value,
     #[case] key: &str,
@@ -52,4 +53,16 @@ fn tier_rate_preserves_zero_and_coerces_yaml_strings(
     #[case] expected: f64,
 ) {
     assert_eq!(tier_rate(&tier, key, fallback), expected);
+}
+
+#[rstest]
+fn select_tier_for_input_accepts_float_range_bounds_from_the_cost_map() {
+    let tiers = vec![
+        json!({"range": [16000.0, 128000.0], "input_cost_per_token": 2e-6, "tier": 2}),
+        json!({"range": [0.0, 16000.0], "input_cost_per_token": 1e-6, "tier": 1}),
+    ];
+    assert_eq!(select_tier_for_input(&tiers, 15_000).unwrap()["tier"], 1);
+    assert_eq!(select_tier_for_input(&tiers, 16_000).unwrap()["tier"], 1);
+    assert_eq!(select_tier_for_input(&tiers, 16_001).unwrap()["tier"], 2);
+    assert_eq!(select_tier_for_input(&tiers, 1_000_000).unwrap()["tier"], 2);
 }

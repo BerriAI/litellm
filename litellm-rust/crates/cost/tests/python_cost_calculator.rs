@@ -670,3 +670,46 @@ fn batch_model_info_rejects_invalid_rates_with_an_error_not_a_negative_cost() {
     };
     assert!(batch_cost_from_model_info(&model_info, &usage, Some("anthropic"), None).is_err());
 }
+
+#[rstest]
+fn default_image_cost_calculator_tries_provider_first_quality_candidate() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "openai/high/1024-x-1024/gpt-image-1".to_owned(),
+        json!({"input_cost_per_image": 0.07}),
+    )]));
+    let cost = catalog
+        .default_image_cost_calculator(DefaultImageCostRequest {
+            model: "gpt-image-1",
+            provider: Some("openai"),
+            quality: Some("high"),
+            n: Some(1),
+            size: Some("1024x1024"),
+            supplied_model_info: None,
+        })
+        .unwrap();
+    assert!((cost - 0.07).abs() < 1e-12);
+    let both = ModelInfoCatalog::new(HashMap::from([
+        (
+            "high/1024-x-1024/gpt-image-1".to_owned(),
+            json!({"input_cost_per_image": 0.04}),
+        ),
+        (
+            "openai/high/1024-x-1024/gpt-image-1".to_owned(),
+            json!({"input_cost_per_image": 0.07}),
+        ),
+    ]));
+    let cost = both
+        .default_image_cost_calculator(DefaultImageCostRequest {
+            model: "gpt-image-1",
+            provider: Some("openai"),
+            quality: Some("high"),
+            n: Some(1),
+            size: Some("1024x1024"),
+            supplied_model_info: None,
+        })
+        .unwrap();
+    assert!(
+        (cost - 0.04).abs() < 1e-12,
+        "quality-prefixed candidate is checked before the provider-first one"
+    );
+}

@@ -51,7 +51,7 @@ use crate::non_token::{Error as NonTokenError, ImageRates, ImageUsage, calculate
 use crate::ocr_cost::{OcrCostError, ocr_cost};
 use crate::openai_cost::video_generation_cost as calculate_video_generation_cost;
 use crate::openai_image_cost::cost_calculator as openai_image_cost_calculator;
-use crate::per_second::per_second_pricing_cost;
+use crate::per_second::{has_token_or_tiered_pricing, per_second_pricing_cost};
 use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
 use crate::prompt_caching_savings::{
     PromptCachingSavingsRequest, calculate_prompt_caching_savings,
@@ -61,6 +61,7 @@ use crate::realtime_cost::{
     combine_usage_objects, event_usage, get_transcription_model_name_from_results,
     partition_results_by_service_tier, transcription_usage_cost,
 };
+use crate::regional_uplift::get_provider_specific_geo_multiplier;
 use crate::responses_usage::{ChatUsage, UsageError};
 use crate::retrieval_cost::{rerank_cost, vector_store_search_cost};
 use crate::search_cost::{
@@ -981,6 +982,31 @@ impl ModelInfoCatalog {
                 request.at,
             ));
         }
+        if !matches!(
+            request.provider,
+            Some(
+                "vertex_ai"
+                    | "anthropic"
+                    | "bedrock"
+                    | "openai"
+                    | "databricks"
+                    | "fireworks_ai"
+                    | "azure"
+                    | "gemini"
+                    | "deepseek"
+                    | "tencent"
+                    | "perplexity"
+                    | "xai"
+                    | "lemonade"
+                    | "dashscope"
+                    | "qwencloud"
+                    | "qwen_ai_platform"
+                    | "azure_ai"
+            )
+        ) && !has_token_or_tiered_pricing(&model_info)
+        {
+            return Ok((0.0, 0.0));
+        }
         let cost = calculate_generic_cost_from_model_info_with_region(
             request.usage,
             &model_info,
@@ -992,6 +1018,14 @@ impl ModelInfoCatalog {
         );
         let speed = if request.provider == Some("anthropic") {
             fast_speed_multiplier(&model_info, request.usage)
+                * get_provider_specific_geo_multiplier(
+                    &model_info,
+                    request
+                        .usage
+                        .extra
+                        .get("inference_geo")
+                        .and_then(Value::as_str),
+                )
         } else {
             1.0
         };
@@ -1288,6 +1322,13 @@ impl ModelInfoCatalog {
         let without_prefix = format!("{size}/{model_tail}");
         let candidates = [
             request.quality.map(|quality| format!("{quality}/{base}")),
+            match (request.provider, request.quality) {
+                (Some(provider), Some(quality)) => Some(format!(
+                    "{provider}/{quality}/{size}/{}",
+                    without_provider.unwrap_or(request.model)
+                )),
+                _ => None,
+            },
             Some(base.clone()),
             Some(format!("high/{base}")),
             request

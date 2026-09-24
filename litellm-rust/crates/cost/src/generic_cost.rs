@@ -9,7 +9,7 @@ use crate::generic_input::{InputBaseRates, calculate_input_cost};
 use crate::generic_output::{calculate_output_cost, resolve_reasoning_token_cost};
 use crate::generic_usage::{ParsedPromptDetails, parse_prompt_tokens_details};
 use crate::off_peak::{open_off_peak_block, parse_off_peak_rate};
-use crate::regional_uplift::combined_regional_multiplier;
+use crate::regional_uplift::regional_totals_multiplier;
 use crate::responses_usage::ChatUsage;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -177,12 +177,7 @@ pub fn calculate_generic_cost_from_model_info_with_region(
     vertex_location: Option<&str>,
     at: Timestamp,
 ) -> (f64, f64) {
-    let multiplier = combined_regional_multiplier(
-        model_info,
-        usage.extra.get("inference_geo").and_then(Value::as_str),
-        data_residency,
-        vertex_location,
-    );
+    let multiplier = regional_totals_multiplier(model_info, data_residency, vertex_location);
     calculate_generic_cost_from_model_info(
         usage,
         model_info,

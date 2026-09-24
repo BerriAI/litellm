@@ -21,6 +21,10 @@ fn lenient_count(value: &Value) -> Option<u64> {
         .or_else(|| value.as_bool().map(u64::from))
 }
 
+fn int_count(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| value.as_bool().map(u64::from))
+}
+
 pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
     let object = raw.as_object().ok_or(UsageError::InvalidShape)?;
     let count = |name: &str| {
@@ -34,12 +38,16 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
     let prompt_tokens = count("prompt_tokens")?;
     let completion_tokens = count("completion_tokens")?;
     let total_tokens = count("total_tokens")?;
+    let prompt_cache_hit = object.get("prompt_cache_hit_tokens").and_then(int_count);
     let read = object
         .get("cache_read_input_tokens")
-        .and_then(lenient_count);
+        .and_then(int_count)
+        .or(prompt_cache_hit);
     let creation = object
         .get("cache_creation_input_tokens")
-        .and_then(lenient_count);
+        .and_then(int_count);
+    let private_read =
+        prompt_cache_hit.or(object.get("cache_read_input_tokens").and_then(int_count));
     let prompt_details: Option<PromptTokenDetails> = object
         .get("prompt_tokens_details")
         .filter(|value| value.as_object().is_some_and(|details| !details.is_empty()))
@@ -88,7 +96,7 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
             })
         }
     };
-    let extra: BTreeMap<_, _> = object
+    let mut extra: BTreeMap<_, _> = object
         .iter()
         .filter(|(key, _)| {
             !matches!(
@@ -104,6 +112,12 @@ pub fn chat_usage(raw: &Value) -> Result<ChatUsage, UsageError> {
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
+    if let Some(private_read) = private_read {
+        extra.insert("_cache_read_input_tokens".to_string(), private_read.into());
+    }
+    if let Some(creation) = creation {
+        extra.insert("_cache_creation_input_tokens".to_string(), creation.into());
+    }
     Ok(ChatUsage {
         prompt_tokens,
         completion_tokens,
@@ -127,11 +141,11 @@ pub fn get_usage_object(response: &Value) -> Result<Option<ChatUsage>, UsageErro
             usage, None, false,
         )?));
     }
-    if is_transcription_usage_object(usage) {
-        return transform_transcription_usage_object(usage);
-    }
     if is_response_api_usage(usage) {
         return Ok(Some(transform_response_api_usage_to_chat_usage(usage)?));
+    }
+    if is_transcription_usage_object(usage) {
+        return transform_transcription_usage_object(usage);
     }
     if is_interactions_usage_object(usage) {
         return Ok(Some(transform_interactions_usage_object(usage)?));
