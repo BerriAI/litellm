@@ -699,6 +699,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/list",
             "/user/daily/activity",
             "/user/daily/activity/aggregated",
+            "/user/daily/activity/aggregated/search",
             # team
             "/team/new",
             "/team/update",
@@ -901,6 +902,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
+        "/user/daily/activity/aggregated/search",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
