@@ -37,6 +37,7 @@ export interface KeyListCallOptions {
   teamID?: string | null;
   projectID?: string | null;
   agentID?: string | null;
+  tag?: string | null;
   selectedKeyAlias?: string | null;
   userID?: string | null;
   keyHash?: string | null;
@@ -59,6 +60,7 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
         team_id: options.teamID,
         project_id: options.projectID,
         agent_id: options.agentID,
+        tag: options.tag,
         organization_id: options.organizationID,
         key_alias: options.selectedKeyAlias,
         key_hash: options.keyHash,
