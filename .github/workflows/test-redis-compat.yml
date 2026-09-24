@@ -82,6 +82,7 @@ jobs:
           uv run --no-sync pytest \
             tests/test_litellm/test_redis.py \
             tests/test_litellm/caching/test_redis_connection_pool.py \
+            tests/test_litellm/proxy/_experimental/mcp_server/outbound_credentials/test_redis_distributed_lock.py \
             tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_azure_credentials \
             tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_gcp_credentials \
             --tb=short -vv \

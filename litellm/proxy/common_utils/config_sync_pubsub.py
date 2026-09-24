@@ -4,27 +4,13 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # untyped prisma/redis boundary needs cast
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # untyped prisma boundary needs cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
-    from litellm.caching.redis_cache import RedisCache
-
-
-class _ConfigSyncPubSub(Protocol):
-    def subscribe(self, *channels: str) -> Awaitable[object]: ...
-
-    def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Awaitable[object]: ...
-
-    def aclose(self) -> Awaitable[object]: ...
-
-
-class _ConfigSyncPubSubClient(Protocol):
-    def publish(self, channel: str, message: str) -> Awaitable[int]: ...
-
-    def pubsub(self) -> _ConfigSyncPubSub: ...
+    from litellm.caching.redis_cache import RedisCache, RedisSubscription
 
 
 CONFIG_SYNC_CHANNEL: Final = "litellm_proxy.config_change"
@@ -82,22 +68,6 @@ def config_sync_channel(redis_cache: "RedisCache") -> str:
     return f"{redis_cache.namespace}:{CONFIG_SYNC_CHANNEL}"
 
 
-def _raw_async_client(redis_cache: "RedisCache") -> object:
-    return cast(  # cast-ok: redis-py generics leave the client type partially unknown
-        object,
-        redis_cache.init_async_client(),  # pyright: ignore[reportUnknownMemberType]  # redis generics
-    )
-
-
-def _pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient | None:
-    from redis.asyncio import Redis
-
-    client: Final = _raw_async_client(redis_cache)
-    if isinstance(client, Redis):
-        return cast(_ConfigSyncPubSubClient, client)  # cast-ok: protocol view of the standalone redis client
-    return None
-
-
 @dataclass(frozen=True, slots=True)
 class _ConfigChangeMessage:
     object_type: str
@@ -111,14 +81,12 @@ async def publish_config_change(redis_cache: "RedisCache | None", object_type: s
     if redis_cache is None:
         return
     try:
-        client: Final = _pubsub_capable_client(redis_cache)
-        if client is None:
-            verbose_proxy_logger.debug(
-                "config sync publish for %s skipped: cluster redis client has no pub/sub support",
-                object_type,
-            )
-            return
-        await client.publish(config_sync_channel(redis_cache), _config_change_message_json(object_type))
+        await redis_cache.async_publish(config_sync_channel(redis_cache), _config_change_message_json(object_type))
+    except NotImplementedError:
+        verbose_proxy_logger.debug(
+            "config sync publish for %s skipped: cluster redis client has no pub/sub support",
+            object_type,
+        )
     except Exception as e:  # noqa: BLE001  # best-effort publish; writes must never fail on redis errors
         verbose_proxy_logger.warning("config sync publish for %s failed: %s", object_type, e)
 
@@ -237,20 +205,14 @@ class ConfigSyncSubscriber:
         backoff_seconds = self._backoff_initial_seconds
         while True:
             try:
-                client = _pubsub_capable_client(self._redis_cache)
-                if client is None:
-                    verbose_proxy_logger.warning(
-                        "config sync subscriber disabled: cluster redis client has no pub/sub support; "
-                        "interval polling remains the only sync mechanism"
-                    )
+                subscription = await self._open_subscription()
+                if subscription is None:
                     return
-                pubsub = client.pubsub()
                 try:
-                    await pubsub.subscribe(config_sync_channel(self._redis_cache))
                     backoff_seconds = self._backoff_initial_seconds
-                    await self._consume(pubsub)
+                    await self._consume(subscription)
                 finally:
-                    await self._close_pubsub(pubsub)
+                    await self._close_subscription(subscription)
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001  # any redis failure falls through to backoff and reconnect
@@ -262,14 +224,24 @@ class ConfigSyncSubscriber:
                 await self._sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, self._backoff_max_seconds)
 
-    async def _consume(self, pubsub: _ConfigSyncPubSub) -> None:
+    async def _open_subscription(self) -> "RedisSubscription | None":
+        try:
+            return await self._redis_cache.async_subscribe(config_sync_channel(self._redis_cache))
+        except NotImplementedError:
+            verbose_proxy_logger.warning(
+                "config sync subscriber disabled: cluster redis client has no pub/sub support; "
+                "interval polling remains the only sync mechanism"
+            )
+            return None
+
+    async def _consume(self, subscription: "RedisSubscription") -> None:
         while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
+            message = await subscription.get_message(timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
                 continue
             await self._sleep(self._debounce_seconds + self._rng.uniform(0.0, self._jitter_max_seconds))
             await self._wait_for_min_resync_interval()
-            await self._drain_pending(pubsub)
+            await self._drain_pending(subscription)
             await self._run_resync_callbacks()
             self._last_resync_at = self._monotonic()
 
@@ -286,8 +258,8 @@ class ConfigSyncSubscriber:
         await self._sleep(seconds_until_next_resync)
 
     @staticmethod
-    async def _drain_pending(pubsub: _ConfigSyncPubSub) -> None:
-        while await pubsub.get_message(ignore_subscribe_messages=True, timeout=0) is not None:
+    async def _drain_pending(subscription: "RedisSubscription") -> None:
+        while await subscription.get_message(timeout=0) is not None:
             pass
 
     async def _run_resync_callbacks(self) -> None:
@@ -298,8 +270,8 @@ class ConfigSyncSubscriber:
                 verbose_proxy_logger.warning("config sync resync callback failed: %s", e)
 
     @staticmethod
-    async def _close_pubsub(pubsub: _ConfigSyncPubSub) -> None:
+    async def _close_subscription(subscription: "RedisSubscription") -> None:
         try:
-            await pubsub.aclose()
+            await subscription.aclose()
         except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection
             verbose_proxy_logger.debug("config sync pubsub close failed: %s", e)

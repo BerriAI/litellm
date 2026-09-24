@@ -5,15 +5,11 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.config_sync_pubsub import (
-    _ConfigSyncPubSub,
-    _pubsub_capable_client,
-    coordination_redis_cache,
-)
+from litellm.proxy.common_utils.config_sync_pubsub import coordination_redis_cache
 
 if TYPE_CHECKING:
     from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.caching.redis_cache import RedisCache
+    from litellm.caching.redis_cache import RedisCache, RedisMessage, RedisSubscription
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
@@ -73,15 +69,13 @@ def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
 
 async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: str) -> None:
     try:
-        client: Final = _pubsub_capable_client(redis_cache)
-        if client is None:
-            verbose_proxy_logger.debug(
-                "auth cache invalidation publish for %s skipped: cluster redis client has no pub/sub support",
-                cache_key,
-            )
-            return
         async with _in_flight_publishes:
-            await client.publish(auth_cache_invalidation_channel(redis_cache), message)
+            await redis_cache.async_publish(auth_cache_invalidation_channel(redis_cache), message)
+    except NotImplementedError:
+        verbose_proxy_logger.debug(
+            "auth cache invalidation publish for %s skipped: cluster redis client has no pub/sub support",
+            cache_key,
+        )
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
         verbose_proxy_logger.warning("auth cache invalidation publish for %s failed: %s", cache_key, e)
 
@@ -184,20 +178,14 @@ class AuthCacheInvalidationSubscriber:
         backoff_seconds = _BACKOFF_INITIAL_SECONDS  # rebind-ok: exponential backoff accumulator across reconnects
         while True:
             try:
-                client = _pubsub_capable_client(self._redis_cache)
-                if client is None:
-                    verbose_proxy_logger.warning(
-                        "auth cache invalidation subscriber disabled: cluster redis client has no pub/sub support; "
-                        "cross-worker eviction falls back to the local cache TTL"
-                    )
+                subscription = await self._open_subscription()
+                if subscription is None:
                     return
-                pubsub = client.pubsub()
                 try:
-                    await pubsub.subscribe(auth_cache_invalidation_channel(self._redis_cache))
                     backoff_seconds = _BACKOFF_INITIAL_SECONDS
-                    await self._consume(pubsub)
+                    await self._consume(subscription)
                 finally:
-                    await self._close_pubsub(pubsub)
+                    await self._close_subscription(subscription)
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001  # any redis failure falls through to backoff and reconnect
@@ -209,16 +197,25 @@ class AuthCacheInvalidationSubscriber:
                 await asyncio.sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, _BACKOFF_MAX_SECONDS)
 
-    async def _consume(self, pubsub: _ConfigSyncPubSub) -> None:
+    async def _open_subscription(self) -> "RedisSubscription | None":
+        try:
+            return await self._redis_cache.async_subscribe(auth_cache_invalidation_channel(self._redis_cache))
+        except NotImplementedError:
+            verbose_proxy_logger.warning(
+                "auth cache invalidation subscriber disabled: cluster redis client has no pub/sub support; "
+                "cross-worker eviction falls back to the local cache TTL"
+            )
+            return None
+
+    async def _consume(self, subscription: "RedisSubscription") -> None:
         while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
+            message = await subscription.get_message(timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
                 continue
             self._apply_message(message)
 
-    def _apply_message(self, message: object) -> None:
-        data: Final = message.get("data") if isinstance(message, dict) else None
-        parsed: Final = _message_from_data(data)
+    def _apply_message(self, message: "RedisMessage") -> None:
+        parsed: Final = _message_from_data(message.payload)
         if parsed is None:
             return
         if parsed.new_value is not None:
@@ -230,8 +227,8 @@ class AuthCacheInvalidationSubscriber:
             additional_cache.delete_cache(parsed.cache_key)
 
     @staticmethod
-    async def _close_pubsub(pubsub: _ConfigSyncPubSub) -> None:
+    async def _close_subscription(subscription: "RedisSubscription") -> None:
         try:
-            await pubsub.aclose()
+            await subscription.aclose()
         except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection
             verbose_proxy_logger.debug("auth cache invalidation pubsub close failed: %s", e)

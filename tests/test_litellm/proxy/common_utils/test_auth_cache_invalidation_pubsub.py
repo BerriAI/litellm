@@ -2,14 +2,14 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from unittest.mock import patch
 
 import pytest
-from redis.asyncio import Redis
 
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisMessage
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AUTH_CACHE_INVALIDATION_CHANNEL,
@@ -20,16 +20,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 
-class _RecordingRedisClient(Redis):
-    def __init__(self) -> None:
-        self.published: list[tuple[str, str]] = []
-
-    async def publish(self, channel: str, message: str) -> int:
-        self.published.append((channel, message))
-        return 1
-
-
-class _WedgedPublishRedisClient(Redis):
+class _WedgedPublisher:
     def __init__(self) -> None:
         self.attempted: list[str] = []
         self.in_flight = 0
@@ -45,26 +36,17 @@ class _WedgedPublishRedisClient(Redis):
         return 1
 
 
-class _FailingPublishRedisClient(Redis):
-    def __init__(self) -> None:
-        pass
-
-    async def publish(self, channel: str, message: str) -> int:
-        raise ConnectionError("redis down")
-
-
 class _QueuePubSub:
-    def __init__(self, initial_messages: Iterable[object] = ()) -> None:
-        self.queue: asyncio.Queue[object] = asyncio.Queue()
+    """A subscription fed from a queue of messages, standing in for RedisSubscription."""
+
+    def __init__(self, initial_messages: Iterable[RedisMessage] = ()) -> None:
+        self.queue: asyncio.Queue[RedisMessage] = asyncio.Queue()
         for message in initial_messages:
             self.queue.put_nowait(message)
         self.subscribed_channels: list[str] = []
         self.closed = False
 
-    async def subscribe(self, *channels: str) -> None:
-        self.subscribed_channels.extend(channels)
-
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> object | None:
+    async def get_message(self, *, timeout: float | None) -> RedisMessage | None:
         try:
             return await asyncio.wait_for(self.queue.get(), timeout)
         except asyncio.TimeoutError:
@@ -74,49 +56,70 @@ class _QueuePubSub:
         self.closed = True
 
 
-class _ScriptedPubSubRedisClient(Redis):
-    def __init__(self, pubsubs: Iterable[_QueuePubSub]) -> None:
-        self._scripted_pubsubs = iter(pubsubs)
-
-    def pubsub(self) -> _QueuePubSub:
-        return next(self._scripted_pubsubs)
-
-
 class _FakeRedisCache:
-    def __init__(self, client: object, namespace: str | None = None) -> None:
-        self._client = client
+    """The slice of RedisCache the module uses: namespace, async_publish and async_subscribe."""
+
+    def __init__(
+        self,
+        subscriptions: Iterable[_QueuePubSub] = (),
+        namespace: str | None = None,
+        publish: Callable[[str, str], Awaitable[int]] | None = None,
+        publish_error: Exception | None = None,
+    ) -> None:
+        self._subscriptions = iter(subscriptions)
+        self._publish = publish
+        self._publish_error = publish_error
         self.namespace = namespace
+        self.published: list[tuple[str, str]] = []
 
-    def init_async_client(self) -> object:
-        return self._client
+    async def async_publish(self, channel: str, message: str) -> int:
+        if self._publish_error is not None:
+            raise self._publish_error
+        if self._publish is not None:
+            return await self._publish(channel, message)
+        self.published.append((channel, message))
+        return 1
+
+    async def async_subscribe(self, *channels: str) -> _QueuePubSub:
+        subscription = next(self._subscriptions)
+        subscription.subscribed_channels.extend(channels)
+        return subscription
 
 
-def _invalidation_message(cache_key: str) -> dict:
-    return {"type": "message", "data": json.dumps({"cache_key": cache_key}).encode()}
+class _ClusterRedisCache(_FakeRedisCache):
+    async def async_publish(self, channel: str, message: str) -> int:
+        raise NotImplementedError("Redis Cluster clients have no pub/sub support")
+
+    async def async_subscribe(self, *channels: str) -> _QueuePubSub:
+        raise NotImplementedError("Redis Cluster clients have no pub/sub support")
+
+
+def _invalidation_message(cache_key: str) -> RedisMessage:
+    return RedisMessage(channel=AUTH_CACHE_INVALIDATION_CHANNEL, payload=json.dumps({"cache_key": cache_key}).encode())
 
 
 @pytest.mark.asyncio
 async def test_publish_sends_cache_key_json_on_channel() -> None:
-    client = _RecordingRedisClient()
+    cache = _FakeRedisCache()
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client),
+        return_value=cache,
     ):
         await publish_auth_cache_invalidation(cache_key="project_id:p-1")
 
-    assert client.published == [(AUTH_CACHE_INVALIDATION_CHANNEL, json.dumps({"cache_key": "project_id:p-1"}))]
+    assert cache.published == [(AUTH_CACHE_INVALIDATION_CHANNEL, json.dumps({"cache_key": "project_id:p-1"}))]
 
 
 @pytest.mark.asyncio
 async def test_publish_uses_namespaced_channel() -> None:
-    client = _RecordingRedisClient()
+    cache = _FakeRedisCache(namespace="ns1")
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client, namespace="ns1"),
+        return_value=cache,
     ):
         await publish_auth_cache_invalidation(cache_key="project_id:p-1")
 
-    assert client.published[0][0] == f"ns1:{AUTH_CACHE_INVALIDATION_CHANNEL}"
+    assert cache.published[0][0] == f"ns1:{AUTH_CACHE_INVALIDATION_CHANNEL}"
 
 
 @pytest.mark.asyncio
@@ -132,9 +135,31 @@ async def test_publish_noops_without_coordination_redis() -> None:
 async def test_publish_swallows_redis_errors() -> None:
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=_FailingPublishRedisClient()),
+        return_value=_FakeRedisCache(publish_error=ConnectionError("redis down")),
     ):
         await publish_auth_cache_invalidation(cache_key="project_id:p-1")
+
+
+@pytest.mark.asyncio
+async def test_publish_skips_clients_without_pubsub_support() -> None:
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_ClusterRedisCache(),
+    ):
+        await publish_auth_cache_invalidation(cache_key="project_id:p-1")
+        await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
+
+
+@pytest.mark.asyncio
+async def test_subscriber_disables_itself_without_pubsub_support() -> None:
+    subscriber = AuthCacheInvalidationSubscriber(redis_cache=_ClusterRedisCache(), user_api_key_cache=UserApiKeyCache())
+
+    subscriber.start()
+    task = subscriber._task
+    assert task is not None
+    await asyncio.wait_for(task, timeout=5)
+
+    assert task.done() is True
 
 
 @pytest.mark.asyncio
@@ -150,7 +175,7 @@ async def test_subscriber_deletes_local_cache_entry_on_message() -> None:
 
     pubsub = _QueuePubSub(initial_messages=[_invalidation_message("project_id:p-1")])
     subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        redis_cache=_FakeRedisCache(subscriptions=[pubsub]),
         user_api_key_cache=cache,
     )
     subscriber.start()
@@ -180,7 +205,7 @@ async def test_subscriber_deletes_key_object_partition_entry_on_message() -> Non
 
     pubsub = _QueuePubSub(initial_messages=[_invalidation_message(hashed_token)])
     subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        redis_cache=_FakeRedisCache(subscriptions=[pubsub]),
         user_api_key_cache=cache,
     )
     subscriber.start()
@@ -210,7 +235,7 @@ async def test_subscriber_deletes_additional_in_memory_cache_entry_on_message() 
 
     pubsub = _QueuePubSub(initial_messages=[_invalidation_message("spend:team_member:u-1:t-1")])
     subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        redis_cache=_FakeRedisCache(subscriptions=[pubsub]),
         user_api_key_cache=cache,
         additional_in_memory_caches=(spend_counter_in_memory_cache,),
     )
@@ -232,13 +257,13 @@ async def test_subscriber_ignores_malformed_messages() -> None:
     cache.in_memory_cache.set_cache("project_id:p-1", {"models": []})
 
     subscriber = AuthCacheInvalidationSubscriber(
-        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[_QueuePubSub()])),
+        redis_cache=_FakeRedisCache(subscriptions=[_QueuePubSub()]),
         user_api_key_cache=cache,
     )
-    subscriber._apply_message({"type": "message", "data": b"not json"})
-    subscriber._apply_message({"type": "message", "data": json.dumps({"other": "x"}).encode()})
-    subscriber._apply_message("raw string")
-    subscriber._apply_message(None)
+    subscriber._apply_message(RedisMessage(channel=AUTH_CACHE_INVALIDATION_CHANNEL, payload=b"not json"))
+    subscriber._apply_message(
+        RedisMessage(channel=AUTH_CACHE_INVALIDATION_CHANNEL, payload=json.dumps({"other": "x"}).encode())
+    )
 
     assert cache.in_memory_cache.get_cache("project_id:p-1") is not None
 
@@ -247,11 +272,11 @@ async def test_subscriber_ignores_malformed_messages() -> None:
 async def test_evict_and_broadcast_evicts_locally_and_returns_while_redis_publish_never_answers() -> None:
     cache = UserApiKeyCache()
     cache.set_cache("user-wedged", UserAPIKeyAuth(user_id="user-wedged"), model_type=UserAPIKeyAuth)
-    client = _WedgedPublishRedisClient()
+    client = _WedgedPublisher()
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client),
+        return_value=_FakeRedisCache(publish=client.publish),
     ):
         started = time.monotonic()
         await evict_and_broadcast(cache_keys=("user-wedged",), user_api_key_cache=cache)
@@ -270,11 +295,11 @@ async def test_publish_holds_at_most_sixteen_redis_connections_while_redis_is_we
 ) -> None:
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    client = _WedgedPublishRedisClient()
+    client = _WedgedPublisher()
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(client=client),
+        return_value=_FakeRedisCache(publish=client.publish),
     ):
         for i in range(64):
             await publish_auth_cache_invalidation(cache_key=f"user-{i}")
