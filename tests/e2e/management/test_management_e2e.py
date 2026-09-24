@@ -632,6 +632,32 @@ class TestOrganizationRoutes:
 
         _ = _poll(client, gone, f"org {org_id} still resolved on /organization/info after /organization/delete")
 
+    @pytest.mark.covers("mgmt.organization.delete.unknown_id_rejects_whole_request")
+    def test_delete_with_unknown_id_rejects_whole_request(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        org_id = client.create_org(OrgNewBody(organization_alias=f"e2e-mgmt-org-{unique_marker()}"))
+        resources.defer(lambda: client.delete_org(org_id))
+        team_id = client.create_team(
+            TeamNewBody(team_alias=f"e2e-mgmt-team-{unique_marker()}", organization_id=org_id)
+        )
+        resources.defer(lambda: client.delete_team(team_id))
+
+        rejected = client.delete_orgs_status([org_id, f"e2e-missing-{unique_marker()}"])
+        assert rejected.status_code == 404, (
+            f"/organization/delete with one unknown id must reject the whole request with 404, got "
+            f"{rejected.status_code}: {rejected.body[:300]}"
+        )
+        assert client.org_info_status(org_id).status_code == 200, (
+            f"org {org_id} must still resolve on /organization/info after the rejected batch delete"
+        )
+
+        team_probe = client.team_info_status(team_id)
+        assert team_probe.status_code == 200, (
+            f"team {team_id} inside org {org_id} must still resolve on /team/info after the rejected batch "
+            f"delete, got {team_probe.status_code}: {team_probe.body[:300]}"
+        )
+
 
 class TestTagRoutes:
     @pytest.mark.covers("mgmt.tag.new.happy_path")

@@ -91,7 +91,15 @@ class Transport(Protocol):
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]: ...
 
-    def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult: ...
+    def probe(
+        self,
+        path: str,
+        *,
+        params: BaseModel | None = None,
+        headers: BaseModel | None = None,
+        method: str = "GET",
+        json: BaseModel | None = None,
+    ) -> ProbeResult: ...
 
     def upload[R: BaseModel](
         self,
@@ -253,11 +261,21 @@ class HttpTransport:
     ) -> AbandonedRequest | StreamingResponse:
         return e2e_http.abandon(self._url(path), headers=headers, json=json, after=after)
 
-    def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult:
+    def probe(
+        self,
+        path: str,
+        *,
+        params: BaseModel | None = None,
+        headers: BaseModel | None = None,
+        method: str = "GET",
+        json: BaseModel | None = None,
+    ) -> ProbeResult:
         return e2e_http.probe(
             self._url(path),
             headers=self.master if headers is None else headers,
             params=params,
+            method=method,
+            json=json,
             timeout=self.request_timeout,
         )
 
@@ -439,8 +457,16 @@ class SplitTransport:
     ) -> AbandonedRequest | StreamingResponse:
         return self._route(path).abandon(path, headers=headers, json=json, after=after)
 
-    def probe(self, path: str, *, params: BaseModel, headers: BaseModel | None = None) -> ProbeResult:
-        return self._route(path).probe(path, params=params, headers=headers)
+    def probe(
+        self,
+        path: str,
+        *,
+        params: BaseModel | None = None,
+        headers: BaseModel | None = None,
+        method: str = "GET",
+        json: BaseModel | None = None,
+    ) -> ProbeResult:
+        return self._route(path).probe(path, params=params, headers=headers, method=method, json=json)
 
     def upload[R: BaseModel](
         self,

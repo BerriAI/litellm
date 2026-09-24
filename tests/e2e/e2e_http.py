@@ -642,13 +642,23 @@ def put[R: BaseModel](
     return classify(resp, response_type)
 
 
-def probe(url: URL, *, headers: BaseModel, params: BaseModel, timeout: float = 30.0) -> ProbeResult:
+def probe(
+    url: URL,
+    *,
+    headers: BaseModel,
+    params: BaseModel | None = None,
+    method: str = "GET",
+    json: BaseModel | None = None,
+    timeout: float = 30.0,
+) -> ProbeResult:
     try:
         resp = request_with_retry(
-            lambda: requests.get(
+            lambda: requests.request(
+                method,
                 str(url),
                 headers=_headers(headers),
-                params=params.model_dump(by_alias=True, exclude_none=True),
+                params=_params(params),
+                json=wire_body(json) if json is not None else None,
                 timeout=timeout,
             )
         )
