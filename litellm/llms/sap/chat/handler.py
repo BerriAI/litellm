@@ -33,13 +33,15 @@ def _now_ts() -> int:
 
 
 def normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic types
-    choices: list[object] = list(
-        raw.get("choices") or []
-    )  # explicit cast: raw values are object, pyright can't infer iterability
-    return {
+    choices: list[object] = list(  # mutable-ok: immediately consumed, never escapes
+        raw.get("choices") or []  # mutable-ok: transient default, consumed inline
+    )
+    return {  # mutable-ok: one-shot dict passed directly to model_validate, never mutated
         **raw,
-        "choices": [normalize_choice(c) for c in choices if isinstance(c, dict)],
-    }  # mutable-ok: sentinel default, never mutated
+        "choices": [  # mutable-ok: built once, passed as value
+            normalize_choice(c) for c in choices if isinstance(c, dict)
+        ],
+    }
 
 
 def normalize_choice(choice: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic dict from raw JSON
@@ -59,9 +61,9 @@ def normalize_choice(choice: dict[str, object]) -> dict[str, object]:  # mutable
             for item in rc
             if isinstance(item, dict)
         ]
-        return {
+        return {  # mutable-ok: one-shot return value, caller owns it
             **choice,
-            key: {
+            key: {  # mutable-ok: nested one-shot dict, built and returned immediately
                 **carrier,
                 "thinking_blocks": thinking_blocks,
                 "reasoning_content": ("\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None),
@@ -98,13 +100,13 @@ class _StreamParser:
             "object": orc.get("object") or "chat.completion.chunk",
             "created": orc.get("created") or evt.get("created") or _now_ts(),
             "model": orc.get("model") or "unknown",
-            "choices": [
-                {
+            "choices": [  # mutable-ok: list built inline as part of the outer Final dict literal
+                {  # mutable-ok: each choice dict is a nested one-shot literal
                     "index": c.get("index", 0),
-                    "delta": c.get("delta") or {},
+                    "delta": c.get("delta") or {},  # mutable-ok: transient default, consumed by model_validate
                     "finish_reason": c.get("finish_reason"),
                 }
-                for c in (orc.get("choices") or [])
+                for c in (orc.get("choices") or [])  # mutable-ok: transient default for iteration
             ],
         }
         return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(chunk))
