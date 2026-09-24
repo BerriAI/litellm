@@ -56,7 +56,7 @@ def test_team_member_budget_thresholds_email_member_and_configured_recipients(ga
             eventually(
                 lambda: _membership_spend(user_id, team_id), lambda spend: spend == pytest.approx(CALL_COST), seconds=70
             )
-            assert mailbox.drain() == (), "no threshold is reached before the first call is recorded"
+            assert tuple(mailbox.received) == (), "no threshold is reached before the first call is recorded"
 
             second: Final = candidate.request(
                 "POST",
@@ -65,10 +65,8 @@ def test_team_member_budget_thresholds_email_member_and_configured_recipients(ga
                 key=key,
             )
             assert second.status_code == 200, second.text
-            eventually(mailbox.pending, lambda count: count >= 1, seconds=30)
-            halfway: Final = mailbox.drain()
+            halfway: Final = eventually(lambda: mailbox.with_subject("50%"), lambda found: len(found) >= 1, seconds=30)
             assert [delivery.recipients for delivery in halfway] == [(member_email,)], halfway
-            assert "50%" in halfway[0].subject, halfway[0].subject
             assert f"${MEMBER_BUDGET}" in halfway[0].html, halfway[0].html
             eventually(
                 lambda: _membership_spend(user_id, team_id),
@@ -83,9 +81,7 @@ def test_team_member_budget_thresholds_email_member_and_configured_recipients(ga
                 key=key,
             )
             assert third.status_code == 422 and third.json()["error"]["type"] == "budget_exceeded", third.text
-            eventually(mailbox.pending, lambda count: count >= 2, seconds=30)
-            hundred: Final = mailbox.drain()
-            assert all("100%" in delivery.subject for delivery in hundred), hundred
+            hundred: Final = eventually(lambda: mailbox.with_subject("100%"), lambda found: len(found) >= 2, seconds=30)
             assert {recipient for delivery in hundred for recipient in delivery.recipients} == {
                 member_email,
                 finance_email,

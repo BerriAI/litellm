@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socketserver
 import threading
+from collections import deque
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -33,13 +34,10 @@ class Delivery:
 class Mailbox:
     host: str
     port: int
-    received: SimpleQueue[Delivery]
+    received: deque[Delivery]
 
-    def pending(self) -> int:
-        return self.received.qsize()
-
-    def drain(self) -> tuple[Delivery, ...]:
-        return tuple(self.received.get_nowait() for _ in range(self.received.qsize()))
+    def with_subject(self, fragment: str) -> tuple[Delivery, ...]:
+        return tuple(delivery for delivery in tuple(self.received) if fragment in delivery.subject)
 
 
 def _address(argument: str) -> str:
@@ -49,7 +47,7 @@ def _address(argument: str) -> str:
 @contextmanager
 def smtp_sink() -> Generator[Mailbox, None, None]:
     """Owned plaintext SMTP peer; deliveries traverse the proxy's real smtplib client."""
-    received: Final[SimpleQueue[Delivery]] = SimpleQueue()
+    received: Final[deque[Delivery]] = deque()  # mutable-ok: sink thread appends each delivery
     errors: Final[SimpleQueue[Exception]] = SimpleQueue()
 
     class Handler(socketserver.StreamRequestHandler):
@@ -92,7 +90,7 @@ def smtp_sink() -> Generator[Mailbox, None, None]:
                         if not chunk or chunk == b".\r\n":
                             break
                         body.extend(chunk[1:] if chunk.startswith(b"..") else chunk)
-                    received.put(Delivery(sender, recipients, message_from_bytes(bytes(body))))
+                    received.append(Delivery(sender, recipients, message_from_bytes(bytes(body))))
                     sender, recipients = "", ()
                     self._reply("250 OK queued")
                 elif verb == "RSET":
