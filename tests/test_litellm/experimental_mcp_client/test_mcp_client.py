@@ -1890,8 +1890,9 @@ async def test_transport_completion_and_normal_messages(transport: MCPTransport,
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
     logging_callback: Final = AsyncMock()
+    read_timeout: Final = 0.2 if mode == "silent" else 30
     client: Final = MCPClient(
-        server_url="https://example.com/sse", transport_type=transport, timeout=0.2, logging_callback=logging_callback
+        server_url="https://example.com/sse", transport_type=transport, timeout=read_timeout, logging_callback=logging_callback
     )
 
     async def operation(session: ClientSession) -> CallToolResult:
@@ -1909,7 +1910,7 @@ async def test_transport_completion_and_normal_messages(transport: MCPTransport,
         with pytest.raises(MCPError) as caught:
             await asyncio.wait_for(pending, timeout=3)
         if mode == "closed":
-            assert "connection was closed" in _connection_error_message(caught.value, client.server_url, 0.2)
+            assert "connection was closed" in _connection_error_message(caught.value, client.server_url, read_timeout)
         else:
             assert isinstance(as_mcp_read_timeout(caught.value), TimeoutError)
 

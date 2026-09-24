@@ -54,7 +54,6 @@ def _owned(nodeid: str) -> bool:
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     order_seed: Final = config.getoption("integration_order_seed")
     if order_seed:
-        # rebind-ok: pytest requires this hook to reorder its shared collection list in place.
         items.sort(key=lambda item: hashlib.sha256(f"{order_seed}:{item.nodeid}".encode()).digest())
     root: Final = Path(__file__).parent
     owned: Final = tuple(

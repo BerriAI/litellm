@@ -3303,7 +3303,7 @@ workflows:
           cron: "17 0,6,12,18 * * *"
           filters:
             branches:
-              only: litellm_internal_staging
+              only: main
     jobs: *migration_jobs
   routing_parity:
     when:
