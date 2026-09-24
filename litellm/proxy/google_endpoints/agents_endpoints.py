@@ -15,6 +15,8 @@ These are distinct from the A2A agent registry at /v1/agents.
 """
 
 import json
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -62,24 +64,19 @@ def _enforce_caller_supplied_provider_key(
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=(
-            "Gemini managed-agent endpoints require a caller-supplied "
-            "Gemini api_key (via 'litellm_params_template'). Falling back to "
-            "the proxy's GOOGLE_API_KEY / GEMINI_API_KEY env vars is only "
-            "permitted for proxy admins."
+            "Managed-agent endpoints require a caller-supplied provider "
+            "api_key (via 'litellm_params_template'). Falling back to the "
+            "proxy's provider environment variables is only permitted for "
+            "proxy admins."
         ),
     )
 
 
-def _merge_query_params_into_data(data: dict, request: Request) -> dict:
+def _query_template(request: Request) -> Mapping[str, object]:
     """
-    For GET/DELETE endpoints that cannot carry a JSON body, read a
-    JSON-encoded ``litellm_params_template`` query parameter and merge its
-    contents into *data*, without overwriting keys that are already present
-    (e.g. path params like ``name`` or the fixed ``custom_llm_provider``).
-
-    This mirrors the ``litellm_params_template`` handling in
-    ``create_gemini_agent`` and is the supported way for multi-tenant
-    callers to supply per-request credentials on non-POST endpoints:
+    GET/DELETE endpoints cannot carry a JSON body, so per-request
+    ``litellm_params_template`` (credentials, ``custom_llm_provider``) travels
+    as one JSON-encoded query parameter, mirroring ``create_gemini_agent``:
 
     .. code-block:: bash
 
@@ -89,24 +86,23 @@ def _merge_query_params_into_data(data: dict, request: Request) -> dict:
     Credentials MUST NOT be passed as plain flat query parameters (e.g.
     ``?api_key=AIza...``) because URL query strings appear verbatim in
     web-server access logs, CDN edge logs, browser history, and Referer
-    headers. Use the ``litellm_params_template`` JSON body field on POST
-    requests, or the JSON-encoded query parameter above for GET/DELETE.
+    headers.
     """
-    query_params: Final = _safe_get_request_query_params(request)
-    if not query_params:
-        return data
+    raw_template: Final = _safe_get_request_query_params(request).get("litellm_params_template")
+    if not raw_template:
+        return MappingProxyType({})
+    try:
+        template: Final = json.loads(raw_template) if isinstance(raw_template, str) else raw_template
+    except (json.JSONDecodeError, ValueError):
+        return MappingProxyType({})
+    return MappingProxyType(template) if isinstance(template, dict) else MappingProxyType({})
 
-    raw_template: Final = query_params.get("litellm_params_template")
-    if raw_template:
-        try:
-            template = json.loads(raw_template) if isinstance(raw_template, str) else raw_template
-        except (json.JSONDecodeError, ValueError):
-            template = {}
-        if isinstance(template, dict):
-            for key, value in template.items():
-                data.setdefault(key, value)
 
-    return data
+def _route_data(
+    request: Request, path_params: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: ProxyBaseLLMRequestProcessing owns and mutates the request data
+    """Path parameters win over the template, the template wins over the Gemini default."""
+    return {"custom_llm_provider": "gemini", **_query_template(request), **path_params}
 
 
 def _proxy_server_imports():
@@ -227,7 +223,7 @@ async def list_gemini_agents(
     Pass per-request Gemini credentials via the JSON-encoded
     ``litellm_params_template`` query parameter. Flat query parameters
     (e.g. ``?api_key=AIza...``) are intentionally ignored — see
-    ``_merge_query_params_into_data`` for the rationale.
+    ``_query_template`` for the rationale.
 
     ```bash
     curl "http://localhost:4000/v1beta/agents?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \\
@@ -235,8 +231,7 @@ async def list_gemini_agents(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final[dict] = {"custom_llm_provider": "gemini"}
-    _merge_query_params_into_data(data, request)
+    data: Final = _route_data(request, MappingProxyType({}))
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -285,7 +280,7 @@ async def get_gemini_agent(
     Pass per-request Gemini credentials via the JSON-encoded
     ``litellm_params_template`` query parameter. Flat query parameters
     (e.g. ``?api_key=AIza...``) are intentionally ignored — see
-    ``_merge_query_params_into_data`` for the rationale.
+    ``_query_template`` for the rationale.
 
     ```bash
     curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \\
@@ -293,8 +288,7 @@ async def get_gemini_agent(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final = {"name": name, "custom_llm_provider": "gemini"}
-    _merge_query_params_into_data(data, request)
+    data: Final = _route_data(request, MappingProxyType({"name": name}))
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -343,7 +337,7 @@ async def delete_gemini_agent(
     Pass per-request Gemini credentials via the JSON-encoded
     ``litellm_params_template`` query parameter. Flat query parameters
     (e.g. ``?api_key=AIza...``) are intentionally ignored — see
-    ``_merge_query_params_into_data`` for the rationale.
+    ``_query_template`` for the rationale.
 
     ```bash
     curl -X DELETE "http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \\
@@ -351,8 +345,7 @@ async def delete_gemini_agent(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final = {"name": name, "custom_llm_provider": "gemini"}
-    _merge_query_params_into_data(data, request)
+    data: Final = _route_data(request, MappingProxyType({"name": name}))
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -401,7 +394,7 @@ async def list_gemini_agent_versions(
     Pass per-request Gemini credentials via the JSON-encoded
     ``litellm_params_template`` query parameter. Flat query parameters
     (e.g. ``?api_key=AIza...``) are intentionally ignored — see
-    ``_merge_query_params_into_data`` for the rationale.
+    ``_query_template`` for the rationale.
 
     ```bash
     curl "http://localhost:4000/v1beta/agents/my-custom-slides-agent/versions?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D" \\
@@ -409,8 +402,7 @@ async def list_gemini_agent_versions(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final = {"name": name, "custom_llm_provider": "gemini"}
-    _merge_query_params_into_data(data, request)
+    data: Final = _route_data(request, MappingProxyType({"name": name}))
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)

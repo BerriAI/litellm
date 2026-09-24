@@ -9288,7 +9288,7 @@
     "paths": {
       "/v1beta/agents": {
         "get": {
-          "description": "List all custom agents on the Gemini side.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_merge_query_params_into_data`` for the rationale.\n\n```bash\ncurl \"http://localhost:4000/v1beta/agents?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
+          "description": "List all custom agents on the Gemini side.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_query_template`` for the rationale.\n\n```bash\ncurl \"http://localhost:4000/v1beta/agents?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
           "operationId": "list_gemini_agents_v1beta_agents_get",
           "responses": {
             "200": {
@@ -9336,7 +9336,7 @@
       },
       "/v1beta/agents/{name}": {
         "delete": {
-          "description": "Delete a custom agent by name.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_merge_query_params_into_data`` for the rationale.\n\n```bash\ncurl -X DELETE \"http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
+          "description": "Delete a custom agent by name.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_query_template`` for the rationale.\n\n```bash\ncurl -X DELETE \"http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
           "operationId": "delete_gemini_agent_v1beta_agents__name__delete",
           "parameters": [
             {
@@ -9380,7 +9380,7 @@
           ]
         },
         "get": {
-          "description": "Get a specific custom agent by name.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_merge_query_params_into_data`` for the rationale.\n\n```bash\ncurl \"http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
+          "description": "Get a specific custom agent by name.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_query_template`` for the rationale.\n\n```bash\ncurl \"http://localhost:4000/v1beta/agents/my-custom-slides-agent?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
           "operationId": "get_gemini_agent_v1beta_agents__name__get",
           "parameters": [
             {
@@ -9426,7 +9426,7 @@
       },
       "/v1beta/agents/{name}/versions": {
         "get": {
-          "description": "List versions of a custom agent.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_merge_query_params_into_data`` for the rationale.\n\n```bash\ncurl \"http://localhost:4000/v1beta/agents/my-custom-slides-agent/versions?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
+          "description": "List versions of a custom agent.\n\nPass per-request Gemini credentials via the JSON-encoded\n``litellm_params_template`` query parameter. Flat query parameters\n(e.g. ``?api_key=AIza...``) are intentionally ignored \u2014 see\n``_query_template`` for the rationale.\n\n```bash\ncurl \"http://localhost:4000/v1beta/agents/my-custom-slides-agent/versions?litellm_params_template=%7B%22api_key%22%3A%22AIza...%22%7D\" \\\n    -H \"Authorization: Bearer sk-...\"\n```",
           "operationId": "list_gemini_agent_versions_v1beta_agents__name__versions_get",
           "parameters": [
             {
