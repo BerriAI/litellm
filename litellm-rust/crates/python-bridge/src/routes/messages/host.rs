@@ -2,6 +2,7 @@ use bytes::Bytes;
 use litellm_core::messages::{
     Error,
     route::{Messages, MessagesCall, MessagesOp, MessagesOpResult, MessagesOutput},
+    types::MessagesShaping,
 };
 use litellm_host_python::{InvokeError, RouteHost, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
@@ -11,6 +12,7 @@ use pyo3::{
     prelude::*,
     types::{PyBytes, PyDict},
 };
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -18,9 +20,14 @@ use crate::{
     marshal::{optional_timeout, python_timeout_seconds},
 };
 
+const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
+/// Set on a request rejected before the provider was called, so the Python host maps it to
+/// the public 400 rather than a connection failure.
+const REQUEST_ERROR_MARKER: &str = "messages_request_error";
+
 /// The Anthropic Messages body fields a caller may pass besides `model` and `messages`,
 /// as `AnthropicMessagesRequestOptionalParams` declares them.
-const BODY_FIELDS: [&str; 20] = [
+const BODY_FIELDS: [&str; 22] = [
     "max_tokens",
     "metadata",
     "stop_sequences",
@@ -35,13 +42,49 @@ const BODY_FIELDS: [&str; 20] = [
     "top_p",
     "mcp_servers",
     "context_management",
+    "compaction",
     "container",
     "output_format",
     "speed",
     "output_config",
     "cache_control",
     "reasoning_effort",
+    "safeguards",
 ];
+
+/// One `provider_specific_header` entry: headers scoped to a comma separated provider list.
+#[derive(Deserialize)]
+struct ProviderSpecificHeader {
+    #[serde(default)]
+    custom_llm_provider: String,
+    #[serde(default)]
+    extra_headers: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ProviderSpecificHeaders {
+    One(ProviderSpecificHeader),
+    Many(Vec<ProviderSpecificHeader>),
+}
+
+impl ProviderSpecificHeaders {
+    fn matching(self, provider: &str) -> impl Iterator<Item = (String, Value)> {
+        let entries = match self {
+            Self::One(entry) => vec![entry],
+            Self::Many(entries) => entries,
+        };
+        entries
+            .into_iter()
+            .filter(move |entry| {
+                entry
+                    .custom_llm_provider
+                    .split(',')
+                    .any(|scoped| scoped.trim() == provider)
+            })
+            .flat_map(|entry| entry.extra_headers)
+    }
+}
 
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
@@ -84,17 +127,63 @@ impl MessagesRouteHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
+        let custom_llm_provider = string("custom_llm_provider")?;
+        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
         Ok(MessagesCall {
             model,
             body,
             api_key: string("api_key")?,
             api_base: string("api_base")?,
-            custom_llm_provider: string("custom_llm_provider")?,
-            extra_headers: argument("extra_headers")?
-                .map(|value| from_py(&value))
-                .transpose()?,
+            extra_headers: self.merged_headers(py, arguments)?,
+            custom_llm_provider,
             timeout: optional_timeout(timeout),
+            shaping,
         })
+    }
+
+    /// Python's handler merges the forwarded `headers`, `extra_headers` and the
+    /// `provider_specific_header` entries scoped to this provider, in that order.
+    fn merged_headers(
+        &self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> PyResult<Option<Map<String, Value>>> {
+        let request = self.request.bind(py);
+        let mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
+            lookup(arguments, request, name)?
+                .filter(|value| !value.is_none())
+                .map(|value| from_py(&value))
+                .transpose()
+        };
+        let provider = self.provider(py);
+        let scoped = lookup(arguments, request, "provider_specific_header")?
+            .filter(|value| !value.is_none())
+            .map(|value| from_py::<ProviderSpecificHeaders>(&value))
+            .transpose()?
+            .into_iter()
+            .flat_map(|headers| headers.matching(&provider));
+        let merged: Map<String, Value> = mapping("headers")?
+            .into_iter()
+            .flatten()
+            .chain(mapping("extra_headers")?.into_iter().flatten())
+            .chain(scoped)
+            .collect();
+        Ok((!merged.is_empty()).then_some(merged))
+    }
+
+    fn shaping(
+        &self,
+        py: Python<'_>,
+        model: &str,
+        custom_llm_provider: Option<&str>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> PyResult<MessagesShaping> {
+        let projected = py.import(ROUTE_HOST_MODULE)?.getattr("shaping")?.call1((
+            model,
+            custom_llm_provider,
+            arguments,
+        ))?;
+        from_py(&projected)
     }
 
     fn provider(&self, py: Python<'_>) -> String {
@@ -112,7 +201,7 @@ impl MessagesRouteHost {
             return error;
         }
         let mapped = py
-            .import("litellm.rust_bridge.messages.route_host")
+            .import(ROUTE_HOST_MODULE)
             .and_then(|module| module.getattr("map_failure"))
             .and_then(|map| map.call1((error.value(py), self.request.bind(py), self.provider(py))))
             .and_then(|mapped| {
@@ -148,7 +237,7 @@ impl RouteHost for MessagesRouteHost {
     fn complete(&mut self, py: Python<'_>, response: MessagesOutput) -> PyResult<Py<PyAny>> {
         match response {
             MessagesOutput::Message(message) => py
-                .import("litellm.rust_bridge.messages.route_host")?
+                .import(ROUTE_HOST_MODULE)?
                 .getattr("response")?
                 .call1((to_py(py, message.as_ref())?,))
                 .map(Bound::unbind),
@@ -167,6 +256,11 @@ impl RouteHost for MessagesRouteHost {
                 error
                     .value(py)
                     .setattr("headers", Vec::<(String, String)>::new())?;
+                error
+            }
+            Error::InvalidRequest(message) => {
+                let error = PyValueError::new_err(message);
+                error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
                 error
             }
             other => messages_error_to_pyerr(other),

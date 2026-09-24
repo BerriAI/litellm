@@ -1,15 +1,24 @@
-use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
-use litellm_llms::base_llm::anthropic_messages::transformation::{
-    BaseAnthropicMessagesConfig, MessagesAuthStrategy,
+use litellm_core_utils::{
+    dot_notation_indexing::delete_nested_value,
+    get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
 };
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
-use serde_json::{Map, Value};
+use litellm_llms::{
+    anthropic::common_utils::{
+        flatten_unencrypted_web_search_results, sanitize_tool_use_ids, strip_empty_content_blocks,
+        strip_provider_specific_fields,
+    },
+    base_llm::anthropic_messages::transformation::MessagesTransformContext,
+};
+use litellm_types::llms::anthropic_messages::anthropic_request::{
+    AnthropicMessage, AnthropicMessagesRequest,
+};
+use serde_json::{Map, Value, json};
 
 use super::{
     Error,
-    common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers},
+    common_utils::{messages_provider_config, string_headers},
 };
-use crate::messages::types::{MessagesRequest, ProviderMessagesRequest};
+use crate::messages::types::{MessagesRequest, MessagesShaping, ProviderMessagesRequest};
 
 pub(super) fn prepare_provider_request(
     request: MessagesRequest<'_>,
@@ -35,17 +44,33 @@ pub(super) fn prepare_provider_request(
         .ok_or_else(|| Error::InvalidProvider(provider.to_string()))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
-    let headers =
-        validate_environment(config, request.extra_headers, request.api_key, &env_lookup)?;
-
-    let typed_request: AnthropicMessagesRequest =
-        serde_json::from_value(request.body).map_err(|err| {
-            Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
-        })?;
-    let transformed = config.transform_anthropic_messages_request(AnthropicMessagesRequest {
-        model: model.clone(),
-        ..typed_request
+    let body = request
+        .shaping
+        .additional_drop_params
+        .iter()
+        .fold(request.body, |body, path| delete_nested_value(body, path));
+    let typed_request: AnthropicMessagesRequest = serde_json::from_value(body).map_err(|err| {
+        Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
     })?;
+    let sanitized = sanitize_request(
+        AnthropicMessagesRequest {
+            model: model.clone(),
+            ..typed_request
+        },
+        &request.shaping,
+    );
+    let transformed = config.transform_anthropic_messages_request(
+        sanitized,
+        &MessagesTransformContext::new(request.shaping.capabilities, request.shaping.drop_params),
+    )?;
+
+    let forwarded = string_headers(request.extra_headers)?;
+    let authenticated = config.authenticate(forwarded, request.api_key, &env_lookup)?;
+    let headers = config.request_headers(
+        with_default_headers(authenticated, config.default_headers()),
+        &transformed,
+    );
+
     let body = serde_json::to_value(transformed).map_err(|err| {
         Error::InvalidRequest(format!(
             "failed to serialize Anthropic messages request: {err}"
@@ -65,33 +90,66 @@ pub(super) fn prepare_provider_request(
     })
 }
 
-fn validate_environment(
-    config: &dyn BaseAnthropicMessagesConfig,
-    extra_headers: Option<Map<String, Value>>,
-    api_key: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, Error> {
-    let mut headers = string_headers(extra_headers)?;
-
-    let auth_strategy = config.auth_strategy();
-    let already_authorized = has_header(&headers, auth_strategy.header_name())
-        || (config.accepts_bearer_auth() && has_bearer_auth(&headers));
-    if !already_authorized {
-        let api_key = config.resolve_api_key(api_key, env_lookup)?;
-        let auth_header = match auth_strategy {
-            MessagesAuthStrategy::Bearer => {
-                ("authorization".to_string(), format!("Bearer {api_key}"))
-            }
-            MessagesAuthStrategy::Header(name) => (name.to_string(), api_key),
-        };
-        headers.push(auth_header);
+/// The route-level cleanup Python's `anthropic_messages` runs before any provider config:
+/// history sanitizers, the `metadata` allowlist and the reasoning auto summary.
+fn sanitize_request(
+    request: AnthropicMessagesRequest,
+    shaping: &MessagesShaping,
+) -> AnthropicMessagesRequest {
+    AnthropicMessagesRequest {
+        messages: sanitize_messages(request.messages),
+        metadata: request.metadata.as_ref().map(allowed_metadata),
+        thinking: with_reasoning_auto_summary(request.thinking, shaping.reasoning_auto_summary),
+        ..request
     }
+}
 
-    for (name, value) in config.default_headers() {
-        if !has_header(&headers, name) {
-            headers.push((name.to_string(), value.to_string()));
-        }
+fn sanitize_messages(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
+    strip_provider_specific_fields(flatten_unencrypted_web_search_results(
+        sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
+    ))
+}
+
+/// Only the fields Anthropic's `metadata` accepts reach the provider; LiteLLM-specific
+/// metadata travels under `litellm_metadata` instead.
+fn allowed_metadata(metadata: &Value) -> Value {
+    let user_id = metadata.get("user_id").filter(|value| !value.is_null());
+    Value::Object(
+        user_id
+            .map(|value| ("user_id".to_string(), value.clone()))
+            .into_iter()
+            .collect::<Map<String, Value>>(),
+    )
+}
+
+fn with_reasoning_auto_summary(thinking: Option<Value>, enabled: bool) -> Option<Value> {
+    let Some(Value::Object(thinking)) = thinking else {
+        return thinking;
+    };
+    if !enabled || thinking.get("type").and_then(Value::as_str) == Some("disabled") {
+        return Some(Value::Object(thinking));
     }
+    Some(Value::Object(
+        thinking
+            .into_iter()
+            .filter(|(key, _)| key != "display")
+            .chain([("display".to_string(), json!("summarized"))])
+            .collect(),
+    ))
+}
 
-    Ok(headers)
+fn with_default_headers(
+    headers: Vec<(String, String)>,
+    defaults: &[(&str, &str)],
+) -> Vec<(String, String)> {
+    let missing: Vec<(String, String)> = defaults
+        .iter()
+        .filter(|(name, _)| {
+            !headers
+                .iter()
+                .any(|(header, _)| header.eq_ignore_ascii_case(name))
+        })
+        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+        .collect();
+    headers.into_iter().chain(missing).collect()
 }

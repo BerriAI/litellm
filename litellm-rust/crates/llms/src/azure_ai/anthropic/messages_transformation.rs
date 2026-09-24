@@ -4,14 +4,15 @@ use litellm_types::llms::anthropic_messages::{
     },
     anthropic_response::AnthropicMessagesResponse,
 };
-use serde_json::{Map, Value};
 
 use crate::{
     anthropic::experimental_pass_through::messages::transformation::{
         ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
     },
     base_llm::{
-        anthropic_messages::transformation::{BaseAnthropicMessagesConfig, MessagesAuthStrategy},
+        anthropic_messages::transformation::{
+            BaseAnthropicMessagesConfig, MessagesAuthStrategy, MessagesTransformContext,
+        },
         chat::transformation::Error,
     },
 };
@@ -21,7 +22,6 @@ const AZURE_API_BASE_ENV: &str = "AZURE_API_BASE";
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
 const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 const SYSTEM_ROLE: &str = "system";
-const TEXT_BLOCK_TYPE: &str = "text";
 
 pub struct AzureAnthropicMessagesConfig {
     anthropic: AnthropicMessagesConfig,
@@ -45,6 +45,7 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
     fn transform_anthropic_messages_request(
         &self,
         request: AnthropicMessagesRequest,
+        context: &MessagesTransformContext,
     ) -> Result<AnthropicMessagesRequest, Error> {
         let mut request = fold_system_role_messages(request);
         if let Some(system) = request.system.as_mut() {
@@ -54,7 +55,8 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
             .messages
             .iter_mut()
             .for_each(strip_scope_from_message);
-        self.anthropic.transform_anthropic_messages_request(request)
+        self.anthropic
+            .transform_anthropic_messages_request(request, context)
     }
 
     fn transform_anthropic_messages_response(
@@ -143,17 +145,7 @@ fn strip_scope_from_message(message: &mut AnthropicMessage) {
 }
 
 fn text_content_block(text: String) -> ContentBlock {
-    let extra = Map::from_iter([
-        (
-            "type".to_string(),
-            Value::String(TEXT_BLOCK_TYPE.to_string()),
-        ),
-        ("text".to_string(), Value::String(text)),
-    ]);
-    ContentBlock {
-        cache_control: None,
-        extra,
-    }
+    ContentBlock::text(text)
 }
 
 fn content_into_blocks(content: MessageContent) -> Vec<ContentBlock> {
@@ -202,6 +194,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::anthropic::common_utils::AnthropicModelCapabilities;
 
     fn request_from(value: serde_json::Value) -> AnthropicMessagesRequest {
         serde_json::from_value(value).expect("valid request")
@@ -346,7 +339,7 @@ mod tests {
 
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request)
+                .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
                 .expect("request transforms"),
         );
 
@@ -373,10 +366,13 @@ mod tests {
             "messages": [{"role": "user", "content": "hi"}]
         }));
         let once = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_anthropic_messages_request(request)
+            .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
             .expect("request transforms");
         let twice = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_anthropic_messages_request(once.clone())
+            .transform_anthropic_messages_request(
+                once.clone(),
+                &MessagesTransformContext::default(),
+            )
             .expect("request transforms");
         assert_eq!(once, twice);
         assert_eq!(to_value(once)["system"], json!("plain string system"));
@@ -408,9 +404,21 @@ mod tests {
             "inference_geo": "us",
             "litellm_metadata": {"trace": "abc"}
         });
+        let context = MessagesTransformContext::with_lookup(
+            AnthropicModelCapabilities {
+                supports_reasoning: true,
+                supports_adaptive_thinking: true,
+                supports_legacy_thinking: true,
+                supports_output_config: true,
+                supports_speed: true,
+                ..Default::default()
+            },
+            false,
+            &|_: &str| None,
+        );
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request_from(body.clone()))
+                .transform_anthropic_messages_request(request_from(body.clone()), &context)
                 .expect("request transforms"),
         );
         assert_eq!(transformed, body);
@@ -430,7 +438,7 @@ mod tests {
 
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request)
+                .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
                 .expect("request transforms"),
         );
 
@@ -460,7 +468,7 @@ mod tests {
 
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request)
+                .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
                 .expect("request transforms"),
         );
 
@@ -485,9 +493,21 @@ mod tests {
                 {"role": "assistant", "content": "hello"}
             ]
         });
+        let context = MessagesTransformContext::with_lookup(
+            AnthropicModelCapabilities {
+                supports_reasoning: true,
+                supports_adaptive_thinking: true,
+                supports_legacy_thinking: true,
+                supports_output_config: true,
+                supports_speed: true,
+                ..Default::default()
+            },
+            false,
+            &|_: &str| None,
+        );
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_anthropic_messages_request(request_from(body.clone()))
+                .transform_anthropic_messages_request(request_from(body.clone()), &context)
                 .expect("request transforms"),
         );
         assert_eq!(transformed, body);

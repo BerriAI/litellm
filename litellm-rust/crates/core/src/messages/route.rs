@@ -17,7 +17,7 @@ use super::{
     common_utils::messages_provider_config,
     handler::{decode_response, network, provider_error, send},
     prepare::prepare_provider_request,
-    types::MessagesRequest,
+    types::{MessagesRequest, MessagesShaping},
 };
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 
@@ -39,6 +39,7 @@ pub struct MessagesCall {
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    pub shaping: MessagesShaping,
 }
 
 impl MessagesCall {
@@ -135,6 +136,7 @@ async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
         custom_llm_provider: call.custom_llm_provider.as_deref(),
         extra_headers: call.extra_headers.clone(),
         timeout: call.timeout,
+        shaping: call.shaping.clone(),
     })?;
     if stream && request.provider != ANTHROPIC_MESSAGES_PROVIDER {
         return Err(Error::Unsupported("streaming messages for this provider"));
