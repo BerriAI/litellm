@@ -23,6 +23,7 @@ from litellm.proxy.auth.auth_checks import (
     log_db_metrics,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import (
     DBSpendUpdateWriter,
     debitable_model_access_groups,
@@ -186,8 +187,8 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["error_information"] = _error_information
 
-        _metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
-            metadata=_metadata,
+        _metadata = await _ProxyDBLogger._enrich_failure_metadata_unless_db_stalled(
+            metadata=_metadata, original_exception=original_exception
         )
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
@@ -471,6 +472,12 @@ class _ProxyDBLogger(CustomLogger):
             )
 
             spend_log_error("Error in tracking cost callback - %s", str(e), exc=e)
+
+    @staticmethod
+    async def _enrich_failure_metadata_unless_db_stalled(metadata: dict, original_exception: Exception) -> dict:
+        if isinstance(original_exception, DBLookupDeadlineExceeded):
+            return metadata
+        return await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
 
     @staticmethod
     async def _enrich_failure_metadata_with_key_info(metadata: dict, resolve_missing_key_identity: bool = True) -> dict:
@@ -770,7 +777,7 @@ async def _reconcile_budget_reservation_before_db_update(
                 "Failed to invalidate budget reservation counters after pre-persist reconcile failed"
             )
         finally:
-            budget_reservation["finalized"] = True  # rebind-ok: the counter update reads the stamp off the shared dict
+            budget_reservation["finalized"] = True  # rebind-ok: stamps the caller's shared dict for the counter update
 
 
 async def _release_budget_reservation(budget_reservation: dict | None) -> None:

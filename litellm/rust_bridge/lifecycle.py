@@ -81,6 +81,7 @@ class Stream(AsyncIterator[object]):
     def __init__(self, execution: Execution) -> None:
         self._execution: Final = execution
         self._done = False
+        self._hidden_params: dict[str, object] = {}  # mutable-ok: header writers mutate _hidden_params in place
 
     def __aiter__(self) -> Stream:
         return self
@@ -117,6 +118,7 @@ class SyncStream(Iterator[object]):
     def __init__(self, execution: Execution) -> None:
         self._execution: Final = execution
         self._done = False
+        self._hidden_params: dict[str, object] = {}  # mutable-ok: header writers mutate _hidden_params in place
 
     def __iter__(self) -> SyncStream:
         return self
