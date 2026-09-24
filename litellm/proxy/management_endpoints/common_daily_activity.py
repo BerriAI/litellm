@@ -4,6 +4,7 @@ import binascii
 import dataclasses
 import itertools
 import json
+import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
@@ -848,9 +849,12 @@ def decode_key_page_cursor(raw: str) -> KeyPageCursor | None:
     except (ValueError, binascii.Error):
         return None
     try:
-        return _KEY_PAGE_CURSOR_ADAPTER.validate_json(decoded)
+        cursor: Final = _KEY_PAGE_CURSOR_ADAPTER.validate_json(decoded)
     except ValidationError:
         return None
+    if not math.isfinite(cursor.spend) or cursor.api_key == "":
+        return None
+    return cursor
 
 
 def _build_aggregated_sql_query(

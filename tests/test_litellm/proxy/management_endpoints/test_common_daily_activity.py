@@ -3210,6 +3210,9 @@ class TestKeyPageCursorCodec:
             "aGVsbG8=",  # valid base64, not json
             "eyJmb28iOiAxfQ==",  # json object missing both fields
             "eyJzcGVuZCI6ICIxLjUiLCAiYXBpX2tleSI6IDd9",  # wrong types
+            "eyJzcGVuZCI6IE5hTiwgImFwaV9rZXkiOiAiayJ9",  # {"spend": NaN, "api_key": "k"}
+            "eyJzcGVuZCI6IEluZmluaXR5LCAiYXBpX2tleSI6ICJrIn0=",  # {"spend": Infinity, "api_key": "k"}
+            "eyJzcGVuZCI6IDEuMCwgImFwaV9rZXkiOiAiIn0=",  # {"spend": 1.0, "api_key": ""}
         ],
     )
     def test_malformed_returns_none(self, raw):
