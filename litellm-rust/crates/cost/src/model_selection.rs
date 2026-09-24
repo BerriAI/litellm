@@ -118,24 +118,20 @@ pub fn select_model_name_for_cost_calc(
         get_hidden_str_for_cost_calc(request.hidden_params, "region_name").or(request.region_name)
     })
     .flatten();
-    let selected = if request.custom_pricing {
+    let explicitly_selected = if request.custom_pricing {
         request
             .router_model_id
             .filter(|id| cost_map.get(*id).is_some_and(has_explicit_pricing))
             .or(request.model)
     } else {
-        request
-            .base_model
-            .or(private_model)
-            .or_else(|| {
-                response_model
-                    .is_none()
-                    .then(|| get_hidden_str_for_cost_calc(request.hidden_params, "model"))
-                    .flatten()
-            })
-            .or(response_model)
-            .or(request.model)
-    }?;
+        request.base_model.or(private_model).or_else(|| {
+            response_model
+                .is_none()
+                .then(|| get_hidden_str_for_cost_calc(request.hidden_params, "model"))
+                .flatten()
+        })
+    };
+    let selected = explicitly_selected.or(response_model).or(request.model)?;
     let Some(provider) = provider else {
         return Some(selected.to_owned());
     };

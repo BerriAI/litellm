@@ -271,3 +271,22 @@ fn pricing_entry_falls_back_from_unpriced_base_to_served_model() {
         Some(("openai/served", &json!({"input_cost_per_token": 0.01})))
     );
 }
+
+#[rstest]
+#[case::no_requested_model(None, Some("openai/gpt-4o"))]
+#[case::requested_model_wins(Some("requested"), Some("openai/requested"))]
+fn custom_pricing_without_a_priced_router_id_falls_back_to_the_response_model(
+    #[case] model: Option<&str>,
+    #[case] expected: Option<&str>,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::new());
+    let response = json!({"model": "gpt-4o"});
+    assert_eq!(
+        catalog.select_model_name_for_cost_calc(ModelSelectionRequest {
+            custom_pricing: true,
+            response: Some(&response),
+            ..request(model, Some("openai"))
+        }),
+        expected.map(str::to_owned)
+    );
+}
