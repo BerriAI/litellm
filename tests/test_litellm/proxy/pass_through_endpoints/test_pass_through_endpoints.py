@@ -7404,8 +7404,11 @@ def test_passthrough_lets_metadata_win_over_litellm_metadata_on_a_shared_key() -
 def test_passthrough_orders_extracted_litellm_params_by_the_registry() -> None:
     body: Final = json.dumps({"ttl": 30, "tags": ["team-a"], "num_retries": 2, "contents": []})
     split: Final = _split_pass_through_body(body)
+    body_keys: Final = frozenset(json.loads(body))
 
-    assert tuple(split.litellm_params) == tuple(k for k in types_utils.all_litellm_params if k in split.litellm_params)
+    assert tuple(k for k in split.litellm_params if k in body_keys) == tuple(
+        k for k in types_utils.all_litellm_params if k in body_keys
+    )
 
 
 LATE_REGISTERED_BODY: Final = '{"registered_later": 1, "contents": [{"parts": [{"text": "hi"}]}]}'
