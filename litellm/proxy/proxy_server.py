@@ -11112,7 +11112,13 @@ async def _names_hidden_by_listing_callbacks(
     if not hidden or llm_router is None:
         return hidden
     aliases: Final = llm_router.model_group_alias
-    return hidden | frozenset(alias for alias in aliases if resolve_model_group_alias(aliases, alias) in hidden)
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+    return hidden | frozenset(
+        alias
+        for alias in aliases
+        if (target := resolve_model_group_alias(aliases, alias)) is not None
+        and internal_to_public.get(target, target) in hidden
+    )
 
 
 async def _entries_kept_by_listing_callbacks(
@@ -11127,9 +11133,10 @@ async def _entries_kept_by_listing_callbacks(
 
 
 async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_api_key_dict: UserAPIKeyAuth) -> bool:
-    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
-    public_name: Final = internal_to_public.get(deployment.model_name, deployment.model_name)
-    return public_name in await _names_hidden_by_listing_callbacks(user_api_key_dict, (public_name,))
+    listed_name: Final = _translate_model_name_for_response(deployment.model_dump(exclude_none=True)).get("model_name")
+    if not isinstance(listed_name, str):
+        return False
+    return listed_name in await _names_hidden_by_listing_callbacks(user_api_key_dict, (listed_name,))
 
 
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])

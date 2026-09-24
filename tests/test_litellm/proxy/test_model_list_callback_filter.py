@@ -280,6 +280,28 @@ async def test_router_alias_follows_its_hidden_target(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_router_alias_of_a_team_model_follows_its_hidden_public_name(monkeypatch):
+    _install_router(
+        monkeypatch,
+        _deployment("gpt-4"),
+        _deployment("model_name_team1_abc", team_id="team1", team_public_model_name="team-gpt"),
+        model_group_alias={"team-alias": "model_name_team1_abc"},
+    )
+    caller: UserAPIKeyAuth = _non_admin(
+        user_id="u",
+        team_id="team1",
+        team_models=["model_name_team1_abc", "team-alias"],
+        models=["model_name_team1_abc", "team-alias"],
+    )
+    _register(monkeypatch, _Gate(hidden=frozenset()))
+    assert sorted(await _v1_models(caller)) == ["team-alias", "team-gpt"]
+
+    _register(monkeypatch, _Gate(hidden=frozenset({"team-gpt"})))
+    assert await _v1_models(caller) == []
+    assert await _model_groups(caller) == []
+
+
+@pytest.mark.asyncio
 async def test_v1_model_info_offers_only_the_rows_the_caller_would_see(monkeypatch):
     _install_router(monkeypatch, _deployment("open-model"), _deployment("hidden-model", discoverable=False))
     gate: _Gate = _Gate()
@@ -387,3 +409,16 @@ async def test_v1_model_info_by_deployment_id_offers_the_public_team_name(team_r
     assert await _v1_model_info_by_deployment_id("model_name_team1_abc-id", _team_member()) == 400
     assert await _v1_model_info_by_deployment_id("model_name_team1_def-id", _team_member()) == ["team-chat"]
     assert gate.seen == [("team-gpt",), ("team-chat",)]
+
+
+@pytest.mark.asyncio
+async def test_v1_model_info_by_deployment_id_offers_the_name_its_listing_shows_in_legacy_mode(
+    team_router, monkeypatch
+):
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_team_public_model_name": False})
+    gate: _Gate = _Gate(hidden=frozenset({"team-gpt"}))
+    _register(monkeypatch, gate)
+
+    assert await _v1_model_info_names(_team_member()) == ["team-chat"]
+    assert await _v1_model_info_by_deployment_id("model_name_team1_abc-id", _team_member()) == 400
+    assert gate.seen[-1] == ("team-gpt",)

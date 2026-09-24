@@ -427,11 +427,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         model_names: Sequence[str],
     ) -> Sequence[str]:
         """Runs on the model listing routes (`/v1/models`, `/v1/models/{id}`, `/model/info`,
-        `/model_group/info`) with the public model names the caller would otherwise see. Return
-        the names to keep as a sequence of strings; a name left out disappears from every
-        listing, its aliases go with it, and `/v1/models/{id}` answers 404 for it, exactly as
-        for a model that does not exist. Names outside `model_names` are ignored, so a callback
-        can only narrow the listing, never widen it.
+        `/model_group/info`) with the public model names the route would otherwise return, so a
+        lookup of one model may offer just that name: decide per name, never by position in the
+        sequence. Return the names to keep as a sequence of strings; a name left out disappears
+        from every listing, any alias of it offered in the same call goes with it, and
+        `/v1/models/{id}` answers 404 for it, exactly as for a model that does not exist. Names
+        outside `model_names` are ignored, so a callback can only narrow the listing, never widen
+        it.
         """
         return model_names
 
