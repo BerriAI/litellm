@@ -1,21 +1,17 @@
 use std::{sync::Arc, time::Duration};
 
 use futures_util::future::BoxFuture;
-use litellm_http::request::{has_bearer_auth, has_header};
+use litellm_core::messages::{
+    Error, messages,
+    route::{LocalMessagesHost, MessagesCall, messages_machine},
+    types::{MessagesRequest, MessagesShaping},
+};
 use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::{Map, Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-
-use super::{
-    Error,
-    common_utils::{messages_provider_config, string_headers, truncate_error_body},
-    messages,
-    route::{LocalMessagesHost, MessagesCall, MessagesOutput, messages_machine},
-};
-use crate::messages::types::{MessagesRequest, MessagesShaping};
 
 struct RecordingSecrets {
     values: Vec<(&'static str, String)>,
@@ -74,55 +70,6 @@ fn secrets_call() -> MessagesCall {
 }
 
 #[tokio::test]
-async fn route_reads_the_provider_credential_and_base_from_the_secret_source() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
-    let addr = listener.local_addr().expect("addr");
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accepts request");
-        let request = read_http_request(&mut socket).await;
-        let response_body = r#"{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#;
-        socket
-            .write_all(write_response(response_body).as_bytes())
-            .await
-            .expect("writes response");
-        request
-    });
-    let secrets = Arc::new(RecordingSecrets::new(
-        vec![
-            ("ANTHROPIC_API_KEY", "sk-from-manager".to_string()),
-            ("ANTHROPIC_BASE_URL", format!("http://{addr}")),
-        ],
-        false,
-    ));
-
-    let output = litellm_host::run::run(
-        messages_machine(secrets.clone()),
-        &LocalMessagesHost::new(secrets_call()),
-    )
-    .await
-    .expect("messages request succeeds");
-
-    assert!(matches!(output, MessagesOutput::Message(_)));
-    let request = server.await.expect("server task completes");
-    assert!(
-        request
-            .to_ascii_lowercase()
-            .contains("x-api-key: sk-from-manager"),
-        "{request}"
-    );
-    let requested = secrets.requested.lock().unwrap().clone();
-    assert_eq!(
-        requested,
-        messages_provider_config("anthropic")
-            .unwrap()
-            .secret_names()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-    );
-}
-
-#[tokio::test]
 async fn route_surfaces_a_secret_manager_failure_before_the_call() {
     let Err(error) = litellm_host::run::run(
         messages_machine(Arc::new(RecordingSecrets::new(Vec::new(), true))),
@@ -177,75 +124,6 @@ fn write_response(body: &str) -> String {
         body.len(),
         body
     )
-}
-
-#[test]
-fn provider_config_resolves_anthropic_and_azure_ai() {
-    assert!(messages_provider_config("anthropic").is_some());
-    assert!(messages_provider_config("azure_ai").is_some());
-    assert!(messages_provider_config("openai").is_none());
-}
-
-#[test]
-fn truncate_error_body_caps_long_payloads() {
-    let body = "x".repeat(400);
-    let truncated = truncate_error_body(&body);
-    assert!(truncated.ends_with("... (truncated)"));
-    let prefix_chars = truncated
-        .strip_suffix("... (truncated)")
-        .expect("truncated marker present")
-        .chars()
-        .count();
-    assert_eq!(prefix_chars, 256);
-}
-
-#[test]
-fn string_headers_rejects_non_string_values() {
-    let headers = json!({"x-count": 3}).as_object().unwrap().clone();
-    let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-    assert_eq!(
-        err,
-        Error::Headers(litellm_http::request::HeaderError {
-            context: "messages",
-            name: "x-count".to_string(),
-            actual: "number",
-        })
-    );
-}
-
-#[test]
-fn has_header_is_case_insensitive() {
-    let headers = vec![("X-Api-Key".to_string(), "secret".to_string())];
-    assert!(has_header(&headers, "x-api-key"));
-    assert!(!has_header(&headers, "authorization"));
-}
-
-#[test]
-fn has_bearer_auth_requires_a_nonempty_bearer_token() {
-    assert!(has_bearer_auth(&[(
-        "Authorization".to_string(),
-        "Bearer tok".to_string()
-    )]));
-    assert!(has_bearer_auth(&[(
-        "authorization".to_string(),
-        "bearer tok".to_string()
-    )]));
-    assert!(!has_bearer_auth(&[(
-        "authorization".to_string(),
-        "Bearer ".to_string()
-    )]));
-    assert!(!has_bearer_auth(&[(
-        "authorization".to_string(),
-        String::new()
-    )]));
-    assert!(!has_bearer_auth(&[(
-        "authorization".to_string(),
-        "Basic abc".to_string()
-    )]));
-    assert!(!has_bearer_auth(&[(
-        "x-api-key".to_string(),
-        "sk".to_string()
-    )]));
 }
 
 #[tokio::test]

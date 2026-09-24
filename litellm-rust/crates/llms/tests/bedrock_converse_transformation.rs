@@ -1,7 +1,11 @@
-use serde_json::json;
-
-use super::*;
-use crate::base_llm::chat::transformation::Error;
+use litellm_llms::{
+    base_llm::chat::transformation::{
+        BaseConfig, Error, ProviderChatResponseData, RequestAuth, Unsupported,
+    },
+    bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
+};
+use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use serde_json::{Map, Value, json};
 
 fn messages(value: Value) -> Vec<ChatMessage> {
     serde_json::from_value(value).expect("valid messages")
