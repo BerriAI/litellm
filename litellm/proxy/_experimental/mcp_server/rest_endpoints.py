@@ -1155,6 +1155,7 @@ if MCP_AVAILABLE:
                     route_type=CallTypes.call_mcp_tool.value,
                     proxy_logging_obj=proxy_logging_obj,
                     general_settings=general_settings,
+                    skip_guardrails=True,
                 )
 
                 # Extract MCP auth headers from request and add to data dict

@@ -12,7 +12,8 @@ import os
 import random
 import time
 import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, overload
@@ -269,6 +270,80 @@ def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
     return tx
 
 
+_daily_spend_commit_started: Final[ContextVar[asyncio.Event | None]] = ContextVar(
+    "_daily_spend_commit_started", default=None
+)
+
+
+def _mark_daily_spend_commit_started() -> None:
+    started: Final = _daily_spend_commit_started.get()
+    if started is not None:
+        started.set()
+
+
+def _mark_daily_spend_commit_finished() -> None:
+    started: Final = _daily_spend_commit_started.get()
+    if started is not None:
+        started.clear()
+
+
+def _start_daily_spend_commit(
+    commit_started: asyncio.Event, commit: Callable[[], Coroutine[object, object, None]]
+) -> "asyncio.Task[None]":
+    token: Final = _daily_spend_commit_started.set(commit_started)
+    try:
+        return asyncio.ensure_future(commit())
+    finally:
+        _daily_spend_commit_started.reset(token)
+
+
+def _track_interrupted_commit(commits: set[asyncio.Task[None]], settle: Coroutine[object, object, None]) -> None:
+    task: Final = asyncio.ensure_future(settle)
+    commits.add(task)
+    task.add_done_callback(commits.discard)
+
+
+async def _settle_interrupted_commits(commits: set[asyncio.Task[None]]) -> None:
+    while commits:
+        await asyncio.wait(tuple(commits))
+
+
+async def _restore_tag_spend_the_commit_left_behind(
+    commit_task: "asyncio.Task[None]",
+    redis_update_buffer: RedisUpdateBuffer,
+    transactions: dict[str, DailyTagSpendTransaction],
+) -> None:
+    await asyncio.wait({commit_task})
+    if commit_task.cancelled() or commit_task.exception() is None:
+        return
+    await redis_update_buffer.restore_transactions_to_redis(
+        daily_tag_spend_update_transactions=transactions,
+    )
+
+
+async def _requeue_daily_spend_the_commit_left_behind(
+    commit_task: "asyncio.Task[None]",
+    queue: DailySpendUpdateQueue,
+    entity_type: str,
+    transactions: dict[str, BaseDailySpendTransaction],
+) -> None:
+    await asyncio.wait({commit_task})
+    if commit_task.cancelled() or not transactions:
+        return
+    failure: Final = commit_task.exception()
+    if failure is None:
+        return
+    spend_log_error(
+        "Spend tracking - daily %s spend commit interrupted by shutdown failed. Re-queued %d rows for the "
+        "shutdown flush. Error: %s",
+        entity_type,
+        len(transactions),
+        str(failure),
+        exc=failure,
+    )
+    await queue.add_update(transactions)
+
+
 # The per-team advisory lock the team endpoints hold while changing a roster (TEAM_ADVISORY_LOCK_SQL),
 # so the roster check below cannot interleave with their writes. A row lock would deadlock with the
 # access-group endpoints, which lock a team row after an access-group lock.
@@ -391,6 +466,9 @@ class DBSpendUpdateWriter:
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
         self.window_spend_update_queue = WindowSpendUpdateQueue()
+        self.interrupted_tag_commits: set[asyncio.Task[None]] = (
+            set()
+        )  # mutable-ok: same registry as DailySpendUpdateQueue.interrupted_commits
 
     async def update_database(
         # LiteLLM management object fields
@@ -1606,17 +1684,24 @@ class DBSpendUpdateWriter:
         proxy_logging_obj: ProxyLogging,
     ) -> None:
         transactions: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
-        commit_task: Final = asyncio.ensure_future(
-            commit(
+        commit_started: Final = asyncio.Event()
+        commit_task: Final = _start_daily_spend_commit(
+            commit_started,
+            lambda: commit(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
-            )
+            ),
         )
         try:
             await asyncio.shield(commit_task)
         except asyncio.CancelledError:
+            if commit_started.is_set():
+                queue.track_interrupted_commit(
+                    _requeue_daily_spend_the_commit_left_behind(commit_task, queue, entity_type, transactions)
+                )
+                raise
             commit_task.cancel()
             if transactions:
                 await queue.add_update(transactions)
@@ -1841,23 +1926,36 @@ class DBSpendUpdateWriter:
         The drain is destructive, so a failed commit must push the transactions back for the next tick
         or their spend is lost permanently.
         """
+        await _settle_interrupted_commits(self.interrupted_tag_commits)
         daily_tag_spend_update_transactions: Final = (
             await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
         )
         if not daily_tag_spend_update_transactions:
             return
 
-        commit_task: Final = asyncio.ensure_future(
-            DBSpendUpdateWriter.update_daily_tag_spend(
+        commit_started: Final = asyncio.Event()
+        commit_task: Final = _start_daily_spend_commit(
+            commit_started,
+            lambda: DBSpendUpdateWriter.update_daily_tag_spend(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=daily_tag_spend_update_transactions,
-            )
+            ),
         )
         try:
             await asyncio.shield(commit_task)
         except BaseException:  # noqa: BLE001  # a cancel must restore the drained rows before its rollback returns
+            if commit_started.is_set():
+                _track_interrupted_commit(
+                    self.interrupted_tag_commits,
+                    _restore_tag_spend_the_commit_left_behind(
+                        commit_task,
+                        self.redis_update_buffer,
+                        daily_tag_spend_update_transactions,
+                    ),
+                )
+                raise
             commit_task.cancel()
             await self.redis_update_buffer.restore_transactions_to_redis(
                 daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
@@ -2382,6 +2480,8 @@ class DBSpendUpdateWriter:
                             sql, params = build_bulk_upsert(table=table, batch=merged_batch)
                             async with _spend_update_tx(prisma_client) as transaction:
                                 await transaction.execute_raw(sql, *params)
+                                _mark_daily_spend_commit_started()
+                            _mark_daily_spend_commit_finished()
                         except Exception as batch_error:
                             if _spend_commit_failure_is_requeue_safe(batch_error):
                                 spend_log_error(

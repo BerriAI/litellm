@@ -1,6 +1,8 @@
 <!-- The whole description's target audience is humans, not AI agents: write it in plain, simple,
      everyday engineering language, extremely parsable and readable at a glance. This goes double for
-     the TLDR, User Flow, and Caveats sections -->
+     the TLDR, User Flow, and Caveats sections
+     Drop every section you have nothing to put in, heading included: a bare "## Relevant issues" or
+     "## Affected release" with nothing under it must not appear in the final description -->
 
 ## TLDR
 
@@ -21,6 +23,7 @@ How it solves it:
 <!-- Two ordered lists, Before and After, walking the same end user through the same task, written strictly from that user's seat
      Read the linked issue, ticket, or customer thread first so the flow reflects the real application and the routes its users actually hit; don't invent a generic scenario
      Lead each list with one plain sentence saying where the flow fails (Before) or succeeds (After), then number the steps
+     Keep it tight: aim for 3 to 5 steps per list, one line each, roughly 20 words max, and never pad a shorter flow with filler steps to hit the count. Cover the one path the PR changes and fold variants (case, other field, second endpoint) into a clause on the step they belong to rather than their own steps. The example below is the target length
      Every step is something the user does or observes: the HTTP method and full URL they hit, what they sent, and what visibly came back (status code, error text, the shape of an ID). UI steps name the page URL and what is on screen
      No LiteLLM internals: never name functions, files, DB tables, config classes, hooks, callbacks, or code paths. "The upload hands back an ID that looks like OpenAI's own `file-abc123` instead of the scrambled one the gateway returned" is right, "no managed-file row was registered" is wrong
      Keep the two lists step-for-step identical until they diverge, so the changed step is obvious
@@ -45,15 +48,15 @@ After: the same request comes back with real token counts, so the dashboard show
 
 ## Relevant issues
 
-<!-- e.g., "Fixes #000" -->
+<!-- e.g., "Fixes #000". Drop the section if there is none -->
 
 ## Affected release
 
-<!-- Only for a fix to a regression in a released or rc version (perf, memory, crash, or behavior): name the version it regressed in, e.g. "regression in v1.100.0" or "since v1.101.0-rc.1", and add the `backport-stable` label so the fix is cherry-picked onto the rc line before the stable is tagged. Leave the section blank otherwise -->
+<!-- Only for a fix to a regression in a released or rc version (perf, memory, crash, or behavior): name the version it regressed in, e.g. "regression in v1.100.0" or "since v1.101.0-rc.1", and add the `backport-stable` label so the fix is cherry-picked onto the rc line before the stable is tagged. Drop the section otherwise -->
 
 ## Linear ticket
 
-<!-- if you are an internal contributor, add "Resolves " followed by the Linear ticket e.g., "Resolves LIT-1234" to link the Linear ticket to the GitHub PR. If you don't have one, leave the section blank rather than guessing -->
+<!-- if you are an internal contributor, add "Resolves " followed by the Linear ticket e.g., "Resolves LIT-1234" to link the Linear ticket to the GitHub PR. If you don't have one, drop the section rather than guessing -->
 
 ## Pre-Submission checklist
 
@@ -134,7 +137,7 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      human reader
      If you assumed something instead of testing it, e.g. "only reproduces with X on" or "no
      user-observable behavior difference", list it here too with what breaks if it is wrong
-     Leave this section empty if there are none -->
+     Drop this section if there are none -->
 
 ## QA runbook
 

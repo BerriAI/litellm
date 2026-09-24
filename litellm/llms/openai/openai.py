@@ -1427,9 +1427,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 },
             )
 
-            request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
-                {**data, "extra_headers": headers} if headers else data
-            )
+            request_data: Final = {**data, "extra_headers": headers} if headers else data
             raw_response: Final = await openai_aclient.images.with_raw_response.generate(
                 **request_data, timeout=timeout
             )
@@ -1517,9 +1515,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             ## COMPLETION CALL
-            request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
-                {**data, "extra_headers": headers} if headers else data
-            )
+            request_data: Final = {**data, "extra_headers": headers} if headers else data
             raw_response: Final = openai_client.images.with_raw_response.generate(**request_data, timeout=timeout)
 
             response: Final = raw_response.parse().model_dump()

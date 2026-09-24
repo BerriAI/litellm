@@ -2475,6 +2475,7 @@ def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj)
 
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.types.guardrails import GuardrailEventHooks
 
     class DummyGuardrail(CustomGuardrail):
@@ -2484,6 +2485,12 @@ def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj)
         pass
 
     logging_obj.stream = False
+    snapshot: Final = GuardrailRequestSnapshot.capture(
+        {"messages": [{"role": "user", "content": "approved"}]},
+        {"standard_logging_guardrail_information": [{"guardrail_mode": "pre_call"}]},
+    )
+    assert snapshot is not None
+    logging_obj.shadow_eval_request_snapshot = snapshot
 
     model_response = ModelResponse(
         id="resp-guardrail-skip",
@@ -2525,6 +2532,7 @@ def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj)
     assert guardrail_call_kwargs["event_type"] == GuardrailEventHooks.logging_only
     guardrail.logging_hook.assert_not_called()
     dummy_logger.logging_hook.assert_called_once()
+    assert logging_obj.shadow_eval_request_snapshot is snapshot
 
 
 def test_success_handler_runs_guardrail_logging_hook_when_enabled(logging_obj):
@@ -2532,12 +2540,18 @@ def test_success_handler_runs_guardrail_logging_hook_when_enabled(logging_obj):
     import datetime
 
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.types.guardrails import GuardrailEventHooks
 
     class DummyGuardrail(CustomGuardrail):
         pass
 
     logging_obj.stream = False
+    logging_obj.shadow_eval_request_snapshot = GuardrailRequestSnapshot.capture(
+        {"messages": [{"role": "user", "content": "approved"}]},
+        {"standard_logging_guardrail_information": [{"guardrail_mode": "pre_call"}]},
+    )
+    assert logging_obj.shadow_eval_request_snapshot is not None
 
     model_response = ModelResponse(
         id="resp-guardrail-run",
@@ -2582,6 +2596,88 @@ def test_success_handler_runs_guardrail_logging_hook_when_enabled(logging_obj):
     assert guardrail_call_kwargs["event_type"] == GuardrailEventHooks.logging_only
     guardrail.logging_hook.assert_called_once()
     assert logging_obj.model_call_details.get("guardrail_hook_ran") is True
+    assert logging_obj.shadow_eval_request_snapshot is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook_mode", ["disabled", "mask", "raises"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_shadow_snapshot_stays_private_and_is_invalidated_before_logging_guardrails(
+    monkeypatch: pytest.MonkeyPatch, hook_mode: Literal["disabled", "mask", "raises"], stream: bool
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot, ShadowEvalLogger
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    shadow_snapshots: Final[list[GuardrailRequestSnapshot | None]] = []
+    hook_snapshots: Final[list[GuardrailRequestSnapshot | None]] = []
+    other_payloads: Final[list[Mapping[str, object]]] = []
+    prisma_reads: Final[list[bool]] = []
+
+    def no_prisma() -> None:
+        prisma_reads.append(True)
+
+    class RecordingShadowLogger(ShadowEvalLogger):
+        async def async_log_success_event(
+            self, kwargs: Mapping[str, object], response_obj: object, start_time: object,
+            end_time: object, *, guardrail_snapshot: GuardrailRequestSnapshot | None = None,
+        ) -> None:
+            shadow_snapshots.append(guardrail_snapshot)
+            await super().async_log_success_event(
+                kwargs, response_obj, start_time, end_time, guardrail_snapshot=guardrail_snapshot
+            )
+
+    class RecordingLogger(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object,
+        ) -> None:
+            other_payloads.append(kwargs)
+
+    class LoggingGuardrail(CustomGuardrail):
+        async def async_logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str,
+        ) -> tuple[dict[str, object], object]:
+            hook_snapshots.append(logging_obj.shadow_eval_request_snapshot)
+            if hook_mode == "raises":
+                raise RuntimeError("logging guardrail failed without recording history")
+            return {**kwargs, "messages": [{"role": "user", "content": "masked"}]}, result
+
+    metadata: Final = {
+        "standard_logging_guardrail_information": [{"guardrail_mode": "pre_call"}],
+        "user_api_key_hash": "test-key",
+    }
+    snapshot: Final = GuardrailRequestSnapshot.capture(
+        {"messages": [{"role": "user", "content": "snapshot-only"}]}, metadata,
+    )
+    assert snapshot is not None
+    shadow: Final = RecordingShadowLogger(prisma_provider=no_prisma, jobs_cache=InMemoryCache())
+    guardrail: Final = LoggingGuardrail(
+        guardrail_name="late-mask", default_on=True,
+        event_hook=GuardrailEventHooks.pre_call if hook_mode == "disabled" else GuardrailEventHooks.logging_only,
+    )
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    logging_obj: Final = LitellmLogging(
+        model="test-model", messages=[], stream=stream, call_type="anthropic_messages",
+        start_time=datetime.datetime.now(), litellm_call_id="private-snapshot", function_id="private-snapshot",
+        dynamic_async_success_callbacks=[shadow, RecordingLogger(), guardrail],
+    )
+    logging_obj.update_messages([{"role": "user", "content": "logged input"}])
+    logging_obj.update_environment_variables(litellm_params={"metadata": metadata}, optional_params={})
+    logging_obj.shadow_eval_request_snapshot = snapshot
+    payload: Final = {
+        "id": "private-snapshot", "call_type": "anthropic_messages", "metadata": metadata,
+        "model_group": "test-model", "model_parameters": {},
+    }
+
+    await logging_obj.async_success_handler(result=ModelResponse(), standard_logging_object=payload)
+
+    assert shadow_snapshots == ([snapshot] if hook_mode == "disabled" else [None])
+    assert hook_snapshots == ([] if hook_mode == "disabled" else [None])
+    assert prisma_reads == ([True] if hook_mode == "disabled" else [])
+    assert len(other_payloads) == 1
+    assert "snapshot-only" not in json.dumps(other_payloads[0], default=str)
+    assert "snapshot-only" not in json.dumps(logging_obj.model_call_details, default=str)
 
 
 def test_get_user_agent_tags():
