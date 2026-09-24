@@ -275,7 +275,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             api_key (str | None): The CrowdStrike AIDR API key. Reads from CS_AIDR_TOKEN env var if None.
             api_base (str | None): The CrowdStrike AIDR API base URL. Reads from CS_AIDR_BASE_URL env var if None.
             streaming_end_of_stream_only (bool | None): Scan streamed output once at end of stream instead of
-                every streaming_sampling_rate chunks. Defaults to False.
+                every streaming_sampling_rate chunks. Defaults to True.
             streaming_sampling_rate (int | None): Scan the accumulated streamed output every Nth chunk. Defaults to 5.
             async_handler (AsyncHTTPHandler | None): HTTP client to call AI Guard with. Defaults to the shared
                 guardrail-callback client.
@@ -316,7 +316,11 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
     def _set_streaming_params(self, streaming_params: CrowdStrikeAIDRGuardrailConfigModelOptionalParams) -> None:
         self.streaming_buffer_until_moderated: bool = streaming_params.streaming_buffer_until_moderated or False
         self.streaming_buffer_release_on_scan: bool = streaming_params.streaming_buffer_release_on_scan or False
-        self.streaming_end_of_stream_only: bool = streaming_params.streaming_end_of_stream_only or False
+        self.streaming_end_of_stream_only: bool = (
+            True
+            if streaming_params.streaming_end_of_stream_only is None
+            else streaming_params.streaming_end_of_stream_only
+        )
         self.streaming_sampling_rate: int = streaming_params.streaming_sampling_rate or 5
 
     @override
