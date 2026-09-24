@@ -27,6 +27,7 @@ interface MCPServerViewProps {
   userID: string | null;
   isViewOnly?: boolean;
   availableAccessGroups: string[];
+  existingServers?: MCPServer[];
   initialTabIndex?: number;
 }
 
@@ -58,6 +59,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userID,
   isViewOnly = false,
   availableAccessGroups,
+  existingServers,
   initialTabIndex = 0,
 }) => {
   // Open the editing Settings tab on first render when returning from the edit OAuth
@@ -244,6 +246,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 onCancel={() => setEditing(false)}
                 onSuccess={handleSuccess}
                 availableAccessGroups={availableAccessGroups}
+                existingServers={existingServers}
               />
             ) : (
               <div className="divide-y divide-border">
