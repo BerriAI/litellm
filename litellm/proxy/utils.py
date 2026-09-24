@@ -4388,7 +4388,7 @@ class PrismaClient:
         # reader endpoint and writes stay on the writer. Falls back to the
         # writer-only wrapper when the env var is unset, preserving existing
         # single-DB deployments.
-        self.db: PrismaWrapper | RoutingPrismaWrapper
+        self._routed_db: PrismaWrapper | RoutingPrismaWrapper
         if read_replica_url:
             try:
                 # If token auth is enabled, the reader refreshes its own token on
@@ -4425,7 +4425,7 @@ class PrismaClient:
                     recreate_uses_datasource=True,
                     log_prefix="[reader]",
                 )
-                self.db = RoutingPrismaWrapper(writer=writer_wrapper, reader=reader_wrapper)
+                self._routed_db = RoutingPrismaWrapper(writer=writer_wrapper, reader=reader_wrapper)
                 verbose_proxy_logger.info(
                     "PrismaClient: read-replica routing enabled via DATABASE_URL_READ_REPLICA"
                     + (f" (with {token_auth.label} auto-refresh)" if token_auth is not None else "")
@@ -4444,9 +4444,9 @@ class PrismaClient:
                     "Falling back to writer-only mode (no read routing) until proxy restart.",
                     e,
                 )
-                self.db = writer_wrapper
+                self._routed_db = writer_wrapper
         else:
-            self.db = writer_wrapper  # Client to connect to Prisma db
+            self._routed_db = writer_wrapper  # Client to connect to Prisma db
         self._db_reconnect_lock = asyncio.Lock()
         self._db_health_watchdog_task: asyncio.Task | None = None
         self._view_setup_task: asyncio.Task[_ViewSetupOutcome] | None = None
@@ -4494,9 +4494,9 @@ class PrismaClient:
     @property
     def writer_db(self) -> PrismaWrapper:
         """Underlying writer Prisma wrapper, regardless of read-replica routing."""
-        if isinstance(self.db, RoutingPrismaWrapper):
-            return self.db.writer
-        return self.db
+        if isinstance(self._routed_db, RoutingPrismaWrapper):
+            return self._routed_db.writer
+        return self._routed_db
 
     @property
     def read_db(self) -> PrismaWrapper:
@@ -4507,22 +4507,30 @@ class PrismaClient:
         so anything reasoning about the state of the connection that served a
         read has to consult this rather than the writer.
         """
-        if isinstance(self.db, RoutingPrismaWrapper):
-            return self.db.read_target
-        return self.db
+        if isinstance(self._routed_db, RoutingPrismaWrapper):
+            return self._routed_db.read_target
+        return self._routed_db
+
+    @property
+    def db(self) -> PrismaWrapper:
+        return self.writer_db
+
+    @db.setter
+    def db(self, value: "PrismaWrapper | RoutingPrismaWrapper") -> None:
+        self._routed_db = value
 
     @property
     def replica_db(self) -> "PrismaWrapper | RoutingPrismaWrapper":
         """Explicit opt-in to read-replica routing; reads reached through it may go to the reader."""
-        return self.db
+        return self._routed_db
 
     def tx(self, *, timeout: timedelta = _PRISMA_DEFAULT_TX_TIMEOUT) -> "TransactionManager":
         """Open an interactive transaction on the writer.
 
-        Callers go through this instead of reaching into ``self.db`` so writer
+        Callers go through this instead of reaching into ``self._routed_db`` so writer
         selection and read-replica routing stay encapsulated in the wrapper.
         """
-        return cast("TransactionManager", self.db.tx(timeout=timeout))  # cast-ok: untyped __getattr__ delegate
+        return cast("TransactionManager", self._routed_db.tx(timeout=timeout))  # cast-ok: untyped __getattr__ delegate
 
     def get_request_status(self, payload: dict | SpendLogsPayload) -> Literal["success", "failure"]:
         """
@@ -4624,7 +4632,7 @@ class PrismaClient:
                 if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
                     await create_view_tolerating_race(
-                        self.db,
+                        self._routed_db,
                         "LiteLLM_VerificationTokenView",
                         """
                             CREATE VIEW "LiteLLM_VerificationTokenView" AS
@@ -5454,7 +5462,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher = self._routed_db.batch_()
                 for idx, t in enumerate(data_list):
                     # check if plain text or hash
                     if t.token.startswith("sk-"):
@@ -5479,7 +5487,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher = self._routed_db.batch_()
                 for idx, user in enumerate(data_list):
                     try:
                         data_json = self.jsonify_object(data=user.model_dump(exclude_none=True))
@@ -5504,7 +5512,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher = self._routed_db.batch_()
                 for enduser in data_list:
                     try:
                         data_json = self.jsonify_object(data=enduser.model_dump(exclude_none=True))
@@ -5529,7 +5537,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher = self._routed_db.batch_()
                 for budget in data_list:
                     try:
                         data_json = self.jsonify_object(data=budget.model_dump(exclude_none=True))
@@ -5552,7 +5560,7 @@ class PrismaClient:
                 and isinstance(data_list, list)
             ):
                 # Batch write update queries
-                batcher = self.db.batch_()
+                batcher = self._routed_db.batch_()
                 for idx, team in enumerate(data_list):
                     try:
                         data_json = self.jsonify_team_object(db_data=team.model_dump(exclude_none=True))
@@ -5664,9 +5672,9 @@ class PrismaClient:
         start_time: Final = time.time()
         try:
             verbose_proxy_logger.debug("PrismaClient: connect() called Attempting to Connect to DB")
-            if self.db.is_connected() is False:
+            if self._routed_db.is_connected() is False:
                 verbose_proxy_logger.debug("PrismaClient: DB not connected, Attempting to Connect to DB")
-                await self.db.connect()
+                await self._routed_db.connect()
         except Exception as e:
             import traceback
 
@@ -5696,7 +5704,7 @@ class PrismaClient:
     async def disconnect(self):
         start_time: Final = time.time()
         try:
-            await self.db.disconnect()
+            await self._routed_db.disconnect()
         except Exception as e:
             import traceback
 
@@ -5859,10 +5867,10 @@ class PrismaClient:
         would otherwise kill the engine the recreate just spawned (#29176).
 
         Consumes (removes) the PID so a later real crash of a reused PID is
-        still handled. Tolerant of `self.db` stand-ins (tests / older clients)
+        still handled. Tolerant of `self._routed_db` stand-ins (tests / older clients)
         that don't expose a real set.
         """
-        expected: Final = getattr(self.db, "_expected_engine_deaths", None)
+        expected: Final = getattr(self._routed_db, "_expected_engine_deaths", None)
         if isinstance(expected, set) and pid in expected:
             expected.discard(pid)
             return True
@@ -6134,7 +6142,7 @@ class PrismaClient:
                 # direct path there is no SELECT 1 probe here, so the generation
                 # guard is the only thing standing between a crash-reconnect and
                 # a refresh that raced it.
-                recreated: Final = await self.db.recreate_prisma_client(db_url, expected_generation=expected_generation)
+                recreated: Final = await self._routed_db.recreate_prisma_client(db_url, expected_generation=expected_generation)
                 await self._start_engine_watcher()
                 # Same contract as the direct path below: a forced caller asked
                 # for its engine to be replaced, so a decline is not a success.
@@ -6193,8 +6201,8 @@ class PrismaClient:
                                 "Writer healthy on probe; skipping recreate (engine "
                                 "likely already replaced by a token refresh)."
                             )
-                            if isinstance(self.db, RoutingPrismaWrapper):
-                                self.db.mark_writer_recovered()
+                            if isinstance(self._routed_db, RoutingPrismaWrapper):
+                                self._routed_db.mark_writer_recovered()
                             await self._start_engine_watcher()
                             return
                     except Exception as probe_err:
@@ -6208,7 +6216,7 @@ class PrismaClient:
                 # ends up killing the engine anyway, we do it non-blockingly
                 # via `_kill_engine_process` inside `recreate_prisma_client`.
                 self._cleanup_engine_watcher()
-                recreated: Final = await self.db.recreate_prisma_client(db_url, expected_generation=expected_generation)
+                recreated: Final = await self._routed_db.recreate_prisma_client(db_url, expected_generation=expected_generation)
                 await self._start_engine_watcher()
                 # Smoke-test the writer specifically; query_raw on the routing
                 # wrapper sends to the reader, which would not validate the
@@ -6576,7 +6584,7 @@ class PrismaClient:
                     self.replica_db.query_raw("SELECT 1"),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
                 )
-                if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
+                if isinstance(self._routed_db, RoutingPrismaWrapper) and self._routed_db.writer_unavailable:
                     await self.attempt_db_reconnect(
                         reason="db_health_watchdog_writer_unavailable",
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
@@ -6645,14 +6653,14 @@ class PrismaClient:
         therefore says nothing about a probe that failed against the reader, so
         the gate has to follow the same routing rule the probe did.
         """
-        if isinstance(self.db, RoutingPrismaWrapper):
-            return self.db.writer if self.db.reader_unavailable else self.db.reader
-        return self.db
+        if isinstance(self._routed_db, RoutingPrismaWrapper):
+            return self._routed_db.writer if self._routed_db.reader_unavailable else self._routed_db.reader
+        return self._routed_db
 
     async def _run_health_probe(self, wrapper: PrismaWrapper) -> object:
         """Issue the `SELECT 1` a health check is made of, against `wrapper`.
 
-        Takes the wrapper rather than re-reading `self.db`, because routing is
+        Takes the wrapper rather than re-reading `self._routed_db`, because routing is
         re-resolved on every attribute access: a reader that recovers between
         the caller picking its target and the query going out would send the
         probe to a different engine than the one whose generation the caller is
