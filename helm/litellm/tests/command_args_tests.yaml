@@ -1,0 +1,89 @@
+suite: test container command and args overrides
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: gateway omits command and args by default
+    template: gateway/deployment.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].command
+      - isNull:
+          path: spec.template.spec.containers[0].args
+
+  - it: gateway renders command and args when set
+    template: gateway/deployment.yaml
+    set:
+      gateway.command:
+        - .venv/bin/granian
+      gateway.args:
+        - gateway.main:app
+        - --http
+        - auto
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - .venv/bin/granian
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - gateway.main:app
+            - --http
+            - auto
+
+  - it: backend omits command and args by default
+    template: backend/deployment.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].command
+      - isNull:
+          path: spec.template.spec.containers[0].args
+
+  - it: backend renders command and args when set
+    template: backend/deployment.yaml
+    set:
+      backend.command:
+        - python
+      backend.args:
+        - -m
+        - litellm
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - python
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - -m
+            - litellm
+
+  - it: ui omits command and args by default
+    template: ui/deployment.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].command
+      - isNull:
+          path: spec.template.spec.containers[0].args
+
+  - it: ui renders command and args when set
+    template: ui/deployment.yaml
+    set:
+      ui.command:
+        - node
+      ui.args:
+        - server.js
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - node
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - server.js
