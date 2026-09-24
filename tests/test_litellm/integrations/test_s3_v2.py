@@ -617,19 +617,17 @@ async def test_async_upload_signs_with_one_frozen_credential_snapshot(rotating_p
 
 
 @pytest.mark.asyncio
-async def test_async_upload_retries_transient_status_with_fresh_credentials_and_signature(
-    rotating_profile: str, caplog
-):
+async def test_async_upload_retries_403_with_fresh_credentials_and_signature(rotating_profile: str, caplog):
     """
-    A transient status must be retried, and the retry must fetch credentials again and carry
-    a signature computed from that newer generation.
+    A 403 (SignatureDoesNotMatch after an IMDS rotation) must be retried, and the retry must fetch
+    credentials again and carry a signature computed from that newer generation.
     """
     test_element = s3BatchLoggingElement(
-        s3_object_key="2025-09-14/test-503.json",
-        payload={"test": "503"},
-        s3_object_download_filename="test-503.json",
+        s3_object_key="2025-09-14/test-403.json",
+        payload={"test": "403"},
+        s3_object_download_filename="test-403.json",
     )
-    async with _s3_logger_on_production_handler(rotating_profile, [503, 200]) as (logger, requests, mock_sleep):
+    async with _s3_logger_on_production_handler(rotating_profile, [403, 200]) as (logger, requests, mock_sleep):
         await logger.async_upload_data_to_s3(test_element)
 
     assert len(requests) == 2
@@ -644,13 +642,13 @@ async def test_async_upload_retries_transient_status_with_fresh_credentials_and_
 
 
 @pytest.mark.asyncio
-async def test_async_upload_exhausts_transient_retries_through_production_http_handler(rotating_profile: str, caplog):
+async def test_async_upload_exhausts_403_retries_through_production_http_handler(rotating_profile: str, caplog):
     test_element = s3BatchLoggingElement(
-        s3_object_key="2025-09-14/test-503-exhausted.json",
-        payload={"test": "503-exhausted"},
-        s3_object_download_filename="test-503-exhausted.json",
+        s3_object_key="2025-09-14/test-403-exhausted.json",
+        payload={"test": "403-exhausted"},
+        s3_object_download_filename="test-403-exhausted.json",
     )
-    async with _s3_logger_on_production_handler(rotating_profile, [503, 503, 503]) as (logger, requests, mock_sleep):
+    async with _s3_logger_on_production_handler(rotating_profile, [403, 403, 403]) as (logger, requests, mock_sleep):
         await logger.async_upload_data_to_s3(test_element)
 
     assert len(requests) == 3
@@ -673,22 +671,52 @@ async def test_async_upload_does_not_retry_404_through_production_http_handler(r
     assert "Error uploading to s3" in caplog.text
 
 
-def test_sync_upload_retries_transient_status_with_fresh_signature(
-    rotating_profile: str, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setenv("AWS_PROFILE", rotating_profile)
-    logger = S3Logger(s3_bucket_name="test-bucket", s3_region_name="us-east-1", s3_flush_interval=3600)
+@pytest.mark.asyncio
+async def test_async_upload_access_denied_403_is_not_retried(rotating_profile: str, caplog):
     test_element = s3BatchLoggingElement(
-        s3_object_key="2025-09-14/test-sync-503.json",
-        payload={"test": "sync-503"},
-        s3_object_download_filename="test-sync-503.json",
+        s3_object_key="2025-09-14/test-403-denied.json",
+        payload={"test": "403-denied"},
+        s3_object_download_filename="test-403-denied.json",
     )
     requests: list[httpx.Request] = []
-    replies = iter([503, 200])
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(next(replies), request=request)
+        return httpx.Response(403, request=request, text="<Error><Code>AccessDenied</Code></Error>")
+
+    handler = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_region_name="us-east-1",
+        s3_aws_profile_name=rotating_profile,
+        s3_flush_interval=3600,
+    )
+    logger.async_httpx_client = handler
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        outcome = await logger.async_upload_data_to_s3(test_element)
+    await handler.client.aclose()
+
+    assert outcome == "dropped"
+    assert len(requests) == 1
+    mock_sleep.assert_not_awaited()
+    assert "Error uploading to s3" in caplog.text
+
+
+def test_sync_upload_retries_403_with_fresh_signature(rotating_profile: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AWS_PROFILE", rotating_profile)
+    logger = S3Logger(s3_bucket_name="test-bucket", s3_region_name="us-east-1", s3_flush_interval=3600)
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-sync-403.json",
+        payload={"test": "sync-403"},
+        s3_object_download_filename="test-sync-403.json",
+    )
+    requests: list[httpx.Request] = []
+    replies = iter([403, 200])
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(next(replies), request=request, text="<Error><Code>SignatureDoesNotMatch</Code></Error>")
 
     handler = HTTPHandler()
     handler.client = httpx.Client(transport=httpx.MockTransport(respond))
@@ -2693,6 +2721,7 @@ def _transient_failure_response() -> MagicMock:
 def _terminal_failure_response() -> MagicMock:
     response = MagicMock()
     response.status_code = 403
+    response.text = "<Error><Code>AccessDenied</Code></Error>"
     response.raise_for_status = MagicMock(
         side_effect=httpx.HTTPStatusError("403", request=MagicMock(), response=response)
     )

@@ -7,6 +7,7 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint; by default each element is
 """
 
 import asyncio
+import re
 import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -56,13 +57,30 @@ if TYPE_CHECKING:
 UploadOutcome = Literal["delivered", "retry", "dropped"]
 
 _TRANSIENT_STATUSES: Final = frozenset({408, 429, 500, 502, 503, 504})
-_TRANSIENT_400_CODES: Final = ("<Code>RequestTimeout</Code>", "<Code>SlowDown</Code>")
+_TRANSIENT_ERROR_CODES: Final = frozenset(
+    {
+        "RequestTimeout",
+        "SlowDown",
+        "SignatureDoesNotMatch",
+        "ExpiredToken",
+        "InvalidToken",
+        "RequestTimeTooSkewed",
+        "AuthorizationHeaderMalformed",
+    }
+)
+_BODY_CODED_STATUSES: Final = frozenset({400, 403})
+_S3_ERROR_CODE: Final = re.compile(r"<Code>([^<]+)</Code>")
+
+
+def _s3_error_code(response: httpx.Response) -> str | None:
+    match: Final = _S3_ERROR_CODE.search(response.text)
+    return match.group(1) if match else None
 
 
 def _is_transient(response: httpx.Response) -> bool:
     if response.status_code in _TRANSIENT_STATUSES:
         return True
-    return response.status_code == 400 and any(code in response.text for code in _TRANSIENT_400_CODES)
+    return response.status_code in _BODY_CODED_STATUSES and _s3_error_code(response) in _TRANSIENT_ERROR_CODES
 
 
 def _s3_key_parent(s3_object_key: str) -> str:
@@ -548,10 +566,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             )
         if not requeued:
             return
-        self.log_queue = [
+        self.log_queue = [  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
             *requeued,
             *self.log_queue[len(batch) :],
-        ]  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+        ]
         raise S3BatchUploadError(failed=len(retry), total=len(uploads))
 
     def _batch_file_mode_active(self) -> bool:
