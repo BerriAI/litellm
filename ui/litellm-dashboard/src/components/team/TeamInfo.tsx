@@ -890,13 +890,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     setMemberToDelete(null);
   };
 
-  const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>) => {
+  const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>, refetch = true) => {
     await teamUpdateCall(token, updateData);
     queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
     toast.success("Team settings updated successfully");
     setIsEditing(false);
-    await fetchTeamInfo();
+    if (refetch) await fetchTeamInfo();
   };
 
   const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
@@ -1209,7 +1209,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     if (!accessToken || !pending) return;
     setIsApplyingMemberBudgets(true);
     try {
-      await persistTeamUpdate(accessToken, pending.updateData);
+      await persistTeamUpdate(accessToken, pending.updateData, false);
     } catch (error) {
       console.error("Error updating team:", error);
       toast.fromError("Failed to update team settings");

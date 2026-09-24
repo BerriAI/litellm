@@ -3109,6 +3109,29 @@ describe("TeamInfoView - member budget apply-all prompt", () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Reset 2 member budgets to the team default"));
   });
 
+  it("keeps the prompt mounted while the member-budget reset is in flight", async () => {
+    const user = userEvent.setup({ delay: null });
+    const input = await openEditorWithCustomMembers(user);
+    let resolveBulk: ((value: { data: { data: { success: boolean; user_id: string }[] } }) => void) | undefined;
+    vi.mocked(networking.teamInfoCall).mockImplementationOnce(() => new Promise(() => {}));
+    bulkUpdatePOST.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveBulk = resolve;
+        }),
+    );
+
+    await submitNewDefault(user, input, "20");
+    await user.click(await screen.findByRole("button", { name: "Reset to $20" }));
+
+    await waitFor(() => expect(bulkUpdatePOST).toHaveBeenCalled());
+    expect(screen.getByText("Reset member budgets?")).toBeInTheDocument();
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+
+    resolveBulk?.({ data: { data: [{ success: true, user_id: "user-custom@x.com" }] } });
+    await waitFor(() => expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument());
+  });
+
   it("surfaces a failure toast when some members cannot be reset", async () => {
     const user = userEvent.setup({ delay: null });
     const input = await openEditorWithCustomMembers(user, ["user-a@x.com", "user-b@x.com"]);
