@@ -39,6 +39,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
@@ -97,16 +98,22 @@ def _json_escaped_len(text: str) -> int:
 _MAX_FIRST_SSE_FRAME_BYTES: Final = 64 * 1024
 
 
-def _holds_complete_sse_frame(raw: bytes) -> bool:
-    """Whether ``raw`` holds one blank-line terminated SSE event, or is too large to keep joining."""
-    return b"\n\n" in raw or b"\r\n\r\n" in raw or len(raw) >= _MAX_FIRST_SSE_FRAME_BYTES
+def _holds_classifiable_sse_frame(raw: bytes) -> bool:
+    """Whether ``raw`` holds one complete SSE event carrying a ``data:`` line, or is too large to keep joining."""
+    complete_frames, _ = split_complete_sse_frames(raw)
+    return (
+        any(line.startswith(b"data:") for line in complete_frames.splitlines())
+        or len(raw) >= _MAX_FIRST_SSE_FRAME_BYTES
+    )
 
 
 async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
     """
-    Join leading raw ``bytes`` chunks until they hold one complete SSE event, so
-    the stream shape is decided on a whole frame rather than a transport fragment.
-    Everything after that first frame is forwarded untouched.
+    Join leading raw ``bytes`` chunks until they hold one complete SSE event
+    with a data line (a comment keepalive or data-less event alone says nothing
+    about the stream shape), so the stream shape is decided on a whole frame
+    rather than a transport fragment. Everything after that first frame is
+    forwarded untouched.
     """
     pending = b""
     try:
@@ -115,7 +122,7 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
                 yield chunk
                 continue
             pending += chunk
-            if _holds_complete_sse_frame(pending):
+            if _holds_classifiable_sse_frame(pending):
                 break
         else:
             if pending:
