@@ -20,7 +20,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import React, { type ReactNode, useMemo, useState } from "react";
+import React, { type ReactNode, useCallback, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
@@ -34,6 +34,7 @@ import {
   tagDailyActivityCall,
   teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
+  teamDailyActivityKeySearchCall,
   userDailyActivityCall,
 } from "@/components/networking";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -182,6 +183,16 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const modelBreakdownKey = modelViewType === "groups" ? "model_groups" : "models";
   const modelMetrics = processActivityData(spendData, modelBreakdownKey, teams || []);
   const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
+  const searchTeamKeys = useCallback(
+    (query: string) => {
+      if (!accessToken || !startTime || !endTime) return Promise.resolve({});
+      const teamIds = Array.isArray(entityFilterArg) ? entityFilterArg : null;
+      return teamDailyActivityKeySearchCall(accessToken, startTime, endTime, query, teamIds).then((data) =>
+        processActivityData(data, "api_keys", teams || []),
+      );
+    },
+    [accessToken, startTime, endTime, entityFilterArg, teams],
+  );
   const agentMetrics = showAgentBreakdown ? processActivityData(agentSpendData, "entities", teams || []) : {};
 
   const getAllTags = () => {
@@ -667,6 +678,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           keyMetrics={keyMetrics}
           hidePromptCachingMetrics={entityType === "agent"}
           apiKeyTruncation={apiKeyTruncation}
+          searchKeys={entityType === "team" ? searchTeamKeys : undefined}
         />
       ),
     },

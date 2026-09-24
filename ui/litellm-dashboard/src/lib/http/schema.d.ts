@@ -15645,6 +15645,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Team Daily Activity Keys
+         * @description Aggregated daily team activity for the keys matching a search term.
+         *
+         *     `/team/daily/activity/aggregated` only returns the top USAGE_TOP_API_KEYS_LIMIT keys by spend, so
+         *     a key outside that subset cannot be found by filtering the loaded page. This endpoint resolves
+         *     the term against every verification token the caller may see (same team and key scoping as the
+         *     aggregated endpoint) and aggregates litellm_dailyteamspend for just those hashes.
+         *
+         *     Args:
+         *         search (str): Exact token hash, or case-insensitive substring of key_alias or user_id.
+         *         team_ids (Optional[str]): Comma-separated list of team IDs to filter by.
+         *         start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+         *         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+         *         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+         *         timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset().
+         *     Returns:
+         *         SpendAnalyticsPaginatedResponse: Aggregated activity restricted to the matching keys.
+         */
+        get: operations["search_team_daily_activity_keys_team_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -30010,7 +30045,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/aggregated/search" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -62307,6 +62342,43 @@ export interface operations {
                 end_date?: string | null;
                 model?: string | null;
                 api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_team_daily_activity_keys_team_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                /** @description Exact token hash, or a case-insensitive substring of the key alias or owning user id */
+                search: string;
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
             };
