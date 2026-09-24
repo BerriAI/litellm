@@ -51,8 +51,8 @@ help:
 	@echo "  make test-unit-core-utils - Run core utils tests (~32 files)"
 	@echo "  make test-unit-other    - Run other tests (caching, responses, etc., ~69 files)"
 	@echo "  make test-unit-root     - Run root-level tests (~34 files)"
-	@echo "  make test-proxy-unit-a  - Run proxy_unit_tests (a-o, ~20 files)"
-	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
+	@echo "  make test-proxy-unit-a  - Run tests/unit/proxy (a-o)"
+	@echo "  make test-proxy-unit-b  - Run tests/unit/proxy (p-z)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
@@ -337,12 +337,12 @@ test-unit-other: install-test-deps
 test-unit-root: install-test-deps
 	$(UV_RUN) pytest tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
 
-# Proxy unit tests (tests/proxy_unit_tests split alphabetically)
+# Proxy unit tests (tests/unit/proxy split alphabetically)
 test-proxy-unit-a: install-test-deps
-	$(UV_RUN) pytest tests/proxy_unit_tests/test_[a-o]*.py --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy --ignore-glob='tests/unit/proxy/test_[p-z]*.py' --tb=short -vv -n 2 --durations=20
 
 test-proxy-unit-b: install-test-deps
-	$(UV_RUN) pytest tests/proxy_unit_tests/test_[p-z]*.py --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/test_[p-z]*.py tests/unit/skills --tb=short -vv -n 2 --durations=20
 
 test-integration: install-test-deps
 	$(UV_RUN) pytest tests/ -k "not test_litellm"

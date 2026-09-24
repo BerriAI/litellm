@@ -42,7 +42,7 @@ def create_skill_zip(skill_name: str):
 
     The zip file is automatically cleaned up after use.
     """
-    test_dir = Path(__file__).parent.parent / "llm_translation" / "test_skills_data"
+    test_dir = Path(__file__).parents[2] / "llm_translation" / "test_skills_data"
     skill_dir = test_dir / skill_name
 
     # Create a zip file containing the skill directory

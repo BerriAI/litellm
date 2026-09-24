@@ -31,10 +31,10 @@ concurrency:
 # number, so a partially-specified entry would fail the call rather than fall
 # back to the default.
 #
-# tests/proxy_unit_tests keeps its own caller (test-unit-proxy-db.yml): it is
-# already a matrix and carries a shard-coverage guard that reads that file by
-# name. Folding it in here is a follow-up, together with generalising that guard
-# into assert_ci_coverage.py.
+# tests/unit/proxy keeps its own caller (test-unit-proxy-db.yml): it is already
+# a matrix and carries a shard-coverage guard that reads that file by name.
+# Folding it in here is a follow-up, together with generalising that guard into
+# assert_ci_coverage.py.
 #
 # `fork-flag` names the `.circleci/tests.yml` job that now runs part of the
 # shard under the same Codecov flag. CircleCI does not build pull requests from

@@ -31,7 +31,7 @@ async def test_basic_reading_configs_from_files():
     example_config_yaml_path = os.path.join(current_path, "example_config_yaml")
 
     # get all the files from example_config_yaml
-    files = os.listdir(example_config_yaml_path)
+    files = [f for f in os.listdir(example_config_yaml_path) if f.endswith((".yaml", ".yml"))]
     print(files)
 
     for file in files:
