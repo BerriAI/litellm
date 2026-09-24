@@ -35,6 +35,9 @@ class Mailbox:
     port: int
     received: SimpleQueue[Delivery]
 
+    def pending(self) -> int:
+        return self.received.qsize()
+
     def drain(self) -> tuple[Delivery, ...]:
         return tuple(self.received.get_nowait() for _ in range(self.received.qsize()))
 
@@ -64,14 +67,15 @@ def smtp_sink() -> Generator[Mailbox, None, None]:
 
         def _session(self) -> None:
             self._reply("220 integration-smtp ready")
+            # rebind-ok: the SMTP envelope is built across MAIL/RCPT lines and reset after DATA or RSET.
             sender = ""
             recipients: tuple[str, ...] = ()
             while True:
                 raw: Final = self.rfile.readline()
                 if not raw:
                     return
-                line = raw.decode().rstrip("\r\n")
-                verb = line.split(" ", 1)[0].upper()
+                line: Final = raw.decode().rstrip("\r\n")
+                verb: Final = line.split(" ", 1)[0].upper()
                 if verb in {"EHLO", "HELO"}:
                     self._reply("250 integration-smtp")
                 elif verb == "MAIL":

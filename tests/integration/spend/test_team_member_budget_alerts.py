@@ -6,7 +6,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.mail import Delivery, Mailbox, smtp_sink
+from integration._support.mail import smtp_sink
 from integration._support.process import owned_proxy
 
 MEMBER_BUDGET: Final = 0.10
@@ -18,11 +18,6 @@ def _membership_spend(user_id: str, team_id: str) -> float:
         'SELECT spend FROM "LiteLLM_TeamMembership" WHERE user_id = %s AND team_id = %s', (user_id, team_id)
     )
     return float(str(rows[0]["spend"])) if rows else 0.0
-
-
-def _deliveries_for(mailbox: Mailbox, seen: list[Delivery]) -> list[Delivery]:
-    seen.extend(mailbox.drain())
-    return seen
 
 
 def test_team_member_budget_thresholds_email_member_and_configured_recipients(gateway: Gateway, tmp_path: Path) -> None:
@@ -49,7 +44,6 @@ def test_team_member_budget_thresholds_email_member_and_configured_recipients(ga
             )
             candidate.post("/team/member_add", {"team_id": team_id, "member": {"user_id": user_id, "role": "user"}})
             key: Final = scenario.key(team_id=team_id, user_id=user_id)
-            received: Final[list[Delivery]] = []
 
             first: Final = candidate.request(
                 "POST",
@@ -62,7 +56,7 @@ def test_team_member_budget_thresholds_email_member_and_configured_recipients(ga
             eventually(
                 lambda: _membership_spend(user_id, team_id), lambda spend: spend == pytest.approx(CALL_COST), seconds=70
             )
-            assert _deliveries_for(mailbox, received) == [], "no threshold is reached before the first call is recorded"
+            assert mailbox.drain() == (), "no threshold is reached before the first call is recorded"
 
             second: Final = candidate.request(
                 "POST",
@@ -71,9 +65,8 @@ def test_team_member_budget_thresholds_email_member_and_configured_recipients(ga
                 key=key,
             )
             assert second.status_code == 200, second.text
-            halfway: Final = eventually(
-                lambda: _deliveries_for(mailbox, received), lambda values: len(values) >= 1, seconds=30
-            )
+            eventually(mailbox.pending, lambda count: count >= 1, seconds=30)
+            halfway: Final = mailbox.drain()
             assert [delivery.recipients for delivery in halfway] == [(member_email,)], halfway
             assert "50%" in halfway[0].subject, halfway[0].subject
             assert f"${MEMBER_BUDGET}" in halfway[0].html, halfway[0].html
@@ -90,14 +83,12 @@ def test_team_member_budget_thresholds_email_member_and_configured_recipients(ga
                 key=key,
             )
             assert third.status_code == 422 and third.json()["error"]["type"] == "budget_exceeded", third.text
-            capped: Final = eventually(
-                lambda: _deliveries_for(mailbox, received), lambda values: len(values) >= 3, seconds=30
-            )
-            hundred: Final = capped[1:]
-            assert all("100%" in delivery.subject for delivery in hundred), capped
+            eventually(mailbox.pending, lambda count: count >= 2, seconds=30)
+            hundred: Final = mailbox.drain()
+            assert all("100%" in delivery.subject for delivery in hundred), hundred
             assert {recipient for delivery in hundred for recipient in delivery.recipients} == {
                 member_email,
                 finance_email,
-            }, capped
+            }, hundred
             assert all(member_email in delivery.html and f"${MEMBER_BUDGET}" in delivery.html for delivery in hundred)
-            assert len(capped) == 3, capped
+            assert len(hundred) == 2, hundred
