@@ -72,23 +72,64 @@ def test_validate_fallbacks(model_list):
     router.validate_fallbacks(fallback_param=[{"gpt-5.5": "gpt-5-mini"}])
 
 
-def test_validate_context_window_fallbacks(model_list, monkeypatch):
+def test_validate_context_window_fallbacks(model_list):
     router = Router(
         model_list=model_list,
         context_window_fallbacks=[{"gpt-5.5": ["gpt-5-mini"]}],
     )
-    assert router.context_window_fallbacks == [{"gpt-5.5": ["gpt-5-mini"]}]
+    try:
+        assert router.context_window_fallbacks == [{"gpt-5.5": ["gpt-5-mini"]}]
+    finally:
+        router.discard()
 
-    with pytest.raises(ValueError, match="Item 'garbage' is not a dictionary"):
+
+@pytest.mark.parametrize("source", ["argument", "global"])
+@pytest.mark.parametrize(
+    "fallbacks, message",
+    [
+        (["garbage"], "Item 'garbage' is not a dictionary"),
+        ([{}], "must have exactly one key"),
+        ([{"primary": ["backup"], "other": ["backup"]}], "must have exactly one key"),
+    ],
+)
+def test_invalid_context_window_fallbacks_leave_global_state_unchanged(monkeypatch, source, fallbacks, message):
+    deployment_id = "context-fallback-existing-deployment"
+    existing_price = {"input_cost_per_token": 0.001}
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, deployment_id: existing_price})
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "context_window_fallbacks", fallbacks if source == "global" else None)
+    costs_before = dict(litellm.model_cost)
+    callback_names = (
+        "callbacks",
+        "success_callback",
+        "_async_success_callback",
+        "failure_callback",
+        "_async_failure_callback",
+        "input_callback",
+        "service_callback",
+    )
+    callbacks_before = {name: tuple(getattr(litellm, name)) for name in callback_names}
+
+    with pytest.raises(ValueError, match=message):
         Router(
-            model_list=model_list,
-            context_window_fallbacks=["garbage"],
+            model_list=[
+                {
+                    "model_name": "primary",
+                    "litellm_params": {
+                        "model": "gpt-5.5",
+                        "api_key": "fake-key",
+                        "input_cost_per_token": 0.002,
+                    },
+                    "model_info": {"id": deployment_id},
+                }
+            ],
+            cache_responses=True,
+            context_window_fallbacks=fallbacks if source == "argument" else [],
         )
 
-    with monkeypatch.context() as context:
-        context.setattr(litellm, "context_window_fallbacks", ["garbage"])
-        with pytest.raises(ValueError, match="Item 'garbage' is not a dictionary"):
-            Router(model_list=model_list)
+    assert litellm.model_cost == costs_before
+    assert litellm.cache is None
+    assert {name: tuple(getattr(litellm, name)) for name in callback_names} == callbacks_before
 
 
 def test_routing_strategy_init(model_list):
