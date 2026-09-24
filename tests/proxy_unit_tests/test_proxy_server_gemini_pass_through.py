@@ -25,7 +25,6 @@ async def test_gemini_pass_through_endpoint():
         }
         """
 
-    # Construct the scope dictionary
     scope = {
         "type": "http",
         "method": "POST",
@@ -36,7 +35,6 @@ async def test_gemini_pass_through_endpoint():
         ],
     }
 
-    # Create a new Request object
     async def async_receive():
         return {"type": "http.request", "body": body, "more_body": False}
 
