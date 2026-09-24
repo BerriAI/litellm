@@ -6,6 +6,7 @@ use crate::generic_usage::{get_billable_input_tokens, parse_prompt_tokens_detail
 use crate::pricing::Rate;
 use crate::regional_uplift::get_regional_uplift_multiplier;
 use crate::responses_usage::ChatUsage;
+use crate::wire::py_float;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThresholdPolicy {
@@ -209,17 +210,10 @@ pub fn batch_cost_calculator(
 }
 
 fn model_rate(model_info: &Value, key: &str) -> Rate {
-    let Some(value) = model_info.get(key) else {
-        return Rate::Missing;
-    };
-    match value {
-        Value::Number(value) => value.as_f64().map_or(Rate::Missing, Rate::Value),
-        Value::String(value) => value
-            .trim()
-            .parse::<f64>()
-            .map_or(Rate::Missing, Rate::Value),
-        _ => Rate::Missing,
-    }
+    model_info
+        .get(key)
+        .and_then(py_float)
+        .map_or(Rate::Missing, Rate::Value)
 }
 
 fn threshold(value: &str) -> Option<u64> {

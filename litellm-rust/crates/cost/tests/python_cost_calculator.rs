@@ -829,3 +829,23 @@ fn default_image_cost_calculator_strips_every_provider_prefix_like_python_replac
     .unwrap();
     assert!((cost - 0.5).abs() < 1e-12);
 }
+
+#[rstest]
+#[case::boolean_rate(json!(true), 100.0)]
+#[case::padded_string_rate(json!(" 0.5 "), 50.0)]
+#[case::unparseable_string_is_unset(json!("n/a"), 0.0)]
+fn batch_rates_convert_like_python_batch_rate(
+    #[case] rate: serde_json::Value,
+    #[case] expected: f64,
+) {
+    let model_info =
+        json!({"input_cost_per_token_batches": rate, "output_cost_per_token_batches": 0.0});
+    let usage = ChatUsage {
+        prompt_tokens: 100,
+        completion_tokens: 0,
+        total_tokens: 100,
+        ..ChatUsage::default()
+    };
+    let cost = batch_cost_from_model_info(&model_info, &usage, Some("openai"), None).unwrap();
+    assert!((cost.prompt - expected).abs() < 1e-12);
+}
