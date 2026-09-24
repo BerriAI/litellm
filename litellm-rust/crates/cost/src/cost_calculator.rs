@@ -20,11 +20,14 @@ use crate::fireworks_cost::{
     FireworksThresholds, cost_per_token as fireworks_cost_per_token, get_base_model_for_pricing,
 };
 use crate::generic_cost::{GenericCostRequest, generic_cost_per_token};
+use crate::generic_input::get_cost_per_unit;
 use crate::lemonade_cost::lemonade_cost_per_token;
+use crate::non_token::{ImageRates, ImageUsage, calculate_image};
 use crate::ocr_cost::ocr_cost;
 use crate::openai_cost::video_generation_cost;
 use crate::per_second::{has_token_or_tiered_pricing, per_second_pricing_cost};
 use crate::perplexity_cost::cost_per_token as perplexity_cost_per_token;
+use crate::pricing::Rate;
 use crate::provider::LlmProviders;
 use crate::provider_cache::apply_provider_cache_read_default;
 use crate::realtime_cost::{
@@ -568,6 +571,97 @@ pub fn response_cost_calculator(
     Ok(completion_cost(catalog, request.completion)?.total)
 }
 
+fn model_without_provider_prefix(model: &str, provider: Option<&str>) -> Option<String> {
+    let prefix = format!("{}/", provider.filter(|provider| !provider.is_empty())?);
+    model
+        .starts_with(&prefix)
+        .then(|| model.replace(&prefix, ""))
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DefaultImageCostRequest<'a> {
+    pub model: &'a str,
+    pub provider: Option<&'a str>,
+    pub quality: Option<&'a str>,
+    pub n: Option<u64>,
+    pub size: Option<&'a str>,
+    pub supplied_model_info: Option<&'a Value>,
+}
+
+fn image_dimensions(size: &str) -> Result<(u32, u32), CostError> {
+    let (height, width) = size.split_once("-x-").ok_or(CostError::InvalidQuantity)?;
+    let parse = |value: &str| value.parse::<u32>().map_err(|_| CostError::InvalidQuantity);
+    Ok((parse(height)?, parse(width)?))
+}
+
+pub fn default_image_cost_calculator(
+    catalog: &ModelInfoCatalog,
+    request: DefaultImageCostRequest<'_>,
+) -> Result<f64, CostError> {
+    let raw_size = request.size.unwrap_or("1024-x-1024");
+    let size = if raw_size.contains("-x-") {
+        raw_size.to_owned()
+    } else {
+        raw_size.replace('x', "-x-")
+    };
+    let (height, width) = image_dimensions(&size)?;
+    let without_provider = model_without_provider_prefix(request.model, request.provider);
+    let base = match (request.provider, without_provider.as_deref()) {
+        (Some(provider), Some(model)) => format!("{provider}/{size}/{model}"),
+        _ => format!("{size}/{}", request.model),
+    };
+    let model_tail = request.model.rsplit('/').next().unwrap_or(request.model);
+    let without_prefix = format!("{size}/{model_tail}");
+    let candidates = [
+        request.quality.map(|quality| format!("{quality}/{base}")),
+        request
+            .provider
+            .zip(request.quality)
+            .map(|(provider, quality)| {
+                format!(
+                    "{provider}/{quality}/{size}/{}",
+                    without_provider.as_deref().unwrap_or(request.model)
+                )
+            }),
+        Some(base.clone()),
+        Some(format!("high/{base}")),
+        request
+            .quality
+            .map(|quality| format!("{quality}/{without_prefix}")),
+        Some(without_prefix),
+        Some(request.model.to_owned()),
+        without_provider.clone(),
+    ];
+    let shared = candidates
+        .iter()
+        .flatten()
+        .find_map(|candidate| catalog.entries().get(candidate));
+    if shared.is_none() && request.supplied_model_info.is_none() {
+        return Err(CostError::ModelNotFound);
+    }
+    let rate = |info: &Value, key: &str| {
+        get_cost_per_unit(info, key, None).map_or(Rate::Missing, Rate::Value)
+    };
+    let tables = [request.supplied_model_info, shared]
+        .into_iter()
+        .flatten()
+        .map(|info| ImageRates {
+            input_per_image: rate(info, "input_cost_per_image"),
+            output_per_image: rate(info, "output_cost_per_image"),
+            input_per_pixel: rate(info, "input_cost_per_pixel"),
+        })
+        .collect::<Vec<_>>();
+    Ok(calculate_image(
+        &tables,
+        ImageUsage {
+            count: request.n.unwrap_or(1),
+            width,
+            height,
+        },
+    )?
+    .total)
+}
+
 pub fn default_video_cost_calculator(
     catalog: &ModelInfoCatalog,
     model: &str,
@@ -579,12 +673,8 @@ pub fn default_video_cost_calculator(
     let model_info = match deployment_info {
         Some(info) => info,
         None => {
-            let without_provider = provider.and_then(|provider| {
-                model
-                    .strip_prefix(provider)
-                    .and_then(|rest| rest.strip_prefix('/'))
-            });
-            let base_model = match (provider, without_provider) {
+            let without_provider = model_without_provider_prefix(model, provider);
+            let base_model = match (provider, without_provider.as_deref()) {
                 (Some(provider), Some(bare)) => format!("{provider}/{bare}"),
                 _ => model.to_owned(),
             };
@@ -593,7 +683,7 @@ pub fn default_video_cost_calculator(
                 Some(base_model.as_str()),
                 Some(model),
                 Some(model_tail),
-                without_provider,
+                without_provider.as_deref(),
             ]
             .into_iter()
             .flatten()

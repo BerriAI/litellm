@@ -7,6 +7,7 @@ use crate::azure_ai_image_cost::{
 use crate::bedrock_image_cost::cost_calculator as bedrock_image_cost_calculator;
 use crate::call_type::CallTypes;
 use crate::catalog::ModelInfoCatalog;
+use crate::cost_calculator::{DefaultImageCostRequest, default_image_cost_calculator};
 use crate::error::CostError;
 use crate::fal_ai_image_cost::cost_calculator as fal_ai_image_cost_calculator;
 use crate::generic_input::get_cost_per_unit;
@@ -14,9 +15,7 @@ use crate::image_response_cost::{
     flat_image_cost, gemini_image_edit_cost, gemini_image_generation_cost,
     resolve_image_model_info, vertex_image_edit_cost, vertex_image_generation_cost,
 };
-use crate::non_token::{ImageRates, ImageUsage, calculate_image};
 use crate::openai_image_cost::cost_calculator as openai_image_cost_calculator;
-use crate::pricing::Rate;
 use crate::provider::LlmProviders;
 
 #[derive(Clone, Copy, Debug)]
@@ -42,16 +41,6 @@ pub struct AzureAiImageCatalogRequest<'a> {
     pub optional_params: &'a Value,
     pub supplied_model_info: Option<&'a Value>,
     pub at: Timestamp,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct DefaultImageCostRequest<'a> {
-    pub model: &'a str,
-    pub provider: Option<&'a str>,
-    pub quality: Option<&'a str>,
-    pub n: Option<u64>,
-    pub size: Option<&'a str>,
-    pub supplied_model_info: Option<&'a Value>,
 }
 
 pub fn call_type_has_image_response(call_type: &str) -> bool {
@@ -438,81 +427,4 @@ pub fn openai_image_generation_cost(
 ) -> Result<f64, CostError> {
     let model_info = resolved_model_info(catalog, model, provider, supplied_model_info)?;
     openai_image_cost_calculator(image_response, &model_info, provider, at)
-}
-
-fn image_dimensions(size: &str) -> Result<(u32, u32), CostError> {
-    let (height, width) = size.split_once("-x-").ok_or(CostError::InvalidQuantity)?;
-    let parse = |value: &str| value.parse::<u32>().map_err(|_| CostError::InvalidQuantity);
-    Ok((parse(height)?, parse(width)?))
-}
-
-pub fn default_image_cost_calculator(
-    catalog: &ModelInfoCatalog,
-    request: DefaultImageCostRequest<'_>,
-) -> Result<f64, CostError> {
-    let raw_size = request.size.unwrap_or("1024-x-1024");
-    let size = if raw_size.contains("-x-") {
-        raw_size.to_owned()
-    } else {
-        raw_size.replace('x', "-x-")
-    };
-    let (height, width) = image_dimensions(&size)?;
-    let provider_prefix = request.provider.map(|provider| format!("{provider}/"));
-    let without_provider = provider_prefix
-        .as_deref()
-        .and_then(|prefix| request.model.strip_prefix(prefix));
-    let base = match (request.provider, without_provider) {
-        (Some(provider), Some(model)) => format!("{provider}/{size}/{model}"),
-        _ => format!("{size}/{}", request.model),
-    };
-    let model_tail = request.model.rsplit('/').next().unwrap_or(request.model);
-    let without_prefix = format!("{size}/{model_tail}");
-    let candidates = [
-        request.quality.map(|quality| format!("{quality}/{base}")),
-        request
-            .provider
-            .zip(request.quality)
-            .map(|(provider, quality)| {
-                format!(
-                    "{provider}/{quality}/{size}/{}",
-                    without_provider.unwrap_or(request.model)
-                )
-            }),
-        Some(base.clone()),
-        Some(format!("high/{base}")),
-        request
-            .quality
-            .map(|quality| format!("{quality}/{without_prefix}")),
-        Some(without_prefix),
-        Some(request.model.to_owned()),
-        without_provider.map(str::to_owned),
-    ];
-    let shared = candidates
-        .iter()
-        .flatten()
-        .find_map(|candidate| catalog.entries().get(candidate));
-    if shared.is_none() && request.supplied_model_info.is_none() {
-        return Err(CostError::ModelNotFound);
-    }
-    let rate = |info: &Value, key: &str| {
-        get_cost_per_unit(info, key, None).map_or(Rate::Missing, Rate::Value)
-    };
-    let tables = [request.supplied_model_info, shared]
-        .into_iter()
-        .flatten()
-        .map(|info| ImageRates {
-            input_per_image: rate(info, "input_cost_per_image"),
-            output_per_image: rate(info, "output_cost_per_image"),
-            input_per_pixel: rate(info, "input_cost_per_pixel"),
-        })
-        .collect::<Vec<_>>();
-    Ok(calculate_image(
-        &tables,
-        ImageUsage {
-            count: request.n.unwrap_or(1),
-            width,
-            height,
-        },
-    )?
-    .total)
 }

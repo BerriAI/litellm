@@ -13,9 +13,9 @@ use litellm_cost::batch::{
     batch_cost_from_model_info, get_batch_cost_rates,
 };
 use litellm_cost::catalog::ModelInfoCatalog;
+use litellm_cost::cost_calculator::DefaultImageCostRequest;
 use litellm_cost::cost_calculator::default_video_cost_calculator;
 use litellm_cost::error::CostError;
-use litellm_cost::image_cost_router::DefaultImageCostRequest;
 use litellm_cost::non_token::{
     ImageRates, ImageUsage, OcrBatchRates, OcrRates, OcrUsage, Unit, VideoRates, calculate_image,
     calculate_ocr_batch, calculate_ocr_with_tables, calculate_video,
@@ -588,7 +588,7 @@ fn default_image_cost_calculator_selects_quality_and_normalized_size(
             json!({"input_cost_per_image": 0.08}),
         ),
     ]));
-    let cost = litellm_cost::image_cost_router::default_image_cost_calculator(
+    let cost = litellm_cost::cost_calculator::default_image_cost_calculator(
         &catalog,
         DefaultImageCostRequest {
             model: "xai/model",
@@ -611,7 +611,7 @@ fn default_image_cost_calculator_prefers_deployment_rate_and_explicit_zero() {
     )]));
     for (rate, expected) in [(0.07, 0.14), (0.0, 0.0)] {
         let supplied = json!({"input_cost_per_image": rate});
-        let cost = litellm_cost::image_cost_router::default_image_cost_calculator(
+        let cost = litellm_cost::cost_calculator::default_image_cost_calculator(
             &catalog,
             DefaultImageCostRequest {
                 model: "dall-e",
@@ -633,7 +633,7 @@ fn default_image_cost_calculator_prices_pixels_after_image_rates() {
         "provider/model".to_owned(),
         json!({"input_cost_per_pixel": 0.0001}),
     )]));
-    let cost = litellm_cost::image_cost_router::default_image_cost_calculator(
+    let cost = litellm_cost::cost_calculator::default_image_cost_calculator(
         &catalog,
         DefaultImageCostRequest {
             model: "provider/model",
@@ -688,7 +688,7 @@ fn default_image_cost_calculator_tries_provider_first_quality_candidate() {
         "openai/high/1024-x-1024/gpt-image-1".to_owned(),
         json!({"input_cost_per_image": 0.07}),
     )]));
-    let cost = litellm_cost::image_cost_router::default_image_cost_calculator(
+    let cost = litellm_cost::cost_calculator::default_image_cost_calculator(
         &catalog,
         DefaultImageCostRequest {
             model: "gpt-image-1",
@@ -711,7 +711,7 @@ fn default_image_cost_calculator_tries_provider_first_quality_candidate() {
             json!({"input_cost_per_image": 0.07}),
         ),
     ]));
-    let cost = litellm_cost::image_cost_router::default_image_cost_calculator(
+    let cost = litellm_cost::cost_calculator::default_image_cost_calculator(
         &both,
         DefaultImageCostRequest {
             model: "gpt-image-1",
@@ -777,4 +777,55 @@ fn default_video_cost_calculator_prefers_deployment_pricing_over_the_cost_map() 
     )
     .unwrap();
     assert!((cost - 1.0).abs() < 1e-12);
+}
+
+#[rstest]
+fn default_video_cost_calculator_strips_every_provider_prefix_like_python_replace() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "openai/zzvid".to_owned(),
+            json!({"output_cost_per_video_per_second": 1.0}),
+        ),
+        (
+            "zzvid".to_owned(),
+            json!({"output_cost_per_video_per_second": 2.0}),
+        ),
+    ]));
+    let cost = default_video_cost_calculator(
+        &catalog,
+        "openai/openai/zzvid",
+        1.0,
+        Some("openai"),
+        None,
+        None,
+    )
+    .unwrap();
+    assert!((cost - 1.0).abs() < 1e-12);
+}
+
+#[rstest]
+fn default_image_cost_calculator_strips_every_provider_prefix_like_python_replace() {
+    let catalog = ModelInfoCatalog::new(HashMap::from([
+        (
+            "openai/1024-x-1024/dall-e".to_owned(),
+            json!({"input_cost_per_image": 0.5}),
+        ),
+        (
+            "openai/1024-x-1024/openai/dall-e".to_owned(),
+            json!({"input_cost_per_image": 0.9}),
+        ),
+    ]));
+    let cost = litellm_cost::cost_calculator::default_image_cost_calculator(
+        &catalog,
+        DefaultImageCostRequest {
+            model: "openai/openai/dall-e",
+            provider: Some("openai"),
+            quality: None,
+            n: Some(1),
+            size: None,
+            supplied_model_info: None,
+        },
+    )
+    .unwrap();
+    assert!((cost - 0.5).abs() < 1e-12);
 }
