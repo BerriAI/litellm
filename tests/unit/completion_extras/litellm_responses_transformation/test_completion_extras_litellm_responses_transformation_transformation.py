@@ -4357,18 +4357,13 @@ def test_map_optional_params_verbosity_merges_into_text():
 @pytest.mark.parametrize(
     "tool_call_id,is_custom",
     [
-        # Short tool call ID: stays unchanged
         ("call_short_123", False),
-        # Exactly 64 characters: boundary case, stays unchanged
         ("call_" + "a" * 59, False),
-        # Overlong tool call ID (65 characters): normalized to <= 64 chars
         ("call_" + "a" * 60, False),
-        # Overlong tool call ID from issue #42765 (85 characters): normalized to 64 chars
         (
             "call_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             False,
         ),
-        # Custom tool call with overlong ID: normalized to <= 64 chars
         (
             "custom_tool_call_id_exceeding_the_standard_responses_api_sixty_four_character_length_limit",
             True,
@@ -4379,11 +4374,7 @@ def test_convert_chat_completion_messages_to_responses_api_normalizes_overlong_t
     tool_call_id: str,
     is_custom: bool,
 ):
-    """
-    Overlong tool call IDs (> 64 chars) must be deterministically normalized to <= 64 characters
-    consistently across assistant tool_calls and matching tool result messages,
-    while IDs <= 64 chars must be preserved unchanged.
-    """
+    """Overlong tool call IDs (> 64 chars) must be deterministically normalized to <= 64 characters."""
     import hashlib
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -4425,7 +4416,6 @@ def test_convert_chat_completion_messages_to_responses_api_normalizes_overlong_t
 
     input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
 
-    # Validate tool call item
     if is_custom:
         tool_call_item: Final = next(
             item for item in input_items if isinstance(item, dict) and item.get("type") == "custom_tool_call"
@@ -4440,7 +4430,6 @@ def test_convert_chat_completion_messages_to_responses_api_normalizes_overlong_t
     assert call_id == expected_id
     assert len(str(call_id)) <= 64
 
-    # Validate matching tool output item
     if is_custom:
         custom_output_item: Final = next(
             item for item in input_items if isinstance(item, dict) and item.get("type") == "custom_tool_call_output"
@@ -4491,3 +4480,48 @@ def test_convert_chat_completion_messages_to_responses_api_overlong_collision_re
     assert calls[1]["call_id"] == outputs[1].get("call_id")
     assert len(str(calls[0]["call_id"])) <= 64
     assert len(str(calls[1]["call_id"])) <= 64
+
+
+def test_convert_chat_completion_messages_to_responses_api_mixed_custom_and_function_output_types():
+    """Mixed custom and function tool call outputs must maintain respective types without collision."""
+    import hashlib
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    custom_raw_id: Final = "custom_call_" + "y" * 60
+    function_raw_id: Final = f"{custom_raw_id[:31]}_{hashlib.sha256(custom_raw_id.encode('utf-8')).hexdigest()[:32]}"
+
+    messages: Final[list[dict[str, object]]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": custom_raw_id,
+                    "type": "custom",
+                    "custom": {"name": "c_tool", "input": "{}"},
+                },
+                {
+                    "id": function_raw_id,
+                    "type": "function",
+                    "function": {"name": "f_tool", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": custom_raw_id, "content": "custom_res"},
+        {"role": "tool", "tool_call_id": function_raw_id, "content": "func_res"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+    custom_outputs: Final = [
+        item for item in input_items if isinstance(item, dict) and item.get("type") == "custom_tool_call_output"
+    ]
+    function_outputs: Final = [
+        item for item in input_items if isinstance(item, dict) and item.get("type") == "function_call_output"
+    ]
+
+    assert len(custom_outputs) == 1
+    assert len(function_outputs) == 1
+    assert custom_outputs[0].get("call_id") == function_raw_id
+    assert function_outputs[0].get("call_id") == function_raw_id

@@ -360,14 +360,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     @staticmethod
     def _normalize_tool_call_id(tool_call_id: object) -> str | None:
-        """Normalize tool call ID to ensure it does not exceed 64 characters.
-
-        Responses API downstream providers (e.g. OpenAI Responses API, AWS Bedrock)
-        enforce a 64-character limit on ``call_id``. IDs within the limit are preserved
-        verbatim. Overlong IDs are deterministically mapped to the first 31 characters
-        of the ID followed by '_' and a 32-character SHA-256 digest of the full ID
-        (31 + 1 + 32 = 64 characters), preserving readability and guaranteeing collision resistance.
-        """
         if tool_call_id is None:
             return None
         tool_call_id_str: Final = str(tool_call_id)
@@ -383,17 +375,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         input_items: Final[list[object]] = []
         instructions: str | None = None
         custom_tool_call_ids: Final = frozenset(
-            ident
+            tool_call["id"]
             for msg in messages
             if msg.get("role") == "assistant" and isinstance(msg.get("tool_calls"), list)
             for tool_call in msg.get("tool_calls") or ()
             if isinstance(tool_call, dict)
             and not tool_call.get("function")
             and isinstance(tool_call.get("custom"), dict)
-            for raw_id in (tool_call.get("id"),)
-            if raw_id is not None
-            for ident in (raw_id, self._normalize_tool_call_id(raw_id))
-            if ident is not None
+            and "id" in tool_call
         )
 
         leading_system_count: Final = next(
@@ -446,7 +435,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Fallback: convert unexpected types to input_text
                     tool_output = [{"type": "input_text", "text": str(content)}]
                 normalized_tool_call_id: Final = self._normalize_tool_call_id(tool_call_id)
-                if tool_call_id in custom_tool_call_ids or normalized_tool_call_id in custom_tool_call_ids:
+                if tool_call_id in custom_tool_call_ids:
                     input_items.append(
                         ResponseCustomToolCallOutputParam(
                             type="custom_tool_call_output",
