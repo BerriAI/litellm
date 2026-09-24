@@ -1901,6 +1901,103 @@ class TestBedrockBatchNonChatEndpointRecords:
         ]
 
 
+class TestBedrockBatchAnthropicRowParams:
+    """Anthropic batch rows get the OpenAI-to-Anthropic param mapping a real-time request gets.
+
+    Bedrock batch `modelInput` is the InvokeModel body, so a row's OpenAI params
+    (`tools`, `reasoning_effort`, `max_tokens`, ...) have to be mapped the way
+    `get_optional_params` maps them for `bedrock/invoke/...` at request time.
+    Before that, the Anthropic branch wrote the row params into the body as
+    sent, and Bedrock failed every record carrying a function tool
+    (`tool type 'function' is not supported`) or a reasoning tier
+    (`reasoning_effort: Extra inputs are not permitted`).
+    """
+
+    MODEL = "bedrock/us.anthropic.claude-sonnet-4-6"
+    PARAMETERS = {"type": "object", "properties": {"city": {"type": "string"}}}
+
+    def _transform(self, url: str, body: dict) -> dict:
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        record = {"custom_id": "row-1", "method": "POST", "url": url, "body": {"model": self.MODEL, **body}}
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content([record])
+        assert len(result) == 1
+        return result[0]["modelInput"]
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            (
+                "/v1/chat/completions",
+                {
+                    "messages": [{"role": "user", "content": "Weather in Paris?"}],
+                    "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": PARAMETERS}}],
+                },
+            ),
+            (
+                "/v1/responses",
+                {
+                    "input": "Weather in Paris?",
+                    "tools": [{"type": "function", "name": "get_weather", "parameters": PARAMETERS}],
+                },
+            ),
+        ],
+        ids=["chat", "responses"],
+    )
+    def test_function_tools_become_anthropic_tools(self, url, body):
+        model_input = self._transform(url, body)
+
+        (tool,) = model_input["tools"]
+        assert (tool["name"], tool["input_schema"]) == ("get_weather", self.PARAMETERS)
+        assert "function" not in tool
+        assert tool.get("type") != "function"
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            ("/v1/chat/completions", {"messages": [{"role": "user", "content": "17 * 23?"}], "reasoning_effort": "low"}),
+            ("/v1/responses", {"input": "17 * 23?", "reasoning": {"effort": "low"}}),
+        ],
+        ids=["chat", "responses"],
+    )
+    def test_reasoning_effort_becomes_thinking(self, url, body):
+        model_input = self._transform(url, body)
+
+        assert "reasoning_effort" not in model_input
+        assert "thinking" in model_input
+
+    def test_provider_native_params_still_pass_through(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 20, "top_k": 5},
+        )
+
+        assert (model_input["top_k"], model_input["max_tokens"]) == (5, 20)
+
+    def test_unsupported_openai_param_fails_the_row_like_real_time(self):
+        from litellm.exceptions import UnsupportedParamsError
+
+        with pytest.raises(UnsupportedParamsError, match="logprobs"):
+            self._transform("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}], "logprobs": True})
+
+    def test_row_level_drop_params_drops_the_unsupported_param(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "logprobs": True, "drop_params": True},
+        )
+
+        assert "logprobs" not in model_input
+        assert "drop_params" not in model_input
+
+    def test_chat_record_metadata_stays_out_of_the_body(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "metadata": {"tenant": "acct-1"}},
+        )
+
+        assert "metadata" not in model_input
+
+
 class TestBedrockFileDeletion:
     S3_URI: Final = "s3://my-bucket/litellm-bedrock-files-model-abc.jsonl"
     URL: Final = "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-bedrock-files-model-abc.jsonl"
