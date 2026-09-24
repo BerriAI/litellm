@@ -352,6 +352,7 @@
         "supports_vision": true
     },
     "amazon.nova-lite-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 6e-08,
         "litellm_provider": "bedrock_converse",
@@ -537,6 +538,7 @@
         "supports_audio_input": true
     },
     "amazon.nova-micro-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 8.75e-09,
         "input_cost_per_token": 3.5e-08,
         "litellm_provider": "bedrock_converse",
@@ -3146,6 +3148,7 @@
         "supports_function_calling": true
     },
     "apac.amazon.nova-lite-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 1.575e-08,
         "input_cost_per_token": 6.3e-08,
         "litellm_provider": "bedrock_converse",
@@ -3162,6 +3165,7 @@
         "supports_tool_choice": true
     },
     "apac.amazon.nova-micro-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 9.25e-09,
         "input_cost_per_token": 3.7e-08,
         "litellm_provider": "bedrock_converse",
@@ -3176,6 +3180,7 @@
         "supports_tool_choice": true
     },
     "apac.amazon.nova-pro-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 2.1e-07,
         "input_cost_per_token": 8.4e-07,
         "litellm_provider": "bedrock_converse",
@@ -13891,6 +13896,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-east-1/amazon.nova-pro-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 9.6e-07,
         "litellm_provider": "bedrock",
@@ -14038,6 +14044,7 @@
         "supports_audio_input": true
     },
     "bedrock/us-gov-west-1/amazon.nova-lite-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 1.8e-08,
         "input_cost_per_token": 7.2e-08,
         "litellm_provider": "bedrock",
@@ -14054,6 +14061,7 @@
         "supports_tool_choice": true
     },
     "bedrock/us-gov-west-1/amazon.nova-micro-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 1.05e-08,
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "bedrock",
@@ -14068,6 +14076,7 @@
         "supports_tool_choice": true
     },
     "bedrock/us-gov-west-1/amazon.nova-pro-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 9.6e-07,
         "litellm_provider": "bedrock",
@@ -22247,6 +22256,7 @@
         "supports_embedding_image_input": true
     },
     "eu.amazon.nova-lite-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 1.95e-08,
         "input_cost_per_token": 7.8e-08,
         "litellm_provider": "bedrock_converse",
@@ -22263,6 +22273,7 @@
         "supports_tool_choice": true
     },
     "eu.amazon.nova-micro-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 1.15e-08,
         "input_cost_per_token": 4.6e-08,
         "litellm_provider": "bedrock_converse",
@@ -22277,6 +22288,7 @@
         "supports_tool_choice": true
     },
     "eu.amazon.nova-pro-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 2.625e-07,
         "input_cost_per_token": 1.05e-06,
         "litellm_provider": "bedrock_converse",
@@ -35587,6 +35599,7 @@
         "supports_tool_choice": true
     },
     "amazon-nova/nova-micro-v1": {
+        "supports_reasoning": false,
         "input_cost_per_token": 3.5e-08,
         "litellm_provider": "amazon_nova",
         "max_input_tokens": 128000,
@@ -35599,6 +35612,7 @@
         "supports_response_schema": true
     },
     "amazon-nova/nova-lite-v1": {
+        "supports_reasoning": false,
         "input_cost_per_token": 6e-08,
         "litellm_provider": "amazon_nova",
         "max_input_tokens": 300000,
@@ -35613,6 +35627,7 @@
         "supports_vision": true
     },
     "amazon-nova/nova-premier-v1": {
+        "supports_reasoning": false,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "amazon_nova",
         "max_input_tokens": 1000000,
@@ -35627,6 +35642,7 @@
         "supports_vision": true
     },
     "amazon-nova/nova-pro-v1": {
+        "supports_reasoning": false,
         "input_cost_per_token": 8e-07,
         "litellm_provider": "amazon_nova",
         "max_input_tokens": 300000,
@@ -46090,6 +46106,7 @@
         "source": "https://aws.amazon.com/polly/pricing/"
     },
     "us.amazon.nova-lite-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 6e-08,
         "litellm_provider": "bedrock_converse",
@@ -46106,6 +46123,7 @@
         "supports_tool_choice": true
     },
     "us.amazon.nova-micro-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 8.75e-09,
         "input_cost_per_token": 3.5e-08,
         "litellm_provider": "bedrock_converse",
@@ -46120,6 +46138,7 @@
         "supports_tool_choice": true
     },
     "us.amazon.nova-pro-v1:0": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 8e-07,
         "litellm_provider": "bedrock_converse",
@@ -47088,6 +47107,7 @@
         "supports_tool_choice": true
     },
     "vercel_ai_gateway/amazon/nova-lite": {
+        "supports_reasoning": false,
         "input_cost_per_token": 6e-08,
         "litellm_provider": "vercel_ai_gateway",
         "max_input_tokens": 300000,
@@ -47100,6 +47120,7 @@
         "supports_response_schema": true
     },
     "vercel_ai_gateway/amazon/nova-micro": {
+        "supports_reasoning": false,
         "input_cost_per_token": 3.5e-08,
         "litellm_provider": "vercel_ai_gateway",
         "max_input_tokens": 128000,
@@ -47111,6 +47132,7 @@
         "supports_response_schema": true
     },
     "vercel_ai_gateway/amazon/nova-pro": {
+        "supports_reasoning": false,
         "input_cost_per_token": 8e-07,
         "litellm_provider": "vercel_ai_gateway",
         "max_input_tokens": 300000,

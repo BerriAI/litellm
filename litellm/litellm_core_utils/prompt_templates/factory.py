@@ -4709,7 +4709,6 @@ class BedrockConverseMessagesProcessor:
     def _is_bedrock_converse_reasoning_model(model: str | None) -> bool:
         if model is None:
             return True
-        import litellm
         from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
         candidates: Final = (model, get_bedrock_base_model(model))

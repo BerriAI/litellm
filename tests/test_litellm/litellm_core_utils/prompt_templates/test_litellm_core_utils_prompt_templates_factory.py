@@ -363,16 +363,32 @@ def test_bedrock_converse_redacted_thinking_dropped_for_non_anthropic_model():
         },
     ]
 
-    for non_thinking_model in (
-        "amazon.nova-pro-v1:0",
-        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-pro-v1:0",
+    nova_app_profile: Final = (
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/nova-pro-app"
+    )
+    with patch.dict(
+        litellm.model_cost,
+        {
+            "amazon.nova-pro-v1:0": {"supports_reasoning": False},
+            "amazon.nova-lite-v1:0": {"supports_reasoning": False},
+            "amazon.nova-micro-v1:0": {"supports_reasoning": False},
+            "us.amazon.nova-pro-v1:0": {"supports_reasoning": False},
+            nova_app_profile: {"supports_reasoning": False},
+        },
     ):
-        result = _bedrock_converse_messages_pt(
-            messages=messages,
-            model=non_thinking_model,
-            llm_provider="bedrock_converse",
-        )
-        assert result[1]["content"] == [{"text": "answer"}]
+        for non_thinking_model in (
+            "amazon.nova-pro-v1:0",
+            "amazon.nova-lite-v1:0",
+            "amazon.nova-micro-v1:0",
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-pro-v1:0",
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/nova-pro-app",
+        ):
+            result = _bedrock_converse_messages_pt(
+                messages=messages,
+                model=non_thinking_model,
+                llm_provider="bedrock_converse",
+            )
+            assert result[1]["content"] == [{"text": "answer"}]
 
     registered_non_reasoning: Final = (
         "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/custom-non-reasoning"
