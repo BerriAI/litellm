@@ -97,6 +97,7 @@ def test_pure_python_psycopg_detects_partitioned_spend_logs_and_refuses_db_push(
         proxy: Final = subprocess.run(
             [
                 sys.executable,
+                "-P",
                 "-m",
                 "integration._support.proxy",
                 "--config",
