@@ -31323,6 +31323,8 @@ export interface components {
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Balanced */
+            cache_creation_input_token_cost_balanced?: number | null;
             /** Cache Creation Input Token Cost Batches */
             cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
@@ -31351,6 +31353,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Balanced */
+            cache_read_input_token_cost_balanced?: number | null;
             /** Cache Read Input Token Cost Batches */
             cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
@@ -31429,6 +31433,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
+            /** Input Cost Per Token Balanced */
+            input_cost_per_token_balanced?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -31516,6 +31522,8 @@ export interface components {
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
             output_cost_per_reasoning_token?: number | null;
+            /** Output Cost Per Reasoning Token Balanced */
+            output_cost_per_reasoning_token_balanced?: number | null;
             /** Output Cost Per Reasoning Token Flex */
             output_cost_per_reasoning_token_flex?: number | null;
             /** Output Cost Per Reasoning Token Priority */
@@ -31552,6 +31560,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
+            /** Output Cost Per Token Balanced */
+            output_cost_per_token_balanced?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -42218,6 +42228,8 @@ export interface components {
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Balanced */
+            cache_creation_input_token_cost_balanced?: number | null;
             /** Cache Creation Input Token Cost Batches */
             cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
@@ -42246,6 +42258,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Balanced */
+            cache_read_input_token_cost_balanced?: number | null;
             /** Cache Read Input Token Cost Batches */
             cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
@@ -42324,6 +42338,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
+            /** Input Cost Per Token Balanced */
+            input_cost_per_token_balanced?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -42411,6 +42427,8 @@ export interface components {
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
             output_cost_per_reasoning_token?: number | null;
+            /** Output Cost Per Reasoning Token Balanced */
+            output_cost_per_reasoning_token_balanced?: number | null;
             /** Output Cost Per Reasoning Token Flex */
             output_cost_per_reasoning_token_flex?: number | null;
             /** Output Cost Per Reasoning Token Priority */
@@ -42447,6 +42465,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
+            /** Output Cost Per Token Balanced */
+            output_cost_per_token_balanced?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */

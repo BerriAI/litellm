@@ -970,7 +970,7 @@ def _completion_window_value(metadata: object) -> str | None:
     pricing, so it returns None."""
     if not isinstance(metadata, dict):
         return None
-    window: Final = cast(dict[str, object], metadata).get("completion_window")
+    window: Final[object] = metadata.get("completion_window")
     if isinstance(window, str) and window in (ServiceTier.FLEX.value, ServiceTier.BALANCED.value):
         return window
     return None
@@ -980,9 +980,8 @@ def _service_tier_from_completion_window(optional_params: dict[str, object]) -> 
     """Read ``metadata.completion_window`` from ``extra_body`` or a top-level ``metadata``
     param (the two shapes callers use to pick a provider completion window directly)."""
     extra_body: Final = optional_params.get("extra_body")
-    return _completion_window_value(
-        cast(dict[str, object], extra_body).get("metadata") if isinstance(extra_body, dict) else None
-    ) or _completion_window_value(optional_params.get("metadata"))
+    extra_metadata: Final[object] = extra_body.get("metadata") if isinstance(extra_body, dict) else None
+    return _completion_window_value(extra_metadata) or _completion_window_value(optional_params.get("metadata"))
 
 
 def get_usage_object(
@@ -1398,7 +1397,7 @@ def completion_cost(
         if service_tier is None and optional_params is not None:
             service_tier = _normalize_service_tier(optional_params.get("service_tier"))
             if service_tier is None:
-                service_tier = _service_tier_from_completion_window(cast(dict[str, object], optional_params))
+                service_tier = _service_tier_from_completion_window(optional_params)
 
         service_tier = _normalize_service_tier(service_tier)
 

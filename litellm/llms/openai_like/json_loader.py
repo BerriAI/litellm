@@ -5,6 +5,7 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 import json
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -21,7 +22,7 @@ class SimpleProviderConfig:
         self.base_class = data.get("base_class", "openai_gpt")
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
-        self.special_handling: Mapping[str, object] = data.get("special_handling", {})
+        self.special_handling: Mapping[str, object] = data.get("special_handling") or MappingProxyType({})
         self.supported_endpoints = data.get("supported_endpoints", [])
         self.unsupported_params: Final = tuple(data.get("unsupported_params", ()))
 

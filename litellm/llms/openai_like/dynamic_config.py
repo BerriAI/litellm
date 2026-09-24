@@ -4,7 +4,7 @@ Dynamic configuration class generator for JSON-based providers.
 
 from collections.abc import Coroutine, Mapping
 from types import MappingProxyType
-from typing import Any, Final, Literal, cast, overload
+from typing import Any, Final, Literal, overload
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -33,13 +33,17 @@ def _apply_service_tier_as_completion_window(body: Mapping[str, object]) -> dict
     window: Final[str | None] = (
         _SERVICE_TIER_TO_COMPLETION_WINDOW.get(service_tier.lower()) if isinstance(service_tier, str) else None
     )
-    metadata: Final[dict[str, object]] = (
-        cast(dict[str, object], body["metadata"]) if isinstance(body.get("metadata"), dict) else {}
-    )
-    new_body: Final[dict[str, object]] = {key: value for key, value in body.items() if key != "service_tier"}
+    raw_metadata: Final = body.get("metadata")
+    metadata: Final[Mapping[str, object]] = raw_metadata if isinstance(raw_metadata, dict) else MappingProxyType({})
+    new_body: Final[dict[str, object]] = {  # mutable-ok: transform_request returns a plain dict
+        key: value for key, value in body.items() if key != "service_tier"
+    }
     if window is None or "completion_window" in metadata:
         return new_body
-    return {**new_body, "metadata": {**metadata, "completion_window": window}}
+    return {  # mutable-ok: transform_request returns a plain dict
+        **new_body,
+        "metadata": {**metadata, "completion_window": window},  # mutable-ok: transform_request returns a plain dict
+    }
 
 
 def _service_tier_as_completion_window_enabled(provider: SimpleProviderConfig) -> bool:
@@ -126,15 +130,12 @@ def create_config_class(provider: SimpleProviderConfig):
             litellm_params: dict[str, object],
             headers: dict[str, object],
         ) -> dict[str, object]:
-            body: Final[dict[str, object]] = cast(
-                dict[str, object],
-                super().transform_request(
-                    model=model,
-                    messages=messages,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    headers=headers,
-                ),
+            body: Final = super().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
             )
             if _service_tier_as_completion_window_enabled(provider):
                 return _apply_service_tier_as_completion_window(body)
@@ -169,7 +170,7 @@ def create_config_class(provider: SimpleProviderConfig):
                 param for param in (*base_params, *extra_params) if param not in excluded_params
             )
 
-            return list(supported_params)
+            return list(supported_params)  # mutable-ok: get_supported_openai_params contract returns a list
 
         def map_openai_params(
             self,
@@ -282,15 +283,12 @@ def create_responses_config_class(provider: SimpleProviderConfig):
         ) -> dict[str, object]:
             if provider.special_handling.get("force_store_false"):
                 response_api_optional_request_params["store"] = False
-            body: Final[dict[str, object]] = cast(
-                dict[str, object],
-                super().transform_responses_api_request(
-                    model=model,
-                    input=input,
-                    response_api_optional_request_params=response_api_optional_request_params,
-                    litellm_params=litellm_params,
-                    headers=headers,
-                ),
+            body: Final = super().transform_responses_api_request(
+                model=model,
+                input=input,
+                response_api_optional_request_params=response_api_optional_request_params,
+                litellm_params=litellm_params,
+                headers=headers,
             )
             if _service_tier_as_completion_window_enabled(provider):
                 return _apply_service_tier_as_completion_window(body)
