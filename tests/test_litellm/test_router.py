@@ -17899,3 +17899,58 @@ async def test_bare_model_group_served_by_wildcard_deployment_uses_provider_pref
     )
 
     assert result["content"][0]["text"] == "served by the fallback"
+
+
+@pytest.mark.asyncio
+async def test_bare_model_group_served_by_wildcard_deployment_uses_provider_prefixed_context_window_fallback_key() -> None:
+    """The context-window chain is keyed the same way the ordinary chain is, so a key spelled like the
+    wildcard deployment ("anthropic/claude-sonnet-4-6") must catch the bare group's context-window error too."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.ContextWindowExceededError",
+                },
+            },
+            {
+                "model_name": "openai/gpt-5.5-pro",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5-pro",
+                    "api_key": "sk-fake",
+                    "mock_response": "served by the context window fallback",
+                },
+            },
+        ],
+        context_window_fallbacks=[{"anthropic/claude-sonnet-4-6": ["openai/gpt-5.5-pro"]}],
+        num_retries=0,
+    )
+
+    result = await router.aanthropic_messages(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=64,
+    )
+
+    assert result["content"][0]["text"] == "served by the context window fallback"
+
+
+def test_bare_model_group_served_by_wildcard_deployment_has_provider_prefixed_content_policy_fallback() -> None:
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "sk-fake"},
+            },
+            {
+                "model_name": "openai/gpt-5.5-pro",
+                "litellm_params": {"model": "openai/gpt-5.5-pro", "api_key": "sk-fake"},
+            },
+        ],
+        content_policy_fallbacks=[{"anthropic/claude-sonnet-4-6": ["openai/gpt-5.5-pro"]}],
+    )
+
+    assert router._has_content_policy_fallback("claude-sonnet-4-6", {}) is True
+    assert router._has_content_policy_fallback("claude-haiku-4-5", {}) is False
