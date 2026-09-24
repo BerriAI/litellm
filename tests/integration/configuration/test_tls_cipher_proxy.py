@@ -394,10 +394,15 @@ def test_proxy_burst_survives_peer_restart_with_every_outcome_recorded(cipher_pr
             lambda successes: successes >= 3,
             seconds=60,
         )
+        stopped_at: Final = time.monotonic()
         tls_peers.gcm.stop()
         tls_peers.gcm.start()
         finished: Final = tuple(future.result(timeout=120) for future in futures)
     assert len(finished) == 30, finished
+    assert all(outcome.finished_at >= stopped_at for outcome in finished if outcome.status != 200), (
+        stopped_at,
+        finished,
+    )
     assert not any(outcome.status == 0 for outcome in finished), finished
     records: Final = tls_peers.gcm.received()[before:]
     assert all(record.cipher == PFS_GCM for record in records), records
