@@ -10,7 +10,6 @@ from litellm.llms.openai_like.dynamic_config import (
     apply_service_tier_as_completion_window,
     service_tier_as_completion_window_enabled,
     service_tier_completion_window_drop,
-    validate_caller_completion_window,
 )
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.secret_managers.main import get_secret_str

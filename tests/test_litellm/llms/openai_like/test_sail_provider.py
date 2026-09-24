@@ -874,7 +874,10 @@ class TestSailWireAndBillingConsistency:
         )
 
         response = litellm.completion(
-            model="openai/gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}], service_tier="flex"
+            model="openai/gpt-4.1-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            service_tier="flex",
+            api_key="sk-test",
         )
 
         assert response._hidden_params["response_cost"] > 0
