@@ -363,13 +363,29 @@ def test_bedrock_converse_redacted_thinking_dropped_for_non_anthropic_model():
         },
     ]
 
-    result = _bedrock_converse_messages_pt(
-        messages=messages,
-        model="amazon.nova-pro-v1:0",
-        llm_provider="bedrock_converse",
-    )
+    for non_thinking_model in (
+        "amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/nova-pro-app",
+    ):
+        result = _bedrock_converse_messages_pt(
+            messages=messages,
+            model=non_thinking_model,
+            llm_provider="bedrock_converse",
+        )
+        assert result[1]["content"] == [{"text": "answer"}]
 
-    assert result[1]["content"] == [{"text": "answer"}]
+    registered_non_reasoning = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/custom-non-reasoning"
+    litellm.model_cost[registered_non_reasoning] = {"supports_reasoning": False}
+    try:
+        result = _bedrock_converse_messages_pt(
+            messages=messages,
+            model=registered_non_reasoning,
+            llm_provider="bedrock_converse",
+        )
+        assert result[1]["content"] == [{"text": "answer"}]
+    finally:
+        litellm.model_cost.pop(registered_non_reasoning, None)
 
 
 def test_bedrock_converse_preserves_reasoning_for_application_inference_profile():

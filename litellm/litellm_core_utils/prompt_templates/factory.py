@@ -4720,13 +4720,24 @@ class BedrockConverseMessagesProcessor:
         Relevant Issue: https://github.com/BerriAI/litellm/issues/9063
         """
         model_lower = model.lower() if model is not None else None
-        is_anthropic_model = (
-            model_lower is None
-            or "anthropic" in model_lower
-            or "claude" in model_lower
-            or "application-inference-profile" in model_lower
-            or "inference-profile" in model_lower
-        )
+        if model_lower is None:
+            is_anthropic_model = True
+        elif any(
+            name in model_lower for name in ("nova", "amazon.nova", "meta.llama", "llama", "mistral", "cohere", "ai21")
+        ):
+            is_anthropic_model = False
+        elif "anthropic" in model_lower or "claude" in model_lower:
+            is_anthropic_model = True
+        else:
+            import litellm
+            from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+
+            candidates = (model, get_bedrock_base_model(model))
+            entries = [entry for c in candidates if (entry := litellm.model_cost.get(c)) is not None]
+            if entries:
+                is_anthropic_model = any(entry.get("supports_reasoning") is True for entry in entries)
+            else:
+                is_anthropic_model = True
         filtered_thinking_blocks: Final = []
         for block in thinking_blocks:
             reasoning_content = block.get("reasoningContent", None)
