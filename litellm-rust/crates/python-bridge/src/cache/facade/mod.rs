@@ -17,7 +17,7 @@ use pyo3::{
     types::{PyDict, PyFrozenSet, PyString, PyTuple},
 };
 
-use self::steps::ready_none;
+use self::steps::Operation;
 use super::{guard::FacadeGuard, native::NativeResponseCache};
 
 pub(super) struct NativeStorage {
@@ -436,14 +436,14 @@ impl Cache {
         kwargs: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = slf.py();
-        let kwargs = kwargs_or_empty(py, kwargs);
-        match entries::async_get_cache(slf, dynamic_cache_object, &kwargs) {
-            Ok(awaitable) => Ok(awaitable),
-            Err(error) => {
-                entries::log_lookup_failure(py, &error)?;
-                ready_none(py)
-            }
-        }
+        steps::defer(
+            py,
+            Operation::GetCache {
+                facade: slf.clone().unbind(),
+                dynamic: dynamic_cache_object.map(|dynamic| dynamic.clone().unbind()),
+                kwargs: kwargs_or_empty(py, kwargs).unbind(),
+            },
+        )
     }
 
     #[pyo3(signature = (result, **kwargs))]
@@ -484,14 +484,15 @@ impl Cache {
         kwargs: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = slf.py();
-        let kwargs = kwargs_or_empty(py, kwargs);
-        match entries::async_add_cache(slf, result, dynamic_cache_object, &kwargs) {
-            Ok(awaitable) => Ok(awaitable),
-            Err(error) => {
-                entries::log_add_cache_failure(slf, &error)?;
-                ready_none(py)
-            }
-        }
+        steps::defer(
+            py,
+            Operation::AddCache {
+                facade: slf.clone().unbind(),
+                result: result.clone().unbind(),
+                dynamic: dynamic_cache_object.map(|dynamic| dynamic.clone().unbind()),
+                kwargs: kwargs_or_empty(py, kwargs).unbind(),
+            },
+        )
     }
 
     #[pyo3(signature = (embedding_response, model, prompt_tokens=None, prompt_tokens_details=None))]
@@ -550,14 +551,15 @@ impl Cache {
         kwargs: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = slf.py();
-        let kwargs = kwargs_or_empty(py, kwargs);
-        match embedding::async_add_cache_pipeline(slf, result, dynamic_cache_object, &kwargs) {
-            Ok(awaitable) => Ok(awaitable),
-            Err(error) => {
-                entries::log_add_cache_failure(slf, &error)?;
-                ready_none(py)
-            }
-        }
+        steps::defer(
+            py,
+            Operation::AddCachePipeline {
+                facade: slf.clone().unbind(),
+                result: result.clone().unbind(),
+                dynamic: dynamic_cache_object.map(|dynamic| dynamic.clone().unbind()),
+                kwargs: kwargs_or_empty(py, kwargs).unbind(),
+            },
+        )
     }
 
     #[pyo3(signature = (**kwargs))]
@@ -574,41 +576,46 @@ impl Cache {
         result: &Bound<'py, PyAny>,
         kwargs: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        entries::batch_cache_write(slf, result, &kwargs_or_empty(slf.py(), kwargs))
+        let py = slf.py();
+        steps::defer(
+            py,
+            Operation::BatchCacheWrite {
+                facade: slf.clone().unbind(),
+                result: result.clone().unbind(),
+                kwargs: kwargs_or_empty(py, kwargs).unbind(),
+            },
+        )
     }
 
     fn ping<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
-        let py = slf.py();
-        let ping = slf.get().backend(py)?.into_bound(py).getattr("ping")?;
-        if ping.is_truthy()? {
-            return ping.call0();
-        }
-        ready_none(py)
+        steps::defer(
+            slf.py(),
+            Operation::Ping {
+                facade: slf.clone().unbind(),
+            },
+        )
     }
 
     fn delete_cache_keys<'py>(
         slf: &Bound<'py, Self>,
         keys: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let py = slf.py();
-        let delete = slf
-            .get()
-            .backend(py)?
-            .into_bound(py)
-            .getattr("delete_cache_keys")?;
-        if delete.is_truthy()? {
-            return delete.call1((keys,));
-        }
-        ready_none(py)
+        steps::defer(
+            slf.py(),
+            Operation::DeleteCacheKeys {
+                facade: slf.clone().unbind(),
+                keys: keys.clone().unbind(),
+            },
+        )
     }
 
     fn disconnect<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
-        let py = slf.py();
-        let backend = slf.get().backend(py)?.into_bound(py);
-        if backend.hasattr("disconnect")? {
-            return backend.call_method0("disconnect");
-        }
-        ready_none(py)
+        steps::defer(
+            slf.py(),
+            Operation::Disconnect {
+                facade: slf.clone().unbind(),
+            },
+        )
     }
 
     fn _supports_async(&self) -> bool {

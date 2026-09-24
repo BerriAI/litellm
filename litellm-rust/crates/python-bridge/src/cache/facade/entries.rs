@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::{
     Binding, Cache, keys, override_of,
-    steps::{Continuation, after, ready_none},
+    steps::{Awaited, Continuation, Start},
     verbose_logger,
 };
 use crate::cache::{
@@ -326,52 +326,50 @@ pub(super) fn get_cache(
 }
 
 pub(super) fn async_get_cache<'py>(
+    _awaited: Awaited,
     slf: &Bound<'py, Cache>,
     dynamic: Option<&Bound<'py, PyAny>>,
     kwargs: &Bound<'py, PyDict>,
-) -> PyResult<Bound<'py, PyAny>> {
+) -> PyResult<Start<'py>> {
     let py = slf.py();
     if !uses_cache(slf, kwargs)? {
-        return ready_none(py);
+        return Ok(Start::none(py));
     }
     let key = cache_key_for(slf, kwargs)?;
     if key.is_none() {
-        return ready_none(py);
+        return Ok(Start::none(py));
     }
     match slf.get().binding(py, slf.as_any(), dynamic)? {
         Binding::Native(service) => {
             let Some(request) = native_request(slf, kwargs, &key)? else {
-                return ready_none(py);
+                return Ok(Start::none(py));
             };
             if keys::is_semantic_cache(slf)? {
-                let awaitable = service.async_lookup_semantic_py(py, request)?;
-                return after(
-                    py,
-                    awaitable,
+                return Ok(Start::Await(
+                    service.async_lookup_semantic_py(py, request)?,
                     Continuation::SemanticLookup {
                         kwargs: kwargs.clone().unbind(),
                     },
-                );
+                ));
             }
-            let awaitable = service.async_lookup_py(py, request)?;
-            after(py, awaitable, Continuation::NativeLookup)
+            Ok(Start::Await(
+                service.async_lookup_py(py, request)?,
+                Continuation::NativeLookup,
+            ))
         }
         Binding::Python(backend) => {
             let control = kwargs.call_method1("get", ("cache", PyDict::new(py)))?;
             let legacy = control.call_method1("get", ("s-maxage", infinity(py)))?;
             let max_age = control.call_method1("get", ("s-max-age", legacy))?;
-            let awaitable =
+            Ok(Start::Await(
                 backend
                     .bind(py)
-                    .call_method("async_get_cache", (&key,), Some(kwargs))?;
-            after(
-                py,
-                awaitable,
+                    .call_method("async_get_cache", (&key,), Some(kwargs))?,
                 Continuation::Lookup {
                     facade: slf.clone().into_any().unbind(),
                     max_age: max_age.unbind(),
                 },
-            )
+            ))
         }
     }
 }
@@ -439,6 +437,7 @@ pub(super) fn add_cache(
 }
 
 pub(super) fn batch_cache_write<'py>(
+    _awaited: Awaited,
     slf: &Bound<'py, Cache>,
     result: &Bound<'py, PyAny>,
     kwargs: &Bound<'py, PyDict>,
@@ -453,14 +452,15 @@ pub(super) fn batch_cache_write<'py>(
 }
 
 pub(super) fn async_add_cache<'py>(
+    awaited: Awaited,
     slf: &Bound<'py, Cache>,
     result: &Bound<'py, PyAny>,
     dynamic: Option<&Bound<'py, PyAny>>,
     kwargs: &Bound<'py, PyDict>,
-) -> PyResult<Bound<'py, PyAny>> {
+) -> PyResult<Start<'py>> {
     let py = slf.py();
     if !uses_cache(slf, kwargs)? {
-        return ready_none(py);
+        return Ok(Start::none(py));
     }
     let store = Continuation::Store {
         facade: slf.clone().into_any().unbind(),
@@ -469,10 +469,13 @@ pub(super) fn async_add_cache<'py>(
         Binding::Native(service) => {
             let key = cache_key_for(slf, kwargs)?;
             let Some(request) = native_request(slf, kwargs, &key)? else {
-                return ready_none(py);
+                return Ok(Start::none(py));
             };
             let response = native_response(py, result)?;
-            after(py, service.async_store_py(py, request, response)?, store)
+            Ok(Start::Await(
+                service.async_store_py(py, request, response)?,
+                store,
+            ))
         }
         Binding::Python(target) => {
             let buffered = keys::type_name(slf)?.as_deref() == Some("redis")
@@ -484,18 +487,57 @@ pub(super) fn async_add_cache<'py>(
                         call_kwargs.set_item("result", result)?;
                         method.call((), Some(&call_kwargs))?
                     }
-                    None => batch_cache_write(slf, result, kwargs)?,
+                    None => batch_cache_write(awaited, slf, result, kwargs)?,
                 };
-                return after(py, write, store);
+                return Ok(Start::Await(write, store));
             }
             let (key, data, kwargs) = cache_entry(slf, result, kwargs)?;
-            let awaitable =
+            Ok(Start::Await(
                 target
                     .bind(py)
-                    .call_method("async_set_cache", (key, data), Some(&kwargs))?;
-            after(py, awaitable, store)
+                    .call_method("async_set_cache", (key, data), Some(&kwargs))?,
+                store,
+            ))
         }
     }
+}
+
+pub(super) fn ping<'py>(_awaited: Awaited, slf: &Bound<'py, Cache>) -> PyResult<Start<'py>> {
+    let py = slf.py();
+    let ping = slf.get().backend(py)?.into_bound(py).getattr("ping")?;
+    if !ping.is_truthy()? {
+        return Ok(Start::none(py));
+    }
+    Ok(Start::Await(ping.call0()?, Continuation::Forward))
+}
+
+pub(super) fn delete_cache_keys<'py>(
+    _awaited: Awaited,
+    slf: &Bound<'py, Cache>,
+    keys: &Bound<'py, PyAny>,
+) -> PyResult<Start<'py>> {
+    let py = slf.py();
+    let delete = slf
+        .get()
+        .backend(py)?
+        .into_bound(py)
+        .getattr("delete_cache_keys")?;
+    if !delete.is_truthy()? {
+        return Ok(Start::none(py));
+    }
+    Ok(Start::Await(delete.call1((keys,))?, Continuation::Forward))
+}
+
+pub(super) fn disconnect<'py>(_awaited: Awaited, slf: &Bound<'py, Cache>) -> PyResult<Start<'py>> {
+    let py = slf.py();
+    let backend = slf.get().backend(py)?.into_bound(py);
+    if !backend.hasattr("disconnect")? {
+        return Ok(Start::none(py));
+    }
+    Ok(Start::Await(
+        backend.call_method0("disconnect")?,
+        Continuation::Discard,
+    ))
 }
 
 pub(super) fn log_lookup_failure(py: Python<'_>, error: &PyErr) -> PyResult<()> {

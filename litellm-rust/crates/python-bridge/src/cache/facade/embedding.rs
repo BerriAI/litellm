@@ -12,7 +12,7 @@ use super::{
     Binding, Cache,
     entries::{cache_entry, native_request, uses_cache},
     keys, override_of,
-    steps::{Continuation, after, ready_none},
+    steps::{Awaited, Continuation, Start},
 };
 
 pub(super) fn cached_embedding<'py>(
@@ -188,14 +188,15 @@ fn embedding_entry<'py>(
 }
 
 pub(super) fn async_add_cache_pipeline<'py>(
+    _awaited: Awaited,
     slf: &Bound<'py, Cache>,
     result: &Bound<'py, PyAny>,
     dynamic: Option<&Bound<'py, PyAny>>,
     kwargs: &Bound<'py, PyDict>,
-) -> PyResult<Bound<'py, PyAny>> {
+) -> PyResult<Start<'py>> {
     let py = slf.py();
     if !uses_cache(slf, kwargs)? {
-        return ready_none(py);
+        return Ok(Start::none(py));
     }
     let input = kwargs
         .get_item("input")?
@@ -215,7 +216,7 @@ pub(super) fn async_add_cache_pipeline<'py>(
                 embeddings.into_pyobject(py)?.into_any(),
             ],
         )?;
-        return ready_none(py);
+        return Ok(Start::none(py));
     }
     let ttl = slf.getattr("ttl")?;
     if !ttl.is_none() {
@@ -248,7 +249,10 @@ pub(super) fn async_add_cache_pipeline<'py>(
                     entries.push((request, response));
                 }
             }
-            after(py, service.async_store_batch_py(py, entries)?, store)
+            Ok(Start::Await(
+                service.async_store_batch_py(py, entries)?,
+                store,
+            ))
         }
         Binding::Python(target) => {
             let pairs = cache_list
@@ -257,11 +261,12 @@ pub(super) fn async_add_cache_pipeline<'py>(
                 .collect::<PyResult<Vec<_>>>()?;
             let call_kwargs = current.copy()?;
             call_kwargs.set_item("cache_list", PyList::new(py, pairs)?)?;
-            let awaitable =
+            Ok(Start::Await(
                 target
                     .bind(py)
-                    .call_method("async_set_cache_pipeline", (), Some(&call_kwargs))?;
-            after(py, awaitable, store)
+                    .call_method("async_set_cache_pipeline", (), Some(&call_kwargs))?,
+                store,
+            ))
         }
     }
 }

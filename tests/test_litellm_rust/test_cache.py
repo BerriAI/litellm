@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 import weakref
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Coroutine, Generator
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
@@ -2240,3 +2240,93 @@ def test_replacing_the_backend_lets_its_finalizer_read_the_facade(native: bool, 
     result: Final = run_child_interpreter(_FINALIZER_READS_THE_FACADE.format(native=native), timeout=30)
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [kind, "finalizer saw Replacement", "replaced"], result.stderr
+
+
+class RecordingBackend(InMemoryCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    def _record(self, name: str) -> Coroutine[object, object, None]:
+        self.calls.append(name)
+        return asyncio.sleep(0)
+
+    def async_get_cache(self, key: object, **kwargs: object) -> Coroutine[object, object, None]:
+        return self._record("async_get_cache")
+
+    def async_set_cache(self, key: object, value: object, **kwargs: object) -> Coroutine[object, object, None]:
+        return self._record("async_set_cache")
+
+    def async_set_cache_pipeline(
+        self, cache_list: object, ttl: object = None, **kwargs: object
+    ) -> Coroutine[object, object, None]:
+        return self._record("async_set_cache_pipeline")
+
+    def batch_cache_write(self, key: object, value: object, **kwargs: object) -> Coroutine[object, object, None]:
+        return self._record("batch_cache_write")
+
+    def ping(self) -> Coroutine[object, object, None]:
+        return self._record("ping")
+
+    def delete_cache_keys(self, keys: object) -> Coroutine[object, object, None]:
+        return self._record("delete_cache_keys")
+
+    def disconnect(self) -> Coroutine[object, object, None]:
+        return self._record("disconnect")
+
+
+def embedding_result() -> EmbeddingResponse:
+    return EmbeddingResponse(
+        model="text-embedding-3-small", data=[{"object": "embedding", "index": 0, "embedding": [0.5]}]
+    )
+
+
+AsyncCall: TypeAlias = Callable[[Cache], Coroutine[object, object, object]]
+
+ASYNC_CALLS: Final[tuple[tuple[str, AsyncCall, str], ...]] = (
+    ("async_get_cache", lambda facade: facade.async_get_cache(**completion_kwargs("get")), "async_get_cache"),
+    ("async_add_cache", lambda facade: facade.async_add_cache({"a": 1}, **completion_kwargs("add")), "async_set_cache"),
+    (
+        "async_add_cache_pipeline",
+        lambda facade: facade.async_add_cache_pipeline(embedding_result(), model="m", input=["hello"]),
+        "async_set_cache_pipeline",
+    ),
+    (
+        "batch_cache_write",
+        lambda facade: facade.batch_cache_write({"a": 1}, **completion_kwargs("batch")),
+        "batch_cache_write",
+    ),
+    ("ping", lambda facade: facade.ping(), "ping"),
+    ("delete_cache_keys", lambda facade: facade.delete_cache_keys(["key"]), "delete_cache_keys"),
+    ("disconnect", lambda facade: facade.disconnect(), "disconnect"),
+)
+
+
+@pytest.mark.parametrize("facade_class", [Cache, NativeCache], ids=["python", "native"])
+@pytest.mark.parametrize(
+    ("start", "backend_method"),
+    [(start, backend_method) for _, start, backend_method in ASYNC_CALLS],
+    ids=[name for name, _, _ in ASYNC_CALLS],
+)
+async def test_both_facades_run_async_methods_only_when_awaited(
+    facade_class: type[Cache], start: AsyncCall, backend_method: str
+) -> None:
+    built_keys: Final[list[dict[str, object]]] = []
+
+    class KeyRecording(facade_class):
+        def get_cache_key(self, **kwargs: object) -> str:
+            built_keys.append(kwargs)
+            return super().get_cache_key(**kwargs)
+
+    first: Final = RecordingBackend()
+    second: Final = RecordingBackend()
+    facade: Final = KeyRecording(type=LiteLLMCacheType.LOCAL)
+    facade.cache = first
+    start(facade).close()
+    pending: Final = start(facade)
+    assert (built_keys, first.calls) == ([], [])
+
+    facade.cache = second
+    await pending
+
+    assert (first.calls, second.calls) == ([], [backend_method])
