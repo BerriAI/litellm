@@ -6,6 +6,8 @@ from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 from litellm.llms.ollama.chat.transformation import OllamaChatConfig
 from litellm.llms.ollama.completion.transformation import OllamaConfig
 from litellm.llms.perplexity.embedding.transformation import PerplexityEmbeddingConfig
+from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
+from litellm.llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
 from litellm.llms.topaz.image_variations.transformation import TopazImageVariationConfig
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from litellm.llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig
@@ -240,3 +242,43 @@ def test_topaz_get_complete_url_trailing_slash():
     assert url_without_slash == "https://api.topazlabs.com/image/v1/enhance"
     assert url_with_slash == "https://api.topazlabs.com/image/v1/enhance"
     assert "//image/v1/enhance" not in url_with_slash
+
+
+def test_snowflake_get_complete_url_trailing_slash():
+    chat_config = SnowflakeConfig()
+    url_without_slash = chat_config.get_complete_url(
+        api_base="https://myaccount.snowflakecomputing.com",
+        api_key=None,
+        model="snowflake-arctic",
+        optional_params={},
+        litellm_params={},
+    )
+    url_with_slash = chat_config.get_complete_url(
+        api_base="https://myaccount.snowflakecomputing.com/",
+        api_key=None,
+        model="snowflake-arctic",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url_without_slash == "https://myaccount.snowflakecomputing.com/api/v2/cortex/v1/chat/completions"
+    assert url_with_slash == "https://myaccount.snowflakecomputing.com/api/v2/cortex/v1/chat/completions"
+    assert "//api/v2" not in url_with_slash
+
+    embed_config = SnowflakeEmbeddingConfig()
+    embed_url_without_slash = embed_config.get_complete_url(
+        api_base="https://myaccount.snowflakecomputing.com",
+        api_key=None,
+        model="snowflake-arctic-embed",
+        optional_params={},
+        litellm_params={},
+    )
+    embed_url_with_slash = embed_config.get_complete_url(
+        api_base="https://myaccount.snowflakecomputing.com/",
+        api_key=None,
+        model="snowflake-arctic-embed",
+        optional_params={},
+        litellm_params={},
+    )
+    assert embed_url_without_slash == "https://myaccount.snowflakecomputing.com/api/v2/cortex/inference:embed"
+    assert embed_url_with_slash == "https://myaccount.snowflakecomputing.com/api/v2/cortex/inference:embed"
+    assert "//api/v2" not in embed_url_with_slash
