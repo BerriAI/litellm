@@ -10,7 +10,7 @@ use crate::generic_output::{calculate_output_cost, resolve_reasoning_token_cost}
 use crate::generic_usage::{ParsedPromptDetails, parse_prompt_tokens_details};
 use crate::off_peak::{open_off_peak_block, parse_off_peak_rate};
 use crate::provider_cache::apply_provider_cache_read_default;
-use crate::regional_uplift::regional_totals_multiplier;
+use crate::regional_uplift::apply_regional_totals_uplift;
 use crate::responses_usage::ChatUsage;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -178,14 +178,18 @@ pub fn calculate_generic_cost_from_model_info_with_region(
     vertex_location: Option<&str>,
     at: Timestamp,
 ) -> (f64, f64) {
-    let multiplier = regional_totals_multiplier(model_info, data_residency, vertex_location);
-    calculate_generic_cost_from_model_info(
-        usage,
+    apply_regional_totals_uplift(
+        calculate_generic_cost_from_model_info(
+            usage,
+            model_info,
+            service_tier,
+            threshold_inclusive,
+            1.0,
+            at,
+        ),
         model_info,
-        service_tier,
-        threshold_inclusive,
-        multiplier,
-        at,
+        data_residency,
+        vertex_location,
     )
 }
 

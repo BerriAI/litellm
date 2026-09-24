@@ -46,13 +46,20 @@ pub fn get_provider_specific_geo_multiplier(
         .unwrap_or(1.0)
 }
 
-pub fn regional_totals_multiplier(
+pub fn apply_regional_totals_uplift(
+    (prompt, completion): (f64, f64),
     model_info: &Value,
     data_residency: Option<&str>,
     vertex_location: Option<&str>,
-) -> f64 {
-    get_regional_uplift_multiplier(model_info, data_residency)
-        * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+) -> (f64, f64) {
+    [
+        get_regional_uplift_multiplier(model_info, data_residency),
+        get_vertex_regional_endpoint_uplift(model_info, vertex_location),
+    ]
+    .into_iter()
+    .fold((prompt, completion), |(prompt, completion), uplift| {
+        (prompt * uplift, completion * uplift)
+    })
 }
 
 pub fn combined_regional_multiplier(

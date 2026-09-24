@@ -5,8 +5,8 @@
 use jiff::Timestamp;
 use litellm_cost::generic_cost::calculate_generic_cost_from_model_info_with_region;
 use litellm_cost::regional_uplift::{
-    get_provider_specific_geo_multiplier, get_regional_uplift_multiplier,
-    get_vertex_regional_endpoint_uplift, regional_totals_multiplier,
+    apply_regional_totals_uplift, get_provider_specific_geo_multiplier,
+    get_regional_uplift_multiplier, get_vertex_regional_endpoint_uplift,
 };
 use litellm_cost::usage_dispatch::get_usage_object;
 use rstest::rstest;
@@ -99,11 +99,9 @@ fn calculate_generic_cost_from_model_info_with_region_scales_both_sides() {
         Some("us-east5"),
         at,
     );
-    let multiplier = regional_totals_multiplier(&model_info, Some("eu"), Some("us-east5"));
-    assert!((actual.0 - 100.0 * 2e-6 * multiplier).abs() < 1e-12);
-    assert!((actual.1 - 50.0 * 4e-6 * multiplier).abs() < 1e-12);
-    assert!(
-        (multiplier - 1.2 * 1.3).abs() < 1e-12,
+    assert_eq!(
+        actual,
+        (100.0 * 2e-6 * 1.2 * 1.3, 50.0 * 4e-6 * 1.2 * 1.3),
         "generic totals exclude the provider-specific geo multiplier; only the anthropic wrapper applies it"
     );
 }
@@ -131,4 +129,17 @@ fn uplift_multipliers_are_coerced_like_python_float(
         get_vertex_regional_endpoint_uplift(&model_info, Some("us-east5")),
         expected
     );
+}
+
+#[rstest]
+fn apply_regional_totals_uplift_multiplies_in_python_order() {
+    let model_info = json!({
+        "regional_processing_uplift_multiplier_eu": 1.1,
+        "regional_endpoint_uplift_multiplier": 1.1
+    });
+    let prompt = 7.0 * 3e-7;
+    let (actual, _) =
+        apply_regional_totals_uplift((prompt, 0.0), &model_info, Some("eu"), Some("us-east5"));
+    assert_eq!(actual, prompt * 1.1 * 1.1);
+    assert_ne!(actual, prompt * (1.1 * 1.1));
 }
