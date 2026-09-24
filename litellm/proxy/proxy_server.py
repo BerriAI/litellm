@@ -11407,14 +11407,14 @@ async def model_info(
         all_models = [m for m in all_models if m not in hidden_names]
 
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
+    aliased_model_id: Final = alias_target(
+        model_id,
+        caller_alias_maps(
+            user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+        ),
+    )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
-        model_id=alias_target(
-            model_id,
-            caller_alias_maps(
-                user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
-            ),
-        )
-        or model_id,
+        model_id=aliased_model_id or model_id,
         available_models=all_models,
         llm_router=llm_router,
         general_settings=settings,
@@ -11444,7 +11444,8 @@ async def model_info(
         fallback_type=None,
         llm_router=llm_router,
     )
-    return {**response, "id": internal_to_public.get(resolved_model_id, model_id)}  # mutable-ok: response id differs
+    response_id: Final = model_id if aliased_model_id else internal_to_public.get(resolved_model_id, model_id)
+    return {**response, "id": response_id}  # mutable-ok: response id differs
 
 
 def _blocked_response_usage(original_response: object | None) -> "litellm.Usage":

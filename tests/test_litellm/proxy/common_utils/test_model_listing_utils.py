@@ -131,9 +131,9 @@ def test_mutation_breaking_the_hex_name_cannot_route_to_the_source(source):
 def test_team_alias_is_listed_under_its_target_metadata_and_only_when_the_target_is_accessible():
     entries = [("gpt-4.1-mini", "gpt-4.1-mini"), ("team-public", "model_name_team_1_abc")]
     aliases = (
-        {"claude-sonnet-4-5": "gpt-4.1-mini", "via-public": "team-public", "not-granted": "gpt-4.1"},
-        None,
         {"gpt-4.1-mini": "team-public"},
+        None,
+        {"claude-sonnet-4-5": "gpt-4.1-mini", "via-public": "team-public", "not-granted": "gpt-4.1"},
     )
     assert alias_listing_entries(entries, aliases) == (
         *entries,
@@ -150,10 +150,24 @@ def test_alias_target_resolves_the_requested_alias_across_key_and_team_maps():
     assert alias_target("gpt-4.1-mini", (None, {"claude-sonnet-4-5": "gpt-4.1-mini"})) is None
 
 
+def test_alias_maps_apply_in_the_order_chat_completions_applies_them():
+    team_then_key = ({"fast": "gpt-4.1-mini", "hop": "mid"}, {"fast": "gpt-4.1", "mid": "gpt-4.1"})
+    entries = [("gpt-4.1-mini", "gpt-4.1-mini"), ("gpt-4.1", "gpt-4.1")]
+
+    assert alias_target("fast", team_then_key) == "gpt-4.1-mini"
+    assert alias_target("hop", team_then_key) == "gpt-4.1"
+    assert alias_listing_entries(entries, team_then_key) == (
+        *entries,
+        ("fast", "gpt-4.1-mini"),
+        ("hop", "gpt-4.1"),
+        ("mid", "gpt-4.1"),
+    )
+
+
 def test_team_aliases_only_apply_when_listing_the_team_the_key_authenticated_as():
     key_aliases, team_aliases = {"k": "gpt-4.1"}, {"t": "gpt-4.1-mini"}
-    assert caller_alias_maps(key_aliases, team_aliases, "team-a", None) == (key_aliases, team_aliases)
-    assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-a") == (key_aliases, team_aliases)
+    assert caller_alias_maps(key_aliases, team_aliases, "team-a", None) == (team_aliases, key_aliases)
+    assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-a") == (team_aliases, key_aliases)
     assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-b") == (key_aliases,)
 
 

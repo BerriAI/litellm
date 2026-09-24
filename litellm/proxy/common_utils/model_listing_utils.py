@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass
+from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
@@ -31,6 +32,7 @@ _CLAUDE_CODE_ALIAS_PREFIX: Final = "claude-router-"
 _ONE_MILLION_SUFFIX: Final = "[1m]"
 _ONE_MILLION_TOKENS: Final = 1_000_000
 _ALIAS_MAP: Final = TypeAdapter(Mapping[str, str])
+_NO_ALIASES: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def configured_display_names(
@@ -161,29 +163,36 @@ def caller_alias_maps(
     key_team_id: str | None,
     listed_team_id: str | None,
 ) -> tuple[object, ...]:
-    """The alias maps `/chat/completions` rewrites this caller's model through: the key's
-    own aliases always, the team's only when listing the team the key authenticated as."""
+    """The alias maps `/chat/completions` rewrites this caller's model through, in the order
+    it applies them: the team's first, only when listing the team the key authenticated as,
+    then the key's own."""
     if listed_team_id is not None and listed_team_id != key_team_id:
         return (key_aliases,)
-    return (key_aliases, team_aliases)
+    return (team_aliases, key_aliases)
 
 
-def _string_pairs(aliases: object) -> tuple[tuple[str, str], ...]:
+def _alias_map(aliases: object) -> Mapping[str, str]:
     if not isinstance(aliases, Mapping):
-        return ()
+        return _NO_ALIASES
     try:
-        return tuple(_ALIAS_MAP.validate_python(aliases, strict=True).items())
+        return MappingProxyType(dict(_ALIAS_MAP.validate_python(aliases, strict=True)))
     except ValidationError:
-        return ()
+        return _NO_ALIASES
 
 
-def _alias_pairs(alias_maps: Sequence[object]) -> tuple[tuple[str, str], ...]:
-    return tuple(pair for aliases in alias_maps for pair in _string_pairs(aliases))
+def _alias_names(alias_maps: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(alias for aliases in alias_maps for alias in aliases))
+
+
+def _rewrite(model_id: str, alias_maps: Sequence[Mapping[str, str]]) -> str | None:
+    target: Final = reduce(lambda name, aliases: aliases.get(name, name), alias_maps, model_id)
+    return None if target == model_id else target
 
 
 def alias_target(model_id: str, alias_maps: Sequence[object]) -> str | None:
-    """The model group a key or team alias rewrites `model_id` to, else None."""
-    return next((target for alias, target in _alias_pairs(alias_maps) if alias == model_id), None)
+    """The model group `/chat/completions` rewrites `model_id` to through the caller's key and
+    team aliases, applied in `alias_maps` order, else None."""
+    return _rewrite(model_id, tuple(_alias_map(aliases) for aliases in alias_maps))
 
 
 def alias_listing_entries(
@@ -192,16 +201,18 @@ def alias_listing_entries(
 ) -> tuple[tuple[str, str], ...]:
     """`entries` plus one `(alias, lookup_id)` row per key or team alias whose target is
     listed. An alias colliding with a listed id keeps the listed entry."""
+    maps: Final = tuple(_alias_map(aliases) for aliases in alias_maps)
     lookup_by_response: Final = MappingProxyType(dict(entries))
     lookup_ids: Final = frozenset(lookup_by_response.values())
-    added: Final = MappingProxyType(
-        {
-            alias: lookup_by_response.get(target, target)
-            for alias, target in _alias_pairs(alias_maps)
-            if alias not in lookup_by_response and (target in lookup_by_response or target in lookup_ids)
-        }
+    targets: Final = MappingProxyType(
+        {alias: _rewrite(alias, maps) for alias in _alias_names(maps) if alias not in lookup_by_response}
     )
-    return (*entries, *added.items())
+    added: Final = tuple(
+        (alias, lookup_by_response.get(target, target))
+        for alias, target in targets.items()
+        if target is not None and (target in lookup_by_response or target in lookup_ids)
+    )
+    return (*entries, *added)
 
 
 def claude_code_requested_group(
