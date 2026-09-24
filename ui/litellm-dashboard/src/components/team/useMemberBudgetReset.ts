@@ -22,38 +22,58 @@ export interface MemberBudgetResetGateway {
   refreshTeamData: () => Promise<void>;
 }
 
+type ResetRun =
+  | { ok: true; attempted: number; results: readonly MemberBudgetBulkResult[] }
+  | { ok: false; attempted: number; error: unknown };
+
 export const useMemberBudgetReset = (gateway: MemberBudgetResetGateway) => {
   const [state, setState] = useState<MemberBudgetResetState>({ phase: "idle" });
 
   const runReset = async (pending: MemberBudgetResetPending, attempted: number) => {
     const { resetMemberBudgets, refreshTeamData } = gateway;
-    const results: MemberBudgetBulkResult[] = [];
-    try {
-      for (const ids of chunk(pending.userIds.slice(attempted), MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES)) {
-        results.push(...(await resetMemberBudgets(pending.teamId, ids)));
-        attempted += ids.length;
-      }
-    } catch (error) {
-      console.error("Error resetting member budgets:", error);
+
+    const runChunks = (
+      chunks: readonly (readonly string[])[],
+      attemptedSoFar: number,
+      results: readonly MemberBudgetBulkResult[],
+    ): Promise<ResetRun> => {
+      const [ids, ...rest] = chunks;
+      if (ids === undefined) return Promise.resolve({ ok: true, attempted: attemptedSoFar, results });
+      return resetMemberBudgets(pending.teamId, ids).then(
+        (batch) => runChunks(rest, attemptedSoFar + ids.length, [...results, ...batch]),
+        (error: unknown) => ({ ok: false as const, attempted: attemptedSoFar, error }),
+      );
+    };
+
+    const outcome = await runChunks(
+      chunk(pending.userIds.slice(attempted), MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES),
+      attempted,
+      [],
+    );
+
+    if (!outcome.ok) {
+      console.error("Error resetting member budgets:", outcome.error);
       const total = pending.userIds.length;
-      if (attempted > 0) {
+      if (outcome.attempted > 0) {
         toast.error(
-          `Reset ${attempted} of ${total} member ${pluralize(total, "budget", "budgets")}; the rest could not be reset`,
+          `Reset ${outcome.attempted} of ${total} member ${pluralize(total, "budget", "budgets")}; the rest could not be reset`,
         );
       } else {
         toast.fromError("Team updated, but member budgets could not be reset");
       }
-      setState({ phase: "resetFailed", pending, attempted });
+      setState({ phase: "resetFailed", pending, attempted: outcome.attempted });
       await refreshTeamData();
       return;
     }
-    const failed = results.filter((r) => !r.success);
+    const failed = outcome.results.filter((r) => !r.success);
     if (failed.length > 0) {
       toast.error(
         `Team updated, but ${failed.length} member ${pluralize(failed.length, "budget", "budgets")} could not be reset`,
       );
     } else {
-      toast.success(`Reset ${attempted} member ${pluralize(attempted, "budget", "budgets")} to the team default`);
+      toast.success(
+        `Reset ${outcome.attempted} member ${pluralize(outcome.attempted, "budget", "budgets")} to the team default`,
+      );
     }
     setState({ phase: "idle" });
     await refreshTeamData();
