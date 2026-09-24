@@ -97,8 +97,9 @@ def native_vertex_batch_row_stats(
     generateContent object or a `{"request": ..., "response": {"embedding": {...}, "usageMetadata": {...}}}`
     embedding object (an embedding row without `usageMetadata` is billed from its documented `tokenCount`).
     `model_name` (the deployment model) prices the row unless it is a wildcard, else its own `modelVersion`
-    does; a row without a response, a generateContent row without `response.usageMetadata`, and a row whose
-    response fails validation are None (failed).
+    does, else the wildcard name so explicit deployment prices still apply; a row without a response, a
+    generateContent row without `response.usageMetadata`, and a row whose response fails validation are
+    None (failed).
     """
     response_body: Final = row.get("response")
     if not isinstance(response_body, dict):
@@ -109,11 +110,11 @@ def native_vertex_batch_row_stats(
     total_tokens: Final = usage.total_tokens or (usage.prompt_tokens + usage.completion_tokens)
     model_version: Final = response_body.get("modelVersion")
     deployment_model: Final = model_name if model_name and "*" not in model_name else None
-    model: Final = deployment_model or (model_version if isinstance(model_version, str) else None)
+    model: Final = deployment_model or (model_version if isinstance(model_version, str) else model_name)
     if model is None:
         verbose_logger.warning(
             "vertex_ai batch output row could not be costed, so it is billed at $0 and the rest of the batch "
-            "is still billed: the row has no modelVersion and the batch has no priceable deployment model"
+            "is still billed: the row has no modelVersion and the batch has no deployment model"
         )
         return NativeVertexBatchRowStats(
             usage=usage, total_tokens=total_tokens, model=None, prompt_cost=0.0, completion_cost=0.0

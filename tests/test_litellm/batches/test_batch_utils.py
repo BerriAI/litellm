@@ -327,10 +327,25 @@ def test_native_vertex_rows_under_a_wildcard_deployment_are_priced_by_model_vers
 
     result = bu.calculate_vertex_ai_batch_cost_and_usage(rows, wildcard_model)
 
-    assert [call["model"] for call in calls] == ["gemini-2.5-flash"]
-    assert result.cost == pytest.approx(0.75)
+    assert [call["model"] for call in calls] == ["gemini-2.5-flash", wildcard_model]
+    assert result.cost == pytest.approx(1.5)
     assert (result.successful_requests, result.failed_requests) == (2, 0)
     assert result.usage.total_tokens == 557 + 336
+
+
+def test_native_vertex_row_without_model_version_under_a_wildcard_deployment_bills_its_explicit_prices():
+    deployment_model_info = {"input_cost_per_token_batches": 1e-6, "output_cost_per_token_batches": 2e-6}
+    with_version = _native_vertex_row(GROUNDED_USAGE_METADATA, grounded=True, model_version="gemini-2.5-flash")
+    without_version = _native_vertex_row(GROUNDED_USAGE_METADATA, grounded=True, model_version=None)
+
+    twin = bu.calculate_vertex_ai_batch_cost_and_usage([with_version], "vertex_ai/*", model_info=deployment_model_info)
+    both = bu.calculate_vertex_ai_batch_cost_and_usage(
+        [with_version, without_version], "vertex_ai/*", model_info=deployment_model_info
+    )
+
+    assert twin.cost > 0
+    assert both.cost == pytest.approx(2 * twin.cost)
+    assert (both.successful_requests, both.failed_requests) == (2, 0)
 
 
 def test_native_vertex_row_the_cost_map_cannot_price_is_billed_at_zero_and_the_rest_still_bills(monkeypatch):
