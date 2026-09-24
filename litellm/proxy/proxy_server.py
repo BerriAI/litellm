@@ -13459,23 +13459,22 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     return message
 
 
-def _elide_binary_blobs(part: object) -> object:
-    """Replace base64 blobs (inlineData.data, file data) so serialized
-    parts stay a sane size for the local tokenizer."""
-    if isinstance(part, Mapping):
-        return {
-            key: ("<binary>" if key == "data" and isinstance(value, str) else _elide_binary_blobs(value))
-            for key, value in part.items()
-        }
-    if isinstance(part, list):
-        return [_elide_binary_blobs(item) for item in part]
-    return part
+def _elide_data_key(obj: dict[str, object]) -> dict[str, object]:
+    """json.loads object_hook that replaces base64 blobs (inlineData.data)
+    so serialized parts stay a sane size for the local tokenizer."""
+    return {  # mutable-ok: object_hook contract returns a rebuilt object per JSON node
+        key: ("<binary>" if key == "data" and isinstance(value, str) else value) for key, value in obj.items()
+    }
+
+
+def _serialize_part(part: object) -> str:
+    return json.dumps(json.loads(json.dumps(part, default=str), object_hook=_elide_data_key), default=str)
 
 
 def _part_to_text(part: object) -> str:
     if isinstance(part, Mapping) and isinstance(part.get("text"), str):
         return part["text"]
-    return json.dumps(_elide_binary_blobs(part), default=str)
+    return _serialize_part(part)
 
 
 def _content_parts(content: Mapping[str, object]) -> tuple[object, ...]:
@@ -13506,7 +13505,7 @@ def _contents_as_messages(contents: object) -> tuple[Mapping[str, object], ...] 
     fallback: Final[tuple[Mapping[str, object], ...]] = (
         {  # mutable-ok: transient chat-shaped message for the local tokenizer
             "role": "user",
-            "content": json.dumps(_elide_binary_blobs(contents), default=str),
+            "content": _serialize_part(contents),
         },
     )
     return fallback
