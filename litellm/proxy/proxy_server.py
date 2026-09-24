@@ -11104,6 +11104,17 @@ class ProxyStartupEvent:
 
 
 #### API ENDPOINTS ####
+async def _entries_kept_by_listing_callbacks(
+    entries: Sequence[tuple[str, str]], user_api_key_dict: UserAPIKeyAuth
+) -> tuple[tuple[str, str], ...]:
+    hidden: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
+        user_api_key_dict, tuple(response_id for response_id, _ in entries)
+    )
+    if not hidden:
+        return tuple(entries)
+    return tuple(entry for entry in entries if entry[0] not in hidden)
+
+
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
@@ -11254,7 +11265,9 @@ async def model_list(
         # The internal routing key drives the metadata/fallback lookup, while the
         # public name is what the client sees as the model id.
         model_data = []
-        admin_entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+        admin_entries: Final = await _entries_kept_by_listing_callbacks(
+            TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
+        )
         for response_id, lookup_id in admin_entries:
             model_info = create_model_info_response(
                 model_id=lookup_id,
@@ -11310,7 +11323,10 @@ async def model_list(
     # public name is what the client sees as the model id.
     model_data = []
     entries: Final = alias_listing_entries(
-        TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), caller_aliases
+        await _entries_kept_by_listing_callbacks(
+            TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
+        ),
+        caller_aliases,
     )
     for response_id, lookup_id in entries:
         model_info = create_model_info_response(
@@ -11404,13 +11420,24 @@ async def model_info(
         llm_router=llm_router,
     )
     hidden_names: Final = blocked_names | unhealthy_names
-    if hidden_names:
-        all_models = [m for m in all_models if m not in hidden_names]
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
+    callback_hidden_names: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
+        user_api_key_dict,
+        tuple(
+            response_id
+            for response_id, _ in TeamModelNameTranslator.listing_entries(
+                tuple(m for m in all_models if m not in hidden_names), llm_router, settings
+            )
+        ),
+    )
+    if hidden_names or callback_hidden_names:
+        all_models = [
+            m for m in all_models if m not in hidden_names and internal_to_public.get(m, m) not in callback_hidden_names
+        ]
     undiscoverable_names: Final = undiscoverable_model_names(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
     )
 
-    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
     aliased_model_id: Final = alias_target(
         model_id,
         caller_alias_maps(
@@ -15819,8 +15846,13 @@ async def model_info_v1(
         general_settings=general_settings,
         llm_router=llm_router,
     )
+    listed_names: Final = tuple(
+        dict.fromkeys(name for model in all_models if isinstance(name := model.get("model_name"), str))
+    )
+    callback_hidden_names: Final = await proxy_logging_obj.hidden_by_listing_callbacks(user_api_key_dict, listed_names)
+    dropped_names: Final = hidden_names | callback_hidden_names
     visible_models: Final = discoverable_rows(
-        (model for model in all_models if model.get("model_name") not in hidden_names),
+        (model for model in all_models if model.get("model_name") not in dropped_names),
         user_api_key_dict,
     )
 
@@ -15871,7 +15903,7 @@ async def model_deprecations(
 
 
 def _get_model_group_info(
-    llm_router: Router, all_models_str: list[str], model_group: str | None
+    llm_router: Router, all_models_str: Sequence[str], model_group: str | None
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
@@ -16104,9 +16136,13 @@ async def model_group_info(
     undiscoverable_group_names: Final = undiscoverable_model_names(
         all_models_str, llm_router, user_api_key_dict, user_api_key_dict.team_id
     )
+    listed_group_names: Final = tuple(name for name in all_models_str if name not in undiscoverable_group_names)
+    callback_hidden_names: Final = await proxy_logging_obj.hidden_by_listing_callbacks(
+        user_api_key_dict, listed_group_names
+    )
     model_groups: list[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router,
-        all_models_str=[name for name in all_models_str if name not in undiscoverable_group_names],
+        all_models_str=tuple(name for name in listed_group_names if name not in callback_hidden_names),
         model_group=model_group,
     )
 

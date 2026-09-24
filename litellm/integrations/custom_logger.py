@@ -421,6 +421,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         pass
 
+    async def async_filter_listed_models(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model_names: Sequence[str],
+    ) -> Sequence[str]:
+        """Runs on the model listing routes (`/v1/models`, `/v1/models/{id}`, `/model/info`,
+        `/model_group/info`) with the model names the caller would otherwise see. Return the
+        names to keep; a name left out disappears from every listing and `/v1/models/{id}`
+        answers 404 for it, exactly as for a model that does not exist. Names outside
+        `model_names` are ignored, so a callback can only narrow the listing, never widen it.
+        """
+        return model_names
+
     async def async_post_call_response_headers_hook(
         self,
         data: dict,
