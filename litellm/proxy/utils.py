@@ -2389,7 +2389,6 @@ class ProxyLogging:
         )
 
         try:
-            # Execute guardrail pipelines before the normal callback loop
             if not skip_guardrails:
                 data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
                     data=data,
@@ -3957,7 +3956,7 @@ class ProxyLogging:
         request_data: dict,  # mutable-ok: same request-payload shape the hooks mutate
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
         translation: "tuple[str, BaseTranslation]",
-    ) -> "AsyncGenerator[Any, None]":
+    ) -> "AsyncGenerator[object, None]":
         """
         Execute post_call policy pipelines against a streamed response.
 

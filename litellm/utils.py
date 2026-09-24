@@ -369,7 +369,7 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.rules import Rules
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.litellm_core_utils.thread_pool_executor import executor
+    from litellm.litellm_core_utils.thread_pool_executor import BoundedLoggingThreadPoolExecutor
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
@@ -683,12 +683,12 @@ def load_credentials_from_list(kwargs: dict):
     Updates kwargs with the credentials if credential_name in kwarg
     """
     # Access CredentialAccessor via module to trigger lazy loading if needed
-    CredentialAccessor: Final = getattr(sys.modules[__name__], "CredentialAccessor")
+    credential_accessor: Final[type[CredentialAccessor]] = getattr(sys.modules[__name__], "CredentialAccessor")
 
     credential_name: Final = kwargs.get("litellm_credential_name")
     if not credential_name:
         return
-    credential: Final = CredentialAccessor.find_credential(credential_name)
+    credential: Final = credential_accessor.find_credential(credential_name)
     if credential is None:
         verbose_logger.warning(
             "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
@@ -894,6 +894,45 @@ class _NamedFile(Protocol):
     def name(self) -> object: ...
 
 
+class _LoggingClassGetter(Protocol):
+    def __call__(self) -> type[LiteLLMLoggingObject]: ...
+
+
+class _ResponseMetadataUpdater(Protocol):
+    def __call__(
+        self,
+        result: object,
+        logging_obj: LiteLLMLoggingObject,
+        model: str | None,
+        kwargs: dict[str, object],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        include_overhead: bool = True,
+    ) -> None: ...
+
+
+class _SupportedOpenAIParamsGetter(Protocol):
+    def __call__(
+        self,
+        model: str,
+        custom_llm_provider: str | None = None,
+        request_type: Literal["chat_completion", "embeddings", "transcription"] = "chat_completion",
+        base_model: str | None = None,
+    ) -> list[str] | None: ...
+
+
+class _NestedPathChecker(Protocol):
+    def __call__(self, path: str) -> bool: ...
+
+
+class _NestedValueDeleter(Protocol):
+    def __call__(self, data: dict[str, object], path: str) -> dict[str, object]: ...
+
+
+class _BaseModelFromMetadataGetter(Protocol):
+    def __call__(self, metadata: Mapping[str, object] | None) -> str | None: ...
+
+
 def _ocr_document_summary(document: object) -> str:
     if not isinstance(document, Mapping):
         return "default-message-value"
@@ -978,7 +1017,9 @@ def function_setup(
             len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
         ) and len(callback_list) == 0:
             callback_list = list(set(litellm.input_callback + litellm.success_callback + litellm.failure_callback))
-            get_set_callbacks: Final = getattr(sys.modules[__name__], "get_set_callbacks")
+            get_set_callbacks: Final[Callable[[], Callable[..., None]]] = getattr(
+                sys.modules[__name__], "get_set_callbacks"
+            )
             get_set_callbacks()(callback_list=callback_list, function_id=function_id)
         ## ASYNC CALLBACKS - safety net for callbacks added via direct append
         if len(litellm.input_callback) > 0:
@@ -1223,7 +1264,9 @@ def function_setup(
             call_type=call_type,
         ):
             stream = True
-        get_litellm_logging_class: Final = getattr(sys.modules[__name__], "get_litellm_logging_class")
+        get_litellm_logging_class: Final[_LoggingClassGetter] = getattr(
+            sys.modules[__name__], "get_litellm_logging_class"
+        )
         # Victim for object pool
         logging_obj = get_litellm_logging_class()(  # rebind-ok: 2nd assignment to logging_obj (see initial None above)
             model=model,
@@ -1761,7 +1804,9 @@ def client(original_function):
                     return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else:
                     # RETURN RESULT
-                    update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
+                    update_response_metadata: _ResponseMetadataUpdater = getattr(
+                        sys.modules[__name__], "update_response_metadata"
+                    )
                     update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
@@ -1802,7 +1847,9 @@ def client(original_function):
                 kwargs=kwargs,
             )
 
-            _update_response_metadata: Final = getattr(sys.modules[__name__], "update_response_metadata")
+            _update_response_metadata: Final[_ResponseMetadataUpdater] = getattr(
+                sys.modules[__name__], "update_response_metadata"
+            )
             _update_response_metadata(
                 result=result,
                 logging_obj=logging_obj,
@@ -1817,7 +1864,7 @@ def client(original_function):
             # Copy the current context to propagate it to the background thread
             # This is essential for OpenTelemetry span context propagation
             ctx: Final = contextvars.copy_context()
-            executor: Final = getattr(sys.modules[__name__], "executor")
+            executor: Final[BoundedLoggingThreadPoolExecutor] = getattr(sys.modules[__name__], "executor")
             executor.submit(
                 ctx.run,
                 logging_obj.success_handler,
@@ -1910,7 +1957,9 @@ def client(original_function):
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time: Final = datetime.datetime.now()
         result = None
-        _update_response_metadata: Final = getattr(sys.modules[__name__], "update_response_metadata")
+        _update_response_metadata: Final[_ResponseMetadataUpdater] = getattr(
+            sys.modules[__name__], "update_response_metadata"
+        )
         logging_obj: LiteLLMLoggingObject | None = kwargs.get("litellm_logging_obj", None)
         LLMCachingHandler: Final = _get_cached_llm_caching_handler()
         _llm_caching_handler: Final[LLMCachingHandler] = LLMCachingHandler(
@@ -3678,7 +3727,9 @@ def get_optional_params_embeddings(
     **kwargs,
 ):
     # Lazy load get_supported_openai_params
-    get_supported_openai_params: Final = getattr(sys.modules[__name__], "get_supported_openai_params")
+    get_supported_openai_params: Final[_SupportedOpenAIParamsGetter] = getattr(
+        sys.modules[__name__], "get_supported_openai_params"
+    )
 
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
@@ -4469,7 +4520,9 @@ def get_optional_params(
                     message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
-    get_supported_openai_params: Final = getattr(sys.modules[__name__], "get_supported_openai_params")
+    get_supported_openai_params: Final[_SupportedOpenAIParamsGetter] = getattr(
+        sys.modules[__name__], "get_supported_openai_params"
+    )
     supported_params = get_supported_openai_params(
         model=model, custom_llm_provider=custom_llm_provider, base_model=base_model
     )
@@ -4640,9 +4693,9 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "bedrock":
-        BedrockModelInfo: Final = getattr(sys.modules[__name__], "BedrockModelInfo")
-        bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
-        bedrock_base_model: Final = BedrockModelInfo.get_base_model(model)
+        bedrock_model_info: Final[type[BedrockModelInfo]] = getattr(sys.modules[__name__], "BedrockModelInfo")
+        bedrock_route: Final = bedrock_model_info.get_bedrock_route(model)
+        bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
@@ -4680,7 +4733,7 @@ def get_optional_params(
                 drop_params=bool(drop_params),
             )
             if bedrock_route == "claude_platform":
-                optional_params = BedrockModelInfo.map_claude_platform_auth_params(
+                optional_params = bedrock_model_info.map_claude_platform_auth_params(
                     passed_params=passed_params, optional_params=optional_params
                 )
     elif custom_llm_provider == "cloudflare":
@@ -4954,8 +5007,8 @@ def get_optional_params(
 
     # Apply nested drops from additional_drop_params
     if additional_drop_params:
-        is_nested_path: Final = getattr(sys.modules[__name__], "is_nested_path")
-        delete_nested_value: Final = getattr(sys.modules[__name__], "delete_nested_value")
+        is_nested_path: Final[_NestedPathChecker] = getattr(sys.modules[__name__], "is_nested_path")
+        delete_nested_value: Final[_NestedValueDeleter] = getattr(sys.modules[__name__], "delete_nested_value")
         nested_paths: Final = [p for p in additional_drop_params if is_nested_path(p)]
         for path in nested_paths:
             optional_params = delete_nested_value(optional_params, path)
@@ -7853,7 +7906,7 @@ def _get_base_model_from_metadata(model_call_details=None):
             return _base_model
         metadata: Final = litellm_params.get("metadata") or {}
 
-        _get_base_model_from_litellm_call_metadata: Callable[..., str | None] = getattr(
+        _get_base_model_from_litellm_call_metadata: _BaseModelFromMetadataGetter = getattr(
             sys.modules[__name__], "_get_base_model_from_litellm_call_metadata"
         )
         base_model_from_metadata: Final = _get_base_model_from_litellm_call_metadata(metadata=metadata)
