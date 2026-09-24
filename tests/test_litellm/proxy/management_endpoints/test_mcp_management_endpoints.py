@@ -725,6 +725,7 @@ class TestListMCPServers:
         # Mock health check result as LiteLLM_MCPServerTable
         mock_health_result = generate_mock_mcp_server_db_record(server_id="server-1", alias="Server 1")
         mock_health_result.status = "healthy"
+        mock_health_result.health_check_type = "liveness"
         mock_health_result.last_health_check = datetime.now()
         mock_health_result.health_check_error = None
 
@@ -762,6 +763,7 @@ class TestListMCPServers:
             assert result.credentials is None
             assert mock_server.credentials == {"auth_value": "top-secret"}
             assert result.status == "healthy"
+            assert result.health_check_type == "liveness"
 
     @pytest.mark.asyncio
     async def test_fetch_single_mcp_server_preserves_upstream_resource_for_admin(self):

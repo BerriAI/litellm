@@ -360,7 +360,7 @@ const HealthChip: FC<HealthChipProps> = ({
           </Badge>
         }
       />
-      <TooltipContent side="top" className="max-w-xs">
+      <TooltipContent side="top" className="block max-w-xs">
         <div className="mb-1 font-semibold">Health: {label}</div>
         {healthCheckType === "liveness" && (
           <div className="mb-1 text-xs">Authentication and tools were not checked</div>

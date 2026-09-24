@@ -6917,14 +6917,16 @@ class MCPServerManager:
     async def _check_mcp_liveness(url: str) -> tuple[Literal["healthy", "unhealthy", "unknown"], str | None]:
         async def probe() -> None:
             endpoint: Final = httpx.URL(url).copy_with(username="", password="")
-            async with httpx.AsyncClient(
-                verify=get_ssl_configuration(),
-                trust_env=False,
-                follow_redirects=False,
-                timeout=MCP_HEALTH_CHECK_TIMEOUT,
-            ) as client:
-                async with client.stream("GET", endpoint, auth=None):
-                    pass
+            async with (
+                httpx.AsyncClient(
+                    verify=get_ssl_configuration(),
+                    trust_env=False,
+                    follow_redirects=False,
+                    timeout=MCP_HEALTH_CHECK_TIMEOUT,
+                ) as client,
+                client.stream("GET", endpoint, auth=None),
+            ):
+                pass
 
         try:
             await asyncio.wait_for(probe(), timeout=MCP_HEALTH_CHECK_TIMEOUT)
@@ -6933,7 +6935,7 @@ class MCPServerManager:
             return "unhealthy", f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds"
         except asyncio.CancelledError:
             return "unknown", "Health check was cancelled"
-        except Exception as exc:
+        except (httpx.HTTPError, httpx.InvalidURL, OSError, ValueError) as exc:
             return "unhealthy", f"Liveness check failed ({type(exc).__name__})"
 
     async def health_check_server(self, server_id: str, mcp_auth_header: str | None = None) -> LiteLLM_MCPServerTable:
@@ -6994,12 +6996,14 @@ class MCPServerManager:
         ):
             liveness_status, liveness_error = await self._check_mcp_liveness(server.url)
             return self._build_mcp_server_table(server).model_copy(
-                update={
-                    "status": liveness_status,
-                    "health_check_error": liveness_error,
-                    "health_check_type": "liveness",
-                    "last_health_check": datetime.now(),
-                }
+                update=MappingProxyType(
+                    {
+                        "status": liveness_status,
+                        "health_check_error": liveness_error,
+                        "health_check_type": "liveness",
+                        "last_health_check": datetime.now(),
+                    }
+                )
             )
 
         if not should_skip_health_check:
