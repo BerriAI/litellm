@@ -438,6 +438,7 @@ export interface MCPServer {
   status?: "healthy" | "unhealthy" | "unknown";
   last_health_check?: string | null;
   health_check_error?: string | null;
+  health_check_type?: "liveness" | "protocol" | null;
   teams?: Team[];
   mcp_access_groups?: string[];
   allowed_tools?: string[];

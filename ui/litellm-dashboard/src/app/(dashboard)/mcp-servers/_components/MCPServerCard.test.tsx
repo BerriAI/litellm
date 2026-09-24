@@ -112,3 +112,17 @@ describe("MCPServerCard per-user credentials", () => {
     expect(screen.queryByRole("button", { name: "Set" })).not.toBeInTheDocument();
   });
 });
+
+describe("MCPServerCard health qualification", () => {
+  it.each(["protocol", null, undefined] as const)("keeps Healthy for %s checks", (health_check_type) => {
+    renderCard({ status: "healthy", health_check_type });
+    expect(screen.getByText("Healthy")).toBeInTheDocument();
+    expect(screen.queryByText("Reachable")).not.toBeInTheDocument();
+  });
+
+  it.each(["unhealthy", "unknown"] as const)("does not call %s liveness reachable", (status) => {
+    renderCard({ status, health_check_type: "liveness" });
+    expect(screen.getByText(status === "unhealthy" ? "Unhealthy" : "Unknown")).toBeInTheDocument();
+    expect(screen.queryByText("Reachable")).not.toBeInTheDocument();
+  });
+});

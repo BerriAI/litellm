@@ -31685,6 +31685,22 @@
               ],
               "title": "Health Check Error"
             },
+            "health_check_type": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "liveness",
+                    "protocol"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "readOnly": true,
+              "title": "Health Check Type"
+            },
             "instructions": {
               "anyOf": [
                 {
@@ -34741,6 +34757,22 @@
               ],
               "title": "Health Check Error"
             },
+            "health_check_type": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "liveness",
+                    "protocol"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "readOnly": true,
+              "title": "Health Check Type"
+            },
             "instructions": {
               "anyOf": [
                 {
@@ -35953,6 +35985,76 @@
             "has_credential"
           ],
           "title": "MCPOAuthUserCredentialStatus",
+          "type": "object"
+        },
+        "MCPServerHealthResponse": {
+          "properties": {
+            "health_check_error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Health Check Error"
+            },
+            "health_check_type": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "liveness",
+                    "protocol"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Health Check Type"
+            },
+            "last_health_check": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Health Check"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "healthy",
+                    "unhealthy",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          "required": [
+            "server_id",
+            "status",
+            "last_health_check",
+            "health_check_error"
+          ],
+          "title": "MCPServerHealthResponse",
           "type": "object"
         },
         "MCPServerUserCredentialListItem": {
@@ -37808,7 +37910,13 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/MCPServerHealthResponse"
+                    },
+                    "title": "Response Health Check Servers V1 Mcp Server Health Get",
+                    "type": "array"
+                  }
                 }
               },
               "description": "Successful Response"

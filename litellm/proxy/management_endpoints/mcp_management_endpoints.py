@@ -44,7 +44,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
@@ -94,6 +94,14 @@ TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX: Final = "litellm:mcp:temporary_server"
 
 class _HasServerId(Protocol):
     server_id: str
+
+
+class MCPServerHealthResponse(TypedDict):
+    server_id: ReadOnly[str]
+    status: ReadOnly[Literal["healthy", "unhealthy", "unknown"] | None]
+    health_check_type: ReadOnly[NotRequired[Literal["liveness", "protocol"] | None]]
+    last_health_check: ReadOnly[datetime | None]
+    health_check_error: ReadOnly[str | None]
 
 
 def does_mcp_server_exist(mcp_server_records: Iterable[_HasServerId], mcp_server_id: str) -> bool:
@@ -236,6 +244,15 @@ if MCP_AVAILABLE:
         normalize_upstream_header_name,
     )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    def _mcp_server_health_response(server: LiteLLM_MCPServerTable) -> MCPServerHealthResponse:
+        return {
+            "server_id": server.server_id,
+            "status": server.status,
+            "health_check_type": server.health_check_type,
+            "last_health_check": server.last_health_check,
+            "health_check_error": server.health_check_error,
+        }
 
     @dataclass
     class _TemporaryMCPServerEntry:
@@ -1297,6 +1314,7 @@ if MCP_AVAILABLE:
     @router.get(
         "/server/health",
         description="Health check for MCP servers",
+        response_model=list[MCPServerHealthResponse],
         dependencies=[Depends(user_api_key_auth)],
     )
     async def health_check_servers(
@@ -1305,7 +1323,7 @@ if MCP_AVAILABLE:
             description="Server IDs to check. If not provided, checks all accessible servers.",
         ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ):
+    ) -> list[MCPServerHealthResponse]:
         """
         Perform health checks on one or more MCP servers.
 
@@ -1329,11 +1347,11 @@ if MCP_AVAILABLE:
 
         if user_mcp_management_mode == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
-            return [{"server_id": server.server_id, "status": server.status} for server in servers]
+            return [_mcp_server_health_response(server) for server in servers]
 
         auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
 
-        server_status_map: Final[dict[str, Literal["healthy", "unhealthy", "unknown"] | None]] = {}
+        server_status_map: Final[dict[str, MCPServerHealthResponse]] = {}
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
@@ -1341,9 +1359,9 @@ if MCP_AVAILABLE:
             )
             for server in servers:
                 if server.server_id not in server_status_map:
-                    server_status_map[server.server_id] = server.status
+                    server_status_map[server.server_id] = _mcp_server_health_response(server)
 
-        return [{"server_id": server_id, "status": status} for server_id, status in server_status_map.items()]
+        return list(server_status_map.values())
 
     @router.post(
         "/server/register",
@@ -1688,6 +1706,7 @@ if MCP_AVAILABLE:
             mcp_server.status = health_result.status if health_result.status else "unknown"
             mcp_server.last_health_check = health_result.last_health_check
             mcp_server.health_check_error = health_result.health_check_error
+            mcp_server.health_check_type = health_result.health_check_type
         except Exception as e:
             verbose_proxy_logger.debug("Error performing health check on server %s: %s", server_id, e)
             mcp_server.status = "unknown"

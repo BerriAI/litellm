@@ -67,7 +67,7 @@ from litellm.integrations.custom_guardrail import (
     _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage] - the same bridge @log_guardrail_information uses; reimplementing it here would fork the metadata-key logic
 )
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, get_ssl_configuration
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     MCPServerAccess,
@@ -6913,6 +6913,29 @@ class MCPServerManager:
         # Take first 32 characters and format as UUID-like string
         return hash_hex[:32]
 
+    @staticmethod
+    async def _check_mcp_liveness(url: str) -> tuple[Literal["healthy", "unhealthy", "unknown"], str | None]:
+        async def probe() -> None:
+            endpoint: Final = httpx.URL(url).copy_with(username="", password="")
+            async with httpx.AsyncClient(
+                verify=get_ssl_configuration(),
+                trust_env=False,
+                follow_redirects=False,
+                timeout=MCP_HEALTH_CHECK_TIMEOUT,
+            ) as client:
+                async with client.stream("GET", endpoint, auth=None):
+                    pass
+
+        try:
+            await asyncio.wait_for(probe(), timeout=MCP_HEALTH_CHECK_TIMEOUT)
+            return "healthy", None
+        except asyncio.TimeoutError:
+            return "unhealthy", f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds"
+        except asyncio.CancelledError:
+            return "unknown", "Health check was cancelled"
+        except Exception as exc:
+            return "unhealthy", f"Liveness check failed ({type(exc).__name__})"
+
     async def health_check_server(self, server_id: str, mcp_auth_header: str | None = None) -> LiteLLM_MCPServerTable:
         """
         Perform a health check on a specific MCP server.
@@ -6953,11 +6976,7 @@ class MCPServerManager:
         status: Literal["healthy", "unhealthy", "unknown"] = "unknown"
         health_check_error = None
 
-        # Check if we should skip health check based on auth configuration
-        should_skip_health_check = False
-
-        # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
-        if (
+        should_skip_health_check: Final = (
             server.requires_per_user_auth
             or (
                 server.auth_type
@@ -6966,8 +6985,22 @@ class MCPServerManager:
                 and not server.authentication_token
             )
             or self._references_per_user_env_var(server)
+        )
+        if (
+            should_skip_health_check
+            and server.transport in (MCPTransport.http, MCPTransport.sse)
+            and server.url is not None
+            and server.url.lower().startswith(("http://", "https://"))
         ):
-            should_skip_health_check = True
+            liveness_status, liveness_error = await self._check_mcp_liveness(server.url)
+            return self._build_mcp_server_table(server).model_copy(
+                update={
+                    "status": liveness_status,
+                    "health_check_error": liveness_error,
+                    "health_check_type": "liveness",
+                    "last_health_check": datetime.now(),
+                }
+            )
 
         if not should_skip_health_check:
             try:
@@ -6998,7 +7031,7 @@ class MCPServerManager:
                 health_check_error = "Health check was cancelled"
                 status = "unknown"
             except Exception as e:
-                health_check_error = str(e)
+                health_check_error = f"Health check failed ({type(e).__name__})"
                 status = "unhealthy"
 
         return LiteLLM_MCPServerTable(
@@ -7021,6 +7054,7 @@ class MCPServerManager:
             status=status,
             last_health_check=datetime.now(),
             health_check_error=health_check_error,
+            health_check_type="protocol" if not should_skip_health_check else None,
             command=getattr(server, "command", None),
             args=getattr(server, "args", None) or [],
             env=getattr(server, "env", None) or {},

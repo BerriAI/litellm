@@ -213,6 +213,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
             isLoadingHealth={isLoadingHealth}
             isRechecking={isRechecking}
             onRecheck={onRecheckHealth}
+            healthCheckType={server.health_check_type}
             lastCheck={server.last_health_check}
             error={server.health_check_error}
             dotClass={healthTone.dot}
@@ -307,6 +308,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
 
 interface HealthChipProps {
   status: string;
+  healthCheckType?: MCPServer["health_check_type"];
   isLoadingHealth?: boolean;
   isRechecking?: boolean;
   onRecheck?: () => void;
@@ -317,6 +319,7 @@ interface HealthChipProps {
 
 const HealthChip: FC<HealthChipProps> = ({
   status,
+  healthCheckType,
   isLoadingHealth,
   isRechecking,
   onRecheck,
@@ -332,6 +335,10 @@ const HealthChip: FC<HealthChipProps> = ({
       </Badge>
     );
   }
+  const label =
+    status === "healthy" && healthCheckType === "liveness"
+      ? "Reachable"
+      : status.charAt(0).toUpperCase() + status.slice(1);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -349,12 +356,15 @@ const HealthChip: FC<HealthChipProps> = ({
             }
           >
             <span className={cn("h-1.5 w-1.5 rounded-full", dotClass)} />
-            {status.charAt(0).toUpperCase() + status.slice(1)}
+            {label}
           </Badge>
         }
       />
       <TooltipContent side="top" className="max-w-xs">
-        <div className="mb-1 font-semibold">Health: {status}</div>
+        <div className="mb-1 font-semibold">Health: {label}</div>
+        {healthCheckType === "liveness" && (
+          <div className="mb-1 text-xs">Authentication and tools were not checked</div>
+        )}
         {lastCheck && <div className="mb-1 text-xs">Last check: {new Date(lastCheck).toLocaleString()}</div>}
         {error && (
           <div className="text-xs">

@@ -79,6 +79,9 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     )
     last_health_check: datetime | None = None
     health_check_error: str | None = None
+    health_check_type: Literal["liveness", "protocol"] | None = Field(
+        default=None, json_schema_extra={"readOnly": True}
+    )
     command: str | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)

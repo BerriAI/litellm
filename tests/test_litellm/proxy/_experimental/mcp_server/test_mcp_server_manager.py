@@ -1196,7 +1196,7 @@ class TestMCPServerManager:
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            pytest.raises(ValueError) as exc_info,
+            pytest.raises(ValueError, match="oauth2_flow: client_credentials") as exc_info,
         ):
             await manager.load_servers_from_config(self._oauth2_config())
 
@@ -1209,7 +1209,7 @@ class TestMCPServerManager:
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            pytest.raises(ValueError) as exc_info,
+            pytest.raises(ValueError, match="got 'm2m'") as exc_info,
         ):
             await manager.load_servers_from_config(self._oauth2_config(oauth2_flow="m2m"))
 
@@ -1476,7 +1476,7 @@ class TestMCPServerManager:
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            pytest.raises(ValueError, match="per_server_oauth_discovery.*must be a boolean"),
+            pytest.raises(ValueError, match=r"per_server_oauth_discovery.*must be a boolean"),
         ):
             await manager.load_servers_from_config(
                 self._oauth2_config(oauth2_flow="authorization_code", per_server_oauth_discovery="yes")
@@ -1488,7 +1488,7 @@ class TestMCPServerManager:
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            pytest.raises(ValueError) as exc_info,
+            pytest.raises(ValueError, match="dcr_bridge is only supported") as exc_info,
         ):
             await manager.load_servers_from_config(
                 self._oauth2_config(oauth2_flow="authorization_code", dcr_bridge=True)
@@ -1502,7 +1502,7 @@ class TestMCPServerManager:
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            pytest.raises(ValueError) as exc_info,
+            pytest.raises(ValueError, match="must be a boolean") as exc_info,
         ):
             await manager.load_servers_from_config(
                 self._client_forwarded_config(MCPAuth.true_passthrough, dcr_bridge="yes")
@@ -4815,6 +4815,7 @@ class TestMCPServerManager:
         assert isinstance(result, LiteLLM_MCPServerTable)
         assert result.server_id == "test-server"
         assert result.status == "healthy"
+        assert result.health_check_type == "protocol"
         assert result.health_check_error is None
         assert result.last_health_check is not None
 
@@ -4847,7 +4848,7 @@ class TestMCPServerManager:
         assert isinstance(result, LiteLLM_MCPServerTable)
         assert result.server_id == "test-server"
         assert result.status == "unhealthy"
-        assert result.health_check_error == "Connection timeout"
+        assert result.health_check_error == "Health check failed (Exception)"
         assert result.last_health_check is not None
 
     @pytest.mark.asyncio
@@ -4871,7 +4872,7 @@ class TestMCPServerManager:
         result = await manager.health_check_server(server.server_id)
 
         assert result.status == "unhealthy"
-        assert "OAuth discovery unavailable" in (result.health_check_error or "")
+        assert result.health_check_error == "Health check failed (HTTPException)"
 
     @pytest.mark.asyncio
     async def test_health_check_server_not_found(self):
@@ -4893,8 +4894,9 @@ class TestMCPServerManager:
         assert result.last_health_check is not None
 
     @pytest.mark.asyncio
-    async def test_health_check_server_oauth2_skips_check(self):
-        """Test that health check is skipped for OAuth2 servers and returns unknown status"""
+    async def test_health_check_server_oauth2_checks_liveness(self, respx_mock):
+        """OAuth servers can report reachability without a protocol handshake"""
+        respx_mock.get("http://oauth2-server.com").respond(401)
         manager = MCPServerManager()
 
         # Mock OAuth2 server
@@ -4920,13 +4922,15 @@ class TestMCPServerManager:
         # Verify results
         assert isinstance(result, LiteLLM_MCPServerTable)
         assert result.server_id == "oauth2-server"
-        assert result.status == "unknown"
+        assert result.status == "healthy"
+        assert result.health_check_type == "liveness"
         assert result.health_check_error is None
         assert result.last_health_check is not None
 
     @pytest.mark.asyncio
-    async def test_health_check_server_no_token_skips_check(self):
-        """Test that health check is skipped when auth_type is set but authentication_token is missing"""
+    async def test_health_check_server_no_token_checks_liveness(self, respx_mock):
+        """Missing static credentials still permit a credential-free liveness check"""
+        respx_mock.get("http://no-token-server.com").respond(401)
         manager = MCPServerManager()
 
         # Mock server with auth_type but no authentication_token
@@ -4953,7 +4957,8 @@ class TestMCPServerManager:
         # Verify results
         assert isinstance(result, LiteLLM_MCPServerTable)
         assert result.server_id == "no-token-server"
-        assert result.status == "unknown"
+        assert result.status == "healthy"
+        assert result.health_check_type == "liveness"
         assert result.health_check_error is None
         assert result.last_health_check is not None
 
@@ -4999,11 +5004,13 @@ class TestMCPServerManager:
         assert isinstance(result, LiteLLM_MCPServerTable)
         assert result.server_id == "test-server"
         assert result.status == "healthy"
+        assert result.health_check_type == "protocol"
         assert result.health_check_error is None
 
     @pytest.mark.asyncio
-    async def test_health_check_skips_passthrough_auth_with_authorization_header(self):
-        """Test that health check is skipped for servers with passthrough Authorization header"""
+    async def test_health_check_checks_liveness_with_forwarded_authorization(self, respx_mock):
+        """Forwarded Authorization does not reach the liveness probe"""
+        respx_mock.get("http://github-server.com").respond(401)
         manager = MCPServerManager()
 
         # Mock server with auth_type=none and Authorization in extra_headers (passthrough auth)
@@ -5031,13 +5038,15 @@ class TestMCPServerManager:
         # Verify results
         assert isinstance(result, LiteLLM_MCPServerTable)
         assert result.server_id == "github-server"
-        assert result.status == "unknown"
+        assert result.status == "healthy"
+        assert result.health_check_type == "liveness"
         assert result.health_check_error is None
         assert result.last_health_check is not None
 
     @pytest.mark.asyncio
-    async def test_health_check_skips_passthrough_auth_with_api_key_header(self):
-        """Test that health check is skipped for servers with passthrough x-api-key header"""
+    async def test_health_check_checks_liveness_with_forwarded_api_key(self, respx_mock):
+        """Forwarded API keys do not reach the liveness probe"""
+        respx_mock.get("http://sourcegraph-server.com").respond(401)
         manager = MCPServerManager()
 
         # Mock server with auth_type=none and x-api-key in extra_headers
@@ -5065,7 +5074,8 @@ class TestMCPServerManager:
         # Verify results
         assert isinstance(result, LiteLLM_MCPServerTable)
         assert result.server_id == "sourcegraph-server"
-        assert result.status == "unknown"
+        assert result.status == "healthy"
+        assert result.health_check_type == "liveness"
         assert result.health_check_error is None
         assert result.last_health_check is not None
 
@@ -5811,7 +5821,7 @@ class TestMCPServerManager:
     def test_resolve_mcp_server_for_tool_call_raises_when_not_found(self):
         """ValueError is raised when no resolution path finds the tool."""
         manager = MCPServerManager()
-        with pytest.raises(ValueError, match="Tool .* not found"):
+        with pytest.raises(ValueError, match=r"Tool .* not found"):
             manager._resolve_mcp_server_for_tool_call("nonexistent", "ghost_tool")
 
     def test_resolve_mcp_server_for_tool_call_unscoped_cached_tool_still_fails(self):
@@ -6046,25 +6056,24 @@ class TestMCPServerManager:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_has_user_oauth_token_delegates_to_provider(self):
+    @pytest.mark.parametrize("verdict", (True, False))
+    async def test_has_user_oauth_token_delegates_to_provider(self, verdict: bool):
         """has_user_oauth_token maps the server and delegates the verdict to the v2 resolver."""
         from litellm.proxy._types import UserAPIKeyAuth
 
-        for verdict in (True, False):
+        class _Provider:
+            async def has_user_token(self, subject, spec):
+                return verdict
 
-            class _Provider:
-                async def has_user_token(self, subject, spec):
-                    return verdict
-
-            manager = MCPServerManager(cred_provider=_Provider())
-            server = MCPServer(
-                server_id="s",
-                name="n",
-                transport=MCPTransport.http,
-                auth_type=MCPAuth.oauth2,
-            )
-            user_auth = UserAPIKeyAuth(api_key="sk", user_id="alice")
-            assert await manager.has_user_oauth_token(server, user_auth) is verdict
+        manager = MCPServerManager(cred_provider=_Provider())
+        server = MCPServer(
+            server_id="s",
+            name="n",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk", user_id="alice")
+        assert await manager.has_user_oauth_token(server, user_auth) is verdict
 
     @pytest.mark.asyncio
     async def test_has_user_oauth_token_short_circuits_for_unmigrated_server(self):
@@ -13485,7 +13494,6 @@ class _DiscoveryClock:
         return self.now
 
 
-from pydantic import TypeAdapter
 from mcp.types import JSONRPCMessage
 
 _JSONRPC_ADAPTER = TypeAdapter(JSONRPCMessage)
@@ -14575,3 +14583,169 @@ class TestSharedIdentifierPrefixWarning:
         assert "srv-b" in shared_warnings[0]
         assert "srv-c" not in shared_warnings[0]
         assert "'shared'" in shared_warnings[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", (MCPTransport.http, MCPTransport.sse))
+@pytest.mark.parametrize("status_code", (200, 302, 401, 403, 404, 405, 500))
+async def test_liveness_accepts_headers_without_body_auth_or_redirects(
+    respx_mock: MockRouter, transport: MCPTransport, status_code: int
+) -> None:
+    from collections.abc import AsyncIterator
+
+    class UnreadBody(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            raise AssertionError("A liveness probe must not read the response body")
+            yield b""
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="liveness", name="liveness", transport=transport,
+        url="http://url-user:url-secret@127.0.0.1/mcp", auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code", authentication_token="stored-secret",
+        static_headers={"Authorization": "Bearer static-secret", "Cookie": "session=secret", "X-Api-Key": "secret"},
+        extra_headers=["Authorization", "Cookie"],
+    )
+    manager.registry[server.server_id] = server
+    body: Final = UnreadBody()
+    upstream: Final = respx_mock.get("http://127.0.0.1/mcp").mock(
+        return_value=httpx.Response(status_code, headers={"Location": "https://other.invalid/", "Content-Type": "text/event-stream"}, stream=body)
+    )
+
+    result: Final = await manager.health_check_server(server.server_id, mcp_auth_header="Bearer forwarded-secret")
+
+    assert result.status == "healthy"
+    assert result.health_check_type == "liveness"
+    assert result.health_check_error is None
+    assert result.last_health_check is not None
+    assert body.closed
+    assert len(respx_mock.calls) == 1
+    request: Final = upstream.calls.last.request
+    assert not {"authorization", "cookie", "x-api-key"}.intersection(request.headers)
+    assert request.url.username == request.url.password == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", (httpx.ConnectError, httpx.ReadTimeout))
+async def test_liveness_network_failures_do_not_expose_credentials(respx_mock: MockRouter, failure: type[httpx.RequestError]) -> None:
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="liveness", name="liveness", transport="http", url="https://example.invalid/mcp", auth_type="oauth2")
+    manager.registry[server.server_id] = server
+    respx_mock.get(server.url).mock(side_effect=failure("secret in https://user:password@example.invalid/mcp"))
+    result: Final = await manager.health_check_server(server.server_id)
+    assert result.status == "unhealthy"
+    assert result.health_check_type == "liveness"
+    assert result.health_check_error == f"Liveness check failed ({failure.__name__})"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", (False, True))
+async def test_liveness_whole_operation_timeout_and_cancellation(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
+    started: Final = asyncio.Event()
+    finished: Final = asyncio.Event()
+    async def pending(request: httpx.Request) -> httpx.Response:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            finished.set()
+        return httpx.Response(200)
+
+    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_HEALTH_CHECK_TIMEOUT", 0.2)
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="liveness", name="liveness", transport="http", url="http://127.0.0.1/mcp", auth_type="oauth2")
+    manager.registry[server.server_id] = server
+    respx_mock.get(server.url).mock(side_effect=pending)
+    task: Final = asyncio.create_task(manager.health_check_server(server.server_id))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    if cancel:
+        task.cancel()
+    result: Final = await asyncio.wait_for(task, timeout=2)
+    assert finished.is_set()
+    assert result.status == ("unknown" if cancel else "unhealthy")
+    assert result.health_check_error == ("Health check was cancelled" if cancel else "Health check timed out after 0.2 seconds")
+    assert result.health_check_type == "liveness"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("transport", "url"), (("stdio", "https://example.invalid"), ("http", None), ("sse", "file:///tmp/mcp")))
+async def test_liveness_unsupported_servers_stay_unknown(respx_mock: MockRouter, transport: str, url: str | None) -> None:
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="unsupported", name="unsupported", transport=transport, url=url, auth_type="oauth2", command="unused")
+    manager.registry[server.server_id] = server
+    result: Final = await manager.health_check_server(server.server_id)
+    assert result.status == "unknown"
+    assert result.health_check_type is None
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ssl_setting", ("untrusted", "ca_file", "verify_path", "disabled"))
+async def test_liveness_tls_and_infinite_sse_close_after_headers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ssl_setting: str
+) -> None:
+    import ipaddress
+    import ssl
+    from datetime import timedelta, timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    now: Final = datetime.now(timezone.utc)
+    cert: Final = (
+        x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key())
+        .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    cert_path: Final = tmp_path / "ca.pem"
+    key_path: Final = tmp_path / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy-user:proxy-secret@127.0.0.1:1")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("SSL_VERIFY", "False" if ssl_setting == "disabled" else str(cert_path) if ssl_setting == "verify_path" else "True")
+    if ssl_setting == "ca_file":
+        monkeypatch.setenv("SSL_CERT_FILE", str(cert_path))
+    closed: Final = asyncio.Event()
+
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
+            await writer.drain()
+            await reader.read()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            closed.set()
+
+    upstream: Final = await asyncio.start_server(serve, "127.0.0.1", 0, ssl=context)
+    async with upstream:
+        port: Final = upstream.sockets[0].getsockname()[1]
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(server_id="tls", name="tls", transport="sse", url=f"https://127.0.0.1:{port}/sse", auth_type="oauth2")
+        manager.registry[server.server_id] = server
+        result: Final = await asyncio.wait_for(manager.health_check_server(server.server_id), timeout=3)
+        if ssl_setting == "untrusted":
+            assert result.status == "unhealthy"
+            assert result.health_check_error == "Liveness check failed (ConnectError)"
+        else:
+            assert result.status == "healthy"
+            assert result.health_check_error is None
+            await asyncio.wait_for(closed.wait(), timeout=1)
+        assert result.health_check_type == "liveness"

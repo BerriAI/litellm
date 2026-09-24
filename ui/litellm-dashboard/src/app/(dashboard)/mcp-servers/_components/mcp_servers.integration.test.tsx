@@ -397,7 +397,12 @@ describe("MCPServers", () => {
 
     // Mock health status data
     const mockHealthStatuses = [
-      { server_id: "server-1", status: "healthy" },
+      {
+        server_id: "server-1",
+        status: "healthy",
+        health_check_type: "liveness",
+        last_health_check: "2026-01-02T00:00:00Z",
+      },
       { server_id: "server-2", status: "unhealthy" },
     ];
 
@@ -415,6 +420,12 @@ describe("MCPServers", () => {
     await waitFor(() => {
       expect(screen.getByText("MCP Servers")).toBeInTheDocument();
     });
+
+    expect(await screen.findByText("Reachable")).toBeInTheDocument();
+    expect(await screen.findByText("Unhealthy")).toBeInTheDocument();
+    await userEvent.hover(screen.getByText("Reachable"));
+    expect(await screen.findByText("Authentication and tools were not checked")).toBeInTheDocument();
+    expect(await screen.findByText(/Last check:/)).toBeInTheDocument();
 
     // Verify the health check API was called (without a server ID filter — the hook always
     // fetches health for all servers so the query key stays stable)

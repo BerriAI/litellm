@@ -615,33 +615,18 @@ def test_references_per_user_env_var(static_headers, env_vars, expected):
 
 
 @pytest.mark.asyncio
-async def test_health_check_skips_servers_referencing_per_user_env_var(
-    mock_server, monkeypatch
-):
-    """A userless health probe cannot fill per-user ${NAME} placeholders, so a
-    server whose static_headers reference one must report 'unknown' without
-    connecting. Otherwise it forwards the literal placeholder upstream, gets a
-    401, and flips to 'unhealthy' even though real user calls succeed."""
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        MCPServerManager,
-    )
+async def test_health_check_probes_without_per_user_env_var(mock_server, respx_mock):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
     manager = MCPServerManager()
     manager.registry[mock_server.server_id] = mock_server
-
-    created = []
-
-    async def fake_create_client(*args, **kwargs):
-        created.append((args, kwargs))
-        raise RuntimeError("upstream rejected literal ${NAME}")
-
-    monkeypatch.setattr(manager, "_create_mcp_client", fake_create_client)
-
+    upstream = respx_mock.get(mock_server.url).respond(401)
     result = await manager.health_check_server(mock_server.server_id)
-
-    assert created == []
-    assert result.status == "unknown"
+    assert result.status == "healthy"
+    assert result.health_check_type == "liveness"
     assert result.health_check_error is None
+    assert "authorization" not in upstream.calls.last.request.headers
+    assert not any("${" in value for value in upstream.calls.last.request.headers.values())
 
 
 # ── _load_user_env_vars guard paths ────────────────────────────────────────

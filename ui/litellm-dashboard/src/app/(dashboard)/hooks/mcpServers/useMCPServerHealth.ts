@@ -1,3 +1,4 @@
+import type { components } from "@/lib/http/schema";
 import { useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
@@ -6,10 +7,7 @@ import useAuthorized from "../useAuthorized";
 
 const mcpServerHealthKeys = createQueryKeys("mcpServerHealth");
 
-interface MCPServerHealth {
-  server_id: string;
-  status: string;
-}
+type MCPServerHealth = components["schemas"]["MCPServerHealthResponse"];
 
 export const useMCPServerHealth = () => {
   const { accessToken } = useAuthorized();

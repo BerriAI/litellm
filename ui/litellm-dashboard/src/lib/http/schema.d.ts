@@ -32250,6 +32250,8 @@ export interface components {
             has_user_credential?: boolean | null;
             /** Health Check Error */
             health_check_error?: string | null;
+            /** Health Check Type */
+            readonly health_check_type?: ("liveness" | "protocol") | null;
             /** Instructions */
             instructions?: string | null;
             /**
@@ -35152,6 +35154,19 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /** MCPServerHealthResponse */
+        MCPServerHealthResponse: {
+            /** Health Check Error */
+            health_check_error: string | null;
+            /** Health Check Type */
+            health_check_type?: ("liveness" | "protocol") | null;
+            /** Last Health Check */
+            last_health_check: string | null;
+            /** Server Id */
+            server_id: string;
+            /** Status */
+            status: ("healthy" | "unhealthy" | "unknown") | null;
         };
         /**
          * MCPServerUserCredentialListItem
@@ -71895,7 +71910,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["MCPServerHealthResponse"][];
                 };
             };
             /** @description Validation Error */

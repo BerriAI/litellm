@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import React from "react";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useMCPServerHealth } from "./useMCPServerHealth";
@@ -71,6 +71,23 @@ describe("useMCPServerHealth", () => {
     });
 
     expect(result.current.error).toEqual(mockError);
+  });
+
+  it("replaces probe metadata when a server is rechecked", async () => {
+    const initial = [
+      { server_id: "server-1", status: "healthy", health_check_type: "liveness", health_check_error: null },
+    ];
+    const updated = [
+      { server_id: "server-1", status: "unhealthy", health_check_type: "protocol", health_check_error: "Check failed" },
+    ];
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValueOnce(initial).mockResolvedValueOnce(updated);
+    const { result } = renderHook(() => useMCPServerHealth(), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual(initial));
+    await act(async () => {
+      await result.current.recheckServerHealth("server-1");
+    });
+    expect(result.current.data).toEqual(updated);
+    expect(result.current.recheckingServerIds.size).toBe(0);
   });
 
   it("should not fetch when accessToken is not available", async () => {

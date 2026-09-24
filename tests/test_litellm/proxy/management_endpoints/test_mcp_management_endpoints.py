@@ -4225,7 +4225,9 @@ class TestHealthCheckServers:
         ("view_all", True, ("server-x",), None, ("server-x",), 503),
     ],
 )
+@pytest.mark.parametrize("probe_kind", ("openapi", "liveness"))
 async def test_health_discovery_respects_route_restricted_key_grants(
+    probe_kind: str,
     respx_mock: MockRouter,
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
@@ -4247,13 +4249,14 @@ async def test_health_discovery_respects_route_restricted_key_grants(
             server_id=server_id,
             name=server_id,
             transport=MCPTransport.http,
-            spec_path=f"https://93.184.216.34/{server_id}.json",
-            auth_type=MCPAuth.none,
+            spec_path=f"https://93.184.216.34/{server_id}.json" if probe_kind == "openapi" else None,
+            url=f"http://127.0.0.1/{server_id}" if probe_kind == "liveness" else None,
+            auth_type=MCPAuth.oauth2 if probe_kind == "liveness" else MCPAuth.none,
         )
         for server_id in ("server-x", "server-y")
     }
     routes: Final = {
-        server_id: respx_mock.get(server.spec_path).respond(upstream_status, json={"paths": {}})
+        server_id: respx_mock.get(server.spec_path or server.url).respond(upstream_status, json={"paths": {}})
         for server_id, server in manager.registry.items()
     }
     caller: Final = UserAPIKeyAuth(
@@ -4288,8 +4291,13 @@ async def test_health_discovery_respects_route_restricted_key_grants(
 
     assert {row["server_id"] for row in result} == set(expected)
     assert {server_id for server_id, route in routes.items() if route.called} == set(expected)
-    expected_status: Final = {200: "healthy", 503: "unhealthy"}[upstream_status]
+    expected_status: Final = "healthy" if probe_kind == "liveness" else {200: "healthy", 503: "unhealthy"}[upstream_status]
     assert all(row["status"] == expected_status for row in result)
+
+    assert all(row["last_health_check"] is not None for row in result)
+    if probe_kind == "liveness":
+        assert all(row["health_check_type"] == "liveness" for row in result)
+        assert all(row["health_check_error"] is None for row in result)
 
 
 class TestMCPRegistryEndpoint:

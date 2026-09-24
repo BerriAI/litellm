@@ -185,13 +185,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     if (!mcpServers) return [];
     if (!healthStatuses) return mcpServers;
 
-    const healthMap = new Map(healthStatuses.map((h) => [h.server_id, h.status]));
+    const healthMap = new Map(healthStatuses.map((h) => [h.server_id, h]));
 
     return mcpServers.map((server) => {
       const healthStatus = healthMap.get(server.server_id);
       return {
         ...server,
-        status: healthStatus ? (healthStatus as "healthy" | "unhealthy" | "unknown") : server.status,
+        ...healthStatus,
+        status: healthStatus?.status ?? server.status,
       };
     });
   }, [mcpServers, healthStatuses]);
