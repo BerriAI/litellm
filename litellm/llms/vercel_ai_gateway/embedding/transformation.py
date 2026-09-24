@@ -7,6 +7,7 @@ Vercel AI Gateway is OpenAI-compatible and supports embeddings via the /v1/embed
 Docs: https://vercel.com/docs/ai-gateway/openai-compat/embeddings
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -162,7 +163,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         return optional_params
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+        self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
     ) -> BaseLLMException:
         """
         Get the error class for Vercel AI Gateway errors.
@@ -170,5 +171,5 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         return VercelAIGatewayException(
             message=error_message,
             status_code=status_code,
-            headers=headers,
+            headers=headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers),
         )
