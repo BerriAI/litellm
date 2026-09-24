@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
@@ -58,6 +59,10 @@ NOVA_REEL_DEFAULT_DURATION_SECONDS: Final = 6
 NOVA_REEL_DEFAULT_FPS: Final = 24
 NOVA_REEL_DEFAULT_DIMENSION: Final = "1280x720"
 
+# AWS clientRequestToken: alphanumeric and hyphens only, at most 64 chars.
+NOVA_REEL_CLIENT_REQUEST_TOKEN_MAX_LEN: Final = 64
+_NOVA_REEL_TOKEN_UNSAFE: Final = re.compile(r"[^0-9A-Za-z-]")
+
 # AWS async-invoke status enum (bedrock-runtime service model) -> OpenAI-style
 # VideoObject.status values used across LiteLLM video providers.
 NOVA_REEL_STATUS_MAP: Final[Mapping[str, str]] = MappingProxyType(
@@ -74,16 +79,29 @@ _UNSUPPORTED_MESSAGE: Final = (
 )
 
 
+def _data_url_payload(image: str) -> str:
+    """Validate a ``data:<mime>;base64,`` URL and return only its payload."""
+    header, sep, encoded = image.partition(",")
+    if not sep or not header.removeprefix("data:").endswith(";base64"):
+        raise ValueError(
+            "Nova Reel input_reference data URLs must be base64-encoded "
+            "(data:image/png;base64,<payload>); got an unsupported data URL prefix."
+        )
+    return encoded
+
+
 def _file_content_to_b64_and_format(image: FileContent) -> tuple[str, str]:
     """Read an input-reference image and return (base64, "png"|"jpeg")."""
     if isinstance(image, bytes):
         image_bytes: bytes = image
     elif isinstance(image, str):
-        # Already base64-encoded string - detect format from the decoded header.
+        # Base64-encoded string, optionally wrapped in a data URL; detect the
+        # format from the decoded header.
+        payload: Final = _data_url_payload(image) if image.startswith("data:") else image
         try:
-            image_bytes = base64.b64decode(image, validate=False)
-        except (binascii.Error, ValueError):
-            return image, "png"
+            image_bytes = base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError) as err:
+            raise ValueError(f"Nova Reel input_reference string did not decode as base64: {err}") from err
     elif hasattr(image, "read") and callable(getattr(image, "read", None)):
         if hasattr(image, "seek"):
             image.seek(0)
@@ -98,7 +116,10 @@ def _file_content_to_b64_and_format(image: FileContent) -> tuple[str, str]:
     elif image_bytes.startswith(b"\xff\xd8"):
         image_format = "jpeg"
     else:
-        image_format = "png"
+        raise ValueError(
+            "Nova Reel input_reference images must be PNG or JPEG encoded; "
+            f"unrecognized image header bytes {image_bytes[:8]!r}"
+        )
     return base64.b64encode(image_bytes).decode("utf-8"), image_format
 
 
@@ -121,6 +142,21 @@ def _duration_seconds_from_request(request_data: Mapping[str, object] | None) ->
         return None
 
 
+def _sanitize_client_request_token(token: str) -> str:
+    """AWS clientRequestToken allows alphanumeric and hyphens, max 64 chars."""
+    return _NOVA_REEL_TOKEN_UNSAFE.sub("-", token)[:NOVA_REEL_CLIENT_REQUEST_TOKEN_MAX_LEN]
+
+
+def _request_id_from_litellm_params(litellm_params: GenericLiteLLMParams) -> str | None:
+    """Best-effort litellm request id from litellm_params.metadata (extra field)."""
+    metadata: Final = getattr(litellm_params, "metadata", None)
+    if isinstance(metadata, Mapping):
+        request_id: Final = metadata.get("request_id")
+        if isinstance(request_id, str) and request_id:
+            return request_id
+    return None
+
+
 class BedrockNovaReelVideoConfig(BaseVideoConfig):
     """
     Video config for amazon.nova-reel-v1:0 (and regional variants) on Bedrock.
@@ -135,7 +171,6 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
             "dimension",
             "taskType",
             "output_s3_uri",
-            "parameters",
             "input_reference",
             "image",
         ]
@@ -215,7 +250,11 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         task_type: Final = op.pop("taskType", "TEXT_VIDEO")
 
         text_to_video_params: Final[_VideoParams] = {"text": prompt}
-        input_reference: Final = op.pop("input_reference", None) or op.pop("image", None)
+        # Pop both reference keys unconditionally so neither leaks into modelInput;
+        # input_reference wins when a caller passes both.
+        popped_reference: Final = op.pop("input_reference", None)
+        popped_image: Final = op.pop("image", None)
+        input_reference: Final = popped_reference if popped_reference is not None else popped_image
         if input_reference is not None:
             if isinstance(input_reference, dict):
                 # Pre-built provider shape: {"format": ..., "source": {...}}
@@ -247,10 +286,16 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
             generation_config["dimension"] = dimension
         fps: Final = op.pop("fps", None)
         if fps is not None:
-            generation_config["fps"] = fps
+            try:
+                generation_config["fps"] = int(float(fps))
+            except ValueError as err:
+                raise ValueError(f"Nova Reel fps must be a number; got {fps!r}") from err
         seed: Final = op.pop("seed", None)
         if seed is not None:
-            generation_config["seed"] = seed
+            try:
+                generation_config["seed"] = int(float(seed))
+            except ValueError as err:
+                raise ValueError(f"Nova Reel seed must be a number; got {seed!r}") from err
 
         model_input: Final[_VideoParams] = {
             "taskType": task_type,
@@ -258,15 +303,33 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
             "videoGenerationConfig": generation_config,
         }
 
-        # Remaining provider-specific keys (e.g. multiShotManualParams) are passed
-        # through verbatim on the modelInput body.
+        # Known non-AWS video-client params have no Nova Reel mapping; drop them
+        # instead of leaking junk keys into modelInput. Everything else keeps the
+        # verbatim passthrough (provider-specific AWS keys like multiShotManualParams).
+        for dropped_key in ("parameters", "resolution", "characters", "user", "extra_headers"):
+            op.pop(dropped_key, None)
+        # Pop both token keys unconditionally (caller-supplied wins over the
+        # litellm request id) so neither leaks into modelInput.
+        caller_token_snake: Final = op.pop("client_request_token", None)
+        caller_token_camel: Final = op.pop("clientRequestToken", None)
+        caller_token: Final = caller_token_snake if caller_token_snake is not None else caller_token_camel
         model_input.update(op)
+
+        request_id: Final[str | None] = _request_id_from_litellm_params(litellm_params)
+        client_request_token: Final[str | None] = (
+            _sanitize_client_request_token(str(caller_token))
+            if caller_token is not None
+            else (_sanitize_client_request_token(request_id) if request_id is not None else None)
+        )
 
         request_body: Final[_VideoParams] = {
             "modelId": model,
             "modelInput": model_input,
             "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": output_s3_uri}},
         }
+        if client_request_token:
+            # Envelope key only when populated: caller-supplied token or litellm request id.
+            request_body["clientRequestToken"] = client_request_token
         return request_body, [], "POST"  # mutable-ok: HTTP files payload requires a list
 
     def transform_video_create_response(
@@ -324,7 +387,16 @@ class BedrockNovaReelVideoConfig(BaseVideoConfig):
         invocation_arn: Final[str | None] = response_data.get("invocationArn")
         if not invocation_arn:
             raise ValueError(f"Nova Reel get-async-invoke response missing invocationArn: {response_data}")
-        raw_status: Final[str] = str(response_data.get("status") or "InProgress")
+        status_field: Final[object] = response_data.get("status")
+        if not isinstance(status_field, str) or not status_field:
+            raise BedrockError(
+                status_code=500,
+                message=(
+                    "Nova Reel get-async-invoke response had an unexpected shape: "
+                    f"missing or empty 'status' (observed keys: {sorted(response_data.keys())})"
+                ),
+            )
+        raw_status: Final[str] = status_field
         status: Final[str] = NOVA_REEL_STATUS_MAP.get(raw_status, "processing")
 
         failure_message: Final[str | None] = response_data.get("failureMessage")
