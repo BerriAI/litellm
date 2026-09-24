@@ -369,10 +369,7 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.rules import Rules
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.litellm_core_utils.thread_pool_executor import (
-        BoundedLoggingThreadPoolExecutor,
-        executor,
-    )
+    from litellm.litellm_core_utils.thread_pool_executor import BoundedLoggingThreadPoolExecutor
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
