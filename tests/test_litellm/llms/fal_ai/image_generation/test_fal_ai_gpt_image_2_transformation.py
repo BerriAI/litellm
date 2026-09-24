@@ -7,6 +7,10 @@ from litellm.llms.fal_ai.image_generation import (
     FalAINanoBananaConfig,
     get_fal_ai_image_generation_config,
 )
+from litellm.llms.fal_ai.image_generation.gpt_image_2_transformation import (
+    map_gpt_image_quality,
+    supported_gpt_image_qualities,
+)
 from litellm.types.utils import ImageObject, ImageResponse
 
 
@@ -127,3 +131,57 @@ def test_transform_image_generation_request():
     ) == {"prompt": "a red bicycle", "quality": "high", "num_images": 2}
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openai/gpt-image-2.5/flare/text-to-image",
+        "openai/gpt-image-2.5/sunburst/text-to-image",
+    ],
+)
+def test_gpt_image_25_routes_to_its_own_fal_endpoint(model):
+    config = get_fal_ai_image_generation_config(model)
+    assert isinstance(config, FalAIGPTImage2Config)
+    assert (
+        config.get_complete_url(api_base=None, api_key="k", model=model, optional_params={}, litellm_params={})
+        == f"https://fal.run/{model}"
+    )
+
+
+@pytest.mark.parametrize(
+    "model,quality,expected",
+    [
+        ("openai/gpt-image-2.5/flare/text-to-image", "xhigh", "xhigh"),
+        ("openai/gpt-image-2.5/sunburst/text-to-image", "max", "max"),
+        ("openai/gpt-image-2.5/flare/text-to-image", "hd", "high"),
+        ("openai/gpt-image-2", "xhigh", "auto"),
+        ("openai/gpt-image-2", "max", "auto"),
+    ],
+)
+def test_map_openai_params_quality_tiers_follow_model(model, quality, expected):
+    assert FalAIGPTImage2Config().map_openai_params(
+        non_default_params={"quality": quality},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    ) == {"quality": expected}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "some-new-model",
+        "openai/some-new-model",
+        "fal_ai/openai/some-new-model",
+    ],
+)
+def test_supported_qualities_derived_from_pricing_rows(model):
+    model_cost = {
+        "fal_ai/xhigh/1024-x-1024/openai/some-new-model": {},
+        "fal_ai/low/1024-x-1024/openai/some-new-model": {},
+        "fal_ai/max/1024-x-1024/openai/other-model": {},
+    }
+    assert supported_gpt_image_qualities(model, model_cost) == {"xhigh", "low", "auto"}
+
+
+def test_map_gpt_image_quality_passes_through_when_no_pricing_rows():
+    assert map_gpt_image_quality("xhigh", "some-new-model", {}) == "xhigh"

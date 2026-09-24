@@ -9,11 +9,9 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from opentelemetry import _logs, baggage, metrics, trace
-from opentelemetry._events import EventLogger
-from opentelemetry._logs import LoggerProvider, NoOpLoggerProvider
+from opentelemetry._logs import Logger, LoggerProvider, NoOpLoggerProvider
 from opentelemetry.context import Context
 from opentelemetry.metrics import MeterProvider, NoOpMeterProvider
-from opentelemetry.sdk._events import EventLoggerProvider
 from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
 from opentelemetry.sdk._logs.export import (
     BatchLogRecordProcessor,
@@ -58,6 +56,7 @@ from litellm.integrations.otel.plumbing.context import (
     request_destinations,
     suppressed_backends,
 )
+from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import Meter
@@ -193,18 +192,24 @@ def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
     if kind in _OTLP_HTTP_JSON_KINDS:
         from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter
 
+        tls: Final = resolve_otlp_http_tls("TRACES")
         return OTLPJsonSpanExporter(
             endpoint=spec.traces_endpoint or _otlp_traces_endpoint(spec.endpoint),
             headers=parse_headers(spec.headers),
+            certificate_file=tls.certificate_file,
+            session=tls.session,
         )
     if kind in _OTLP_HTTP_KINDS:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter as HTTPExporter,
         )
 
+        http_tls: Final = resolve_otlp_http_tls("TRACES")
         return HTTPExporter(
             endpoint=spec.traces_endpoint or _otlp_traces_endpoint(spec.endpoint),
             headers=parse_headers(spec.headers),
+            certificate_file=http_tls.certificate_file,
+            session=http_tls.session,
         )
     if kind in _OTLP_GRPC_KINDS:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -348,7 +353,7 @@ class _DrainPool:
 
     def _drain_until_closed(self) -> None:
         while True:
-            processor: SpanProcessor | None = self._pending.get()  # rebind-ok: loop variable
+            processor: SpanProcessor | None = self._pending.get()
             if processor is None:
                 return
             _shutdown_quietly(processor)
@@ -567,7 +572,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 span, destination.span_scope
             ):
                 continue
-            processor = self._acquire(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
+            processor = self._acquire(destination)
             if processor is None:
                 continue
             try:
@@ -902,9 +907,12 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
             OTLPMetricExporter as HTTPMetricExporter,
         )
 
+        tls: Final = resolve_otlp_http_tls("METRICS")
         exporter: Any = HTTPMetricExporter(
             endpoint=_otlp_metrics_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
+            certificate_file=tls.certificate_file,
+            session=tls.session,
         )
     elif kind in ("otlp_grpc", "grpc"):
         try:
@@ -962,9 +970,12 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
             OTLPLogExporter as HTTPLogExporter,
         )
 
+        tls: Final = resolve_otlp_http_tls("LOGS")
         return HTTPLogExporter(
             endpoint=_otlp_logs_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
+            certificate_file=tls.certificate_file,
+            session=tls.session,
         )
     if kind in ("otlp_grpc", "grpc"):
         try:
@@ -1029,8 +1040,8 @@ def resolve_logger_provider(
     return provider
 
 
-def get_event_logger(provider: SDKLoggerProvider, name: str = "litellm") -> EventLogger:
-    return EventLoggerProvider(logger_provider=provider).get_event_logger(name, litellm_version)
+def get_event_logger(provider: SDKLoggerProvider, name: str = "litellm") -> Logger:
+    return provider.get_logger(name, litellm_version)
 
 
 def build_meter_provider(

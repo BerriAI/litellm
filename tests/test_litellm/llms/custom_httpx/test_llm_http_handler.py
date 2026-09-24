@@ -407,11 +407,9 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
     config = Mock()
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
-    config.transform_responses_api_request.return_value = {
-        "model": "gpt-5.3-codex",
-        "input": "hi",
-        "stream": True,
-    }
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5.3-codex", "input": "hi", "stream": True}
+    )
     config.sign_request.return_value = ({}, None)
     client = AsyncHTTPHandler()
     client.post = AsyncMock(
@@ -447,7 +445,9 @@ async def test_async_response_api_handler_streaming_passes_logging_obj_to_post()
     config = Mock()
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
-    config.transform_responses_api_request.return_value = {"model": "gpt-5", "input": "hi", "stream": True}
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5", "input": "hi", "stream": True}
+    )
     config.sign_request.return_value = ({}, None)
     client = AsyncHTTPHandler()
     client.post = AsyncMock(
@@ -470,6 +470,41 @@ async def test_async_response_api_handler_streaming_passes_logging_obj_to_post()
     )
 
     assert client.post.call_args.kwargs["logging_obj"] is logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_posts_the_async_transform_hook_result():
+    """A provider whose request transform must await (Bedrock inlines remote image URLs)
+    overrides the async hook; the async handler has to send that result, not the sync one."""
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5", "input": "inlined by the async hook", "stream": True}
+    )
+    config.sign_request.return_value = ({}, None)
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    await handler.async_response_api_handler(
+        model="gpt-5",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        client=client,
+    )
+
+    assert client.post.call_args.kwargs["json"]["input"] == "inlined by the async hook"
+    config.transform_responses_api_request.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -4007,3 +4042,127 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     assert events[6]["usage"] == {"type": "duration", "seconds": 2.0}
     assert speech_client.requests[0].streaming_config.config.model == "chirp_3"
     assert [bytes(request.audio) for request in speech_client.requests[1:]] == [b"\x00\x01" * 800, b"\x00\x01" * 800]
+
+
+@pytest.mark.asyncio
+async def test_responses_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
+    """A plan whose kwargs repeat a request param must not crash the Responses follow-up with a duplicate keyword"""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+    followup_calls: list[dict[str, object]] = []
+
+    async def fake_aresponses(**kwargs: object) -> str:
+        followup_calls.append(kwargs)
+        return "followup-response"
+
+    monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+    request_kwargs: Final = {"prompt_cache_key": "thread-1", "metadata": {"user": "u1"}}
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "x"}],
+            optional_params={"prompt_cache_key": "thread-1"},
+            kwargs=dict(request_kwargs),
+        ),
+    )
+
+    response: Final = await BaseLLMHTTPHandler()._execute_responses_agentic_plan(
+        plan=plan,
+        model="gpt-5",
+        response_api_optional_request_params={"prompt_cache_key": "thread-1"},
+        logging_obj=Mock(litellm_call_id="call-1"),
+        kwargs=dict(request_kwargs),
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+        callback=CustomLogger(),
+    )
+
+    assert response == "followup-response"
+    assert len(followup_calls) == 1
+    assert followup_calls[0]["prompt_cache_key"] == "thread-1"
+    assert followup_calls[0]["metadata"] == {"user": "u1"}
+    assert followup_calls[0]["_agentic_loop_depth"] == 1
+
+
+@pytest.mark.asyncio
+async def test_responses_agentic_followup_sends_the_plans_request_param_over_a_stale_kwargs_copy(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+    followup_calls: list[dict[str, object]] = []
+
+    async def fake_aresponses(**kwargs: object) -> str:
+        followup_calls.append(kwargs)
+        return "followup-response"
+
+    monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+
+    await BaseLLMHTTPHandler()._execute_responses_agentic_plan(
+        plan=AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                model="gpt-5",
+                messages=[{"role": "user", "content": "x"}],
+                optional_params={"prompt_cache_key": "from-plan-params"},
+                kwargs={"prompt_cache_key": "stale-copy"},
+            ),
+        ),
+        model="gpt-5",
+        response_api_optional_request_params={"prompt_cache_key": "from-request"},
+        logging_obj=Mock(litellm_call_id="call-1"),
+        kwargs={},
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+        callback=CustomLogger(),
+    )
+
+    assert followup_calls[0]["prompt_cache_key"] == "from-plan-params"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
+    """A plan whose kwargs repeat a request param, or the explicitly passed model, must not crash the chat follow-up with a duplicate keyword"""
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+    followup_calls: list[dict[str, object]] = []
+
+    async def fake_acompletion(**kwargs: object) -> str:
+        followup_calls.append(kwargs)
+        return "followup-response"
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    request_kwargs: Final = {"temperature": 0.2, "api_base": "https://a", "model": "gpt-5"}
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "x"}],
+            optional_params={"temperature": 0.2},
+            kwargs=dict(request_kwargs),
+        ),
+    )
+
+    response: Final = await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
+        plan=plan,
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        optional_params={"temperature": 0.2},
+        kwargs=dict(request_kwargs),
+        custom_llm_provider="openai",
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+    )
+
+    assert response == "followup-response"
+    assert len(followup_calls) == 1
+    assert followup_calls[0]["temperature"] == 0.2
+    assert followup_calls[0]["api_base"] == "https://a"
+    assert followup_calls[0]["model"] == "openai/gpt-5"

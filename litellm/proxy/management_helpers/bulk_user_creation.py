@@ -543,7 +543,7 @@ async def _write_team_roster(
             already_present: Final = frozenset(member.user_id for member in roster if member.user_id)
             new_members: Final = tuple(member for member in members if member.user_id not in already_present)
             budget_ids: Final = tuple(
-                [  # mutable-ok: budgets are created one at a time on the transaction's single connection
+                [
                     await _resolve_member_budget_id(
                         prisma_client=prisma_client,
                         user_api_key_dict=user_api_key_dict,

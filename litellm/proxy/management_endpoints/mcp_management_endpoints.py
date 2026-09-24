@@ -22,7 +22,15 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Final,
+    Literal,
+    NoReturn,
+    Protocol,
+    cast,  # noqa: TID251  # validated JSON values need explicit narrowing
+)
 
 from fastapi import (
     APIRouter,
@@ -130,9 +138,10 @@ if MCP_AVAILABLE:
             return _ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
+        McpIdentifierConflict,
         approve_mcp_server,
         create_draft_mcp_server,
-        create_mcp_server,
+        create_mcp_server_if_identifier_free,
         delete_mcp_server,
         delete_user_credential,
         delete_user_env_vars,
@@ -280,6 +289,21 @@ if MCP_AVAILABLE:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
         _validate_upstream_token_header(payload)
+
+    def mcp_identifier_conflict_message(conflict: McpIdentifierConflict) -> str:
+        return (
+            f"An MCP server with {conflict.field} '{conflict.value}' already exists "
+            f"(server_id={conflict.server_id}). "
+            "MCP server names and aliases must be unique, case-insensitive."
+        )
+
+    def raise_mcp_identifier_conflict(conflict: McpIdentifierConflict) -> NoReturn:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                "error": mcp_identifier_conflict_message(conflict)
+            },
+        )
 
     def warn_if_id_jag_server_outruns_sso(server_id: str | None, auth_type: MCPAuth | str | None) -> None:
         """Registering an ``oauth2_id_jag`` server under an SSO provider that captures no IdP
@@ -628,8 +652,8 @@ if MCP_AVAILABLE:
 
     def _preserved_admin_config_credentials(
         credentials: "MCPCredentials | str | None",
-    ) -> "dict[str, str] | None":
-        """Keep only the non-secret admin-config keys, which are stored unencrypted so they lift out
+    ) -> "dict[str, str | list[str]] | None":  # mutable-ok: API response payload
+        """Keep non-secret admin-config keys and scopes, which are stored unencrypted so they lift out
         as plaintext; every secret and minted-token key is dropped.
 
         Total over every stored shape: a dict is read directly, a JSON-object string is parsed, and
@@ -639,15 +663,30 @@ if MCP_AVAILABLE:
         parsed: object = credentials
         if isinstance(credentials, str):
             try:
-                parsed = json.loads(credentials)
+                parsed = cast(object, json.loads(credentials))  # cast-ok: JSON parse result is validated below
             except (ValueError, TypeError):
                 return None
         if not isinstance(parsed, dict):
             return None
-        preserved: Final = {
-            key: value
-            for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
-            if isinstance((value := parsed.get(key)), str) and value
+        parsed_credentials: Final = cast(Mapping[str, object], parsed)  # cast-ok: dict shape validated above
+        scopes: Final[object] = parsed_credentials.get("scopes")
+        scopes_as_objects: Final = (
+            cast(Sequence[object], scopes)  # cast-ok: list shape validated above
+            if isinstance(scopes, list)
+            else ()
+        )
+        preserved_scopes: Final = (
+            {"scopes": cast(list[str], scopes_as_objects)}  # cast-ok: every scope is validated below
+            if scopes_as_objects and all(isinstance(scope, str) and scope for scope in scopes_as_objects)
+            else {}
+        )
+        preserved: Final = {  # mutable-ok: API response payload
+            **{
+                key: value
+                for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
+                if isinstance((value := parsed_credentials.get(key)), str) and value
+            },
+            **preserved_scopes,
         }
         return preserved or None
 
@@ -684,9 +723,7 @@ if MCP_AVAILABLE:
         if not caller_user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "User ID not found in token"
-                },  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                detail={"error": "User ID not found in token"},
             )
         return caller_user_id
 
@@ -827,7 +864,9 @@ if MCP_AVAILABLE:
         if not credentials:
             return False
         as_dict: Final[dict[str, object]] = dict(credentials)
-        return any(value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS)
+        return any(
+            value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS and key != "scopes"
+        )
 
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
@@ -959,7 +998,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers=None,
         )
         tools: Final = listing.tools
-        dumped_tools: Final = [dict(tool) for tool in tools]
+        dumped_tools: Final = [tool.model_dump(by_alias=True) for tool in tools]
 
         return {"tools": dumped_tools}
 
@@ -1054,6 +1093,9 @@ if MCP_AVAILABLE:
         return {"servers": registry_servers}
 
     ## FastAPI Routes
+    def _mcp_server_display_order(server: LiteLLM_MCPServerTable) -> tuple[str, str]:
+        return ((server.server_name or server.alias or server.server_id).lower(), server.server_id)
+
     def _get_user_mcp_management_mode() -> UserMCPManagementMode:
         from litellm.proxy.proxy_server import (
             general_settings as proxy_general_settings,
@@ -1204,10 +1246,12 @@ if MCP_AVAILABLE:
                         detail="You do not have permission to view MCP servers for this team.",
                     )
 
-            redacted_mcp_servers = await _get_team_scoped_mcp_server_list(sanitized_team_id)
+            redacted_mcp_servers = sorted(
+                await _get_team_scoped_mcp_server_list(sanitized_team_id), key=_mcp_server_display_order
+            )
         else:
             servers: Final = await _resolve_accessible_mcp_servers(user_api_key_dict)
-            redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+            redacted_mcp_servers = sorted(_redact_mcp_credentials_list(servers), key=_mcp_server_display_order)
 
         if connected_app_view is True and is_ui_session_credential(user_api_key_dict):
             reachable_ids: Final = await _connected_app_reachable_server_ids(user_api_key_dict)
@@ -1361,7 +1405,7 @@ if MCP_AVAILABLE:
         payload.submitted_at = datetime.now(timezone.utc)
 
         try:
-            new_mcp_server: Final = await create_mcp_server(
+            new_mcp_server: Final = await create_mcp_server_if_identifier_free(
                 prisma_client,
                 payload,
                 touched_by=user_api_key_dict.user_id or user_api_key_dict.team_id,
@@ -1372,6 +1416,8 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error registering mcp server: {e}"},
             )
+        if isinstance(new_mcp_server, McpIdentifierConflict):
+            raise_mcp_identifier_conflict(new_mcp_server)
         # Do NOT add to runtime registry — pending servers are not active
         return _redact_mcp_credentials(new_mcp_server)
 
@@ -1722,7 +1768,7 @@ if MCP_AVAILABLE:
         # The database write is the commit point: if it fails nothing was
         # persisted and the request is a genuine failure.
         try:
-            new_mcp_server: Final = await create_mcp_server(
+            new_mcp_server: Final = await create_mcp_server_if_identifier_free(
                 prisma_client,
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
@@ -1733,6 +1779,8 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error creating mcp server: {e}"},
             )
+        if isinstance(new_mcp_server, McpIdentifierConflict):
+            raise_mcp_identifier_conflict(new_mcp_server)
 
         warn_if_id_jag_server_outruns_sso(new_mcp_server.server_id, new_mcp_server.auth_type)
 
@@ -1781,7 +1829,7 @@ if MCP_AVAILABLE:
         conversions: Final = convert_connector_entries(payload)
         existing_servers: Final = await get_all_mcp_servers(prisma_client)
         existing_names: Final = frozenset(
-            name for server in existing_servers for name in (server.alias, server.server_name) if name
+            name.lower() for server in existing_servers for name in (server.alias, server.server_name) if name
         )
 
         def _classify(
@@ -1790,16 +1838,16 @@ if MCP_AVAILABLE:
             if isinstance(conversion, ConnectorConversionError):
                 return conversion
             alias: Final = conversion.request.alias or ""
-            if alias in existing_names:
+            if alias.lower() in existing_names:
                 return MCPConnectorImportSkipped(
                     name=conversion.name, reason=f"An MCP server named '{alias}' already exists."
                 )
             earlier_aliases: Final = frozenset(
-                earlier.request.alias or ""
+                (earlier.request.alias or "").lower()
                 for earlier in conversions[:index]
                 if isinstance(earlier, ConvertedConnector)
             )
-            if alias in earlier_aliases:
+            if alias.lower() in earlier_aliases:
                 return MCPConnectorImportSkipped(
                     name=conversion.name, reason=f"Duplicate connector name '{alias}' in the import payload."
                 )
@@ -1807,7 +1855,7 @@ if MCP_AVAILABLE:
 
         async def _create(
             conversion: ConvertedConnector,
-        ) -> MCPConnectorImportResult | MCPConnectorImportFailure:
+        ) -> MCPConnectorImportResult | MCPConnectorImportFailure | MCPConnectorImportSkipped:
             try:
                 validate_and_normalize_mcp_server_payload(conversion.request)
             except HTTPException as e:
@@ -1816,7 +1864,7 @@ if MCP_AVAILABLE:
                 )
                 return MCPConnectorImportFailure(name=conversion.name, error=error_text)
             try:
-                created: Final = await create_mcp_server(
+                created: Final = await create_mcp_server_if_identifier_free(
                     prisma_client,
                     conversion.request,
                     touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
@@ -1824,6 +1872,8 @@ if MCP_AVAILABLE:
             except Exception as e:  # noqa: BLE001  # any create failure must become a per-entry error, not a 500
                 verbose_proxy_logger.exception("Error importing mcp server %s: %s", conversion.name, e)
                 return MCPConnectorImportFailure(name=conversion.name, error=str(e))
+            if isinstance(created, McpIdentifierConflict):
+                return MCPConnectorImportSkipped(name=conversion.name, reason=mcp_identifier_conflict_message(created))
             try:
                 await global_mcp_server_manager.add_server(created)
             except Exception as e:  # noqa: BLE001  # the row is committed; the reload after the loop retries registration
@@ -1836,9 +1886,7 @@ if MCP_AVAILABLE:
 
         classified: Final = tuple(_classify(index, conversion) for index, conversion in enumerate(conversions))
         outcomes: Final = tuple(
-            [
-                await _create(entry) if isinstance(entry, ConvertedConnector) else entry for entry in classified
-            ]  # mutable-ok: await is illegal in a generator expression here
+            [await _create(entry) if isinstance(entry, ConvertedConnector) else entry for entry in classified]
         )
 
         imported: Final = tuple(entry for entry in outcomes if isinstance(entry, MCPConnectorImportResult))
@@ -2901,6 +2949,9 @@ if MCP_AVAILABLE:
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             fields_set=payload_fields_set,
         )
+
+        if isinstance(mcp_server_record_updated, McpIdentifierConflict):
+            raise_mcp_identifier_conflict(mcp_server_record_updated)
 
         if mcp_server_record_updated is None:
             raise HTTPException(

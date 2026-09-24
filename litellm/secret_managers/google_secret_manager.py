@@ -9,6 +9,7 @@ from litellm.constants import SECRET_MANAGER_REFRESH_INTERVAL
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem
+from litellm.rust_bridge.secret_manager import resolve_native_provider_reader
 
 
 class GoogleSecretManager(GCSBucketBase):
@@ -60,6 +61,10 @@ class GoogleSecretManager(GCSBucketBase):
         Returns:
             str: The secret value if successful, None otherwise.
         """
+        native: Final = resolve_native_provider_reader(self, "google_secret_manager")
+        if native is not None:
+            return native.sync_read_secret(secret_name)
+
         if self.always_read_secret_manager is not True:
             cached_secret: Final = self.cache.get_cache(secret_name)
             if cached_secret is not None:

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use litellm_auth_gcp::VertexAuth;
@@ -13,12 +15,13 @@ use serde_json::Value;
 
 use crate::base_llm::ocr::{
     error::Error,
-    settings::{OcrSettings, Secrets},
+    settings::OcrSettings,
     transformation::{
         BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OcrDocument, OcrResponseContext,
         PreparedOcrRequest, decode_request_value, decode_response,
     },
 };
+use litellm_secrets::source::SecretSource;
 
 /// The route's view of one call, handed to provider code that has to reach the
 /// caller's hooks mid-flight (guardrails on the outgoing body, raw response events).
@@ -35,7 +38,7 @@ pub struct OcrClient {
     document_fetcher: MediaFetcher,
     vertex_auth: VertexAuth,
     settings: OcrSettings,
-    secrets: Secrets,
+    secrets: Arc<dyn SecretSource>,
 }
 
 impl OcrClient {
@@ -45,7 +48,7 @@ impl OcrClient {
         url_policy: UrlPolicy,
         vertex_auth: VertexAuth,
         settings: OcrSettings,
-        secrets: Secrets,
+        secrets: Arc<dyn SecretSource>,
     ) -> Result<Self, litellm_http::Error> {
         Ok(Self {
             provider_http: pool.client(config, ClientVariant::Provider)?,
@@ -77,7 +80,7 @@ impl OcrClient {
         &self.settings
     }
 
-    pub fn secrets(&self) -> &Secrets {
+    pub fn secret_source(&self) -> &Arc<dyn SecretSource> {
         &self.secrets
     }
 
@@ -92,7 +95,7 @@ impl OcrClient {
             document_fetcher: MediaFetcher::for_test(document_http),
             vertex_auth: VertexAuth::default(),
             settings: OcrSettings::default(),
-            secrets: std::sync::Arc::new(litellm_core_utils::settings::ProcessEnvironment),
+            secrets: Arc::new(litellm_secrets::source::EnvironmentSecrets::default()),
         }
     }
 
@@ -102,7 +105,7 @@ impl OcrClient {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn with_secrets(self, secrets: Secrets) -> Self {
+    pub fn with_secrets(self, secrets: Arc<dyn SecretSource>) -> Self {
         Self { secrets, ..self }
     }
 }

@@ -30,9 +30,13 @@ from e2e_config import (
     FIXTURE_MODE_RAW,
     MANAGED_FILES_OPT_IN_ENV,
     MCP_OAUTH_LIVE_OPT_IN_ENV,
+    OTEL_TLS_OPT_IN_ENV,
+    OTEL_V2_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
+    PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
     REDIS_CHAOS_OPT_IN_ENV,
+    SECRET_MANAGER_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
     unique_marker,
 )
@@ -43,13 +47,18 @@ from fixture_mode import pytest_fixture_setup as pytest_fixture_setup
 from idp import Identity, Keycloak, keycloak_from_env
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
+from memory_readings import RssCapture, read_rss_everywhere
 from models import TeamNewBody, UserNewBody, UserNewResponse
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
 from provider_edge import replay_leftover_error
 from proxy_client import ProxyClient, build_proxy_client
+from stack_lock import stack_lock
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
 _CALL_PASSED = pytest.StashKey[bool]()
+_IDLE_RSS = pytest.StashKey[RssCapture]()
+
+IDLE_RSS_READ_TIMEOUT_SECONDS: Final = 10.0
 
 OPT_IN_MARKERS: Final = MappingProxyType(
     {
@@ -59,6 +68,10 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
+        "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
+        "otel_v2": OTEL_V2_OPT_IN_ENV,
+        "otel_tls": OTEL_TLS_OPT_IN_ENV,
+        "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
     }
 )
 
@@ -140,8 +153,31 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "quiet_stack: measures the proxy itself, so it runs while no other test on this host is hitting the stack; "
+        "every other test waits for it to finish",
+    )
+    config.addinivalue_line(
+        "markers",
         "mcp_oauth_live: real Linear OAuth consent via a captured browser session; deselected unless "
         "E2E_MCP_OAUTH_LIVE is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "provider_edge_host: routes provider traffic through the pytest host's edge in every fixture mode, so the "
+        "gateway must reach the pytest host; deselected unless E2E_PROVIDER_EDGE_HOST_REACHABLE is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "otel_v2: needs a proxy running with LITELLM_OTEL_V2=true; deselected unless E2E_OTEL_V2 is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "otel_tls: needs a stack whose gateway exports OTLP over TLS signed by the CA in SSL_CERT_FILE; deselected unless E2E_OTEL_EXPORTER_ENDPOINT is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "secret_manager: needs a proxy booted from gateway/secret_manager_<system>_ci_config.yml against that live "
+        "secret manager; deselected unless E2E_SECRET_MANAGER names the backend (see secret_manager/secret_backends.py)",
     )
 
 
@@ -149,9 +185,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     """Abort before collection when E2E_FIXTURE_MODE can never work: an unknown
     mode value, or replay against a missing, unreadable, or stale bundle (the
     stale message names the bundle's age). Live and record modes pass through."""
-    reason = fixture_mode_collection_error(
-        FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc)
-    )
+    reason = fixture_mode_collection_error(FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc))
     if reason is not None:
         raise pytest.UsageError(reason)
 
@@ -165,6 +199,16 @@ def _needs_unset_opt_in(item: pytest.Item) -> bool:
         item.get_closest_marker(marker) is not None and not os.environ.get(opt_in_env)
         for marker, opt_in_env in OPT_IN_MARKERS.items()
     )
+
+
+def _reaches_proxy(item: pytest.Item) -> bool:
+    """True for a live test that talks to the shared proxy: `e2e`-marked and not a
+    `migration_startup` test, which boots its own container instead."""
+    return item.get_closest_marker("e2e") is not None and item.get_closest_marker("migration_startup") is None
+
+
+def _uses_idle_rss(item: pytest.Item) -> bool:
+    return isinstance(item, pytest.Function) and "idle_rss" in item.fixturenames
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -196,6 +240,20 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     items.sort(key=lambda item: item.get_closest_marker("load") is not None)
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """When a selected test asks for the `idle_rss` fixture and this is not a
+    `--collect-only` run, read every replica's RSS once, right here at the end of
+    collection and before this process sends any traffic. tryfirst keeps the read
+    ahead of xdist's own collection-finish report, and the controller schedules no
+    test until every worker has reported, so this is the idle footprint of a stack
+    that just passed its readiness gate. The fixture hands the capture to the
+    idle-budget test in router/test_reliability_memory_e2e.py."""
+    if session.config.getoption("collectonly") or not any(_uses_idle_rss(item) for item in session.items):
+        return
+    session.config.stash[_IDLE_RSS] = read_rss_everywhere(build_proxy_client(), timeout=IDLE_RSS_READ_TIMEOUT_SECONDS)
+
+
 def _liveness_reason(label: str, base_url: str) -> str | None:
     """None if `base_url` answers its liveness probe, else a failure reason."""
     try:
@@ -220,6 +278,12 @@ def _proxy_fail_reason() -> str | None:
     return None
 
 
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None, object, object]:
+    with stack_lock(exclusive=item.get_closest_marker("quiet_stack") is not None):
+        return (yield)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Hard-fail `e2e`-marked tests unless a proxy answers its liveness probe.
@@ -227,7 +291,9 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     run even when none is up. Never skip for a missing proxy. Replay mode needs
     the proxy too: only provider-bound traffic replays from the bundle."""
     LIVE_PROVIDER_REQUIRED.set(item.get_closest_marker("provider_live") is not None)
-    if item.get_closest_marker("e2e") is None or item.get_closest_marker("migration_startup") is not None:
+    if _uses_idle_rss(item):
+        item.user_properties.extend(item.config.stash[_IDLE_RSS].junit_properties)
+    if not _reaches_proxy(item):
         return
     if isinstance(item, pytest.Function) and "oauth_gateway" in item.fixturenames:
         return
@@ -242,7 +308,7 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     guard before truncating the spend-log DB. Tests under `tests/e2e/` without the
     `e2e` marker (pure unit coverage for the harness itself) never hit the proxy,
     so they must not arm the destructive DB truncate."""
-    if item.get_closest_marker("e2e") is None or item.get_closest_marker("migration_startup") is not None:
+    if not _reaches_proxy(item):
         return
     item.session.stash[_E2E_TEST_RAN] = True
 
@@ -277,9 +343,7 @@ def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, None, None]:
     LIVE_PROVIDER_REQUIRED.set(False)
     if not item.stash.get(_CALL_PASSED, False):
         return result
-    reason = replay_leftover_error(
-        mode_raw=FIXTURE_MODE_RAW, bundle_dir=FIXTURE_DIR, test_key=item.nodeid
-    )
+    reason = replay_leftover_error(mode_raw=FIXTURE_MODE_RAW, bundle_dir=FIXTURE_DIR, test_key=item.nodeid)
     if reason is not None:
         pytest.fail(reason)
     return result
@@ -304,6 +368,13 @@ def proxy() -> ProxyClient:
     """The shared ProxyClient every suite's client is built from. Suite `client`
     fixtures depend on this and inject it, so the proxy wiring lives in one place."""
     return build_proxy_client()
+
+
+@pytest.fixture(scope="session")
+def idle_rss(request: pytest.FixtureRequest) -> RssCapture:
+    """Every replica's RSS as read once at the end of collection, before this process
+    sent any traffic (see pytest_collection_finish)."""
+    return request.config.stash[_IDLE_RSS]
 
 
 @pytest.fixture
