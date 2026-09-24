@@ -156,7 +156,7 @@ class AutoRouterRoutingTestRequest(BaseModel):
         the serving path.
         """
         return MappingProxyType(
-            {  # mutable-ok: MappingProxyType needs a dict to wrap
+            {
                 key: value
                 for key, value in (("messages", self.messages), ("system", self.system), ("tools", self.tools))
                 if value is not None

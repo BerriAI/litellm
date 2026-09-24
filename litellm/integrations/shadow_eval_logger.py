@@ -873,7 +873,6 @@ class ShadowEvalLogger(CustomLogger):
                 await prisma.db.litellm_shadowevalattempt.group_by(
                     by=["job_id"],
                     count=True,
-                    # mutable-ok: Prisma aggregate spec
                     sum={"judge_cost": True, "shadow_cost": True, "shadow_classifier_cost": True},
                     where={"job_id": {"in": [str(record.id) for record in records]}},  # mutable-ok: Prisma filter
                 )
@@ -901,7 +900,7 @@ class ShadowEvalLogger(CustomLogger):
                 {target: tuple(job for _, job in group) for target, group in groupby(by_target, key=itemgetter(0))}
             )
             await self._jobs_cache.async_set_cache(_JOBS_CACHE_KEY, jobs)
-            self._job_starts = {}  # rebind-ok: new generation, counts absorbed into the fill
+            self._job_starts = {}
             return jobs
         except Exception as e:  # noqa: BLE001  # a DB blip must never break request logging
             verbose_logger.debug("shadow_eval: active-job read failed: %s", e)
@@ -1033,7 +1032,7 @@ class ShadowEvalLogger(CustomLogger):
                         real_cache_hit=real_cache_hit,
                         control_tier=control_tier,
                         shadow_params=shadow_params,
-                        parent_metadata=MappingProxyType(dict(request_metadata)),  # mutable-ok: frozen snapshot
+                        parent_metadata=MappingProxyType(dict(request_metadata)),
                     )
                 ).add_done_callback(self._release_shadow_slot)
         except Exception as e:  # noqa: BLE001  # logging hooks must never fail the request
@@ -1347,7 +1346,7 @@ class ShadowEvalLogger(CustomLogger):
             {
                 "role": "user",
                 "content": _judge_user_prompt(conversation, response_a, response_b, _tool_definitions_text(tools)),
-            },  # mutable-ok: SDK message
+            },
         ]
         try:
             response: Final = await judge_acompletion(

@@ -6667,7 +6667,7 @@ def get_standard_logging_object_payload(
                     "version": 3,
                     "status": "unknown",
                     "reason": "pending_projection",
-                }  # mutable-ok: spend-log JSON serialization requires plain mappings
+                }
                 if captured_baseline is not None
                 else (
                     {  # mutable-ok: spend-log JSON serialization requires plain mappings

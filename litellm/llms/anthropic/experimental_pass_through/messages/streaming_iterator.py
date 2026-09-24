@@ -186,7 +186,7 @@ def _sse_event(event_type: str, payload: Mapping[str, object]) -> bytes:
 
 
 def _incomplete_stream_error_sse_event() -> bytes:
-    return _sse_event(  # mutable-ok: one-shot JSON payload, never mutated after construction
+    return _sse_event(
         "error",
         {"type": "error", "error": {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE}},
     )

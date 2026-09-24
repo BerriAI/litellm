@@ -32,9 +32,7 @@ def get_supported_openai_params(
     - None if unmapped
     """
     if not custom_llm_provider:
-        custom_llm_provider = declared_authenticating_provider(
-            model
-        )  # rebind-ok: resolving would run the provider's OAuth flow
+        custom_llm_provider = declared_authenticating_provider(model)
     if not custom_llm_provider:
         try:
             custom_llm_provider = litellm.get_llm_provider(model=model)[1]

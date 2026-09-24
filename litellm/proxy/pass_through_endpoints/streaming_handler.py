@@ -217,9 +217,7 @@ class PassThroughStreamingHandler:
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
-                    complete_frames, pending = split_complete_sse_frames(
-                        pending + chunk
-                    )  # rebind-ok: SSE frame reassembly buffer across transport chunks
+                    complete_frames, pending = split_complete_sse_frames(pending + chunk)
                     if complete_frames:
                         yield ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                             complete_frames, resolved_model_name, litellm_logging_obj

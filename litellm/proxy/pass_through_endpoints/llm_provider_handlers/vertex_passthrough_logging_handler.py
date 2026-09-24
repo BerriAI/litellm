@@ -447,9 +447,7 @@ class VertexPassthroughLoggingHandler:
         kwargs["model"] = model  # rebind-ok: callback metadata records the resolved model
         kwargs["custom_llm_provider"] = "vertex_ai"  # rebind-ok: callback metadata records the resolved provider
 
-        standard_pass_through_response_object: Final[
-            StandardPassThroughResponseObject
-        ] = {  # mutable-ok: callback contract requires a concrete response dictionary
+        standard_pass_through_response_object: Final[StandardPassThroughResponseObject] = {
             "response": json_response,
         }
         return {  # mutable-ok: passthrough logging contract requires a concrete result dictionary

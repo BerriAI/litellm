@@ -45,7 +45,7 @@ def _move_betas_into_header(request: Mapping[str, object], headers: dict[str, st
     if betas:
         headers["anthropic-beta"] = ",".join(betas)  # rebind-ok: the handler signs and sends this same dict
         return
-    headers.pop("anthropic-beta", None)  # rebind-ok: a caller header Mantle rejects in full must not reach it
+    headers.pop("anthropic-beta", None)
 
 
 class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):

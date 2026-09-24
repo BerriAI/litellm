@@ -566,7 +566,7 @@ class ResponsesAPIRequestUtils:
             return
         items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
         stripped: Final = tuple(ResponsesAPIRequestUtils._without_encrypted_reasoning(item) for item in items)
-        items[:] = (item for item in stripped if item is not None)  # rebind-ok: list shared with fallback snapshot
+        items[:] = (item for item in stripped if item is not None)
 
     @staticmethod
     def _without_encrypted_reasoning(item: object) -> object | None:

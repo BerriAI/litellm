@@ -286,7 +286,7 @@ class AliceGuardrail(CustomGuardrail):
             text = replacement.get("text")
             if not (isinstance(index, int) and isinstance(text, str) and 0 <= index < len(texts)):
                 raise self._mask_rejected(verdict)
-            texts[index] = text  # mutable-ok: item assignment into the local working copy above
+            texts[index] = text
 
         inputs["texts"] = texts
 

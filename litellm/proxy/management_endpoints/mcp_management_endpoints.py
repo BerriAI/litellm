@@ -706,9 +706,7 @@ if MCP_AVAILABLE:
         if not caller_user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "User ID not found in token"
-                },  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                detail={"error": "User ID not found in token"},
             )
         return caller_user_id
 
@@ -1865,9 +1863,7 @@ if MCP_AVAILABLE:
 
         classified: Final = tuple(_classify(index, conversion) for index, conversion in enumerate(conversions))
         outcomes: Final = tuple(
-            [
-                await _create(entry) if isinstance(entry, ConvertedConnector) else entry for entry in classified
-            ]  # mutable-ok: await is illegal in a generator expression here
+            [await _create(entry) if isinstance(entry, ConvertedConnector) else entry for entry in classified]
         )
 
         imported: Final = tuple(entry for entry in outcomes if isinstance(entry, MCPConnectorImportResult))

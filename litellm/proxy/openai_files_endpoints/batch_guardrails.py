@@ -355,9 +355,7 @@ def build_scan_metadata(request_metadata: Mapping[str, object]) -> Mapping[str, 
     Passing the whole thing through would carry values that cannot be copied, such as the parent
     OTel span, and would hand every record proxy state it has no business seeing.
     """
-    return MappingProxyType(
-        {key: value for key, value in request_metadata.items() if key in _SCAN_METADATA_KEYS}
-    )  # mutable-ok: MappingProxyType freezes the comprehension
+    return MappingProxyType({key: value for key, value in request_metadata.items() if key in _SCAN_METADATA_KEYS})
 
 
 async def _scan_record(
@@ -546,7 +544,7 @@ def rewrite_batch_input_file(file_source: BinaryIO, result: BatchScanResult) -> 
     """
     redacted: Final = MappingProxyType(
         {change.line_number: change for change in result.changes if isinstance(change, RecordRedacted)}
-    )  # mutable-ok: MappingProxyType freezes the lookup table
+    )
     dropped: Final = frozenset(change.line_number for change in result.changes if isinstance(change, RecordDropped))
 
     output: Final = tempfile.SpooledTemporaryFile(  # noqa: SIM115  # the caller uploads this handle

@@ -866,14 +866,14 @@ class LiteLLMCompletionResponsesConfig:
             elif pending:
                 # Not followed by an assistant message — keep the reasoning
                 # standalone instead of dropping it.
-                merged.extend(  # mutable-ok: append reasoning messages
+                merged.extend(
                     [_standalone(text, blocks) for text, blocks in pending]  # mutable-ok: append reasoning messages
                 )
                 pending = []  # mutable-ok: reset accumulator
 
             merged.append(msg)
 
-        merged.extend(  # mutable-ok: append trailing reasoning
+        merged.extend(
             [_standalone(text, blocks) for text, blocks in pending]  # mutable-ok: append trailing reasoning
         )
 

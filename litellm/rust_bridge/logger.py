@@ -53,7 +53,7 @@ def emit(
             extra={
                 "rust_target": target,
                 "rust_fields": dict(fields),
-            },  # mutable-ok: LogRecord requires JSON dict extras
+            },
         )
         _REDACTION.filter(record)
         _CORRELATION.filter(record)

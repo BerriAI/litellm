@@ -81,9 +81,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.proxy.utils import PrismaClient
 
-_RowT = TypeVar(
-    "_RowT", bound=ManagedResourceRow
-)  # rebind-ok: TypeVar declarations must stay bare assignments for pyright
+_RowT = TypeVar("_RowT", bound=ManagedResourceRow)
 
 # ---------------------------------------------------------------------------
 # Field map
@@ -998,9 +996,7 @@ async def _build_list_where_with_cursor(
     params: Final = query_params or {}
     after_id: Final[str | None] = params.get("after")
     before_id: Final[str | None] = params.get("before")
-    where: PrismaWhere = dict(
-        owner_filter
-    )  # rebind-ok: narrowed with the cursor boundary when a valid cursor row exists
+    where: PrismaWhere = dict(owner_filter)
     fetch_order: SortOrder = "desc"  # rebind-ok: flipped to asc when paging backwards from a before cursor
 
     cursor_id: Final = after_id or before_id
