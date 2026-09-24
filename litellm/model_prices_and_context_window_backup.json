@@ -34149,6 +34149,7 @@
     },
     "gpt-5-chat": {
         "cache_read_input_token_cost": 1.25e-07,
+        "deprecation_date": "2026-07-23",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
@@ -34184,6 +34185,7 @@
     },
     "gpt-5-chat-latest": {
         "cache_read_input_token_cost": 1.25e-07,
+        "deprecation_date": "2026-07-23",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
