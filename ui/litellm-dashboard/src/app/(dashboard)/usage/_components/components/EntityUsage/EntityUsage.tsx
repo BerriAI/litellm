@@ -674,8 +674,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
 
-  const spendFetchState = { coversRange, cancelled, failed };
-
   const serverExport: ServerExport | undefined =
     entityType === "team" && apiKeyTruncation !== undefined && accessToken && startTime && endTime
       ? (scope, format) =>
@@ -688,6 +686,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             format,
           })
       : undefined;
+
+  const spendFetchState = { coversRange, cancelled, failed, apiKeyTruncation: serverExport ? null : apiKeyTruncation };
 
   return (
     <div style={{ width: "100%" }} className="relative">

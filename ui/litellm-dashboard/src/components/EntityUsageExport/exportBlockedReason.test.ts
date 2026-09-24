@@ -6,6 +6,7 @@ const state = (overrides: Partial<UsageFetchState> = {}): UsageFetchState => ({
   coversRange: true,
   cancelled: false,
   failed: false,
+  apiKeyTruncation: undefined,
   ...overrides,
 });
 
@@ -30,6 +31,17 @@ describe("getExportBlockedReason", () => {
 
     expect(reason).toMatch(/failed to load/i);
     expect(reason).not.toMatch(/stopped/i);
+  });
+
+  it("blocks when the aggregated endpoint dropped keys, since a per-team CSV would miss them", () => {
+    const reason = getExportBlockedReason(state({ apiKeyTruncation: { limit: 100, total: 3000 } }));
+
+    expect(reason).toMatch(/100 highest-spend keys of 3000/);
+    expect(reason).toMatch(/USAGE_TOP_API_KEYS_LIMIT/);
+  });
+
+  it("does not block on truncation when a server export will cover every key", () => {
+    expect(getExportBlockedReason(state({ apiKeyTruncation: null }))).toBeUndefined();
   });
 });
 

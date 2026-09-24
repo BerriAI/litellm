@@ -260,6 +260,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     coversRange: activeAggregated !== null || paginatedResult.coversRange,
     cancelled: paginatedResult.cancelled,
     failed: paginatedResult.failed,
+    apiKeyTruncation,
   };
   const exportBlockedReason = getExportBlockedReason(spendFetchState);
 
