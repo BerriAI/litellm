@@ -13,11 +13,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import jwt
-import litellm
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from pydantic import SecretStr
 
+import litellm
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
@@ -34,12 +35,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     PrivateKeyJwtAuth,
 )
-from pydantic import SecretStr
 
-_PATCH_TARGET = (
-    "litellm.proxy._experimental.mcp_server.outbound_credentials."
-    "token_endpoint.get_async_httpx_client"
-)
+_PATCH_TARGET = "litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint.get_async_httpx_client"
 
 _ENDPOINT = "https://idp.example.com/oauth2/token"
 _CLIENT_ID = "litellm-client-id"
@@ -50,6 +47,15 @@ _PRIVATE_PEM = _RSA_KEY.private_bytes(
     serialization.PrivateFormat.PKCS8,
     serialization.NoEncryption(),
 ).decode()
+_EC_PRIVATE_PEM = (
+    ec.generate_private_key(ec.SECP256R1())
+    .private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    .decode()
+)
 _PUBLIC_PEM = (
     _RSA_KEY.public_key()
     .public_bytes(
@@ -185,9 +191,9 @@ async def test_fetch_network_error_maps_to_upstream_unavailable(raised):
     "auth",
     [
         PrivateKeyJwtAuth(private_key=SecretStr("not-a-pem-key"), signing_alg="RS256"),
-        PrivateKeyJwtAuth(private_key=SecretStr(_PRIVATE_PEM), signing_alg="XX999"),
+        PrivateKeyJwtAuth(private_key=SecretStr(_EC_PRIVATE_PEM), signing_alg="RS256"),
     ],
-    ids=["garbage-key", "unknown-alg"],
+    ids=["garbage-key", "key-alg-mismatch"],
 )
 async def test_fetch_unsignable_client_assertion_is_misconfigured_not_a_crash(auth):
     client = AsyncMock()

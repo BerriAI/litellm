@@ -221,7 +221,10 @@ class JWTHandler:
     # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
     # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
     #   the key in different ways (e.g. HS* and RS*)."
-    SUPPORTED_JWT_ALGORITHMS = [*APPROVED_JWT_ALGORITHMS, *LEGACY_JWT_ALGORITHMS]
+    SUPPORTED_JWT_ALGORITHMS = [  # mutable-ok: list kept for backward compatibility
+        *APPROVED_JWT_ALGORITHMS,
+        *LEGACY_JWT_ALGORITHMS,
+    ]
     LITELLM_JWT_ISSUER_CLAIM = "_litellm_jwt_issuer"
     LITELLM_USER_ID_CLAIM = "_litellm_user_id"
     LITELLM_USER_EMAIL_CLAIM = "_litellm_user_email"
@@ -955,10 +958,11 @@ class JWTHandler:
             log_context=f"kid={kid}",
         )
 
+        allowed: Final = self.allowed_algorithms()
         usable_keys: Final[JWKKeyValue] = (
-            list(jwks_keys_for(keys, self.allowed_algorithms()))
+            list(jwks_keys_for(keys, allowed))  # mutable-ok: parse_keys consumes a JWKKeyValue list
             if isinstance(keys, list)
-            else next(iter(jwks_keys_for((keys,), self.allowed_algorithms())), {})
+            else next(iter(jwks_keys_for((keys,), allowed)), {})  # mutable-ok: single-key dict is a JWKKeyValue
         )
         public_key: Final = self.parse_keys(keys=usable_keys, kid=kid)
         if public_key is not None:
@@ -1231,32 +1235,25 @@ class JWTHandler:
             )
         )
 
-        if isinstance(public_key, dict):
-            public_key_obj: Final = PyJWK.from_dict(self._get_jwk_from_public_key(public_key=public_key)).key
-            payload: Final = jwt.decode(
-                token,
-                public_key_obj,
-                algorithms=self.allowed_algorithms(),
-                options=decode_options,
-                audience=audience,
-                issuer=issuer,
-                leeway=self.leeway,
-            )
-        else:
-            cert: Final = x509.load_pem_x509_certificate(public_key.encode(), default_backend())
-            key: Final = cert.public_key().public_bytes(
+        key_obj: Final = (
+            PyJWK.from_dict(self._get_jwk_from_public_key(public_key=public_key)).key
+            if isinstance(public_key, dict)
+            else x509.load_pem_x509_certificate(public_key.encode(), default_backend())
+            .public_key()
+            .public_bytes(
                 serialization.Encoding.PEM,
                 serialization.PublicFormat.SubjectPublicKeyInfo,
             )
-            payload = jwt.decode(
-                token,
-                key,
-                algorithms=self.allowed_algorithms(),
-                audience=audience,
-                issuer=issuer,
-                options=decode_options,
-                leeway=self.leeway,
-            )
+        )
+        payload: Final = jwt.decode(
+            token,
+            key_obj,
+            algorithms=self.allowed_algorithms(),
+            audience=audience,
+            issuer=issuer,
+            options=decode_options,
+            leeway=self.leeway,
+        )
         self._warn_deprecated_signing_algorithm(token)
         return payload
 

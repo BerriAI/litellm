@@ -460,7 +460,9 @@ class MCPJWTSigner(CustomGuardrail):
         from jwt import PyJWKSet
 
         try:
-            jwks_set: Final = PyJWKSet.from_dict({"keys": list(approved_keys)})
+            jwks_set: Final = PyJWKSet.from_dict(
+                {"keys": list(approved_keys)}  # mutable-ok: PyJWKSet.from_dict takes a dict
+            )
         except Exception as exc:
             raise jwt.exceptions.PyJWKSetError(f"Failed to parse JWKS from {jwks_uri!r}: {exc}") from exc
 

@@ -1485,7 +1485,7 @@ def _warn_on_shared_identifier_prefixes(servers: Iterable[MCPServer]) -> None:
 
 def _stored_client_assertion_signing_alg(value: object, server_name: str) -> ApprovedJwtAlgorithm:
     if value in APPROVED_JWT_ALGORITHMS:
-        return cast(ApprovedJwtAlgorithm, value)
+        return cast(ApprovedJwtAlgorithm, value)  # cast-ok: value was checked against APPROVED_JWT_ALGORITHMS
     if value is not None:
         verbose_logger.warning(
             "MCP server %s: client_assertion_signing_alg %r is not an approved algorithm, using RS256",
