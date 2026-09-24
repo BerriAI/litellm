@@ -6,10 +6,13 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from pathlib import Path
 from typing import Final
 
+import httpx
+import openai
 import pytest
-from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import group_members, owned_proxy, owned_proxy_process
 
@@ -23,7 +26,9 @@ def _export_range() -> dict[str, str]:
     }
 
 
-def _team_with_three_keys(gateway: Gateway, scenario, model: str):
+def _team_with_three_keys(
+    gateway: Gateway, scenario: Scenario, model: str
+) -> tuple[str, tuple[str, ...], tuple[str, ...], dict[str, float]]:
     team: Final = scenario.team(models=[model])
     keys: Final = tuple(scenario.key(team_id=team, models=[model]) for _ in range(3))
     digests: Final = tuple(sha256(key.encode()).hexdigest() for key in keys)
@@ -39,7 +44,7 @@ def _team_with_three_keys(gateway: Gateway, scenario, model: str):
     return team, keys, digests, spend_by_key
 
 
-def _export_json(gateway: Gateway, **params: str):
+def _export_json(gateway: Gateway, **params: str) -> httpx.Response:
     return gateway.request("GET", "/team/daily/activity/export", params={**_export_range(), **params})
 
 
@@ -157,7 +162,7 @@ def test_team_activity_export_denies_a_member_another_team(gateway: Gateway) -> 
         assert float(rows[0]["spend"]) == pytest.approx(float(daily[0]["spend"])), allowed.text
 
 
-def test_export_daily_total_matches_the_capped_aggregated_team_spend(gateway: Gateway, tmp_path) -> None:
+def test_export_daily_total_matches_the_capped_aggregated_team_spend(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy(gateway, tmp_path, {"USAGE_TOP_API_KEYS_LIMIT": "2"}, workers=2) as candidate:
         with candidate.scenario() as scenario:
             model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
@@ -287,8 +292,8 @@ def test_export_without_team_id_returns_only_the_callers_teams(gateway: Gateway)
         )
         assert response.status_code == 200, response.text
         rows: Final = tuple(object_value(row) for row in object_value(response.json())["data"])
-        assert len(rows) >= 1, response.text
-        assert all(row["team_id"] == team_a for row in rows), response.text
+        assert len(rows) == 1, response.text
+        assert rows[0]["team_id"] == team_a, response.text
 
 
 def test_export_rejects_requests_without_a_valid_key(gateway: Gateway) -> None:
@@ -379,7 +384,7 @@ def test_export_csv_escapes_formula_like_key_aliases(gateway: Gateway) -> None:
         assert records[digests[1]]["Key Alias"] == "-", response.text
 
 
-def test_aggregated_route_keeps_the_top_n_key_cap(gateway: Gateway, tmp_path) -> None:
+def test_aggregated_route_keeps_the_top_n_key_cap(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy(gateway, tmp_path, {"USAGE_TOP_API_KEYS_LIMIT": "2"}, workers=2) as candidate:
         with candidate.scenario() as scenario:
             model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
@@ -413,15 +418,20 @@ def test_paginated_team_daily_activity_still_lists_the_team(gateway: Gateway) ->
         )
         assert response.status_code == 200, response.text
         results: Final = object_value(response.json())["results"]
-        assert isinstance(results, list) and len(results) >= 1, response.text
-        assert any(team in object_value(object_value(object_value(day)["breakdown"])["entities"]) for day in results), (
+        assert isinstance(results, list), response.text
+        days: Final = tuple(
+            object_value(day)
+            for day in results
+            if team in object_value(object_value(object_value(day)["breakdown"])["entities"])
+        )
+        assert len(days) == 1, response.text
+        entity: Final = object_value(object_value(object_value(days[0]["breakdown"])["entities"])[team])
+        assert float(object_value(entity["metrics"])["spend"]) == pytest.approx(sum(spend_by_key.values())), (
             response.text
         )
 
 
 def test_openai_sdk_chat_still_lands_one_spend_log(gateway: Gateway) -> None:
-    import openai
-
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         team: Final = scenario.team(models=[model])
@@ -438,7 +448,7 @@ def test_openai_sdk_chat_still_lands_one_spend_log(gateway: Gateway) -> None:
         assert len(rows) == 1 and rows[0]["request_id"] == reply.id, rows
 
 
-def test_export_and_chat_burst_survives_worker_kill(gateway: Gateway, tmp_path) -> None:
+def test_export_and_chat_burst_survives_worker_kill(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy_process(gateway, tmp_path, {"USAGE_TOP_API_KEYS_LIMIT": "2"}, workers=2) as owned:
         candidate: Final = owned.gateway
         with candidate.scenario() as scenario:
@@ -459,11 +469,12 @@ def test_export_and_chat_burst_survives_worker_kill(gateway: Gateway, tmp_path) 
                 "format": "json",
             }
 
-            def burst(tag: str):
+            def burst(tag: str) -> tuple[tuple[httpx.Response, ...], tuple[httpx.Response, ...]]:
                 with ThreadPoolExecutor(max_workers=30) as pool:
-                    chats = tuple(
-                        pool.map(
-                            lambda index: candidate.request(
+                    futures: Final = tuple(
+                        (
+                            pool.submit(
+                                candidate.request,
                                 "POST",
                                 "/v1/chat/completions",
                                 {
@@ -471,17 +482,14 @@ def test_export_and_chat_burst_survives_worker_kill(gateway: Gateway, tmp_path) 
                                     "messages": [{"role": "user", "content": f"{tag}-{index}-{uuid.uuid4().hex}"}],
                                 },
                                 key=keys[index % 3],
-                            ),
-                            range(15),
+                            )
+                            if index % 2 == 0
+                            else pool.submit(candidate.request, "GET", "/team/daily/activity/export", params=params)
                         )
+                        for index in range(30)
                     )
-                    exports = tuple(
-                        pool.map(
-                            lambda index: candidate.request("GET", "/team/daily/activity/export", params=params),
-                            range(15),
-                        )
-                    )
-                return chats, exports
+                    results: Final = tuple(future.result() for future in futures)
+                return results[0::2], results[1::2]
 
             chat_a, export_a = burst("bursta")
             assert all(response.status_code == 200 for response in chat_a), [r.text for r in chat_a]
