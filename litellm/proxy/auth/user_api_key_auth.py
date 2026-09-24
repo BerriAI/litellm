@@ -1807,7 +1807,12 @@ async def _user_api_key_auth_builder(
                         valid_token = auto_registered
                         api_key = valid_token.token or ""
 
-                    if auto_registered is None or not jwt_handler.litellm_jwtauth.auto_register_map_existing_key:
+                    falls_through_to_key_checks: Final = (
+                        auto_registered is not None
+                        and jwt_handler.litellm_jwtauth.auto_register_map_existing_key
+                        and master_key is not None
+                    )
+                    if not falls_through_to_key_checks:
                         # Check if model has zero cost - if so, skip all budget checks
                         model = _get_model_from_request_context(
                             request_data=request_data,
