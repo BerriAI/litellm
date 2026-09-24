@@ -3649,12 +3649,6 @@ def test_add_litellm_metadata_from_request_headers_explicit_trace_id_beats_trace
 
 
 def test_add_litellm_metadata_from_request_headers_body_trace_id_beats_traceparent():
-    """A caller that set metadata.trace_id keeps it: the traceparent fallback is
-    documented as last-resort, so it must not overwrite an explicit choice.
-
-    This matters in practice because some platforms (e.g. GCP) inject a
-    traceparent into every inbound request, so the fallback would otherwise fire
-    on traffic whose caller never sent the header at all."""
     headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
     data = {"metadata": {"trace_id": "caller-chosen-trace-id"}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
@@ -3665,7 +3659,6 @@ def test_add_litellm_metadata_from_request_headers_body_trace_id_beats_tracepare
 
 
 def test_add_litellm_metadata_from_request_headers_body_session_id_beats_baggage():
-    """Same for session_id and the baggage header."""
     headers = {"baggage": "session.id=baggage-session-42"}
     data = {"metadata": {"session_id": "caller-chosen-session-id"}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
@@ -3676,8 +3669,6 @@ def test_add_litellm_metadata_from_request_headers_body_session_id_beats_baggage
 
 
 def test_add_litellm_metadata_from_request_headers_body_steering_is_per_field():
-    """Steering one field must not suppress the fallback for the other:
-    a caller setting only trace_id still gets session_id from baggage."""
     headers = {
         "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
         "baggage": "session.id=baggage-session-42",
@@ -3691,9 +3682,6 @@ def test_add_litellm_metadata_from_request_headers_body_steering_is_per_field():
 
 
 def test_add_litellm_metadata_from_request_headers_litellm_metadata_steering_honoured():
-    """Routes in LITELLM_METADATA_ROUTES (/v1/responses, /v1/messages, batches,
-    files) carry their metadata in litellm_metadata, so steering there counts
-    the same as steering in metadata."""
     headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
     data = {"litellm_metadata": {"trace_id": "caller-chosen-trace-id"}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
@@ -3701,6 +3689,28 @@ def test_add_litellm_metadata_from_request_headers_litellm_metadata_steering_hon
     )
     assert data["litellm_metadata"]["trace_id"] == "caller-chosen-trace-id"
     assert "litellm_trace_id" not in data
+
+
+@pytest.mark.parametrize("empty_session_id", ["", None])
+def test_add_litellm_metadata_from_request_headers_empty_body_session_id_falls_back_to_baggage(
+    empty_session_id: str | None,
+):
+    headers = {"baggage": "session.id=baggage-session-42"}
+    data = {"metadata": {"session_id": empty_session_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == "baggage-session-42"
+    assert data["metadata"]["session_id"] == "baggage-session-42"
+
+
+def test_add_litellm_metadata_from_request_headers_provider_metadata_does_not_block_baggage():
+    headers = {"baggage": "session.id=baggage-session-42"}
+    data = {"metadata": {"session_id": "provider-facing-value"}, "litellm_metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert data["litellm_session_id"] == "baggage-session-42"
 
 
 def _otel_span_with_trace_id(trace_id: int) -> NonRecordingSpan:
@@ -8183,6 +8193,29 @@ async def test_missing_session_id_omit_keeps_client_supplied_session_id():
 
     assert updated["metadata"]["session_id"] == "client-session-1"
     assert _spend_log_session_id(updated) == "client-session-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "client_body"),
+    [
+        ("/v1/chat/completions", {"model": "gpt-4o", "messages": [], "metadata": {"session_id": ""}}),
+        ("/v1/responses", {"model": "gpt-4o", "input": "hi", "metadata": {"session_id": "provider-facing"}}),
+    ],
+)
+async def test_missing_session_id_reject_accepts_baggage_session_id(path: str, client_body: dict[str, object]):
+    request = _request_for(path)
+    request.headers = {"baggage": "session.id=baggage-session-42"}
+
+    updated = await add_litellm_data_to_request(
+        data=client_body,
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "reject"},
+    )
+
+    assert updated["litellm_session_id"] == "baggage-session-42"
 
 
 @pytest.mark.asyncio

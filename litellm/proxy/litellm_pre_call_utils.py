@@ -150,19 +150,8 @@ def _session_id_from_baggage(baggage: str) -> str | None:
     return None
 
 
-def _client_steered_trace_field(data: dict, field: str) -> bool:
-    """Did the caller explicitly steer ``field`` in the request body?
-
-    ``metadata`` (``litellm_metadata`` on ``LITELLM_METADATA_ROUTES``) is the
-    documented way to set ``trace_id`` / ``session_id``, so a value there is an
-    explicit caller choice and must outrank the traceparent/baggage fallback
-    below, which only guards on the top-level ``litellm_*`` keys.
-    """
-    for variable_name in ("metadata", "litellm_metadata"):
-        container = data.get(variable_name)
-        if isinstance(container, dict) and container.get(field) is not None:
-            return True
-    return False
+def _client_steered_trace_field(metadata: object, field: str) -> bool:
+    return isinstance(metadata, Mapping) and bool(cast(Mapping[str, object], metadata).get(field))
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -1590,12 +1579,14 @@ class LiteLLMProxyRequestSetup:
         # (https://www.w3.org/TR/trace-context/, https://www.w3.org/TR/baggage/).
         # Lower priority than everything above - only fires when neither the
         # explicit litellm headers, the Anthropic-metadata path, nor the
-        # caller's own request-body metadata set the field - but lets a
-        # caller's existing traceparent/baggage headers
-        # (from real OTel instrumentation) correlate with litellm's own logs
-        # instead of generating an unrelated trace_id.
+        # caller's own request metadata set the field - but lets a caller's
+        # existing traceparent/baggage headers (from real OTel instrumentation)
+        # correlate with litellm's own logs instead of generating an unrelated
+        # trace_id.
         normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
-        if "litellm_trace_id" not in data and not _client_steered_trace_field(data, "trace_id"):
+        if "litellm_trace_id" not in data and not _client_steered_trace_field(
+            cast(object, data.get(_metadata_variable_name)), "trace_id"
+        ):
             traceparent: Final = normalized_headers.get("traceparent")
             if isinstance(traceparent, str):
                 trace_id_from_traceparent: Final = _trace_id_from_traceparent(traceparent)
@@ -1605,7 +1596,9 @@ class LiteLLMProxyRequestSetup:
                     verbose_proxy_logger.debug(
                         "Extracted trace_id from W3C traceparent header: %s", trace_id_from_traceparent
                     )
-        if "litellm_session_id" not in data and not _client_steered_trace_field(data, "session_id"):
+        if "litellm_session_id" not in data and not _client_steered_trace_field(
+            cast(object, data.get(_metadata_variable_name)), "session_id"
+        ):
             baggage: Final = normalized_headers.get("baggage")
             if isinstance(baggage, str):
                 session_id_from_baggage: Final = _session_id_from_baggage(baggage)
