@@ -202,6 +202,10 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "tool_use": "tool_calls",
     "refusal": "content_filter",
     "compaction": "length",
+    # Anthropic stops generation when the prompt+completion exceeds the
+    # context window. This is a length truncation, not a clean stop, so it
+    # must map to "length" like "max_tokens" (fixes #43012).
+    "model_context_window_exceeded": "length",
     # Cohere
     "COMPLETE": "stop",
     "ERROR_TOXIC": "content_filter",
@@ -365,7 +369,7 @@ def _budget_reservation_on_auth_object(user_api_key_auth: object) -> object:
     return getattr(user_api_key_auth, "budget_reservation", None)
 
 
-def budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict[str, object] | None:
+def budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict | None:
     stamped: Final = metadata.get("user_api_key_budget_reservation")
     if isinstance(stamped, dict):
         return stamped
@@ -765,30 +769,3 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
         RESPONSE_COST_HEADER: cost,
     }
     hidden_params["additional_headers"] = merged
-
-
-_HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
-
-
-def set_provider_response_headers_in_hidden_params(
-    response: _CarriesHiddenParams, headers: httpx.Headers | Mapping[str, str]
-) -> None:
-    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
-    existing_additional_headers: Final[object] = hidden_params.get("additional_headers")
-    raw_headers: Final[dict[str, str]] = dict(headers)  # mutable-ok: stored as the plain-dict hidden param
-    additional_headers: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
-        **process_response_headers(raw_headers),
-        **(existing_additional_headers if isinstance(existing_additional_headers, Mapping) else _NO_HEADERS),
-    }
-    hidden_params["headers"] = raw_headers
-    hidden_params["additional_headers"] = additional_headers
-
-
-def get_provider_response_headers_from_hidden_params(response: object) -> Mapping[str, str] | None:
-    hidden_params: Final[object] = getattr(response, "_hidden_params", None)
-    try:
-        validated: Final = _HIDDEN_PARAMS_ADAPTER.validate_python(hidden_params)
-        return _PROVIDER_HEADERS_ADAPTER.validate_python(validated.get("headers"))
-    except ValidationError:
-        return None
