@@ -99,6 +99,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
   litellm_params?: {
     model?: string | null;
     base_model?: string | null;
+    custom_llm_provider?: string | null;
     complexity_router_config?: unknown;
     complexity_router_default_model?: string | null;
     auto_router_config?: unknown;
