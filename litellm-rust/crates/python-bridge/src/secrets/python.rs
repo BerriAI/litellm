@@ -1,0 +1,156 @@
+use std::sync::Arc;
+
+use futures_util::future::BoxFuture;
+use litellm_host_python::attach_blocking;
+use litellm_secrets::{Error, SecretValue, source::SecretSource};
+use pyo3::prelude::*;
+
+use super::error::external_error;
+
+/// Reads each secret through Python's `get_secret_str`, so the configured manager, the key
+/// management settings and the environment fallback behave exactly as they do in Python.
+pub(super) struct PythonSecrets {
+    get_secret_str: Arc<Py<PyAny>>,
+}
+
+impl PythonSecrets {
+    pub(super) fn new(py: Python<'_>) -> PyResult<Self> {
+        Ok(Self::reading_with(
+            py.import("litellm.secret_managers.main")?
+                .getattr("get_secret_str")?
+                .unbind(),
+        ))
+    }
+
+    fn reading_with(get_secret_str: Py<PyAny>) -> Self {
+        Self {
+            get_secret_str: Arc::new(get_secret_str),
+        }
+    }
+}
+
+impl SecretSource for PythonSecrets {
+    fn get_secret_str<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<SecretValue>, Error>> {
+        let get_secret_str = Arc::clone(&self.get_secret_str);
+        let name = name.to_owned();
+        Box::pin(attach_blocking(move |py| {
+            get_secret_str
+                .bind(py)
+                .call1((name,))
+                .and_then(|value| value.extract::<Option<String>>())
+                .map(|value| value.map(SecretValue::new))
+                .map_err(|error| external_error(py, error))
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use litellm_secrets::source::SecretSource;
+    use pyo3::{prelude::*, types::PyDict};
+    use rstest::{fixture, rstest};
+
+    use super::PythonSecrets;
+    use crate::secrets::python_error;
+
+    #[fixture]
+    fn namespace() -> Py<PyDict> {
+        Python::initialize();
+        Python::attach(|py| {
+            let namespace = PyDict::new(py);
+            py.run(
+                c"
+import threading
+read_on = None
+raised = KeyboardInterrupt('secret manager stopped')
+def get_secret_str(name):
+    global read_on
+    read_on = threading.get_ident()
+    if name == 'RAISING':
+        raise raised
+    return {'MISTRAL_API_KEY': 'vault-key'}.get(name)
+",
+                Some(&namespace),
+                None,
+            )
+            .unwrap();
+            namespace.unbind()
+        })
+    }
+
+    #[fixture]
+    fn secrets(namespace: Py<PyDict>) -> (PythonSecrets, Py<PyDict>) {
+        let reader = Python::attach(|py| {
+            namespace
+                .bind(py)
+                .get_item("get_secret_str")
+                .unwrap()
+                .unwrap()
+                .unbind()
+        });
+        (PythonSecrets::reading_with(reader), namespace)
+    }
+
+    fn global<T: for<'a, 'py> FromPyObject<'a, 'py, Error: std::fmt::Debug>>(
+        namespace: &Py<PyDict>,
+        py: Python<'_>,
+        name: &str,
+    ) -> T {
+        namespace
+            .bind(py)
+            .get_item(name)
+            .unwrap()
+            .unwrap()
+            .extract()
+            .unwrap()
+    }
+
+    #[rstest]
+    #[case::found("MISTRAL_API_KEY", Some("vault-key"))]
+    #[case::missing("OTHER", None)]
+    #[tokio::test]
+    async fn returns_what_get_secret_str_returns(
+        secrets: (PythonSecrets, Py<PyDict>),
+        #[case] name: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let value = secrets.0.get_secret_str(name).await.unwrap();
+
+        assert_eq!(value.as_ref().map(|value| value.expose()), expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn exceptions_surface_as_the_original_python_object(
+        secrets: (PythonSecrets, Py<PyDict>),
+    ) {
+        let error = secrets.0.get_secret_str("RAISING").await.unwrap_err();
+
+        Python::attach(|py| {
+            let surfaced = python_error(py, &error).expect("the Python exception is preserved");
+            let raised: Py<PyAny> = global(&secrets.1, py, "raised");
+            assert!(surfaced.value(py).is(raised.bind(py)));
+        });
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reads_run_off_the_thread_polling_the_route(secrets: (PythonSecrets, Py<PyDict>)) {
+        let polling: u64 = Python::attach(|py| {
+            py.import("threading")
+                .unwrap()
+                .call_method0("get_ident")
+                .unwrap()
+                .extract()
+                .unwrap()
+        });
+
+        secrets.0.get_secret_str("MISTRAL_API_KEY").await.unwrap();
+
+        let read_on: u64 = Python::attach(|py| global(&secrets.1, py, "read_on"));
+        assert_ne!(read_on, polling);
+    }
+}

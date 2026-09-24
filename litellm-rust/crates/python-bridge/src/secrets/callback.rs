@@ -1,6 +1,7 @@
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use litellm_core_utils::settings::Lookup;
+use litellm_host_python::attach_blocking;
 use litellm_secrets::{
     Error, ExternalSecretManager, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
 };
@@ -19,6 +20,10 @@ const ENVIRONMENT_FALLBACK_LOG: &str =
 /// A secret manager whose reads execute in Python: a custom manager, a legacy compatible
 /// client, or a manually assigned SDK client.
 pub(crate) struct PythonSecretManager {
+    client: Arc<PythonClient>,
+}
+
+struct PythonClient {
     client: Py<PyAny>,
     system: Option<KeyManagementSystem>,
     settings: Option<Py<PyAny>>,
@@ -31,12 +36,16 @@ impl PythonSecretManager {
         settings: Option<Py<PyAny>>,
     ) -> Self {
         Self {
-            client,
-            system,
-            settings,
+            client: Arc::new(PythonClient {
+                client,
+                system,
+                settings,
+            }),
         }
     }
+}
 
+impl PythonClient {
     fn read(&self, py: Python<'_>, name: &str) -> PyResult<Option<String>> {
         let client = self.client.bind(py);
         let kwargs = PyDict::new(py);
@@ -76,7 +85,7 @@ fn python_name(system: KeyManagementSystem) -> &'static str {
 
 impl ExternalSecretManager for PythonSecretManager {
     fn system(&self) -> KeyManagementSystem {
-        self.system.unwrap_or(KeyManagementSystem::Custom)
+        self.client.system.unwrap_or(KeyManagementSystem::Custom)
     }
 
     fn read_secret<'a>(
@@ -85,19 +94,19 @@ impl ExternalSecretManager for PythonSecretManager {
         _settings: &'a KeyManagementSettings,
         _environment: &'a (dyn Lookup + Send + Sync),
     ) -> Pin<Box<dyn Future<Output = Result<Option<Secret>, Error>> + Send + 'a>> {
-        Box::pin(async move {
-            Python::attach(|py| match self.read(py, name) {
-                Ok(value) => Ok(value.map(SecretValue::new).map(Secret::String)),
-                // `get_secret` answers a failed manager read from the process environment, but
-                // only for `Exception`: cancellation and other `BaseException`s propagate.
-                Err(error) if error.is_instance_of::<PyException>(py) => {
-                    log_environment_fallback(py, name, &error)
-                        .map_err(|error| external_error(py, error))?;
-                    Err(read_error(py, error))
-                }
-                Err(error) => Err(external_error(py, error)),
-            })
-        })
+        let client = Arc::clone(&self.client);
+        let name = name.to_owned();
+        Box::pin(attach_blocking(move |py| match client.read(py, &name) {
+            Ok(value) => Ok(value.map(SecretValue::new).map(Secret::String)),
+            // `get_secret` answers a failed manager read from the process environment, but
+            // only for `Exception`: cancellation and other `BaseException`s propagate.
+            Err(error) if error.is_instance_of::<PyException>(py) => {
+                log_environment_fallback(py, &name, &error)
+                    .map_err(|error| external_error(py, error))?;
+                Err(read_error(py, error))
+            }
+            Err(error) => Err(external_error(py, error)),
+        }))
     }
 }
 
@@ -341,7 +350,7 @@ else:
                 )
                 .unwrap();
                 let reader = PythonSecretManager::new(py.None(), None, None);
-                assert_eq!(reader.read(py, "KEY").unwrap(), None);
+                assert_eq!(reader.client.read(py, "KEY").unwrap(), None);
             });
         });
     }
@@ -376,7 +385,7 @@ else:
                     Some(settings.clone().unbind()),
                 );
                 assert_eq!(
-                    reader.read(py, "API_KEY").unwrap().as_deref(),
+                    reader.client.read(py, "API_KEY").unwrap().as_deref(),
                     Some("handled-API_KEY")
                 );
                 assert!(py.import(HANDLER_MODULE).is_ok());
@@ -436,7 +445,7 @@ manager = Manager()
                 let manager = locals.get_item("manager").unwrap().unwrap();
                 let reader = PythonSecretManager::new(manager.clone().unbind(), system, None);
                 assert_eq!(
-                    reader.read(py, "API_KEY").unwrap().as_deref(),
+                    reader.client.read(py, "API_KEY").unwrap().as_deref(),
                     Some("handled-API_KEY")
                 );
                 assert_eq!(
