@@ -407,10 +407,12 @@ describe("MCPToolPermissions", () => {
       // First checkbox is the header toggle of the group holding list_issues.
       await userEvent.click(screen.getAllByRole("checkbox")[0]);
 
-      // list_issues stays allowed through the toolset; the group's other fetched tool becomes denied
+      // A toolset feeds this server, so the write stays an allowlist grant: list_issues is kept
+      // under the server's key and delete_issue is simply absent, which the backend resolves the
+      // same way (allowed = list_issues only)
       expect(mockOnChange).toHaveBeenCalledWith({
-        toolPermissions: {},
-        deniedTools: { [toolsetServer.server_id]: ["delete_issue"] },
+        toolPermissions: { [toolsetServer.server_id]: ["list_issues"] },
+        deniedTools: {},
       });
     });
 
@@ -442,7 +444,81 @@ describe("MCPToolPermissions", () => {
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
       await userEvent.click(screen.getByText("Select All"));
 
-      expect(mockOnChange).toHaveBeenCalledWith({ toolPermissions: {}, deniedTools: {} });
+      // A denylist cannot grant, so a toolset-only server keeps the allowlist write: every fetched
+      // tool outside the toolset lands under its key while the toolset's own tool is withheld.
+      expect(mockOnChange).toHaveBeenCalledWith({
+        toolPermissions: { [toolsetServer.server_id]: ["delete_issue"] },
+        deniedTools: {},
+      });
+    });
+
+    it("renders an outside tool checked after checking it on a toolset-only server", async () => {
+      const toolsetServer = { server_id: "srv-toolset-1", server_name: "Toolset Server", alias: "Toolset Server" };
+      const Harness = () => {
+        const [write, setWrite] = useState<McpToolPermissionWrite>({ toolPermissions: {}, deniedTools: {} });
+        return (
+          <MCPToolPermissions
+            accessToken={mockAccessToken}
+            selectedServers={[]}
+            selectedToolsets={["ts-1"]}
+            toolPermissions={write.toolPermissions}
+            deniedTools={write.deniedTools}
+            onChange={setWrite}
+          />
+        );
+      };
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([toolsetServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([
+        {
+          toolset_id: "ts-1",
+          toolset_name: "Support Toolset",
+          tools: [{ server_id: toolsetServer.server_id, tool_name: "list_issues" }],
+        },
+      ]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      renderWithProviders(<Harness />);
+
+      expect(await screen.findByText("list_issues")).toBeInTheDocument();
+      await userEvent.click(screen.getByText("Flat List"));
+      const deleteIssue = screen.getByRole("checkbox", { name: "delete_issue" });
+      expect(deleteIssue).not.toBeChecked();
+
+      await userEvent.click(deleteIssue);
+      expect(deleteIssue).toBeChecked();
+    });
+
+    it("keeps a tool-permission-only server listed and granting after Select All", async () => {
+      const keyedServer = { server_id: "srv-keyed-1", server_name: "Keyed Server", alias: "Keyed Server" };
+      const Harness = () => {
+        const [write, setWrite] = useState<McpToolPermissionWrite>({
+          toolPermissions: { [keyedServer.server_id]: ["list_issues"] },
+          deniedTools: {},
+        });
+        return (
+          <MCPToolPermissions
+            accessToken={mockAccessToken}
+            selectedServers={[]}
+            toolPermissions={write.toolPermissions}
+            deniedTools={write.deniedTools}
+            onChange={setWrite}
+          />
+        );
+      };
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([keyedServer]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      renderWithProviders(<Harness />);
+
+      expect(await screen.findByText("Keyed Server")).toBeInTheDocument();
+      await userEvent.click(screen.getByText("Select All"));
+
+      // The allowlist is the server's only grant, so Select All widens it rather than clearing it.
+      expect(screen.getByText("Keyed Server")).toBeInTheDocument();
+      await userEvent.click(screen.getByText("Flat List"));
+      const [listIssues, deleteIssue] = screen.getAllByRole("checkbox");
+      expect(listIssues).toBeChecked();
+      expect(deleteIssue).toBeChecked();
     });
 
     // The default narrows an unrestricted server; against a toolset-restricted one it would widen

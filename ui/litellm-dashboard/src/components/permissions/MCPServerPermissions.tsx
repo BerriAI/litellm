@@ -206,9 +206,7 @@ export function MCPServerPermissions({
                   {hasToolRestrictions && (
                     <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
                       <span className="text-xs font-medium text-muted-foreground">
-                        {toolsForServer === undefined || toolsForServer.length === 0
-                          ? deniedForServer.length
-                          : toolsForServer.length}
+                        {deniedForServer.length > 0 ? deniedForServer.length : (toolsForServer ?? []).length}
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {deniedForServer.length > 0 ? "denied" : "tools"}
@@ -227,9 +225,9 @@ export function MCPServerPermissions({
                   <div className="ml-4 pl-4 border-l-2 border-info/20 pb-1">
                     {deniedForServer.length > 0 && (
                       <p className="text-xs text-muted-foreground mb-1.5">
-                        {toolsForServer && toolsForServer.length > 0
-                          ? `Denied: ${deniedForServer.join(", ")}`
-                          : `All tools except: ${deniedForServer.join(", ")}`}
+                        {toolsForServer === undefined
+                          ? `All tools except: ${deniedForServer.join(", ")}`
+                          : `Denied: ${deniedForServer.join(", ")}`}
                       </p>
                     )}
                     <div className="flex flex-wrap gap-1.5">

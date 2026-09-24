@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
 import {
+  applyToolCheckboxWrite,
   applyToolDenyWrite,
   applyToolPermissionWrite,
   EffectiveMcpServer,
@@ -681,6 +682,203 @@ describe("applyToolDenyWrite", () => {
     const input = writeInput(entry, fetched, { deniedTools });
 
     expect(applyToolDenyWrite(input).deniedTools).toEqual({});
+  });
+
+  // Codex repro: a toolset tool renders as a locked checkbox, so unchecking a VISIBLE box cannot
+  // re-decide it — a deny already written against it must survive the rebuild from fetchedTools.
+  it("keeps a deny on a toolset tool the locked checkbox cannot re-decide", () => {
+    const support = toolset({
+      toolset_id: "ts-1",
+      toolset_name: "Support",
+      tools: [{ server_id: "uuid-1", tool_name: "read" }],
+    });
+    const resolveInput = {
+      ...emptyInput,
+      allServers: [named],
+      selectedServers: ["uuid-1"],
+      selectedToolsets: ["ts-1"],
+      toolsets: [support],
+      deniedTools: { "uuid-1": ["read"] },
+    };
+    const [entry] = resolveEffectiveMcpServers(resolveInput);
+    const input = {
+      toolPermissions: {},
+      deniedTools: { "uuid-1": ["read"] },
+      entry,
+      allServers: [named],
+      fetchedTools: ["read", "write"],
+      checked: ["write"],
+    };
+
+    expect(applyToolDenyWrite(input)).toEqual({ toolPermissions: {}, deniedTools: { "uuid-1": ["read"] } });
+  });
+});
+
+// A denylist cannot GRANT a tool, so the deny write is only valid for a server granted
+// independently of any tool list (direct or access-group source) that no selected toolset feeds.
+// Every other shape keeps the standing-grant write: a server reached only through a toolset or by
+// a tool_permissions key would otherwise no-op or lose its sole grant, and a server with a toolset
+// plus an allowlist keeps the key because the backend unions the toolset into the allowlist.
+describe("applyToolCheckboxWrite", () => {
+  const named = server({ server_id: "uuid-1", server_name: "github_mcp", alias: "GitHub" });
+  const support = toolset({
+    toolset_id: "ts-1",
+    toolset_name: "Support",
+    tools: [{ server_id: "uuid-1", tool_name: "a" }],
+  });
+  const reader = toolset({
+    toolset_id: "ts-2",
+    toolset_name: "Reader",
+    tools: [{ server_id: "uuid-1", tool_name: "read" }],
+  });
+
+  const toolsetOnlyEntry = (deniedTools: Readonly<Record<string, readonly string[]>> = {}) => {
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      selectedToolsets: ["ts-1"],
+      toolsets: [support],
+      deniedTools,
+    };
+    return resolveEffectiveMcpServers(input)[0];
+  };
+
+  const checkboxInput = (
+    entry: EffectiveMcpServer,
+    checked: readonly string[],
+    over: {
+      toolPermissions?: Readonly<Record<string, readonly string[]>>;
+      deniedTools?: Readonly<Record<string, readonly string[]>>;
+      fetchedTools?: readonly string[];
+    } = {},
+  ) => ({
+    toolPermissions: over.toolPermissions ?? {},
+    deniedTools: over.deniedTools ?? {},
+    entry,
+    allServers: [named],
+    fetchedTools: over.fetchedTools ?? ["a", "x", "y"],
+    checked,
+  });
+
+  const resolvedAfterWrite = (written: {
+    toolPermissions: Record<string, string[]>;
+    deniedTools: Record<string, string[]>;
+  }) => {
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      selectedServers: ["uuid-1"],
+      selectedToolsets: ["ts-2"],
+      toolsets: [reader],
+      toolPermissions: written.toolPermissions,
+      deniedTools: written.deniedTools,
+    };
+    return resolveEffectiveMcpServers(input)[0];
+  };
+
+  it("writes an allowlist grant for a toolset-only server, leaving the denylist untouched", () => {
+    const deniedTools = { "uuid-9": ["unrelated"] };
+    const entry = toolsetOnlyEntry(deniedTools);
+    const input = checkboxInput(entry, ["a", "x"], { deniedTools });
+
+    expect(applyToolCheckboxWrite(input)).toEqual({
+      toolPermissions: { "uuid-1": ["x"] },
+      deniedTools,
+    });
+  });
+
+  it("writes every fetched tool outside the toolset on Select All", () => {
+    const entry = toolsetOnlyEntry();
+    const input = checkboxInput(entry, ["a", "x", "y"]);
+
+    expect(applyToolCheckboxWrite(input).toolPermissions).toEqual({ "uuid-1": ["x", "y"] });
+  });
+
+  it("keeps a toolPermission-only server granting on Select All", () => {
+    const input = { ...emptyInput, allServers: [named], toolPermissions: { "uuid-1": ["read"] } };
+    const [entry] = resolveEffectiveMcpServers(input);
+    expect(entry.source.kind).toBe("toolPermission");
+
+    const written = applyToolCheckboxWrite(
+      checkboxInput(entry, ["read", "write"], {
+        toolPermissions: { "uuid-1": ["read"] },
+        fetchedTools: ["read", "write"],
+      }),
+    );
+    expect(written).toEqual({ toolPermissions: { "uuid-1": ["read", "write"] }, deniedTools: {} });
+
+    // The allowlist stays the grant, so the server must keep resolving rather than vanish.
+    const afterWrite = { ...emptyInput, allServers: [named], toolPermissions: written.toolPermissions };
+    const [resolved] = resolveEffectiveMcpServers(afterWrite);
+    expect(resolved.server.server_id).toBe("uuid-1");
+  });
+
+  it("leaves the key present but empty when the last tool is unchecked on a toolPermission entry", () => {
+    const input = { ...emptyInput, allServers: [named], toolPermissions: { "uuid-1": ["read"] } };
+    const [entry] = resolveEffectiveMcpServers(input);
+    const written = applyToolCheckboxWrite(
+      checkboxInput(entry, [], { toolPermissions: { "uuid-1": ["read"] }, fetchedTools: ["read"] }),
+    );
+
+    expect(written.toolPermissions).toEqual({ "uuid-1": [] });
+  });
+
+  it("takes the deny write for a direct server no toolset feeds", () => {
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      selectedServers: ["uuid-1"],
+      toolPermissions: { "uuid-1": ["a"] },
+    };
+    const [entry] = resolveEffectiveMcpServers(input);
+    const written = applyToolCheckboxWrite(checkboxInput(entry, ["a", "x"], { toolPermissions: { "uuid-1": ["a"] } }));
+
+    expect(written).toEqual({ toolPermissions: {}, deniedTools: { "uuid-1": ["y"] } });
+  });
+
+  // A direct server a selected toolset also feeds keeps the allowlist write: the backend unions
+  // the toolset's tools into key_tools, so the keyed extras must stay under toolPermissions.
+  it("allowlist-writes a direct server a selected toolset also feeds", () => {
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      selectedServers: ["uuid-1"],
+      selectedToolsets: ["ts-2"],
+      toolsets: [reader],
+      toolPermissions: { "uuid-1": ["write"] },
+    };
+    const [entry] = resolveEffectiveMcpServers(input);
+    const written = applyToolCheckboxWrite(
+      checkboxInput(entry, ["read", "write"], {
+        toolPermissions: { "uuid-1": ["write"] },
+        fetchedTools: ["read", "write", "delete"],
+      }),
+    );
+
+    expect(written).toEqual({ toolPermissions: { "uuid-1": ["write"] }, deniedTools: {} });
+    expect(resolvedAfterWrite(written).allowedTools).toEqual(expect.arrayContaining(["read", "write"]));
+    expect(resolvedAfterWrite(written).allowedTools).toHaveLength(2);
+  });
+
+  it("trims the allowlist when a toolset-fed direct server has a keyed tool unchecked", () => {
+    const input = {
+      ...emptyInput,
+      allServers: [named],
+      selectedServers: ["uuid-1"],
+      selectedToolsets: ["ts-2"],
+      toolsets: [reader],
+      toolPermissions: { "uuid-1": ["write"] },
+    };
+    const [entry] = resolveEffectiveMcpServers(input);
+    const written = applyToolCheckboxWrite(
+      checkboxInput(entry, ["read"], {
+        toolPermissions: { "uuid-1": ["write"] },
+        fetchedTools: ["read", "write", "delete"],
+      }),
+    );
+
+    expect(written).toEqual({ toolPermissions: { "uuid-1": [] }, deniedTools: {} });
+    expect(resolvedAfterWrite(written).allowedTools).toEqual(["read"]);
   });
 });
 

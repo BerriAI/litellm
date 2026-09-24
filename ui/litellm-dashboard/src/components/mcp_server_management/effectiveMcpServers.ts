@@ -174,10 +174,11 @@ export const applyToolPermissionWrite = ({
 
 // The deny write: whatever the entry previously granted (its own key plus equivalent superseded
 // keys, ambiguous keys untouched) is cleared from the allowlist map, and the unchecked fetched
-// tools land under the entry's key in the denylist map. Toolset tools are never denied — the
-// toolset grants them regardless, so writing them would deny other keys' subjects too without
-// protecting this one. An empty denied list removes the entry entirely: nothing denied means
-// every tool the upstream exposes, now and later, is allowed.
+// tools land under the entry's key in the denylist map. Toolset tools are excluded from the
+// fetched-derived list because their checkboxes are locked — a checkbox can never re-decide what
+// the toolset grants — and a denied name already stored against a toolset tool is carried over for
+// the same reason. An empty denied list removes the entry entirely: nothing denied means every
+// tool the upstream exposes, now and later, is allowed.
 export const applyToolDenyWrite = ({
   toolPermissions,
   deniedTools,
@@ -203,10 +204,14 @@ export const applyToolDenyWrite = ({
   );
   // A denied tool the upstream is not listing right now must stay denied: only fetched tools are
   // re-decided by the checkboxes, so names absent from fetchedTools are carried over untouched.
+  // A name that is a toolset tool is carried over too — its checkbox is locked, so it is never
+  // re-decided either.
   const denied = [
     ...new Set([
       ...fetchedTools.filter((tool) => !checked.includes(tool) && !(entry.toolsetTools ?? []).includes(tool)),
-      ...(entry.deniedTools ?? []).filter((name) => !fetchedTools.includes(name)),
+      ...(entry.deniedTools ?? []).filter(
+        (name) => !fetchedTools.includes(name) || (entry.toolsetTools ?? []).includes(name),
+      ),
     ]),
   ];
   const kept = Object.fromEntries(Object.entries(deniedTools).filter(([key]) => !deniedKeys.includes(key)));
@@ -215,6 +220,40 @@ export const applyToolDenyWrite = ({
     toolPermissions: nextPermissions as Record<string, string[]>,
     deniedTools: nextDenied as Record<string, string[]>,
   };
+};
+
+// Every checkbox write goes through here, decided on the GRANT not on what narrows it. A denylist
+// cannot grant a tool, so the deny write is only valid for a server the level grants independently
+// of any tool list — a direct server or one reached through an access group — that NO selected
+// toolset contributes tools to: the backend unions toolset tools into the allowlist, so clearing
+// the key while a toolset applies would leave a partial allowlist shape that denies nothing. Any
+// other shape keeps the standing-grant write instead: checking a tool records it under the
+// server's key rather than being a no-op.
+export const applyToolCheckboxWrite = ({
+  toolPermissions,
+  deniedTools,
+  entry,
+  allServers,
+  fetchedTools,
+  checked,
+}: {
+  readonly toolPermissions: Readonly<Record<string, readonly string[]>>;
+  readonly deniedTools: Readonly<Record<string, readonly string[]>>;
+  readonly entry: EffectiveMcpServer;
+  readonly allServers: readonly MCPServer[];
+  readonly fetchedTools: readonly string[];
+  readonly checked: readonly string[];
+}): { toolPermissions: Record<string, string[]>; deniedTools: Record<string, string[]> } => {
+  const keepsAllowlistWrite =
+    entry.toolsetTools !== undefined || (entry.source.kind !== "direct" && entry.source.kind !== "accessGroup");
+  if (keepsAllowlistWrite) {
+    return {
+      toolPermissions: applyToolPermissionWrite({ toolPermissions, entry, allowed: checked }),
+      deniedTools: Object.fromEntries(Object.entries(deniedTools).map(([key, names]) => [key, [...names]])),
+    };
+  }
+  const denyWrite = { toolPermissions, deniedTools, entry, allServers, fetchedTools, checked };
+  return applyToolDenyWrite(denyWrite);
 };
 
 export const resolveEffectiveMcpServers = ({

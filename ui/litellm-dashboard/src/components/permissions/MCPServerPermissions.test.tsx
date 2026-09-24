@@ -124,6 +124,96 @@ describe("MCPServerPermissions", () => {
     });
   });
 
+  it("counts denied tools, not the allowlist, when both exist for a server", async () => {
+    const mockServers = [
+      {
+        server_id: mockServerId1,
+        server_name: mockServerName1,
+        alias: mockServerName1,
+      },
+    ];
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId1]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{ [mockServerId1]: ["read_wiki_structure", "read_wiki_contents", "ask_question"] }}
+        mcpToolDeniedTools={{ [mockServerId1]: ["read_wiki_contents"] }}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/DW_MCP/)).toBeInTheDocument();
+    });
+
+    // The row badge counts the denied tools, not the 3 the allowlist names.
+    expect(screen.getByText("denied")).toBeInTheDocument();
+    expect(screen.queryByText("3")).not.toBeInTheDocument();
+    expect(screen.queryByText("tools")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByText(/DW_MCP/));
+    expect(await screen.findByText("Denied: read_wiki_contents")).toBeInTheDocument();
+  });
+
+  it("labels a denylist beside an empty allowlist as Denied, not All tools except", async () => {
+    const mockServers = [
+      {
+        server_id: mockServerId1,
+        server_name: mockServerName1,
+        alias: mockServerName1,
+      },
+    ];
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId1]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{ [mockServerId1]: [] }}
+        mcpToolDeniedTools={{ [mockServerId1]: ["delete_issue"] }}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/DW_MCP/)).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByText(/DW_MCP/));
+    expect(await screen.findByText("Denied: delete_issue")).toBeInTheDocument();
+    expect(screen.queryByText("All tools except: delete_issue")).not.toBeInTheDocument();
+  });
+
+  it("labels a denylist with no allowlist as All tools except", async () => {
+    const mockServers = [
+      {
+        server_id: mockServerId1,
+        server_name: mockServerName1,
+        alias: mockServerName1,
+      },
+    ];
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId1]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        mcpToolDeniedTools={{ [mockServerId1]: ["delete_issue"] }}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/DW_MCP/)).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByText(/DW_MCP/));
+    expect(await screen.findByText("All tools except: delete_issue")).toBeInTheDocument();
+  });
+
   it("should not display tool permissions section when no tools are configured", async () => {
     /**
      * Tests that the tool permissions section is not shown when

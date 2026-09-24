@@ -11,7 +11,7 @@ import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import {
   EffectiveMcpServer,
   McpGrantSource,
-  applyToolDenyWrite,
+  applyToolCheckboxWrite,
   emptyMcpAccessGroups,
   resolveEffectiveMcpServers,
 } from "./effectiveMcpServers";
@@ -138,8 +138,8 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   // rest of the fetched tools become the denied entry for the server.
   const writeCheckedTools = (entry: EffectiveMcpServer, checked: readonly string[]) => {
     const fetchedTools = (serverTools[entry.server.server_id] || []).map((tool) => tool.name);
-    const denyWrite = { toolPermissions, deniedTools, entry, allServers, fetchedTools, checked };
-    onChange(applyToolDenyWrite(denyWrite));
+    const write = { toolPermissions, deniedTools, entry, allServers, fetchedTools, checked };
+    onChange(applyToolCheckboxWrite(write));
   };
 
   const handleSelectAll = (entry: EffectiveMcpServer) => {
