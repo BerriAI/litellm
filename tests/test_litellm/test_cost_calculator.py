@@ -4697,3 +4697,59 @@ def test_completion_cost_is_zero_when_explicit_rates_are_zero(monkeypatch: pytes
     )
 
     assert cost == 0.0
+
+
+@pytest.mark.parametrize(
+    "model,provider",
+    [
+        ("gpt-5.5", "openai"),
+        ("claude-haiku-4-5", "anthropic"),
+        ("gemini-3.1-pro-preview", "gemini"),
+        ("anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock"),
+        ("groq/openai/gpt-oss-120b", "groq"),
+        ("azure/gpt-5.5", "azure"),
+    ],
+)
+@pytest.mark.parametrize(
+    "usage",
+    [
+        Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=40),
+        ),
+    ],
+    ids=["plain", "cached"],
+)
+def test_balanced_tier_bills_base_price_on_models_without_balanced_keys(
+    _local_model_cost_map: None, model: str, provider: str, usage: Usage
+) -> None:
+    def _cost(tier: str | None) -> float:
+        response: Final = ModelResponse(model=model, choices=[], usage=usage)
+        return completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider=provider,
+            service_tier=tier,
+        )
+
+    assert _cost("balanced") == _cost(None) == _cost("some_unknown_tier")
+
+
+def test_balanced_cost_keys_exist_only_on_sail_rows(_local_model_cost_map: None) -> None:
+    offenders: Final = [
+        f"{model}:{key}"
+        for model, row in litellm.model_cost.items()
+        for key in row
+        if "_balanced" in key and not model.startswith("sail/")
+    ]
+    missing_base: Final = [
+        f"{model}:{key}"
+        for model, row in litellm.model_cost.items()
+        for key in row
+        if "_balanced" in key and row.get(key.replace("_balanced", "")) is None
+    ]
+    assert offenders == []
+    assert missing_base == []

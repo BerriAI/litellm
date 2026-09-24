@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import wave
 from typing import Final
 
@@ -792,3 +793,67 @@ def test_sail_tier_prices_are_monotone_and_complete():
             if flex is not None and balanced is not None and flex > balanced:
                 problems.append(f"{name}: {base}_flex={flex} exceeds {base}_balanced={balanced}")
     assert problems == []
+
+
+class TestProviderListBlastRadius:
+    def test_sail_stays_out_of_audio_transcription_providers(self):
+        from litellm.constants import OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS, openai_compatible_providers
+
+        assert OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS == frozenset(
+            set(openai_compatible_providers) - {"sail"} | {"openai"}
+        )
+        assert "sail" not in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS
+
+    def test_get_llm_provider_unchanged_for_other_openai_compatible_bases(self):
+        """Every openai_compatible_endpoints api_base must resolve to the same
+        provider slug it resolved to before sail joined the list."""
+        import subprocess
+        import sys
+
+        base_worktree = os.environ.get("LITELLM_BASE_WORKTREE", "/home/ubuntu/triage/wt_base")
+        if not os.path.isdir(os.path.join(base_worktree, "litellm")):
+            pytest.skip("merge-base worktree not present")
+
+        script = """
+import sys, json
+sys.path.insert(0, sys.argv[1])
+import litellm
+assert litellm.__file__.startswith(sys.argv[1]), litellm.__file__
+from litellm.constants import openai_compatible_endpoints
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+out = {}
+for base in openai_compatible_endpoints:
+    try:
+        out[base] = get_llm_provider(model="openai/gpt-x", custom_llm_provider=None, api_base=base, api_key=None)[1]
+    except Exception:
+        out[base] = None
+print(json.dumps(out, sort_keys=True))
+"""
+        out = subprocess.run(
+            [sys.executable, "-c", script, base_worktree],
+            capture_output=True, text=True, check=True,
+            env={**os.environ, "PYTHONPATH": base_worktree},
+        )
+        base_snapshot = json.loads(out.stdout)
+
+        from litellm.constants import openai_compatible_endpoints
+
+        tip_snapshot = {
+            base: get_llm_provider(
+                model="openai/gpt-x", custom_llm_provider=None, api_base=base, api_key=None
+            )[1]
+            for base in openai_compatible_endpoints
+        }
+        added = sorted(set(tip_snapshot) - set(base_snapshot))
+        assert added == ["https://api.sailresearch.com/v1"]
+        assert {base: tip_snapshot[base] for base in base_snapshot} == base_snapshot
+
+
+def test_model_info_balanced_fields_are_none_off_sail_and_set_on_sail():
+    openai_info = litellm.get_model_info("gpt-5.4", custom_llm_provider="openai")
+    assert openai_info["input_cost_per_token_balanced"] is None
+    assert openai_info["output_cost_per_token_balanced"] is None
+
+    sail_info = litellm.get_model_info(MODEL, custom_llm_provider="sail")
+    assert sail_info["input_cost_per_token_balanced"] is not None
+    assert sail_info["output_cost_per_token_balanced"] is not None

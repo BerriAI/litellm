@@ -1,9 +1,8 @@
-from importlib import import_module
 import base64
+from importlib import import_module
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -749,6 +748,32 @@ def test_responses_extra_body_forwarded_to_completion_transformation_handler():
         call_kwargs = mock_handler.call_args
         # extra_body can be a positional or keyword arg; check both
         assert call_kwargs.kwargs.get("extra_body") == {"custom_key": "custom_value"}
+
+
+def test_responses_extra_body_reaches_logging_optional_params_once():
+    """
+    extra_body must appear exactly once in the optional_params handed to logging
+    so the spend row's model_parameters carries the caller's extra_body and
+    completion-window billing can see it.
+    """
+    logging_obj = MagicMock()
+
+    with patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler, "response_api_handler",
+    ) as mock_handler:
+        mock_handler.return_value = MagicMock()
+
+        litellm.responses(
+            model="openai/gpt-4o",
+            input="Hello",
+            extra_body={"metadata": {"x": "y"}},
+            litellm_logging_obj=logging_obj,
+        )
+
+        optional_params = logging_obj.update_from_kwargs.call_args.kwargs["optional_params"]
+        assert optional_params["extra_body"] == {"metadata": {"x": "y"}}
+        call_kwargs = mock_handler.call_args
+        assert call_kwargs.kwargs.get("extra_body") == {"metadata": {"x": "y"}}
 
 
 def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():

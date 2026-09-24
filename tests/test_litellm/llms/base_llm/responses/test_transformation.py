@@ -33,3 +33,19 @@ async def test_default_async_transform_delegates_to_the_sync_transform():
     )
     assert async_body == sync_body
     assert "cache_control" not in async_body["input"][0]["content"][0]
+
+
+def test_merge_extra_body_is_a_shallow_merge_by_default():
+    cfg = OpenAIResponsesAPIConfig()
+    request = {"model": "gpt-5", "metadata": {"completion_window": "flex", "trace_id": "a"}}
+    extra_body = {"metadata": {"trace_id": "b"}, "reasoning_budget": 128}
+
+    merged = cfg.merge_extra_body(request, extra_body)
+
+    assert merged == {
+        "model": "gpt-5",
+        "metadata": {"trace_id": "b"},
+        "reasoning_budget": 128,
+    }
+    assert request == {"model": "gpt-5", "metadata": {"completion_window": "flex", "trace_id": "a"}}
+    assert cfg.merge_extra_body(request, None) == request
