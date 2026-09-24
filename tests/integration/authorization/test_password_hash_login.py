@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 
+import httpx
 import jwt
 import psutil
 import psycopg
@@ -93,6 +94,13 @@ def _login(proxy: Gateway, email: str, password: str) -> int:
         assert response.headers["location"].endswith("/ui?login=success"), response.headers
         assert "token=" in response.headers.get("set-cookie", ""), response.headers
     return response.status_code
+
+
+def _login_retrying_dropped_connections(proxy: Gateway, email: str, password: str) -> int:
+    try:
+        return _login(proxy, email, password)
+    except httpx.TransportError:
+        return _login(proxy, email, password)
 
 
 def _user_with_password(proxy: Gateway, password: str | None) -> tuple[str, str]:
@@ -191,6 +199,69 @@ def test_changed_password_is_stored_as_pbkdf2(proxy: Gateway) -> None:
         _delete_user(proxy, user_id)
 
 
+def test_pbkdf2_row_with_a_higher_iteration_count_signs_in_and_is_kept(proxy: Gateway) -> None:
+    user_id, email = _user_with_password(proxy, None)
+    try:
+        salt: Final = os.urandom(16)
+        derived: Final = hashlib.pbkdf2_hmac("sha256", PASSWORD.encode(), salt, 700_000)
+        row: Final = "pbkdf2:sha256:700000:{}:{}".format(
+            base64.b64encode(salt).decode(), base64.b64encode(derived).decode()
+        )
+        _write_stored_password(user_id, row)
+        assert _login(proxy, email, WRONG_PASSWORD) == 401
+        assert _login(proxy, email, PASSWORD) == 303
+        assert _stored_password(user_id) == row, "a 700k-iteration row must not be downgraded to 600k on login"
+    finally:
+        _delete_user(proxy, user_id)
+
+
+def test_user_new_refuses_a_password(proxy: Gateway) -> None:
+    refused: Final = proxy.request(
+        "POST",
+        "/user/new",
+        {
+            "user_id": f"integration-{uuid.uuid4().hex}",
+            "user_email": f"integration-{uuid.uuid4().hex}@example.com",
+            "auto_create_key": False,
+            "password": PASSWORD,
+        },
+    )
+    assert refused.status_code == 422, refused.text
+    assert "password cannot be set via /user/new" in refused.text, refused.text
+
+
+def test_unrelated_routes_keep_serving_during_a_login_burst(proxy: Gateway) -> None:
+    user_id, email = _user_with_password(proxy, None)
+    try:
+        _write_stored_password(user_id, _scrypt_row(PASSWORD))
+        with proxy.scenario() as scenario:
+            model: Final = scenario.model()
+            key: Final = scenario.key(models=[model])
+            attempts: Final = tuple(PASSWORD if index % 3 else WRONG_PASSWORD for index in range(BURST_SIZE))
+            with ThreadPoolExecutor(max_workers=BURST_SIZE + 2) as pool:
+                login_futures: Final = tuple(
+                    pool.submit(_login, proxy, email, password) for password in attempts
+                )
+                key_future: Final = pool.submit(proxy.request, "POST", "/key/generate", {})
+                chat_future: Final = pool.submit(
+                    proxy.request,
+                    "POST",
+                    "/v1/chat/completions",
+                    {"model": model, "messages": [{"role": "user", "content": "login burst liveness"}]},
+                    key=key,
+                )
+                statuses: Final = tuple(future.result() for future in login_futures)
+                generated: Final = key_future.result()
+                chat: Final = chat_future.result()
+            assert sorted(statuses) == sorted(303 if password == PASSWORD else 401 for password in attempts), statuses
+            assert generated.status_code == 200, generated.text
+            assert chat.status_code == 200, chat.text
+            rehashed: Final = eventually(lambda: _stored_password(user_id), lambda row: row.startswith("pbkdf2:"))
+            assert _pbkdf2_matches(rehashed, PASSWORD), rehashed
+    finally:
+        _delete_user(proxy, user_id)
+
+
 def test_concurrent_logins_on_a_scrypt_row_rehash_once_while_one_worker_is_killed(
     password_proxy: OwnedProxy,
 ) -> None:
@@ -201,11 +272,14 @@ def test_concurrent_logins_on_a_scrypt_row_rehash_once_while_one_worker_is_kille
         workers: Final = psutil.Process(password_proxy.process.pid).children(recursive=True)
         assert len(workers) >= 2, workers
         victim: Final = workers[0]
-        victim.kill()
-        eventually(lambda: victim.is_running() and victim.status() != psutil.STATUS_ZOMBIE, lambda alive: not alive)
         attempts: Final = tuple(PASSWORD if index % 3 else WRONG_PASSWORD for index in range(BURST_SIZE))
         with ThreadPoolExecutor(max_workers=BURST_SIZE) as pool:
-            statuses: Final = tuple(pool.map(lambda password: _login(proxy, email, password), attempts))
+            futures: Final = tuple(
+                pool.submit(_login_retrying_dropped_connections, proxy, email, password) for password in attempts
+            )
+            eventually(lambda: any(future.done() for future in futures), lambda done: done)
+            victim.kill()
+            statuses: Final = tuple(future.result() for future in futures)
         assert sorted(statuses) == sorted(303 if password == PASSWORD else 401 for password in attempts), statuses
         rehashed: Final = eventually(lambda: _stored_password(user_id), lambda row: row.startswith("pbkdf2:"))
         assert _pbkdf2_matches(rehashed, PASSWORD), rehashed
