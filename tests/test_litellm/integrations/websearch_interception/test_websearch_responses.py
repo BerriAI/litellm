@@ -218,12 +218,16 @@ async def test_build_responses_plan_produces_responses_input():
             optional_params={
                 "tools": [{"type": "function", "name": "litellm_web_search"}],
                 "tool_choice": {"type": "function", "name": "litellm_web_search"},
+                "prompt_cache_key": "cache-key",
+                "prompt_cache_retention": "24h",
             },
             logging_obj=MagicMock(),
             stream=False,
             kwargs={
                 "custom_llm_provider": "openai",
                 "_agentic_loop_api_surface": RESPONSES_AGENTIC_SURFACE,
+                "prompt_cache_key": "cache-key",
+                "prompt_cache_retention": "24h",
             },
         )
 
@@ -249,6 +253,10 @@ async def test_build_responses_plan_produces_responses_input():
     assert patch_obj.tools == [{"type": "function", "name": "litellm_web_search"}]
     assert "tool_choice" not in patch_obj.optional_params
     assert "_agentic_loop_api_surface" not in patch_obj.kwargs
+    assert patch_obj.optional_params["prompt_cache_key"] == "cache-key"
+    assert patch_obj.optional_params["prompt_cache_retention"] == "24h"
+    assert "prompt_cache_key" not in patch_obj.kwargs
+    assert "prompt_cache_retention" not in patch_obj.kwargs
     assert patch_obj.model == "openai/gpt-4o"
 
 
