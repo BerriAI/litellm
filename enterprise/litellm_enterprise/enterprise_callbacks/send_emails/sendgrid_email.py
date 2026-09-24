@@ -5,7 +5,6 @@ Docs: https://docs.sendgrid.com/api-reference/mail-send/mail-send
 """
 
 import os
-from typing import List
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -14,7 +13,6 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 
 from .base_email import BaseEmailLogger
-
 
 SENDGRID_API_ENDPOINT = "https://api.sendgrid.com/v3/mail/send"
 
@@ -36,16 +34,13 @@ class SendGridEmailLogger(BaseEmailLogger):
         self.sendgrid_sender_email = os.getenv("SENDGRID_SENDER_EMAIL")
         verbose_logger.debug("SendGrid Email Logger initialized.")
 
-    async def send_email(
+    async def send_email_to_recipient(
         self,
         from_email: str,
-        to_email: List[str],
+        to_email: str,
         subject: str,
         html_body: str,
-    ):
-        """
-        Send an email via SendGrid.
-        """
+    ) -> None:
         if not self.sendgrid_api_key:
             raise ValueError("SENDGRID_API_KEY is not set")
 
@@ -58,7 +53,7 @@ class SendGridEmailLogger(BaseEmailLogger):
             "from": {"email": sender_email},
             "personalizations": [
                 {
-                    "to": [{"email": email} for email in to_email],
+                    "to": [{"email": to_email}],
                     "subject": subject,
                 }
             ],
@@ -79,4 +74,3 @@ class SendGridEmailLogger(BaseEmailLogger):
         verbose_logger.debug(
             f"SendGrid response status={response.status_code}, body={response.text}"
         )
-        return
