@@ -5,6 +5,7 @@ import os
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -807,6 +808,9 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "hello"}],
         "api_key": "request-key",
+        "proxy_server_request": {
+            "body": {"messages": [{"role": "user", "content": "forged"}]},
+        },
     }
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -836,6 +840,77 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
     )
     assert "api_key" not in snapshot_body
     assert updated["proxy_server_request"]["credential_fields"] == ("api_key",)
+    assert snapshot_body["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:
+    from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    logging_obj: Final = Logging(
+        model="test-model", messages=[], stream=False, call_type="acompletion",
+        start_time=datetime.now(), litellm_call_id="new-request", function_id="new-request",
+    )
+    logging_obj.shadow_eval_request_snapshot = GuardrailRequestSnapshot.capture(
+        {"messages": [{"role": "user", "content": "previous request"}]},
+        {"standard_logging_guardrail_information": [{"guardrail_mode": "pre_call"}]},
+    )
+    assert logging_obj.shadow_eval_request_snapshot is not None
+    proxy_request: Final = {"body": {}}
+    data: Final = {
+        "messages": [{"role": "user", "content": "new request"}],
+        "proxy_server_request": proxy_request,
+        "litellm_logging_obj": logging_obj,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert logging_obj.shadow_eval_request_snapshot is None
+    assert proxy_request == {"body": {"messages": [{"role": "user", "content": "new request"}]}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pre_call_ran", [False, True])
+async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_logs(
+    monkeypatch: pytest.MonkeyPatch, pre_call_ran: bool
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    messages: Final = [{"role": "user", "content": "email probe@example.invalid"}]
+    metadata: Final = {
+        "standard_logging_guardrail_information": [{"guardrail_mode": "pre_call"}] if pre_call_ran else []
+    }
+    data: Final = {"messages": messages, "metadata": metadata, "proxy_server_request": {}}
+    logging_obj: Final = Logging(
+        model="test-model", messages=messages, stream=False, call_type="acompletion",
+        start_time=datetime.now(), litellm_call_id="mask-spend", function_id="mask-spend", kwargs=data,
+    )
+    data["litellm_logging_obj"] = logging_obj
+    refresh_proxy_server_request_body_snapshot(data, guardrails_applied=True)
+    logging_obj.update_messages(messages)
+    snapshot: Final = logging_obj.shadow_eval_request_snapshot
+    assert (snapshot is not None) is pre_call_ran
+    guardrail: Final = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, logging_only=True, mock_redacted_text={"text": "email [EMAIL]", "items": []}
+    )
+
+    kwargs, _ = await guardrail.async_logging_hook(
+        kwargs=logging_obj.model_call_details, result=None, call_type="acompletion"
+    )
+    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params=kwargs["litellm_params"], kwargs=kwargs,
+    ))
+
+    assert kwargs["messages"] == [{"role": "user", "content": "email [EMAIL]"}]
+    assert stored["messages"] == kwargs["messages"]
+    if snapshot is not None:
+        assert snapshot.body["messages"] == [{"role": "user", "content": "email probe@example.invalid"}]
+    assert "probe@example.invalid" not in json.dumps(stored)
 
 
 def test_refresh_proxy_server_request_body_snapshot_picks_up_guardrail_masking():
@@ -2850,7 +2925,7 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
         litellm.model_group_settings = original_model_group_settings
 
 
-from typing import Final, Optional
+from typing import Optional
 
 from fastapi.responses import Response
 

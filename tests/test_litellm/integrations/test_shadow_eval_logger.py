@@ -4,7 +4,7 @@ the detached pipeline's single attempt-row write, and the cache-first job lookup
 import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,11 +19,13 @@ from litellm.integrations.shadow_eval_logger import (
     JUDGE_MAX_OUTPUT_TOKENS,
     PAIRWISE_JUDGE_RESPONSE_FORMAT,
     ActiveShadowEvalJob,
+    GuardrailRequestSnapshot,
     ShadowEvalLogger,
     _failure_detail,
     _judge_user_prompt,
     _sample_hits,
     _unmask_preference,
+    request_guardrail_fingerprint,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -33,6 +35,15 @@ from litellm.types.utils import (
     ChatCompletionMessageCustomToolCall,
     ModelResponse,
 )
+
+
+def test_guardrail_fingerprint_excludes_auth_metadata() -> None:
+    history: Final = [{"guardrail_name": "mask", "guardrail_mode": "pre_call"}]
+    metadata: Final = {"standard_logging_guardrail_information": history}
+    fingerprint: Final = request_guardrail_fingerprint(metadata)
+    assert fingerprint == request_guardrail_fingerprint({**metadata, "user_api_key": "first-test-credential"})
+    assert fingerprint == request_guardrail_fingerprint({**metadata, "user_api_key": "second-test-credential"})
+    assert fingerprint != request_guardrail_fingerprint({"standard_logging_guardrail_information": []})
 
 
 def _job(**overrides) -> ActiveShadowEvalJob:
@@ -312,11 +323,19 @@ class TestSurfaceNormalization:
     """/v1/messages and /v1/responses arms: the hook normalizes each surface's logged
     request through litellm's own transformations and judges only text-final turns."""
 
-    async def _drive(self, hook_kwargs, response_obj):
-        prisma = _prisma()
-        router = _router()
-        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
-        await logger.async_log_success_event(hook_kwargs, response_obj, None, None)
+    async def _drive(
+        self,
+        hook_kwargs: Mapping[str, object],
+        response_obj: object,
+        *,
+        guardrail_snapshot: GuardrailRequestSnapshot | None = None,
+    ) -> tuple[MagicMock, MagicMock]:
+        prisma: Final = _prisma()
+        router: Final = _router()
+        logger: Final = _logger(router=router, prisma=prisma, jobs=(_job(),))
+        await logger.async_log_success_event(
+            hook_kwargs, response_obj, None, None, guardrail_snapshot=guardrail_snapshot
+        )
         await _drain(logger)
         return prisma, router
 
@@ -711,40 +730,141 @@ class TestSurfaceNormalization:
         prisma.db.litellm_shadowevalattempt.create.assert_not_called()
 
     @pytest.mark.parametrize(
-        "call_type,guardrail_mode,sampled",
+        "call_type,guardrail_mode,checkpoint,later_mode,sampled",
         [
-            ("anthropic_messages", ["logging_only", "pre_call"], False),
-            ("aresponses", GuardrailEventHooks.pre_call, False),
-            ("anthropic_messages", "post_call", True),
-            ("acompletion", "pre_call", True),
+            ("anthropic_messages", "pre_call", "absent", None, False),
+            ("aresponses", "pre_call", "corrupt", None, False),
+            ("anthropic_messages", ["logging_only", "pre_call"], "missing", None, False),
+            ("aresponses", GuardrailEventHooks.pre_call, "missing", None, False),
+            ("anthropic_messages", "pre_call", "unapproved", None, False),
+            ("aresponses", "pre_call", "unapproved", None, False),
+            ("anthropic_messages", ["logging_only", "pre_call"], "approved", None, True),
+            ("aresponses", GuardrailEventHooks.pre_call, "approved", None, True),
+            ("anthropic_messages", "pre_call", "approved", "pre_call", False),
+            ("aresponses", "pre_call", "approved", "pre_call", False),
+            ("anthropic_messages", "pre_call", "approved", "logging_only", False),
+            ("aresponses", "pre_call", "approved", "logging_only", False),
+            ("anthropic_messages", "pre_call", "approved", "post_call", True),
+            ("aresponses", "pre_call", "approved", "post_call", True),
+            ("anthropic_messages", "post_call", "missing", None, True),
+            ("acompletion", "pre_call", "missing", None, True),
         ],
-        ids=["anthropic-pre-call-list", "responses-pre-call-enum", "anthropic-post-call-only", "chat-pre-call"],
     )
-    async def test_guardrail_rewritten_requests_never_replay_the_wire_body(self, call_type, guardrail_mode, sampled):
-        """The proxy snapshots the wire body before the guardrail pre-call hook, so the
-        wire-sourced surfaces skip requests a request-mutating guardrail ran on rather
-        than replay stripped tools or unmasked content; chat sources the dispatched
-        call and keeps sampling, as do requests only response-mode guardrails touched."""
-        hook_kwargs = _success_kwargs(
+    async def test_guardrail_replay_requires_current_approved_snapshot(
+        self,
+        call_type: str,
+        guardrail_mode: str | list[str],
+        checkpoint: Literal["absent", "corrupt", "missing", "unapproved", "approved"],
+        later_mode: str | None,
+        sampled: bool,
+    ) -> None:
+        history: Final[list[dict[str, object]]] = [{"guardrail_name": "g", "guardrail_mode": guardrail_mode}]
+        if checkpoint == "corrupt":
+            history[0]["guardrail_response"] = history
+        body: Final[dict[str, object]] = {
+            "model": "model",
+            "messages": [{"role": "user", "content": "approved input"}],
+            "input": "approved input",
+        }
+        snapshot: Final = (
+            GuardrailRequestSnapshot.capture(body, {"standard_logging_guardrail_information": history})
+            if checkpoint in ("approved", "corrupt") else None
+        )
+        if checkpoint == "corrupt":
+            assert snapshot is None
+        base_kwargs: Final = _success_kwargs(
             call_type=call_type,
             request_metadata={
-                "standard_logging_guardrail_information": [{"guardrail_name": "g", "guardrail_mode": guardrail_mode}]
+                "standard_logging_guardrail_information": history
+                + ([{"guardrail_name": "g", "guardrail_mode": later_mode}] if later_mode else [])
             },
         )
-        response = RESPONSE
-        if call_type == "anthropic_messages":
-            hook_kwargs["messages"] = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-        elif call_type == "aresponses":
-            hook_kwargs["messages"] = "hi"
-            response = RESPONSES_API_RESPONSE
+        hook_kwargs: Final = {
+            **base_kwargs,
+            "messages": "hi" if call_type == "aresponses" else base_kwargs["messages"],
+            "litellm_params": {
+                **base_kwargs["litellm_params"],
+                "proxy_server_request": None if checkpoint == "absent" else {"body": body},
+            },
+        }
 
-        prisma, router = await self._drive(hook_kwargs, response)
+        prisma, router = await self._drive(
+            hook_kwargs,
+            RESPONSES_API_RESPONSE if call_type == "aresponses" else RESPONSE,
+            guardrail_snapshot=snapshot,
+        )
 
         if sampled:
+            assert router.acompletion.call_count == 2
             prisma.db.litellm_shadowevalattempt.create.assert_called_once()
         else:
             router.acompletion.assert_not_called()
             prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+
+    @pytest.mark.parametrize("call_type", ["anthropic_messages", "aresponses"])
+    @pytest.mark.parametrize("remove_optional_fields", [False, True])
+    async def test_approved_guardrail_snapshot_replays_independent_native_input(
+        self, call_type: str, remove_optional_fields: bool
+    ) -> None:
+        is_responses: Final = call_type == "aresponses"
+        metadata: Final = {
+            "standard_logging_guardrail_information": [{"guardrail_name": "g", "guardrail_mode": "pre_call"}]
+        }
+        live_message: Final = {"role": "user", "content": "approved input"}
+        live_tool: Final = {
+            "name": "approved_tool",
+            "description": "approved tool",
+            "strict": False,
+            "parameters" if is_responses else "input_schema": {"type": "object", "properties": {}},
+            **({"type": "function"} if is_responses else {}),
+        }
+        data: Final[dict[str, object]] = {
+            "model": "model",
+            "input" if is_responses else "messages": [live_message],
+            "max_output_tokens" if is_responses else "max_tokens": 123,
+            **({} if remove_optional_fields else {
+                "instructions" if is_responses else "system": "approved system",
+                "tools": [live_tool],
+                "temperature": 0.2,
+            }),
+        }
+        snapshot: Final = GuardrailRequestSnapshot.capture(data, metadata)
+        assert snapshot is not None
+        live_message["content"] = "changed after checkpoint"
+        live_tool["name"] = "changed_after_checkpoint"
+        base_kwargs: Final = _success_kwargs(call_type=call_type, request_metadata=metadata)
+        hook_kwargs: Final = {
+            **base_kwargs,
+            "messages": "stale input" if is_responses else [{"role": "user", "content": "stale input"}],
+            "system": "stale system",
+            "instructions": "stale system",
+            "standard_logging_object": {
+                **base_kwargs["standard_logging_object"],
+                "model_parameters": {"tools": [{"name": "stale_tool"}], "temperature": 0.9, "max_tokens": 999},
+            },
+            "litellm_params": {**base_kwargs["litellm_params"], "proxy_server_request": {"body": data}},
+        }
+
+        prisma, router = await self._drive(
+            hook_kwargs, RESPONSES_API_RESPONSE if is_responses else RESPONSE, guardrail_snapshot=snapshot
+        )
+
+        assert router.acompletion.call_count == 2
+        shadow_call: Final = router.acompletion.call_args_list[0].kwargs
+        assert shadow_call["messages"] == (
+            [] if remove_optional_fields else [{"role": "system", "content": "approved system"}]
+        ) + [{"role": "user", "content": "approved input"}]
+        assert shadow_call["max_tokens"] == 123
+        assert {key: shadow_call[key] for key in ("tools", "temperature") if key in shadow_call} == (
+            {} if remove_optional_fields else {
+                "temperature": 0.2,
+                "tools": [{"type": "function", "function": {
+                    "name": "approved_tool", "description": "approved tool", "strict": False,
+                    "parameters": {"type": "object", "properties": {}},
+                }}],
+            }
+        )
+        prisma.db.litellm_shadowevalattempt.create.assert_called_once()
 
     @pytest.mark.parametrize(
         "call_type,messages,response_obj",
