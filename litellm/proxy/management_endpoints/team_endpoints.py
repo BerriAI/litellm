@@ -4553,7 +4553,9 @@ async def delete_team(
     )
 
     for deleted_team in team_rows:
-        _emit_team_members_metric(deleted_team.model_copy(update={"members_with_roles": []}))
+        _emit_team_members_metric(
+            deleted_team.model_copy(update={"members_with_roles": ()})  # mutable-ok: pydantic update payload
+        )
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
     return deleted_teams
@@ -4665,16 +4667,21 @@ async def _deleted_team_member_user_ids(team: LiteLLM_TeamTable, prisma_client: 
         member.user_id for member in team.members_with_roles if member.user_id is not None
     )
     email_only_member_emails: Final = sorted(
-        {
+        frozenset(
             member.user_email
             for member in team.members_with_roles
             if member.user_id is None and member.user_email is not None
-        }
+        )
     )
     if not email_only_member_emails:
         return tuple(sorted(roster_user_ids))
     email_only_users: Final = await _user_db(prisma_client).find_many(
-        where={"user_email": {"in": email_only_member_emails, "mode": "insensitive"}}
+        where={  # mutable-ok: Prisma query filters are dict-shaped
+            "user_email": {  # mutable-ok: Prisma query filters are dict-shaped
+                "in": email_only_member_emails,
+                "mode": "insensitive",
+            }
+        }
     )
     return tuple(sorted(roster_user_ids.union(user.user_id for user in email_only_users)))
 
