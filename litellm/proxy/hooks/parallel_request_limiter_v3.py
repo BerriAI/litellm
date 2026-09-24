@@ -469,6 +469,7 @@ class ReservationAwareIncrementOperation(RedisPipelineIncrementOperation):
     window_key: NotRequired[str]
     expected_window_start: NotRequired[str]
     reservation_backend: NotRequired[Literal["redis", "local"]]
+    seed_window_if_absent: NotRequired[bool]
 
 
 class RateLimitResponseWithDescriptors(TypedDict):
@@ -4082,18 +4083,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         parent_otel_span: Span | None = None,
     ) -> None:
         for operation in pipeline_operations:
-            if operation.get("window_key") is None or operation.get("expected_window_start") is None:
-                await self.internal_usage_cache.async_increment_cache(
-                    key=operation["key"],
-                    value=operation["increment_value"],
-                    litellm_parent_otel_span=parent_otel_span,
-                    ttl=operation["ttl"],
-                )
+            await self._apply_one_reservation_aware_token_increment(
+                operation=operation,
+                parent_otel_span=parent_otel_span,
+            )
         local_guarded_operations: Final = tuple(
             operation
             for operation in pipeline_operations
             if operation.get("window_key") is not None
             and operation.get("expected_window_start") is not None
+            and not operation.get("seed_window_if_absent")
             and operation.get("reservation_backend") == "local"
         )
         redis_guarded_operations: Final = tuple(
@@ -4101,6 +4100,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             for operation in pipeline_operations
             if operation.get("window_key") is not None
             and operation.get("expected_window_start") is not None
+            and not operation.get("seed_window_if_absent")
             and operation.get("reservation_backend") != "local"
         )
         if local_guarded_operations:
@@ -4113,6 +4113,57 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 operations=redis_guarded_operations,
                 parent_otel_span=parent_otel_span,
             )
+
+    async def _apply_one_reservation_aware_token_increment(
+        self,
+        *,
+        operation: ReservationAwareIncrementOperation,
+        parent_otel_span: Span | None,
+    ) -> None:
+        if operation.get("seed_window_if_absent"):
+            window_key: Final = operation.get("window_key")
+            if window_key is not None:
+                await self._seed_rate_limit_window_if_absent(
+                    window_key=window_key,
+                    ttl=operation["ttl"],
+                    parent_otel_span=parent_otel_span,
+                )
+            await self.internal_usage_cache.async_increment_cache(
+                key=operation["key"],
+                value=operation["increment_value"],
+                litellm_parent_otel_span=parent_otel_span,
+                ttl=operation["ttl"],
+            )
+            return
+        if operation.get("window_key") is None or operation.get("expected_window_start") is None:
+            await self.internal_usage_cache.async_increment_cache(
+                key=operation["key"],
+                value=operation["increment_value"],
+                litellm_parent_otel_span=parent_otel_span,
+                ttl=operation["ttl"],
+            )
+
+    async def _seed_rate_limit_window_if_absent(
+        self,
+        *,
+        window_key: str,
+        ttl: int | None,
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        """Open a TPM window around an unreserved charge so a later reservation does not wipe it."""
+        active_window: Final = await self.internal_usage_cache.async_get_cache(
+            key=window_key,
+            litellm_parent_otel_span=parent_otel_span,
+        )
+        if active_window is not None:
+            return
+        window_ttl: Final = ttl if ttl is not None else self.window_size
+        await self.internal_usage_cache.async_set_cache(
+            key=window_key,
+            value=str(int(self._get_current_time().timestamp())),
+            ttl=window_ttl,
+            litellm_parent_otel_span=parent_otel_span,
+        )
 
     def get_rate_limit_type(self) -> Literal["output", "input", "total"]:
         from litellm.proxy.proxy_server import general_settings
@@ -4221,7 +4272,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _collect_project_io_scope_targets(
         self,
-        standard_logging_metadata: Mapping[str, Any],
+        standard_logging_metadata: Mapping[str, object],
         model_group: str | None,
     ) -> Sequence[tuple[str, str]]:
         """Rebuild project ITPM/OTPM scopes from logging metadata.
@@ -4240,16 +4291,38 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             (PROJECT_OTPM_DESCRIPTOR_KEY, descriptor_value),
         )
 
+    def _build_unreserved_scoped_token_ops(
+        self,
+        targets: Sequence[tuple[str, str]],
+        actual_tokens: int,
+    ) -> tuple[ReservationAwareIncrementOperation, ...]:
+        if actual_tokens == 0:
+            return ()
+        return tuple(
+            ReservationAwareIncrementOperation(
+                key=self.create_rate_limit_keys(scope_key, scope_value, "tokens"),
+                increment_value=actual_tokens,
+                ttl=self.window_size,
+                window_key=f"{{{scope_key}:{scope_value}}}:window",
+                seed_window_if_absent=True,
+            )
+            for scope_key, scope_value in targets
+        )
+
     def _build_unreserved_project_io_token_ops(
         self,
-        kwargs: dict[str, Any],
+        kwargs: Mapping[str, object],
         response_obj: object,
-    ) -> Sequence[RedisPipelineIncrementOperation]:
+    ) -> tuple[ReservationAwareIncrementOperation, ...]:
         """Charge full actual ITPM/OTPM when no pre-call reservation owns this call.
 
         Summary subrequests never claim the parent stash (``owner_litellm_call_id``
         pins it), so without this path their input/output tokens never hit the
         project IO counters even though combined TPM still charges them.
+
+        Unreserved charges also seed the TPM window key. A plain counter increment
+        without a window is wiped when the next ordinary reservation treats a
+        missing window as expired and resets sibling counters.
         """
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
@@ -4291,16 +4364,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         billable_input, completion_tokens, _ = resolved_usage
         itpm_targets: Final = tuple(t for t in targets if t[0] == PROJECT_ITPM_DESCRIPTOR_KEY)
         otpm_targets: Final = tuple(t for t in targets if t[0] == PROJECT_OTPM_DESCRIPTOR_KEY)
-        return self._build_reservation_aware_tpm_ops(
+        return self._build_unreserved_scoped_token_ops(
             targets=itpm_targets,
-            reserved_scopes=frozenset(),
             actual_tokens=billable_input,
-            reserved_tokens=0,
-        ) + self._build_reservation_aware_tpm_ops(
+        ) + self._build_unreserved_scoped_token_ops(
             targets=otpm_targets,
-            reserved_scopes=frozenset(),
             actual_tokens=completion_tokens,
-            reserved_tokens=0,
         )
 
     def _build_io_token_reservation_ops(

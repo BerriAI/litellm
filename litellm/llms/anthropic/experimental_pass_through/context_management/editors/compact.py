@@ -995,6 +995,25 @@ def _build_summary_messages(
     return summary_messages
 
 
+async def _estimate_summary_input_tokens(
+    *,
+    summary_model: str,
+    summary_messages: Sequence[Mapping[str, object]],
+    fallback_tokens: int,
+) -> int:
+    try:
+        return await asyncify(litellm.token_counter)(
+            model=summary_model,
+            messages=list(summary_messages),
+        )
+    except Exception as e:
+        verbose_logger.warning(
+            "compact_20260112: summary token estimate failed; falling back to parent current_tokens: %s",
+            e,
+        )
+        return fallback_tokens
+
+
 def _is_user_message(msg: object) -> bool:
     return isinstance(msg, dict) and msg.get("role") == "user"
 
@@ -1289,10 +1308,18 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
+    prompt: Final = _build_summary_prompt(edit_spec, tools)
+    summary_messages: Final = _build_summary_messages(effective_messages, prompt, system=augmented_system)
+    estimated_summary_input: Final = await _estimate_summary_input_tokens(
+        summary_model=summary_model,
+        summary_messages=summary_messages,
+        fallback_tokens=current_tokens,
+    )
+
     if not await _check_summary_model_rate_limit(
         user_api_key_auth=user_api_key_auth,
         summary_model=summary_model,
-        estimated_input_tokens=current_tokens,
+        estimated_input_tokens=estimated_summary_input,
         estimated_output_tokens=_read_summary_max_tokens_setting(),
     ):
         verbose_logger.warning(
@@ -1306,8 +1333,6 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
-    prompt: Final = _build_summary_prompt(edit_spec, tools)
-    summary_messages: Final = _build_summary_messages(effective_messages, prompt, system=augmented_system)
     propagated_metadata: Final = _propagate_metadata(litellm_metadata)
     allowed_model_region: Final = getattr(user_api_key_auth, "allowed_model_region", None)
 
