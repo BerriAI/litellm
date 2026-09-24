@@ -14627,6 +14627,7 @@
         "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_native_structured_output": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
