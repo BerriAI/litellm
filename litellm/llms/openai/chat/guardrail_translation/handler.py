@@ -313,11 +313,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 structured_messages[index] for index in scoped_message_indices
             ]
         tools: Final = data.get("tools")
-        if tools and isinstance(tools, list) and not scan_only_tool_results:
+        if tools and not scan_only_tool_results:
             inputs["tools"] = cast("list[ChatCompletionToolParam]", tools)  # cast-ok: raw request json
         model: Final = data.get("model")
-        if model and isinstance(model, str):
-            inputs["model"] = model
+        if model:
+            inputs["model"] = cast("str", model)  # cast-ok: base forwarded the raw model value
         return inputs, structured_messages, scoped_message_indices
 
     def _not_run_reason(

@@ -280,3 +280,35 @@ class TestOpenAIChatHandlerAttachmentsDefaultScope:
         assert guardrail.inputs["texts"] == ["look"]
         assert "files" not in guardrail.inputs
         assert "images" not in guardrail.inputs
+
+
+class TestOpenAIChatHandlerToolsAndModelForwarding:
+    @pytest.mark.asyncio
+    async def test_tools_dict_is_forwarded_verbatim_to_inputs(self):
+        guardrail = ScanningGuardrail()
+        tools = {"name": "lookup", "parameters": {"query": "str"}}
+        data = {
+            "model": "gpt-4o",
+            "tools": tools,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["tools"] == tools
+
+    @pytest.mark.asyncio
+    async def test_model_list_is_forwarded_verbatim_to_inputs(self):
+        guardrail = ScanningGuardrail()
+        data = {
+            "model": ["gpt-4o"],
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.calls == 1
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["model"] == ["gpt-4o"]
