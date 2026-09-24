@@ -92,9 +92,10 @@ class TestCustomToolUtilities:
         assert is_custom_tool_call("unknown_tool", custom_names) is False
 
     def test_serialize_tool_call_arguments_empty_defaults_to_json_object(self):
-        """Test that empty, None, and dict arguments serialize to valid JSON '{}'."""
-        assert serialize_tool_call_arguments(None) == "{}"
-        assert serialize_tool_call_arguments("") == "{}"
+        """Test that empty, None, and dict arguments serialize to valid JSON '{}' when requested."""
+        assert serialize_tool_call_arguments(None) == ""
+        assert serialize_tool_call_arguments(None, "{}") == "{}"
+        assert serialize_tool_call_arguments("", "{}") == "{}"
         assert serialize_tool_call_arguments({}) == "{}"
         assert serialize_tool_call_arguments('{"key": "value"}') == '{"key": "value"}'
         assert serialize_tool_call_arguments({"key": "value"}) == '{"key": "value"}'
