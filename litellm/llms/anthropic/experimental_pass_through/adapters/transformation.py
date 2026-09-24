@@ -625,11 +625,15 @@ class LiteLLMAnthropicMessagesAdapter:
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
                     content=assistant_content,
-                    thinking_blocks=(thinking_blocks if len(thinking_blocks) > 0 else None),
                 )
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls
-                if len(thinking_blocks) > 0:
+                if len(thinking_blocks) > 0 and (
+                    model is None
+                    or LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(
+                        model
+                    )
+                ):
                     assistant_message["thinking_blocks"] = thinking_blocks
                 reasoning_content = reasoning_content_from_thinking_blocks(thinking_blocks)
                 if reasoning_content:
