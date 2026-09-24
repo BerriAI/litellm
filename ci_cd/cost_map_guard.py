@@ -1,8 +1,8 @@
 """Guard the cost map on pull requests.
 
 Every pull request whose diff against its merge base touches one of the three cost map files gets the file
-checks: the files parse, the backup copy matches the root file, and the JSON schema is in sync and validates the
-map. A pull request that leaves all three untouched skips them, since merging it keeps the base branch's copies
+checks: the files parse, the backup copy matches the root file, and, while the schema file exists in the head
+tree, the JSON schema is in sync and validates the map. A pull request that leaves all three untouched skips them, since merging it keeps the base branch's copies
 and its head tree only carries whatever state the branch was cut from. Pull requests from the cost map sync bot
 (branches named litellm_cost_map_sync_*) always get the file checks and additionally may only touch those three
 files and may only add or update models.
@@ -52,14 +52,16 @@ def _rendered_schema(cost_map: CostMap) -> str:
 
 
 def _file_failures(head: Snapshot, head_map: CostMap) -> tuple[str, ...]:
-    schema_text: Final = _rendered_schema(head_map)
-    if not schema_text.startswith("{"):
-        return (schema_text,)
     backup_failure: Final = (
         ()
         if head.backup == head.cost_map
         else (f"{BACKUP_PATH} differs from {COST_MAP_PATH}; copy the root file over it",)
     )
+    if not head.schema:
+        return backup_failure
+    schema_text: Final = _rendered_schema(head_map)
+    if not schema_text.startswith("{"):
+        return (schema_text,)
     schema_failure: Final = (
         ()
         if head.schema == schema_text

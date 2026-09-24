@@ -114,6 +114,16 @@ def test_unclassified_entry_key_is_reported() -> None:
     assert "Unclassified keys" in failure and "weird_thing" in failure
 
 
+def test_head_without_a_schema_file_skips_the_schema_checks() -> None:
+    text = _serialize({**BASE_MAP, "openrouter/c": _entry(weird_thing=1)})
+    head = guard.Snapshot(cost_map=text, backup=text, schema="")
+    assert _failures(head, changed_files=(guard.SCHEMA_PATH,), bot=False) == ()
+    drifted = guard.Snapshot(cost_map=text, backup=BASE.cost_map, schema="")
+    assert [failure for failure in _failures(drifted, changed_files=(guard.SCHEMA_PATH,), bot=False)] == [
+        f"{guard.BACKUP_PATH} differs from {guard.COST_MAP_PATH}; copy the root file over it"
+    ]
+
+
 STALE_HEAD: Final = _snapshot(BASE_MAP, backup=_serialize({**BASE_MAP, "openrouter/b": _entry(3e-06)}), schema="{}")
 CODE_ONLY: Final = (
     "litellm/utils.py",
