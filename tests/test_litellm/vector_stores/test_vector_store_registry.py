@@ -238,6 +238,7 @@ async def test_config_owned_store_survives_db_liveness_check_while_missing_db_st
     registry.add_vector_store_to_registry(_db_store("vs_from_db", "db-store"))
     prisma_client = MagicMock()
     prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
 
     to_run = await registry.pop_vector_stores_to_run_with_db_fallback(
         non_default_params={"vector_store_ids": ["vs_from_config", "vs_from_db"]},

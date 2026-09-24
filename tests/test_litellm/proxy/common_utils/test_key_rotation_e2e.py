@@ -170,6 +170,7 @@ class TestKeyRotationErrorResilience:
         be attempted. No key should be silently skipped.
         """
         mock_prisma = AsyncMock()
+        mock_prisma.replica_db = mock_prisma.db
         manager = KeyRotationManager(mock_prisma)
 
         key1 = LiteLLM_VerificationToken(
@@ -221,6 +222,7 @@ class TestKeyRotationErrorResilience:
         but process_rotations should catch it per-key.
         """
         mock_prisma = AsyncMock()
+        mock_prisma.replica_db = mock_prisma.db
         manager = KeyRotationManager(mock_prisma)
 
         key = LiteLLM_VerificationToken(
@@ -260,6 +262,7 @@ class TestKeyRotationErrorResilience:
         update for rotation_count should still have succeeded (it runs before the hook).
         """
         mock_prisma = AsyncMock()
+        mock_prisma.replica_db = mock_prisma.db
         manager = KeyRotationManager(mock_prisma)
 
         key = LiteLLM_VerificationToken(
@@ -359,6 +362,7 @@ class TestKeyRotationFullFlow:
 
         # Mock cleanup
         mock_prisma.db.litellm_deprecatedverificationtoken.delete_many.return_value = 1
+        mock_prisma.replica_db = mock_prisma.db
         # Mock find keys
         mock_prisma.db.litellm_verificationtoken.find_many.return_value = [key]
 
@@ -399,6 +403,7 @@ class TestKeyRotationFullFlow:
         correctly each time: 0 -> 1 -> 2 -> 3
         """
         mock_prisma = AsyncMock()
+        mock_prisma.replica_db = mock_prisma.db
         manager = KeyRotationManager(mock_prisma)
 
         rotation_counts_seen = []
@@ -445,6 +450,7 @@ class TestKeyRotationFullFlow:
         """
         mock_prisma = AsyncMock()
         mock_prisma.db.litellm_deprecatedverificationtoken.delete_many.return_value = 0
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_verificationtoken.find_many.return_value = []
 
         mock_lock = MagicMock()
@@ -468,6 +474,7 @@ class TestKeyRotationFullFlow:
         the DB update for rotation metadata should be skipped.
         """
         mock_prisma = AsyncMock()
+        mock_prisma.replica_db = mock_prisma.db
         manager = KeyRotationManager(mock_prisma)
 
         key = LiteLLM_VerificationToken(
@@ -525,6 +532,7 @@ class TestKeyRotationInitialization:
         When no pod_lock_manager is provided, it defaults to None.
         """
         mock_prisma = AsyncMock()
+        mock_prisma.replica_db = mock_prisma.db
         manager = KeyRotationManager(mock_prisma)
 
         assert manager.pod_lock_manager is None

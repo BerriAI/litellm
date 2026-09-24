@@ -387,6 +387,7 @@ class TestTeamAdminCanInviteUser:
 
         teams = [make_team(tid, tid in user_is_admin_in) for tid in admin_teams]
         mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=teams)
+        mock_prisma.replica_db = mock_prisma.db
 
         result = await _team_admin_can_invite_user(
             user_api_key_dict=mock_auth,
@@ -1072,6 +1073,7 @@ class TestTeamAdminCanInviteUserQuery:
 
         find_many = AsyncMock(return_value=[make_team("t1"), make_team("t2")])
         mock_prisma.db.litellm_teamtable.find_many = find_many
+        mock_prisma.replica_db = mock_prisma.db
 
         await _team_admin_can_invite_user(
             user_api_key_dict=mock_auth,
@@ -1281,7 +1283,8 @@ async def test_router_weights_validate_current_deployment_scope(
     }])
     rows = [SimpleNamespace(model_id="id", model_name=stored_name, model_info=info)] if stored_name else []
     table = SimpleNamespace(find_many=AsyncMock(return_value=rows))
-    db = SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=table))
+    tables = SimpleNamespace(litellm_proxymodeltable=table)
+    db = SimpleNamespace(db=tables, replica_db=tables)
     validation = validate_router_settings_weights(
         {"weights": {"group": {"id": 1}}}, team_id="team", prisma_client=db, llm_router=router,
     )

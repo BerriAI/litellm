@@ -18,6 +18,7 @@ from litellm.proxy.guardrails.usage_tracking import (
 def _prisma() -> MagicMock:
     client = MagicMock()
     db = client.db
+    client.replica_db = client.db
     db.litellm_dailyguardrailmetrics.upsert = AsyncMock()
     db.litellm_dailyguardrailusageunits.upsert = AsyncMock()
     db.litellm_spendlogguardrailindex.create_many = AsyncMock()
@@ -142,6 +143,7 @@ async def test_one_failing_upsert_does_not_drop_remaining_writes():
     """
     prisma = _prisma()
     prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
+    prisma.replica_db = prisma.db
     prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [httpx.ConnectError("db down"), None, None]
     sleep, _ = _fake_sleep()
     logs = [
@@ -167,6 +169,7 @@ async def test_transient_upsert_failure_is_retried_with_backoff_for_failed_rows_
     """
     prisma = _prisma()
     prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [httpx.ConnectError("blip"), None, None]
+    prisma.replica_db = prisma.db
     sleep, delays = _fake_sleep()
     logs = [
         _payload("r1", usage={"topicPolicyUnits": 1}),
@@ -185,6 +188,7 @@ async def test_transient_upsert_failure_is_retried_with_backoff_for_failed_rows_
 async def test_persistent_upsert_failure_stops_after_three_retries():
     prisma = _prisma()
     prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
+    prisma.replica_db = prisma.db
     sleep, delays = _fake_sleep()
     pending = PendingRollups()
 
@@ -215,6 +219,7 @@ async def test_retry_exhausted_rows_are_requeued_and_land_on_the_next_flush():
     pending = PendingRollups()
     down = _prisma()
     down.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
+    down.replica_db = down.db
     down.db.litellm_dailyguardrailusageunits.upsert.side_effect = httpx.ConnectError("db down")
     sleep, _ = _fake_sleep()
 
@@ -249,6 +254,7 @@ async def test_ambiguous_failures_are_never_requeued():
     pending = PendingRollups()
     prisma = _prisma()
     prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = httpx.ReadTimeout("maybe committed")
+    prisma.replica_db = prisma.db
     sleep, delays = _fake_sleep()
 
     await process_spend_logs_guardrail_usage(
@@ -296,6 +302,7 @@ async def test_post_send_failure_is_never_retried_so_increments_cannot_double_co
         httpx.ConnectError("refused"),
         None,
     ]
+    prisma.replica_db = prisma.db
     sleep, delays = _fake_sleep()
     logs = [
         _payload("r1", usage={"topicPolicyUnits": 1}),
@@ -314,6 +321,7 @@ async def test_post_send_failure_is_never_retried_so_increments_cannot_double_co
 async def test_generic_upsert_exception_is_terminal_for_that_row_only():
     prisma = _prisma()
     prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = RuntimeError("constraint violation")
+    prisma.replica_db = prisma.db
     sleep, delays = _fake_sleep()
 
     await process_spend_logs_guardrail_usage(prisma, [_payload("r1", usage={"topicPolicyUnits": 1})], sleep=sleep)
@@ -565,6 +573,7 @@ async def test_requeued_cost_is_added_to_the_next_flush():
     pending = PendingRollups()
     down = _prisma()
     down.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
+    down.replica_db = down.db
     down.db.litellm_dailyguardrailusageunits.upsert.side_effect = httpx.ConnectError("db down")
     sleep, _ = _fake_sleep()
 
@@ -647,6 +656,7 @@ async def test_one_failing_index_statement_does_not_drop_the_others_or_the_rollu
     monkeypatch.setattr(usage_tracking, "SPEND_LOG_WRITE_BATCH_MAX_ROWS", 100)
     prisma = _prisma()
     prisma.db.litellm_spendlogguardrailindex.create_many.side_effect = [None, httpx.ReadTimeout("ambiguous"), None]
+    prisma.replica_db = prisma.db
     guardrail_ids = tuple(f"guard-{i}" for i in range(50))
     logs = [_fan_out_payload(f"r{i}", guardrail_ids) for i in range(5)]
 

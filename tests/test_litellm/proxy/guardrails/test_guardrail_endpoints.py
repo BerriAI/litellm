@@ -86,6 +86,7 @@ def mock_prisma_client(mocker):
     mock_client = mocker.Mock()
     # Create async mocks for the database methods
     mock_client.db = mocker.Mock()
+    mock_client.replica_db = mock_client.db
     mock_client.db.litellm_guardrailstable = mocker.Mock()
     mock_client.db.litellm_guardrailstable.find_many = AsyncMock(
         return_value=[MOCK_DB_GUARDRAIL]
@@ -175,6 +176,7 @@ async def test_list_guardrails_v2_skips_stale_db_backed_in_memory_entries(mocker
     }
     mock_prisma_client = mocker.Mock()
     mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
     mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
 
@@ -211,6 +213,7 @@ async def test_get_guardrail_info_404s_stale_db_backed_entry(
     mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
         return_value=None
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     # In-memory still has it, but it's tagged as 'db' (stale, awaiting reconcile)
     mock_in_memory_handler.get_source.return_value = "db"
 
@@ -240,6 +243,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_db_guardrails(mocker):
 
     mock_prisma_client = mocker.Mock()
     mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
     mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
         return_value=[db_guardrail_with_secrets]
@@ -295,6 +299,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_config_guardrails(mock
 
     mock_prisma_client = mocker.Mock()
     mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
     mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
 
@@ -354,6 +359,7 @@ async def test_list_guardrails_v2_admin_viewer_sees_guardrails_of_teams_they_are
 
     mock_prisma_client = mocker.Mock()
     mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
     mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
         return_value=[other_team_guardrail]
@@ -403,6 +409,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_for_admin_viewer(mocker):
 
     mock_prisma_client = mocker.Mock()
     mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
     mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
         return_value=[other_team_guardrail_with_secrets]
@@ -465,6 +472,7 @@ async def test_get_guardrail_info_from_config(
     mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
         return_value=None
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     response = await get_guardrail_info("test-config-guardrail")
 
@@ -489,6 +497,7 @@ async def test_get_guardrail_info_not_found(
     mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
         return_value=None
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_in_memory_handler.get_guardrail_by_id.return_value = None
 
     with pytest.raises(HTTPException) as exc_info:
@@ -1903,6 +1912,7 @@ async def test_register_guardrail_success(mocker):
     """Register creates a row with status pending_review and returns guardrail_id."""
     mock_prisma = mocker.Mock()
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.replica_db = mock_prisma.db
     created_row = mocker.Mock(
         guardrail_id="reg-123",
         guardrail_name=MOCK_REGISTER_REQUEST.guardrail_name,
@@ -1961,6 +1971,7 @@ async def test_register_guardrail_non_admin_cross_team_allowed(mocker):
     """Non-admin may register for a team in their user.teams list even if the key's team_id differs."""
     mock_prisma = mocker.Mock()
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.replica_db = mock_prisma.db
     created = mocker.Mock(
         guardrail_id="g1",
         guardrail_name=MOCK_REGISTER_REQUEST.guardrail_name,
@@ -2016,6 +2027,7 @@ async def test_register_guardrail_duplicate_name(mocker):
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(
         return_value={"guardrail_name": MOCK_REGISTER_REQUEST.guardrail_name}
     )
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_id="u1", user_email="a@b.com", team_id="team-1")
 
@@ -2043,6 +2055,7 @@ async def test_list_guardrail_submissions_non_admin_scoped_to_own_teams(mocker):
     )
     find_many = AsyncMock(return_value=[own_team_row])
     mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     mocker.patch(
         "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
@@ -2068,6 +2081,7 @@ async def test_list_guardrail_submissions_non_admin_no_teams(mocker):
     mock_prisma = mocker.Mock()
     find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     mocker.patch(
         "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
@@ -2121,6 +2135,7 @@ async def test_list_guardrail_submissions_success(mocker):
         updated_at=datetime.now(),
     )
     mock_prisma.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[row])
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
@@ -2140,6 +2155,7 @@ async def test_list_guardrail_submissions_returns_only_team_guardrails(mocker):
     mock_prisma = mocker.Mock()
     find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
@@ -2181,6 +2197,7 @@ async def test_list_guardrail_submissions_team_id_filter(mocker):
     )
     find_many = AsyncMock(return_value=[row_abc, row_other])
     mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
@@ -2199,6 +2216,7 @@ async def test_get_guardrail_submission_not_found(mocker):
     """Get submission returns 404 when guardrail_id does not exist."""
     mock_prisma = mocker.Mock()
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
@@ -2224,6 +2242,7 @@ async def test_get_guardrail_submission_non_admin_own_team(mocker):
         updated_at=datetime.now(),
     )
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     mocker.patch(
         "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
@@ -2254,6 +2273,7 @@ async def test_get_guardrail_submission_non_admin_other_team_forbidden(mocker):
         updated_at=datetime.now(),
     )
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     mocker.patch(
         "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
@@ -2283,6 +2303,7 @@ async def test_get_guardrail_submission_admin_viewer_other_team_allowed(mocker):
         updated_at=datetime.now(),
     )
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     mock_get_user_team_ids = mocker.patch(
         "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
@@ -2315,6 +2336,7 @@ async def test_approve_guardrail_submission_success(mocker):
         guardrail_info={},
     )
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_guardrailstable.update = AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     mock_handler = mocker.Mock()
@@ -2340,6 +2362,7 @@ async def test_approve_guardrail_submission_not_pending(mocker):
     mock_prisma = mocker.Mock()
     row = mocker.Mock(guardrail_id="x", guardrail_name="y", status="active")
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
@@ -2354,6 +2377,7 @@ async def test_reject_guardrail_submission_success(mocker):
     mock_prisma = mocker.Mock()
     row = mocker.Mock(guardrail_id="rej-1", guardrail_name="r", status="pending_review")
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_guardrailstable.update = AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -2374,6 +2398,7 @@ async def test_reject_guardrail_submission_not_pending(mocker):
         guardrail_id="already-active", guardrail_name="g", status="active"
     )
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
@@ -2430,6 +2455,7 @@ async def test_register_guardrail_accepts_valid_https_url(mocker):
     """Register accepts valid https api_base URLs."""
     mock_prisma = mocker.Mock()
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.replica_db = mock_prisma.db
     created_row = mocker.Mock(
         guardrail_id="valid-url-123",
         guardrail_name="valid-guard",
@@ -2470,6 +2496,7 @@ async def test_approve_guardrail_init_failure_returns_warning(mocker):
         guardrail_info={},
     )
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_guardrailstable.update = AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -2507,6 +2534,7 @@ async def test_approve_guardrail_no_warning_on_success(mocker):
         guardrail_info={},
     )
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_guardrailstable.update = AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -2530,6 +2558,7 @@ async def test_list_submissions_single_db_query(mocker):
     mock_prisma = mocker.Mock()
     find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
@@ -2568,6 +2597,7 @@ async def test_list_submissions_summary_counts_unaffected_by_filters(mocker):
     )
     all_rows = [pending_row, active_row]
     mock_prisma.db.litellm_guardrailstable.find_many = AsyncMock(return_value=all_rows)
+    mock_prisma.replica_db = mock_prisma.db
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 

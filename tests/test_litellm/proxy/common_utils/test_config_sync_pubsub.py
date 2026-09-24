@@ -683,6 +683,7 @@ async def test_model_repository_write_publishes_via_live_coordination_cache() ->
     client = _RecordingRedisClient()
     prisma_client = MagicMock()
     prisma_client.db.litellm_proxymodeltable.update = AsyncMock(return_value={"model_id": "m-1"})
+    prisma_client.replica_db = prisma_client.db
     repository = ModelRepository(prisma_client)
     table = repository.table
     assert isinstance(table, _PublishOnWriteActions)
@@ -711,6 +712,7 @@ async def test_ui_settings_write_publishes_via_live_coordination_cache() -> None
     client = _RecordingRedisClient()
     prisma_client = MagicMock()
     prisma_client.db.litellm_uisettings.upsert = AsyncMock(return_value={"id": "ui_settings"})
+    prisma_client.replica_db = prisma_client.db
     table = UISettingsRepository(prisma_client).table
     assert isinstance(table, _PublishOnWriteActions)
 
@@ -790,6 +792,7 @@ def _reload_config_prisma_client() -> MagicMock:
     prisma_client = MagicMock()
     prisma_client.get_generic_data = AsyncMock(return_value=config_record)
     prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=config_record)
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_config.upsert = AsyncMock(return_value=config_record)
     prisma_client.db.litellm_config.update_many = AsyncMock(return_value=1)
     return prisma_client
@@ -823,6 +826,7 @@ async def test_model_cost_map_reload_does_not_publish_config_change() -> None:
         _set_redis_usage_cache(previous_cache)
 
     prisma_client.db.litellm_config.update_many.assert_awaited_once()
+    prisma_client.replica_db = prisma_client.db
     assert client.published == []
 
 
@@ -844,6 +848,7 @@ async def test_anthropic_beta_headers_reload_does_not_publish_config_change() ->
         _set_redis_usage_cache(previous_cache)
 
     prisma_client.db.litellm_config.upsert.assert_awaited_once()
+    prisma_client.replica_db = prisma_client.db
     assert client.published == []
 
 

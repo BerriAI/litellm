@@ -340,6 +340,7 @@ async def test_get_invitation_link(base_email_logger):
         return [mock_invitation_row]
 
     mock_prisma.db.litellm_invitationlink.find_many = mock_find_many
+    mock_prisma.replica_db = mock_prisma.db
 
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         # Test with valid user_id
@@ -361,6 +362,7 @@ async def test_get_invitation_link(base_email_logger):
             return []
 
         mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_empty
+        mock_prisma.replica_db = mock_prisma.db
         result = await base_email_logger._get_invitation_link(
             user_id="test-user", base_url="http://test.com"
         )
@@ -386,6 +388,7 @@ async def test_get_invitation_link_creates_new_when_none_exist(base_email_logger
         return []
 
     mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_empty
+    mock_prisma.replica_db = mock_prisma.db
 
     # Mock the create_invitation_for_user function
     mock_created_invitation = mock.MagicMock()
@@ -428,6 +431,7 @@ async def test_get_invitation_link_uses_existing_when_available(base_email_logge
         return [mock_invitation_row]
 
     mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_existing
+    mock_prisma.replica_db = mock_prisma.db
 
     with mock.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with mock.patch(
@@ -459,6 +463,7 @@ async def test_get_invitation_link_creates_new_when_list_is_none(base_email_logg
         return None
 
     mock_prisma.db.litellm_invitationlink.find_many = mock_find_many_none
+    mock_prisma.replica_db = mock_prisma.db
 
     # Mock the create_invitation_for_user function
     mock_created_invitation = mock.MagicMock()

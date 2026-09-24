@@ -56,6 +56,7 @@ async def test_should_resolve_raw_input_file_id_to_unified():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=mock_db_object)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=mock_managed_file)
 
     from litellm.proxy.openai_files_endpoints.common_utils import get_batch_from_database

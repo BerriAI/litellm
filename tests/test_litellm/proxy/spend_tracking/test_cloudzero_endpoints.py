@@ -30,6 +30,7 @@ async def test_delete_cloudzero_settings_success(client, monkeypatch):
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_config = mock_litellm_config
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -57,6 +58,7 @@ async def test_delete_cloudzero_settings_not_found(client, monkeypatch):
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_config = mock_litellm_config
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -93,6 +95,7 @@ async def test_get_cloudzero_settings_success(client, monkeypatch):
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_config = mock_litellm_config
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -134,6 +137,7 @@ async def test_get_cloudzero_settings_not_configured(client, monkeypatch):
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_config = mock_litellm_config
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -168,6 +172,7 @@ async def test_get_cloudzero_settings_empty_param_value(client, monkeypatch):
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_config = mock_litellm_config
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)

@@ -193,6 +193,7 @@ async def test_add_new_member_links_default_team_budget_id():
         "user_role": "internal_user",
     }
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
@@ -265,6 +266,7 @@ async def test_add_new_member_no_budget_when_default_budget_row_is_missing():
         "user_role": "internal_user",
     }
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
@@ -318,6 +320,7 @@ async def test_add_new_member_budget_duration_only_clones_default_max_budget():
         "user_role": "internal_user",
     }
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
@@ -403,6 +406,7 @@ async def test_add_new_member_no_budget_when_no_default_and_no_max_budget():
         "user_role": "internal_user",
     }
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
@@ -494,6 +498,7 @@ async def test_add_new_member_creates_new_budget_when_max_budget_provided():
         "user_role": "internal_user",
     }
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
@@ -572,6 +577,7 @@ async def test_add_new_member_persists_budget_duration():
         "user_role": "internal_user",
     }
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
@@ -636,6 +642,7 @@ async def test_add_new_member_persists_budget_duration_without_max_budget():
         "user_role": "internal_user",
     }
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
@@ -709,6 +716,7 @@ async def test_add_new_member_with_user_email_links_default_budget():
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=mock_default_budget_row
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_budgettable.create = AsyncMock()
 
     mock_team_membership_response = MagicMock()
@@ -845,6 +853,7 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     db: Final = _FakeDb()
     prisma_client: Final = MagicMock()
     prisma_client.db = db
+    prisma_client.replica_db = prisma_client.db
     admin: Final = UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN)
     team_id: Final = "team-shared-default"
     default_budget: Final = await db.litellm_budgettable.create(data={"budget_id": "team-default", "max_budget": 100.0})
@@ -948,6 +957,7 @@ async def test_attach_object_permission_to_dict_with_object_permission_id():
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
         return_value=mock_object_permission
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Call the function
     result = await attach_object_permission_to_dict(
@@ -994,6 +1004,7 @@ async def test_attach_object_permission_to_dict_without_object_permission_id():
 
     # Verify no database query was made
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
 
 @pytest.mark.asyncio
@@ -1021,6 +1032,7 @@ async def test_attach_object_permission_to_dict_object_permission_not_found():
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
         return_value=None
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Call the function
     result = await attach_object_permission_to_dict(
@@ -1075,6 +1087,7 @@ async def test_attach_object_permission_to_dict_with_dict_method():
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
         return_value=mock_object_permission
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Call the function
     result = await attach_object_permission_to_dict(
@@ -1138,6 +1151,7 @@ async def test_attach_object_permission_to_dict_with_empty_dict():
 
     # Verify no database query was made
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
 
 @pytest.mark.asyncio
@@ -1170,6 +1184,7 @@ async def test_attach_object_permission_to_dict_with_none_object_permission_id()
 
     # Verify no database query was made
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
 
 @pytest.mark.asyncio
@@ -1202,6 +1217,7 @@ async def test_add_new_member_appends_team_only_if_absent_for_existing_user():
         "user_role": "internal_user",
     }
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_after)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock()
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
     mock_membership = MagicMock()
@@ -1275,6 +1291,7 @@ async def test_add_new_member_creates_missing_user_atomically_via_upsert():
         "user_role": "internal_user",
     }
     mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_created)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock()
     mock_prisma_client.db.litellm_usertable.create = AsyncMock()
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
@@ -1383,5 +1400,6 @@ async def test_add_new_member_runs_every_write_on_the_caller_transaction(new_mem
     assert tx.litellm_usertable.upsert.await_count + tx.litellm_usertable.create.await_count == 1
 
     prisma_client.db.assert_not_called()
+    prisma_client.replica_db = prisma_client.db
     prisma_client.get_data.assert_not_awaited()
     prisma_client.insert_data.assert_not_awaited()

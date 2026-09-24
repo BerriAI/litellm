@@ -29,6 +29,7 @@ def _make_prisma(
 ) -> MagicMock:
     prisma = MagicMock()
     table = prisma.db.litellm_verificationtoken
+    prisma.replica_db = prisma.db
     table.find_unique = AsyncMock(return_value=find_unique_row)
     table.find_many = AsyncMock(return_value=find_many_rows or [])
     table.delete_many = AsyncMock(return_value=1)
@@ -133,6 +134,7 @@ async def test_session_logout_refuses_non_ui_session_key():
 
     assert exc_info.value.status_code == 403
     prisma.db.litellm_verificationtoken.delete_many.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -157,6 +159,7 @@ async def test_session_logout_is_idempotent_when_row_already_gone():
 
     assert response.message == "Session already revoked."
     prisma.db.litellm_verificationtoken.delete_many.assert_not_called()
+    prisma.replica_db = prisma.db
     # The cache entry may outlive the row; evict regardless.
     evict_mock.assert_awaited_once()
 
@@ -260,6 +263,7 @@ async def test_revoke_ui_session_keys_noop_when_no_sessions():
 
     assert revoked == 0
     prisma.db.litellm_verificationtoken.delete_many.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -268,6 +272,7 @@ async def test_revoke_ui_session_keys_failure_is_swallowed():
     failure must not fail the caller's request."""
     prisma = _make_prisma(find_many_rows=[_session_row(token="t1")])
     prisma.db.litellm_verificationtoken.delete_many = AsyncMock(side_effect=RuntimeError("db down"))
+    prisma.replica_db = prisma.db
     p1, p2, p3 = _patched_globals(prisma)
 
     with (

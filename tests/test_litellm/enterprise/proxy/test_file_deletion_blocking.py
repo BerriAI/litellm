@@ -84,6 +84,7 @@ def _make_managed_files_instance_with_batches(
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(
         return_value=mock_file_record
     )
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_managedfiletable.delete = AsyncMock(
         return_value=mock_file_record
     )

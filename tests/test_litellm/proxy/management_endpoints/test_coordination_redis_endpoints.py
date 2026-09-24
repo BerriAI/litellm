@@ -52,6 +52,7 @@ def _prisma_with_general_settings(general_settings: dict | None) -> MagicMock:
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=row)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_config.upsert = AsyncMock()
     return mock_prisma
 
@@ -267,6 +268,7 @@ async def test_update_rejects_settings_without_a_connection_target(monkeypatch):
 
     assert exc_info.value.status_code == 400
     mock_prisma.db.litellm_config.upsert.assert_not_called()
+    mock_prisma.replica_db = mock_prisma.db
 
 
 @pytest.mark.asyncio
@@ -650,6 +652,7 @@ async def test_update_refuses_a_config_owned_coordination_redis_block(monkeypatc
     assert refused.value.status_code == 400
     assert refused.value.detail["keys"] == ["coordination_redis"]
     mock_prisma.db.litellm_config.upsert.assert_not_called()
+    mock_prisma.replica_db = mock_prisma.db
 
 
 @pytest.mark.asyncio

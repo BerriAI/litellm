@@ -64,6 +64,7 @@ def admin_viewer_client(monkeypatch):
         litellm_config=mock_config_table,
         query_raw=mock_query_raw,
     )
+    mock_prisma.replica_db = mock_prisma.db
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     _override_auth(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)

@@ -233,6 +233,7 @@ async def test_prefetch_config_params_populates_cache_for_each_name(
     ]
     prisma = MagicMock()
     prisma.db.litellm_config.find_many = AsyncMock(return_value=rows)
+    prisma.replica_db = prisma.db
     await prefetch_config_params(prisma, ["a", "b", "c"])
     actual = {
         "a": _swap_config_cache._store[_config_cache_key("a")],
@@ -252,6 +253,7 @@ async def test_prefetch_config_params_empty_list_is_noop(
 ) -> None:
     prisma = MagicMock()
     prisma.db.litellm_config.find_many = AsyncMock(return_value=[])
+    prisma.replica_db = prisma.db
     await prefetch_config_params(prisma, [])
     assert prisma.db.litellm_config.find_many.await_count == 0
     assert _swap_config_cache._store == {}
@@ -263,5 +265,6 @@ async def test_prefetch_config_params_swallows_db_error_without_caching(
 ) -> None:
     prisma = MagicMock()
     prisma.db.litellm_config.find_many = AsyncMock(side_effect=RuntimeError("boom"))
+    prisma.replica_db = prisma.db
     await prefetch_config_params(prisma, ["a", "b"])
     assert _swap_config_cache._store == {}

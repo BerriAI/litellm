@@ -1151,7 +1151,8 @@ def _fake_prisma_client_with_models(rows):
     from types import SimpleNamespace
 
     table = FakeProxyModelTable(rows)
-    return SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=table)), table
+    tables = SimpleNamespace(litellm_proxymodeltable=table)
+    return SimpleNamespace(db=tables, replica_db=tables), table
 
 
 def _db_model_row(model_name: str, mock_response: str):
@@ -1301,6 +1302,7 @@ async def test_route_request_a2a_agent_miss_does_not_consume_model_read_through(
     fake_prisma, model_table = _fake_prisma_client_with_models([])
     agents_find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_agentstable = SimpleNamespace(find_unique=agents_find_unique)
+    fake_prisma.replica_db = fake_prisma.db
     monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(proxy_server, "llm_router", router)

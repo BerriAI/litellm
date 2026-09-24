@@ -41,6 +41,7 @@ class _FakePrisma:
 
     def __init__(self, teams: Set[str] = frozenset(), keys: Set[str] = frozenset()):
         self.db = _FakeDB(teams, keys)
+        self.replica_db = self.db
 
 
 class _FakeRouter:

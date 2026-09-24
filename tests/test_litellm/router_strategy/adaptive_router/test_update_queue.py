@@ -18,6 +18,7 @@ def mock_prisma():
     """Prisma client with both adaptive router models stubbed as AsyncMocks."""
     p = MagicMock()
     p.db.litellm_adaptiverouterstate.find_unique = AsyncMock(return_value=None)
+    p.replica_db = p.db
     p.db.litellm_adaptiverouterstate.upsert = AsyncMock()
     p.db.litellm_adaptiveroutersession.upsert = AsyncMock()
     return p
@@ -53,6 +54,7 @@ async def test_add_session_state_last_write_wins(queue):
         flushed.append(kwargs)
 
     p.db.litellm_adaptiveroutersession.upsert = upsert
+    p.replica_db = p.db
     await queue.flush_session_to_db(p)
     assert len(flushed) == 1
     assert flushed[0]["data"]["update"]["misalignment_count"] == 5

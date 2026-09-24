@@ -52,6 +52,7 @@ def mock_audit_log(monkeypatch):
 def _mock_prisma(monkeypatch, record=None):
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=record)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     return mock_prisma
@@ -105,6 +106,7 @@ class TestUpdateUserBanner:
         response = client.patch("/update/user_banner", json=PUBLISH_BODY)
         assert response.status_code == 403
         mock_prisma.db.litellm_uisettings.upsert.assert_not_awaited()
+        mock_prisma.replica_db = mock_prisma.db
 
     def test_persists_and_round_trips(self, admin_auth, monkeypatch, mock_audit_log):
         mock_prisma = _mock_prisma(monkeypatch, record=None)
@@ -124,6 +126,7 @@ class TestUpdateUserBanner:
         mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(
             return_value=SimpleNamespace(ui_settings=persisted_payload)
         )
+        mock_prisma.replica_db = mock_prisma.db
         read_back = client.get("/get/user_banner")
         assert read_back.status_code == 200
         assert read_back.json() == saved
@@ -173,3 +176,4 @@ class TestUpdateUserBanner:
         response = client.patch("/update/user_banner", json=payload)
         assert response.status_code == 422
         mock_prisma.db.litellm_uisettings.upsert.assert_not_awaited()
+        mock_prisma.replica_db = mock_prisma.db

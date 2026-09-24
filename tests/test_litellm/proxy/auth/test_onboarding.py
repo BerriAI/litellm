@@ -31,6 +31,7 @@ _POLICY_NO_BREACH_CHECK = {"password_policy_check_breached_passwords": False}
 class _AsyncTx:
     def __init__(self, db: MagicMock):
         self.db = db
+        self.replica_db = self.db
 
     async def __aenter__(self) -> MagicMock:
         return self.db
@@ -63,6 +64,7 @@ def _make_user() -> MagicMock:
 def _make_prisma(invite: MagicMock, user: MagicMock | None = None) -> MagicMock:
     prisma = MagicMock()
     prisma.db.litellm_invitationlink.find_unique = AsyncMock(return_value=invite)
+    prisma.replica_db = prisma.db
     prisma.db.litellm_invitationlink.update = AsyncMock()
     prisma.db.litellm_invitationlink.update_many = AsyncMock(return_value=1)
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user)
@@ -125,6 +127,7 @@ async def test_get_token_rejects_already_used_link():
     assert "already been used" in exc_info.value.detail["error"]
     # The user table must never have been queried
     prisma.db.litellm_usertable.find_unique.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -215,6 +218,7 @@ async def test_get_token_returns_onboarding_token_without_minting_ui_key():
 
     mock_generate_key.assert_not_called()
     prisma.db.litellm_invitationlink.update_many.assert_not_called()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_invitationlink.update.assert_not_called()
 
 
@@ -247,6 +251,7 @@ async def test_claim_token_rejects_already_used_link():
     assert "already been used" in exc_info.value.detail["error"]
     # Password must never have been written
     prisma.db.litellm_usertable.update.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -315,6 +320,7 @@ async def test_claim_token_rejects_missing_onboarding_token():
     assert exc_info.value.status_code == 401
     assert "Missing onboarding session" in exc_info.value.detail["error"]
     prisma.db.litellm_usertable.update.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -344,6 +350,7 @@ async def test_claim_token_rejects_wrong_onboarding_session():
     assert exc_info.value.status_code == 401
     assert "Invalid onboarding session" in exc_info.value.detail["error"]
     prisma.db.litellm_usertable.update.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -371,6 +378,7 @@ async def test_claim_token_rejects_invalid_bearer_token():
     assert exc_info.value.status_code == 401
     assert "Invalid onboarding session" in exc_info.value.detail["error"]
     prisma.db.litellm_usertable.update.assert_not_called()
+    prisma.replica_db = prisma.db
 
 
 @pytest.mark.asyncio
@@ -381,6 +389,7 @@ async def test_claim_token_rejects_concurrent_reuse_before_password_write():
     invite = _make_invite(is_accepted=False)
     prisma = _make_prisma(invite)
     prisma.db.litellm_invitationlink.update_many = AsyncMock(return_value=0)
+    prisma.replica_db = prisma.db
     request = _make_claim_request(_make_onboarding_token())
     data = InvitationClaim(
         invitation_link="invite-abc",
@@ -456,6 +465,7 @@ async def test_claim_token_sets_accepted_at_after_password_written():
 
     # Password was written
     prisma.db.litellm_invitationlink.update_many.assert_called_once()
+    prisma.replica_db = prisma.db
     reserve_kwargs = prisma.db.litellm_invitationlink.update_many.call_args.kwargs
     assert reserve_kwargs["where"] == {"id": "invite-abc", "is_accepted": False}
     assert reserve_kwargs["data"]["is_accepted"] is True
@@ -627,6 +637,7 @@ async def test_claim_token_rejects_short_password_before_consuming_invite():
     assert exc_info.value.code == "400"
     assert "at least 12 characters" in exc_info.value.message
     prisma.db.litellm_invitationlink.update_many.assert_not_called()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_usertable.update.assert_not_called()
 
 
@@ -661,6 +672,7 @@ async def test_claim_token_rejects_breached_password_before_consuming_invite():
     assert exc_info.value.code == "400"
     assert "data breaches" in exc_info.value.message
     prisma.db.litellm_invitationlink.update_many.assert_not_called()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_usertable.update.assert_not_called()
 
 
@@ -707,3 +719,4 @@ async def test_claim_token_fails_open_when_hibp_unreachable():
 
     assert "token" in result
     prisma.db.litellm_usertable.update.assert_called_once()
+    prisma.replica_db = prisma.db

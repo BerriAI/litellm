@@ -147,6 +147,7 @@ class TestNewTeamDefaultParamsApplied:
         )
         mock_prisma.get_generic_data = AsyncMock(return_value=None)
         mock_prisma.db = MagicMock()
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.litellm_teamtable = MagicMock()
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
@@ -682,6 +683,7 @@ class TestBulkUpdateTeamMemberPermissions:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_a, team_b])
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.batch_ = MagicMock(return_value=mock_batcher)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -718,6 +720,7 @@ class TestBulkUpdateTeamMemberPermissions:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_has, team_missing])
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.batch_ = MagicMock(return_value=mock_batcher)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -747,6 +750,7 @@ class TestBulkUpdateTeamMemberPermissions:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_teamtable.find_many = AsyncMock(side_effect=[page1, page2])
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.batch_ = MagicMock(return_value=mock_batcher)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -779,6 +783,7 @@ class TestBulkUpdateTeamMemberPermissions:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_a, team_b])
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.batch_ = MagicMock(return_value=mock_batcher)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -811,6 +816,7 @@ class TestBulkUpdateTeamMemberPermissions:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_has, team_missing])
+        mock_prisma.replica_db = mock_prisma.db
         mock_prisma.db.batch_ = MagicMock(return_value=mock_batcher)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -838,6 +844,7 @@ class TestBulkUpdateTeamMemberPermissions:
         mock_prisma = MagicMock()
         # Only team-a exists, team-b does not
         mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_a])
+        mock_prisma.replica_db = mock_prisma.db
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
         data = BulkUpdateTeamMemberPermissionsRequest(
@@ -914,6 +921,7 @@ class TestBulkUpdateTeamMemberPermissions:
 
         assert result["teams_updated"] == 0
         mock_prisma.db.litellm_teamtable.find_many.assert_not_called()
+        mock_prisma.replica_db = mock_prisma.db
 
     @pytest.mark.asyncio
     async def test_non_admin_gets_403(self, monkeypatch):

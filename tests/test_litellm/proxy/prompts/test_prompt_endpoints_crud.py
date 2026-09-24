@@ -47,6 +47,7 @@ async def test_delete_prompt_success():
     # Mock DB Client
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.delete_many = AsyncMock(return_value=None)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock In-Memory Registry
     with patch(
@@ -102,6 +103,7 @@ async def test_delete_prompt_by_base_id_success():
     # Mock DB Client
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.delete_many = AsyncMock(return_value=None)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Mock In-Memory Registry
     with patch(
@@ -147,6 +149,7 @@ async def test_delete_prompt_environment_scope_reaches_db_and_registry():
     mock_user_auth = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.delete_many = AsyncMock(return_value=None)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     with patch(  # test-quality-ok: stubs the collaborator so the test pins what the endpoint deletes
         "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
@@ -235,6 +238,7 @@ async def test_patch_prompt_row_deleted_mid_update_returns_404():
     mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(
         return_value=[target_row]
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_prompttable.update = AsyncMock(return_value=None)
 
     existing_prompt = PromptSpec(
@@ -275,6 +279,7 @@ async def test_patch_prompt_merges_unsent_fields_from_db_row_not_stale_memory():
     db_row = _db_row("Begin every reply with HOWDY")
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[db_row])
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_prompttable.update = AsyncMock(return_value=db_row)
     stale_in_memory = PromptSpec(
         prompt_id="test_prompt.v1",
@@ -440,6 +445,7 @@ async def test_patch_prompt_info_only_keeps_legacy_keyed_row_patchable():
     mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(
         return_value=[target_row]
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_prompttable.update = AsyncMock(return_value=updated_row)
 
     existing_prompt = PromptSpec(

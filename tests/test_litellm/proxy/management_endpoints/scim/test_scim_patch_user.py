@@ -40,6 +40,7 @@ async def test_patch_user_updates_fields():
     mock_client = MagicMock()
     mock_db = MagicMock()
     mock_client.db = mock_db
+    mock_client.replica_db = mock_client.db
     mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
     mock_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
@@ -105,6 +106,7 @@ async def test_patch_user_manages_group_memberships():
     mock_client = MagicMock()
     mock_db = MagicMock()
     mock_client.db = mock_db
+    mock_client.replica_db = mock_client.db
     mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
     mock_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
@@ -196,6 +198,7 @@ async def test_patch_user_deprovision_without_path():
     mock_client = MagicMock()
     mock_db = MagicMock()
     mock_client.db = mock_db
+    mock_client.replica_db = mock_client.db
     mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
     mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -275,6 +278,7 @@ async def test_patch_user_multiple_fields_without_path():
     mock_client = MagicMock()
     mock_db = MagicMock()
     mock_client.db = mock_db
+    mock_client.replica_db = mock_client.db
     mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_db.litellm_usertable.update = AsyncMock(side_effect=mock_update)
     mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])

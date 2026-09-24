@@ -186,6 +186,7 @@ async def test_update_spend_logs_job_skips_when_queue_empty(
     proxy_logging.failure_handler = AsyncMock()
     mock_prisma_client.spend_log_transactions = []
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     await update_spend_logs_job(
         prisma_client=mock_prisma_client,
         db_writer_client=None,
@@ -209,6 +210,7 @@ async def test_update_spend_logs_job_drains_tool_queue_when_spend_queue_empty(
     mock_prisma_client.spend_log_transactions = []
     mock_prisma_client.tool_usage_transactions = [MagicMock()]
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
     monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
     flush_stub = AsyncMock()
     monkeypatch.setattr(tool_mod, "flush_tool_usage_transactions", flush_stub, raising=False)
@@ -234,6 +236,7 @@ async def test_update_spend_logs_job_processes_and_clears_queue(
         make_spend_log_row(request_id="r2"),
     ]
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     # Stub auxiliary imports so the test focuses on the spend-logs write path.
     import litellm.proxy.guardrails.usage_tracking as guard_mod
@@ -289,6 +292,7 @@ async def test_update_spend_logs_job_requeues_popped_rows_when_write_cancelled(
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
         side_effect=_cancel_mid_write
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     with pytest.raises(asyncio.CancelledError):
         await update_spend_logs_job(
@@ -315,6 +319,7 @@ async def test_update_spend_logs_job_does_not_requeue_when_cancelled_after_write
     proxy_logging.failure_handler = AsyncMock()
     mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     monkeypatch.setattr(
         guard_mod,
@@ -361,6 +366,7 @@ async def test_drain_spend_logs_queue_flushes_rows_queued_while_draining(
             )
 
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_write)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     await drain_spend_logs_queue(
         prisma_client=mock_prisma_client,
@@ -402,6 +408,7 @@ async def test_drain_spend_logs_queue_stops_monitor_and_keeps_its_popped_rows(
         written.extend(row["request_id"] for row in kwargs["data"])
 
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_write)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     async def _monitor() -> None:
         await update_spend_logs_job(
@@ -448,6 +455,7 @@ async def test_drain_spend_logs_queue_gives_up_after_max_passes(
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
         side_effect=_write_and_refill
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     await drain_spend_logs_queue(
         prisma_client=mock_prisma_client,
@@ -747,6 +755,7 @@ async def test_drain_spend_logs_queue_parks_unwritable_rows_in_redis_on_shutdown
         make_spend_log_row(request_id="r2"),
     ]
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_table_gone_error())
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     with pytest.raises(TableNotFoundError):
         await drain_spend_logs_queue(
@@ -771,6 +780,7 @@ async def test_drain_spend_logs_queue_waits_for_an_in_flight_write_before_parkin
         raise _table_gone_error()
 
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_fail_once_shutdown_starts)
+    mock_prisma_client.replica_db = mock_prisma_client.db
     scheduler_write: Final = asyncio.ensure_future(
         update_spend_logs_job(
             prisma_client=mock_prisma_client,
@@ -818,6 +828,7 @@ async def test_drain_spend_logs_queue_parks_rows_left_after_max_passes(
         mock_prisma_client.spend_log_transactions.append(make_spend_log_row(request_id="late"))
 
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_write_and_refill)
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     await drain_spend_logs_queue(
         prisma_client=mock_prisma_client,
@@ -838,6 +849,7 @@ async def test_drain_spend_logs_queue_keeps_rows_in_memory_when_redis_is_down(
     fake_redis.down = True
     mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_table_gone_error())
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     with pytest.raises(TableNotFoundError):
         await drain_spend_logs_queue(
@@ -867,6 +879,7 @@ async def test_update_spend_writes_rows_parked_in_redis_by_a_previous_pod(
     assert await buffer.store_spend_logs_in_redis([make_spend_log_row(request_id="parked")]) is True
     mock_prisma_client.spend_log_transactions = []
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock()
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     await update_spend(
         prisma_client=mock_prisma_client,

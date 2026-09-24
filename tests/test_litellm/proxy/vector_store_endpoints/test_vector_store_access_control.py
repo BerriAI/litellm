@@ -121,6 +121,7 @@ async def test_delete_vector_store_checks_access():
         }
     )
     mock_prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=mock_vector_store)
+    mock_prisma.replica_db = mock_prisma.db
 
     # User from different team should get 403
     user_api_key_dict = UserAPIKeyAuth(team_id="team_789")
@@ -279,6 +280,7 @@ async def test_get_vector_store_info_dashboard_session_resolves_real_teams(
     mock_prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         return_value=MagicMock(model_dump=lambda: dict(_TEAM_A_OWNED))
     )
+    mock_prisma.replica_db = mock_prisma.db
 
     async def outcome() -> int:
         try:

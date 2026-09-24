@@ -925,6 +925,7 @@ async def test_tuning_baseline_v3_is_created_alongside_the_legacy_row():
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_config.create = AsyncMock()
     deployment = {
         "model_name": "a",
@@ -962,6 +963,7 @@ async def test_scorer_baseline_upgrade_preserves_existing_routers_and_is_not_ref
             else None
         )
     )
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_config.create = AsyncMock()
 
     baseline = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, deployments)
@@ -1003,6 +1005,7 @@ async def test_tuning_baseline_waits_for_a_complete_db_model_census(monkeypatch)
 
     assert result is None
     prisma_client.db.litellm_config.find_unique.assert_not_called()
+    prisma_client.replica_db = prisma_client.db
 
 
 # ---------------------------------------------------------------------------

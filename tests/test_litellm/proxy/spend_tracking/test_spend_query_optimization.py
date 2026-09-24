@@ -34,6 +34,7 @@ async def test_spend_query_uses_timestamp_filtering():
     mock_query_raw = AsyncMock(return_value=[])
     mock_db.query_raw = mock_query_raw
     mock_prisma.db = mock_db
+    mock_prisma.replica_db = mock_prisma.db
 
     # Use timezone-aware datetime objects
     start_date = datetime.datetime(2024, 1, 1, tzinfo=timezone.utc)
@@ -87,6 +88,7 @@ async def test_global_activity_wraps_params_in_at_time_zone_utc(monkeypatch):
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
@@ -134,6 +136,7 @@ async def test_global_activity_internal_user_wraps_params_in_at_time_zone_utc(
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
@@ -168,6 +171,7 @@ async def test_spend_logs_ui_wraps_params_in_at_time_zone_utc(monkeypatch):
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
@@ -209,6 +213,7 @@ def _make_ui_spend_logs_mock(count_total, page_rows):
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(
         side_effect=[[{"total_count": count_total}], page_rows]
     )
@@ -259,6 +264,7 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
     )
 
     mock_prisma.db.litellm_spendlogs.count.assert_not_called()
+    mock_prisma.replica_db = mock_prisma.db
 
     count_call = mock_prisma.db.query_raw.call_args_list[0]
     count_sql = count_call[0][0]
@@ -347,6 +353,7 @@ async def test_spend_logs_ui_empty_page_reports_zero_total(monkeypatch):
     # page.
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": 0}], []])
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
@@ -395,6 +402,7 @@ async def test_spend_logs_ui_out_of_range_page_keeps_total(monkeypatch):
     # out-of-range page (empty).
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": 7}], []])
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
@@ -436,6 +444,7 @@ async def test_get_spend_by_team_binds_optional_team_filter():
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_query_raw = AsyncMock(return_value=[])
     mock_prisma.db.query_raw = mock_query_raw
 
@@ -487,6 +496,7 @@ async def test_global_spend_report_team_group_forwards_team_id(monkeypatch):
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
@@ -545,6 +555,7 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 

@@ -58,6 +58,7 @@ async def test_create_duplicate_access_group_fails():
             )
         ]
     )
+    mock_prisma.replica_db = mock_prisma.db
 
     mock_user = UserAPIKeyAuth(
         user_id="test_admin",
@@ -103,6 +104,7 @@ async def test_create_access_group_with_model_ids_tags_only_specific_deployments
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
         return_value=deploy_a
     )
@@ -172,6 +174,7 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
         side_effect=[[], [deploy_a, deploy_b, deploy_c]]
     )
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     mock_user = UserAPIKeyAuth(
@@ -217,6 +220,7 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
         return_value=deploy_a
     )
@@ -298,6 +302,7 @@ async def test_create_access_group_invalid_model_id_returns_400():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
 
     mock_user = UserAPIKeyAuth(
@@ -342,6 +347,7 @@ async def test_create_access_group_surfaces_dropped_models():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=deploy_a)
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
@@ -385,6 +391,7 @@ async def test_create_access_group_trusts_reload_snapshot_over_post_lock_fresh_r
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=deploy_a)
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
@@ -421,6 +428,7 @@ async def test_tag_deployment_parses_string_model_info_and_refuses_corrupt():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
+    mock_prisma.replica_db = mock_prisma.db
 
     pair = await _tag_deployment_with_access_group(
         model_id="deploy-str",
@@ -452,6 +460,7 @@ async def test_delete_access_group_ignores_models_that_were_already_dead():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[deploy_broken])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
     mock_prisma.db.litellm_modelaccessgroupbudgettable.delete = AsyncMock(return_value=None)
 
@@ -514,6 +523,7 @@ async def test_create_access_group_read_through_recovers_model_created_on_siblin
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=[[db_row], [], [db_row]])
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
 
     with (
@@ -560,6 +570,7 @@ async def test_create_access_group_model_missing_everywhere_still_400s():
     )
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
 
     with (
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
@@ -714,6 +725,7 @@ class _FakePrismaClient:
             litellm_modelaccessgroupbudgettable=self.access_group_budget_table,
             litellm_proxymodeltable=self.model_table,
         )
+        self.replica_db = self.db
 
     def jsonify_object(self, data):
         return dict(data)

@@ -42,6 +42,7 @@ async def test_set_object_permission():
     mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=mock_created_permission
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
     mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
     # Test data with object_permission
@@ -104,6 +105,7 @@ async def test_set_object_permission_persists_mcp_tool_search_enabled():
     mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=mock_created_permission
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     data_json = {
         "object_permission": {
@@ -130,6 +132,7 @@ async def test_set_object_permission_persists_skills():
     mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=mock_created_permission
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     data_json = {
         "object_permission": LiteLLM_ObjectPermissionBase(skills=["private-skill"]).model_dump(),
@@ -778,6 +781,7 @@ async def test_validate_db_mcp_server_alias_outside_team_scope_raises_when_regis
     mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(
         return_value=[mock_db_server]
     )
+    mock_prisma_client.replica_db = mock_prisma_client.db
 
     team_obj = _make_team_obj(mcp_servers=[])
     with pytest.raises(HTTPException) as exc_info:
@@ -1266,6 +1270,7 @@ def _make_grandfather_fixtures(mcp_servers=None, mcp_tool_permissions=None):
     existing_row.mcp_tool_permissions = mcp_tool_permissions or {}
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.replica_db = mock_prisma.db
     return mock_prisma, existing_row
 
 
@@ -1392,6 +1397,7 @@ def _make_ambiguity_prisma(existing_tool_permissions=None):
     object permission row (if any) stores the given mcp_tool_permissions JSON string."""
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(_SHARED_ALIAS_DB_SERVERS))
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=MagicMock(object_permission_id="perm-id")
     )
@@ -1423,6 +1429,7 @@ async def test_set_object_permission_rejects_shared_alias_or_name_tool_permissio
     assert exc_info.value.status_code == 400
     assert all(server_id in str(exc_info.value.detail) for server_id in colliding_ids)
     mock_prisma.db.litellm_objectpermissiontable.create.assert_not_called()
+    mock_prisma.replica_db = mock_prisma.db
 
 
 @pytest.mark.asyncio

@@ -934,6 +934,7 @@ class TestScanOnlyToolResultsInitRefusal:
 async def test_update_guardrail_in_db_raises_when_row_missing():
     prisma_client = MagicMock()
     prisma_client.db.litellm_guardrailstable.update = AsyncMock(return_value=None)
+    prisma_client.replica_db = prisma_client.db
 
     with pytest.raises(
         Exception,

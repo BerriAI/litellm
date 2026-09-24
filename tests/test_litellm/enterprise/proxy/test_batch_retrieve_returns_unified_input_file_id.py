@@ -26,6 +26,7 @@ def _mock_prisma(batch_json: str, managed_file_record=None):
     prisma.db.litellm_managedobjecttable.find_first = AsyncMock(
         return_value=batch_db_record
     )
+    prisma.replica_db = prisma.db
 
     prisma.db.litellm_managedfiletable.find_first = AsyncMock(
         return_value=managed_file_record
@@ -81,6 +82,7 @@ async def test_should_resolve_raw_input_file_id_to_unified_id():
     prisma.db.litellm_managedfiletable.find_first.assert_any_call(
         where={"flat_model_file_ids": {"has": raw_input_file_id}}
     )
+    prisma.replica_db = prisma.db
     prisma.db.litellm_managedfiletable.find_first.assert_any_call(
         where={"flat_model_file_ids": {"has": "file-output-raw"}}
     )
@@ -125,3 +127,4 @@ async def test_should_preserve_already_managed_input_file_id():
     )
 
     prisma.db.litellm_managedfiletable.find_first.assert_not_called()
+    prisma.replica_db = prisma.db

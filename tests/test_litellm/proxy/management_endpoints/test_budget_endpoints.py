@@ -26,6 +26,7 @@ def client_and_mocks(monkeypatch):
         litellm_budgettable=mock_table,
         litellm_dailyspend=mock_table,
     )
+    mock_prisma.replica_db = mock_prisma.db
 
     # Monkeypatch Mocked Prisma client into the server module
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)

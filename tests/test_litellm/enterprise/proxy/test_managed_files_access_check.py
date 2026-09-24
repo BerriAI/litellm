@@ -52,6 +52,7 @@ def _make_managed_files_instance(
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(
         return_value=mock_db_record
     )
+    mock_prisma.replica_db = mock_prisma.db
 
     instance = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
@@ -189,6 +190,7 @@ def _make_managed_files_instance_with_object_store():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedobjecttable.upsert = AsyncMock(side_effect=upsert)
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(
         side_effect=find_first
     )
@@ -296,6 +298,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
     mock_prisma.db.litellm_managedobjecttable.find_many = AsyncMock(
         return_value=[mock_job]
     )
+    mock_prisma.replica_db = mock_prisma.db
     mock_prisma.db.litellm_managedobjecttable.update = AsyncMock()
     mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
 

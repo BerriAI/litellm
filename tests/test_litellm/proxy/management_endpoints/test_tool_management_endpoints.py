@@ -110,6 +110,7 @@ def _team_row(object_permission_id: Optional[str]) -> MagicMock:
 def _team_policy_prisma(team_table: FakeTeamTable) -> MagicMock:
     prisma = MagicMock()
     prisma.db.litellm_teamtable = team_table
+    prisma.replica_db = prisma.db
     prisma.db.litellm_objectpermissiontable.create = AsyncMock()
     prisma.db.litellm_objectpermissiontable.delete = AsyncMock()
     return prisma
@@ -118,6 +119,7 @@ def _team_policy_prisma(team_table: FakeTeamTable) -> MagicMock:
 def _rollup_prisma(group_rows: list, daily_rows: list | None = None) -> MagicMock:
     prisma = MagicMock()
     prisma.db.query_raw = AsyncMock(return_value=[])
+    prisma.replica_db = prisma.db
     prisma.db.litellm_spendlogs.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_spendlogtoolindex.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_dailytoolspend.group_by = AsyncMock(return_value=group_rows)
@@ -343,6 +345,7 @@ class TestToolManagementEndpoints:
             resp = self.client.get("/v1/tool/spend?start_date=2026-07-01&end_date=2026-07-02")
         assert resp.status_code == 200
         prisma.db.litellm_dailytoolspend.find_many.assert_not_awaited()
+        prisma.replica_db = prisma.db
 
     @patch("litellm.proxy.proxy_server.prisma_client", None)
     def test_tool_spend_no_db_returns_500(self):
@@ -358,6 +361,7 @@ class TestToolManagementEndpoints:
             resp = self.client.get("/v1/tool/spend?start_date=2026-07-01&end_date=2026-07-02")
         assert resp.status_code == 200
         prisma.db.query_raw.assert_not_awaited()
+        prisma.replica_db = prisma.db
         prisma.db.litellm_spendlogs.find_many.assert_not_awaited()
         prisma.db.litellm_spendlogtoolindex.find_many.assert_not_awaited()
         prisma.db.litellm_dailytoolspend.group_by.assert_awaited_once()
@@ -409,6 +413,7 @@ class TestToolManagementEndpoints:
         assert resp.status_code == 400
         assert "Invalid date format" in resp.json()["detail"]
         prisma.db.litellm_dailytoolspend.group_by.assert_not_awaited()
+        prisma.replica_db = prisma.db
 
     def test_tool_spend_non_admin_returns_403(self):
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -424,3 +429,4 @@ class TestToolManagementEndpoints:
             resp = client.get("/v1/tool/spend")
         assert resp.status_code == 403
         prisma.db.litellm_dailytoolspend.group_by.assert_not_awaited()
+        prisma.replica_db = prisma.db

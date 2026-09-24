@@ -3984,6 +3984,7 @@ def test_get_file_content_model_routed_attaches_trusted_model_credentials(monkey
     managed_file_row.storage_url = None
     prisma_stub = MagicMock()
     prisma_stub.db.litellm_managedfiletable.find_first = AsyncMock(return_value=managed_file_row)
+    prisma_stub.replica_db = prisma_stub.db
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_stub)
     setup_proxy_logging_object(monkeypatch, router)

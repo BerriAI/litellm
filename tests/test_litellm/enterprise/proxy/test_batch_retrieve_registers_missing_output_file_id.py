@@ -49,6 +49,7 @@ def _build_managed_files_mock(unified_id: str = "file-bWFuYWdlZF9vdXRwdXRfaWQ=")
 def _build_prisma_mock():
     mock = MagicMock()
     mock.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    mock.replica_db = mock.db
     return mock
 
 
@@ -134,6 +135,7 @@ async def test_get_batch_from_database_registers_missing_output_file_id():
     prisma.db.litellm_managedobjecttable.find_first = AsyncMock(
         return_value=batch_db_record
     )
+    prisma.replica_db = prisma.db
     prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
 
     mock_managed_files = _build_managed_files_mock(unified_id=unified_output_file_id)
@@ -188,6 +190,7 @@ async def test_registered_output_file_row_denies_cross_user_access():
     raw_output_file_id = "file-raw-output"
     prisma = MagicMock()
     prisma.db.litellm_managedfiletable.upsert = AsyncMock()
+    prisma.replica_db = prisma.db
     prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
     managed_files = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),

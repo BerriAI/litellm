@@ -33,6 +33,7 @@ def _row(param_value=None, reload_revision=0, last_run_at=None):
 def _mock_prisma(row=None, upserted_revision=1):
     prisma_client = MagicMock()
     prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=row)
+    prisma_client.replica_db = prisma_client.db
     prisma_client.db.litellm_config.upsert = AsyncMock(return_value=_row(reload_revision=upserted_revision))
     prisma_client.db.litellm_config.update_many = AsyncMock(return_value=1)
     return prisma_client
@@ -85,6 +86,7 @@ class _FakeConfigTable:
 def _fake_prisma(table):
     prisma_client = MagicMock()
     prisma_client.db.litellm_config = table
+    prisma_client.replica_db = prisma_client.db
     return prisma_client
 
 
@@ -291,6 +293,7 @@ async def test_record_reload_run_updates_last_run_without_creating_or_bumping():
     kwargs = prisma_client.db.litellm_config.update_many.await_args.kwargs
     assert kwargs == {"data": {"last_run_at": LAST_RUN}, "where": {"param_name": "model_cost_map_reload_config"}}
     prisma_client.db.litellm_config.upsert.assert_not_called()
+    prisma_client.replica_db = prisma_client.db
 
 
 @pytest.mark.asyncio

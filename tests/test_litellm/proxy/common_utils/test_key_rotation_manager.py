@@ -30,6 +30,7 @@ class TestKeyRotationManager:
         """
         # Setup
         mock_prisma_client = AsyncMock()
+        mock_prisma_client.replica_db = mock_prisma_client.db
         manager = KeyRotationManager(mock_prisma_client)
 
         now = datetime.now(timezone.utc)
@@ -101,6 +102,7 @@ class TestKeyRotationManager:
         """
         # Setup
         mock_prisma_client = AsyncMock()
+        mock_prisma_client.replica_db = mock_prisma_client.db
         manager = KeyRotationManager(mock_prisma_client)
 
         # Use a fixed timestamp to avoid timing issues in tests
@@ -171,6 +173,7 @@ class TestKeyRotationManager:
         """
         # Setup
         mock_prisma_client = AsyncMock()
+        mock_prisma_client.replica_db = mock_prisma_client.db
         manager = KeyRotationManager(mock_prisma_client)
 
         # Mock key to rotate
@@ -231,6 +234,7 @@ class TestKeyRotationManager:
         Test that _cleanup_expired_deprecated_keys deletes expired deprecated keys.
         """
         mock_prisma_client = AsyncMock()
+        mock_prisma_client.replica_db = mock_prisma_client.db
         mock_prisma_client.db.litellm_deprecatedverificationtoken.delete_many.return_value = (
             3
         )
@@ -251,6 +255,7 @@ class TestKeyRotationManager:
         Test that _rotate_key passes grace_period in RegenerateKeyRequest.
         """
         mock_prisma_client = AsyncMock()
+        mock_prisma_client.replica_db = mock_prisma_client.db
         manager = KeyRotationManager(mock_prisma_client)
 
         key_to_rotate = LiteLLM_VerificationToken(

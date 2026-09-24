@@ -1182,6 +1182,7 @@ def assert_ownership_registered_for_team_a(prisma_client: AsyncMock, batch_id: s
     assert created["created_by"] == "user_a"
     assert created["team_id"] == "team_a"
     prisma_client.db.litellm_managedobjecttable.update_many.assert_not_awaited()
+    prisma_client.replica_db = prisma_client.db
 
 
 @pytest.mark.asyncio

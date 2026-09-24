@@ -77,6 +77,7 @@ async def test_full_lifecycle_create_draft_edit_publish_promote():
         return created_v1
 
     prisma.db.litellm_policytable.create = AsyncMock(side_effect=create_impl)
+    prisma.replica_db = prisma.db
     req = PolicyCreateRequest(
         policy_name="lifecycle-policy",
         description="Initial",
@@ -205,6 +206,7 @@ async def test_attachments_resolve_against_production_after_promotion():
         guardrails_add=["ga", "gb"],
     )
     prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[prod_row])
+    prisma.replica_db = prisma.db
 
     resolved = await registry.resolve_guardrails_from_db(
         policy_name="att-policy",
