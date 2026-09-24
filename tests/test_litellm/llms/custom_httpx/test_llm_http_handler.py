@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import struct
 import threading
 import time
 from typing import Final
@@ -3896,6 +3897,77 @@ def test_image_edit_handler_keeps_the_sync_transform():
     assert config.transform_calls == ["sync"]
     assert captured["body"] == {"transformed_by": "sync"}
     assert response.data[0].b64_json == "sync"
+
+
+def _tiny_png(width: int, height: int) -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", 13)
+        + b"IHDR"
+        + struct.pack(">II", width, height)
+        + b"\x08\x06\x00\x00\x00"
+        + bytes(4)
+    )
+
+
+def test_image_edit_handler_stamps_measured_reference_pixels():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_echo_json_transport({}))
+
+    response = BaseLLMHTTPHandler().image_edit_handler(
+        model="edit-model",
+        image=[_tiny_png(4, 2), _tiny_png(1, 1)],
+        prompt="add a hat",
+        image_edit_provider_config=_ImageEditRecordingConfig(),
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert response._reference_pixels == 4 * 2 + 1 * 1
+
+
+async def test_async_image_edit_handler_stamps_measured_reference_pixels():
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_echo_json_transport({}))
+
+    response = await BaseLLMHTTPHandler().async_image_edit_handler(
+        model="edit-model",
+        image=_tiny_png(4, 2),
+        prompt="add a hat",
+        image_edit_provider_config=_ImageEditRecordingConfig(),
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert response._reference_pixels == 8
+
+
+def test_image_edit_handler_leaves_reference_pixels_unset_when_unmeasurable():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_echo_json_transport({}))
+
+    response = BaseLLMHTTPHandler().image_edit_handler(
+        model="edit-model",
+        image=b"not-an-image",
+        prompt="add a hat",
+        image_edit_provider_config=_ImageEditRecordingConfig(),
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert response._reference_pixels is None
 
 
 class _ScriptedClientWebSocket(_FakeClientWebSocket):

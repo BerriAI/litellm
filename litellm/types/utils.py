@@ -318,6 +318,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_audio_token_batches: ReadOnly[float | None]
     input_cost_per_image_token_batches: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
+    input_cost_per_pixel: ReadOnly[float | None]
+    input_cost_per_reference_pixel: ReadOnly[float | None]
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
     input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
@@ -2582,6 +2584,7 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
+    _reference_pixels: int | None = None
 
     usage: ImageUsage | None = None
     """
@@ -3702,6 +3705,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_1024: float | None = None
     output_cost_per_image_1536: float | None = None
     input_cost_per_pixel: float | None = None
+    input_cost_per_reference_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
     # Include all ModelInfoBase fields as optional
