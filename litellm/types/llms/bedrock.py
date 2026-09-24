@@ -1015,6 +1015,140 @@ class AmazonTitanImageGenerationRequestBody(TypedDict, total=False):
     imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
 
 
+################ Amazon Nova Reel Video Types ################
+
+NOVA_REEL_TASK_TYPES = Literal["TEXT_VIDEO", "MULTI_SHOT_AUTOMATED", "MULTI_SHOT_MANUAL"]
+
+
+class AmazonNovaReelS3Location(TypedDict, total=False):
+    """
+    S3 location for a Nova Reel input image.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-req-resp-structure.html
+    """
+
+    uri: str
+    bucketOwner: str
+
+
+class AmazonNovaReelImageSourceLocation(TypedDict, total=False):
+    """
+    Location of a Nova Reel input image: inline base64 bytes or S3.
+    """
+
+    bytes: str  # base64 encoded image
+    s3Location: AmazonNovaReelS3Location
+
+
+class AmazonNovaReelImageSource(TypedDict, total=False):
+    """
+    Image source for Nova Reel textToVideoParams.images entries.
+    """
+
+    format: Literal["png", "jpeg"]
+    source: AmazonNovaReelImageSourceLocation
+
+
+class AmazonNovaReelTextToVideoParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Reel text/image-to-video generation.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-req-resp-structure.html
+    """
+
+    text: str
+    images: list[AmazonNovaReelImageSource]
+
+
+class AmazonNovaReelVideoGenerationConfig(TypedDict, total=False):
+    """
+    Generation config for Amazon Nova Reel.
+
+    durationSeconds: 6 for single-shot (v1:0 supports 6|10; v1:1 single-shot is 6);
+    multiples of 6 up to 120 for multi-shot. fps: 24 only. dimension: "1280x720"
+    (v1:0 also supports "720x1280"). seed: 0-2147483646, AWS default 42.
+    """
+
+    durationSeconds: int
+    fps: int
+    dimension: str
+    seed: int
+
+
+class AmazonNovaReelModelInput(TypedDict, total=False):
+    """
+    modelInput body for Nova Reel StartAsyncInvoke.
+    """
+
+    taskType: NOVA_REEL_TASK_TYPES
+    textToVideoParams: AmazonNovaReelTextToVideoParams
+    videoGenerationConfig: AmazonNovaReelVideoGenerationConfig
+
+
+class BedrockAsyncInvokeS3OutputDataConfig(TypedDict, total=False):
+    """
+    S3 output config for Bedrock StartAsyncInvoke (nested outputDataConfig key).
+
+    Ref: bedrock-runtime service model (StartAsyncInvokeRequest.outputDataConfig)
+    """
+
+    s3Uri: str
+    kmsKeyId: str
+    bucketOwner: str
+
+
+class BedrockAsyncInvokeOutputDataConfig(TypedDict, total=False):
+    """
+    Output data config for Bedrock StartAsyncInvoke.
+    """
+
+    s3OutputDataConfig: BedrockAsyncInvokeS3OutputDataConfig
+
+
+class BedrockStartAsyncInvokeRequest(TypedDict, total=False):
+    """
+    Request body for POST {runtime}/async-invoke (StartAsyncInvoke).
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-access.html
+    """
+
+    modelId: str
+    modelInput: AmazonNovaReelModelInput
+    outputDataConfig: BedrockAsyncInvokeOutputDataConfig
+    clientRequestToken: str
+
+
+class BedrockStartAsyncInvokeResponse(TypedDict, total=False):
+    """
+    Response body for POST {runtime}/async-invoke.
+    """
+
+    invocationArn: str
+
+
+BEDROCK_ASYNC_INVOKE_STATUSES = Literal["InProgress", "Completed", "Failed"]
+
+
+class BedrockGetAsyncInvokeResponse(TypedDict, total=False):
+    """
+    Response body for GET {runtime}/async-invoke/{invocationArn} (GetAsyncInvoke).
+
+    status enum verified against the bedrock-runtime service model
+    (AsyncInvokeStatus): InProgress | Completed | Failed. failureMessage is
+    present when status is Failed.
+    """
+
+    invocationArn: str
+    modelArn: str
+    clientRequestToken: str
+    status: BEDROCK_ASYNC_INVOKE_STATUSES
+    failureMessage: str
+    submitTime: float
+    lastModifiedTime: float
+    endTime: float
+    outputDataConfig: BedrockAsyncInvokeOutputDataConfig
+
+
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
 else:

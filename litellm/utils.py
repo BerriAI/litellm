@@ -9569,6 +9569,15 @@ class ProviderConfigManager:
             from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 
             return get_hosted_vllm_video_config(model)
+        elif LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.videos.transformation import BedrockNovaReelVideoConfig
+
+            # model is None for status/content routes (the provider config only
+            # does response mapping there; the real model id is encoded in the
+            # video id itself).
+            if model is None or "nova-reel" in model.lower():
+                return BedrockNovaReelVideoConfig()
+            return None
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIVideoConfig()
         return None

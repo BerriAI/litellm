@@ -243,6 +243,29 @@ def video_generation(
         # Set the correct call type for video generation
         litellm_logging_obj.call_type = CallTypes.create_video.value
 
+        # Route bedrock to its specific handler (AWS SigV4 signing required)
+        if custom_llm_provider == "bedrock":
+            from litellm.llms.bedrock.videos.handler import BedrockVideoGeneration
+
+            bedrock_optional_params: Final[dict] = dict(video_generation_request_params)
+            # aws_* auth params ride on litellm_params; surface them for the handler
+            # (mirrors how images/main.py merges non_default_params for bedrock).
+            bedrock_optional_params.update(
+                {k: v for k, v in litellm_params.model_dump(exclude_none=True).items() if k.startswith("aws_")}
+            )
+            return BedrockVideoGeneration().video_generation(
+                model=model,
+                prompt=prompt,
+                optional_params=bedrock_optional_params,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+                avideo_generation=_is_async,
+                client=kwargs.get("client"),
+                api_base=litellm_params.get("api_base"),
+                extra_headers=extra_headers,
+                api_key=kwargs.get("api_key"),
+            )
+
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.video_generation_handler(
             model=model,
@@ -355,6 +378,16 @@ def video_content(
         )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
+        if custom_llm_provider == "bedrock":
+            from litellm.llms.bedrock.videos.handler import BedrockVideoGeneration
+
+            return BedrockVideoGeneration().video_content(
+                video_id=video_id,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                api_base=litellm_params.get("api_base"),
+                api_key=kwargs.get("api_key"),
+            )
         return base_llm_http_handler.video_content_handler(
             video_id=video_id,
             video_content_provider_config=video_provider_config,
@@ -1057,6 +1090,19 @@ def video_status(
 
         # Set the correct call type for video status
         litellm_logging_obj.call_type = CallTypes.video_retrieve.value
+
+        # Route bedrock to its specific handler (AWS SigV4 signing required)
+        if custom_llm_provider == "bedrock":
+            from litellm.llms.bedrock.videos.handler import BedrockVideoGeneration
+
+            return BedrockVideoGeneration().video_status(
+                video_id=video_id,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                api_base=litellm_params.get("api_base"),
+                api_key=kwargs.get("api_key"),
+                astatus=_is_async,
+            )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.video_status_handler(
