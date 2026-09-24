@@ -4347,22 +4347,15 @@ class Router:
             raise e
 
     async def _wait_for_scheduler_turn(self, model: str, priority: int, parent_otel_span: Span | None) -> None:
-        item: Final = FlowItem(priority=priority, request_id=str(uuid.uuid4()), model_name=model)
-        try:
-            await self.scheduler.add_request(request=item)
-            end_time: Final = time.monotonic() + self.timeout
-            while time.monotonic() < end_time:
-                healthy_deployments, _ = await self._async_get_healthy_deployments(
-                    model=model, parent_otel_span=parent_otel_span
-                )
-                if await self.scheduler.poll(
-                    id=item.request_id, model_name=model, health_deployments=healthy_deployments
-                ):
-                    return
-                await asyncio.sleep(self.scheduler.polling_interval)
-        finally:
-            await self.scheduler.remove_request(request_id=item.request_id, model_name=model)
-        raise litellm.Timeout(message="Request timed out while polling queue", model=model, llm_provider="openai")
+        async def healthy_deployments() -> Sequence[object]:
+            deployments, _ = await self._async_get_healthy_deployments(model=model, parent_otel_span=parent_otel_span)
+            return deployments
+
+        await self.scheduler.wait_for_turn(
+            request=FlowItem(priority=priority, request_id=str(uuid.uuid4()), model_name=model),
+            timeout=self.timeout,
+            get_healthy_deployments=healthy_deployments,
+        )
 
     def _is_prompt_management_model(self, model: str) -> bool:
         model_list: Final = self.get_model_list(model_name=model)
