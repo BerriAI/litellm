@@ -633,6 +633,41 @@ class TestMCPRequestHandler:
         assert blocked is False
         assert open_tool is True
 
+    async def test_org_denylist_read_fault_denies_the_server_tools(self):
+        """A key whose org permission row cannot be read denies every tool on the server:
+        an unreadable entitlement is a known restriction with unknown contents, not no denylist"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", org_id="org-1")
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader to raise on read
+                MCPRequestHandler,
+                "_get_org_object_permission",
+                AsyncMock(side_effect=ValueError("org permission row unreadable")),
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="anything_else", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert result is False
+
     async def test_legacy_allowlist_still_denies_tools_not_listed(self):
         """mcp_tool_permissions alone keeps its exact behavior: a tool not named by
         the allowlist stays denied even when no denylist exists"""
@@ -743,10 +778,10 @@ class TestMCPRequestHandler:
         assert grant.allowed is None
         assert grant.grants("denied_tool") is True
 
-    async def test_admitted_subject_all_enumerated_sources_apply_own_denylist(self):
-        """Keyless union with only enumerated sources: each source's own denylist
-        removes its tools before the union, so a denied tool stays denied even
-        when a sibling source's allowlist happens to carry it"""
+    async def test_admitted_subject_denylist_loses_to_a_sibling_allowlist(self):
+        """Keyless union with only enumerated sources: each source's own denylist is applied
+        before the union, so a tool one source denies is still granted when a sibling source's
+        allowlist carries it (any granting source wins)"""
         auth = UserAPIKeyAuth(user_id="sso-user")
         auth.mcp_admitted_user_subject = True
         source_one = UserAPIKeyAuth(team_id="team-1")
@@ -4630,8 +4665,7 @@ class TestAgentMCPPermissions:
         assert result == frozenset({"ag-server-id"})
         assert asked == ["agent-ag"]
         assert (
-            await MCPRequestHandler._get_agent_access_group_server_ceiling(UserAPIKeyAuth(api_key="k"), resolve)
-            is None
+            await MCPRequestHandler._get_agent_access_group_server_ceiling(UserAPIKeyAuth(api_key="k"), resolve) is None
         )
         assert asked == ["agent-ag"]
 
@@ -4768,7 +4802,9 @@ class TestAgentMCPPermissions:
                 stack.enter_context(patcher)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
+                    MCPRequestHandler,
+                    "_get_allowed_mcp_servers_for_key",
+                    AsyncMock(return_value=["server-a", "server-b"]),
                 )
             )
             stack.enter_context(
@@ -4794,7 +4830,9 @@ class TestAgentMCPPermissions:
                 await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
+                    MCPRequestHandler,
+                    "_get_allowed_mcp_servers_for_key",
+                    AsyncMock(return_value=["server-a", "server-b"]),
                 )
             )
             stack.enter_context(
@@ -4818,9 +4856,15 @@ class TestAgentMCPPermissions:
         with contextlib.ExitStack() as stack:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
-            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-a", user_api_key_auth)
-            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-b", user_api_key_auth)
-            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-c", user_api_key_auth)
+            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                "server-a", user_api_key_auth
+            )
+            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                "server-b", user_api_key_auth
+            )
+            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                "server-c", user_api_key_auth
+            )
 
         assert sorted(server_a_tools) == ["tool_direct", "tool_via_toolset"]
         assert server_b_tools == ["tool_b"]

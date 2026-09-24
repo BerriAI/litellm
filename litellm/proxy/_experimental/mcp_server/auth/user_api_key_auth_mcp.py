@@ -2397,9 +2397,7 @@ class MCPRequestHandler:
         )
         from litellm.proxy.proxy_server import prisma_client
 
-        org_obj_perm: Final = await MCPRequestHandler._org_denylist_object_permission(
-            user_api_key_auth, keyless_source=keyless_source
-        )
+        org_obj_perm: Final = await MCPRequestHandler._org_denylist_object_permission(user_api_key_auth)
         levels: Final[tuple[LiteLLM_ObjectPermissionTable | None, ...]] = (
             await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth),
             await MCPRequestHandler._get_team_object_permission(user_api_key_auth),
@@ -2439,25 +2437,18 @@ class MCPRequestHandler:
     @staticmethod
     async def _org_denylist_object_permission(
         user_api_key_auth: UserAPIKeyAuth,
-        *,
-        keyless_source: bool = False,
     ) -> LiteLLM_ObjectPermissionTable | None:
-        """The org's object_permission for denylist reads, with the same per-shape fault decision as
-        the org tool ceiling: an unreadable NAMED entitlement re-raises everywhere, an indeterminate
-        fault re-raises only for a keyless source and reads as no denylist for a key."""
+        """The org's object_permission for denylist reads, with the same fault decision as the user
+        denylist level: a row that names a permission and cannot be read is a known entitlement
+        with unknown contents, so it denies rather than reads as no denylist."""
         if not user_api_key_auth.org_id:
             return None
         try:
             return await MCPRequestHandler._get_org_object_permission(user_api_key_auth)
-        except Exception as e:  # noqa: BLE001  # same per-shape decision as the org tool ceiling
-            if keyless_source or isinstance(e, UnloadableEntitlementError):
-                raise
-            verbose_logger.warning(
-                "MCP org tool denylist unresolvable for org_id=%r; skipping org denylist: %s",
-                user_api_key_auth.org_id,
-                e,
-            )
-            return None
+        except Exception as e:  # noqa: BLE001  # an unreadable org entitlement must not fail open
+            raise UnloadableEntitlementError(
+                f"MCP org tool denylist unresolvable for org_id={user_api_key_auth.org_id!r}"
+            ) from e
 
     @staticmethod
     async def _apply_agent_and_org_tool_ceilings(
