@@ -63760,6 +63760,31 @@
         "supports_web_search": false,
         "output_cost_per_image": 0.08
     },
+    "gemini/lyria-realtime-exp": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "source": "https://ai.google.dev/gemini-api/docs/models/lyria-realtime-exp",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true,
+        "supports_function_calling": false,
+        "supports_prompt_caching": false,
+        "supports_response_schema": false,
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_web_search": false,
+        "output_cost_per_image": 0.08
+    },
     "perplexity/anthropic/claude-fable-5": {
         "litellm_provider": "perplexity",
         "mode": "responses",
