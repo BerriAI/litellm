@@ -22,6 +22,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+from onelogin.saml2.settings import OneLogin_Saml2_Settings
 from onelogin.saml2.utils import OneLogin_Saml2_Utils
 from starlette.datastructures import URL
 
@@ -749,3 +750,17 @@ class TestSAMLAuthnCookieSecureFlag:
         redirect = await SAMLAuthHandler.build_login_redirect(request, cache)
         cookie = redirect.headers["set-cookie"]
         assert "Secure" not in cookie
+
+
+@pytest.mark.asyncio
+async def test_effective_sp_settings_use_sha256_signature_and_digest(saml_env):
+    cache = DualCache()
+    idp_settings = await SAMLAuthHandler._load_idp_settings(cache)
+    settings = SAMLAuthHandler._build_settings(_fake_request(), idp_settings)
+
+    security = settings["security"]
+    assert security["signatureAlgorithm"] == "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
+    assert security["digestAlgorithm"] == "http://www.w3.org/2001/04/xmlenc#sha256"
+    effective = OneLogin_Saml2_Settings(settings, sp_validation_only=True).get_security_data()
+    assert effective["signatureAlgorithm"] == security["signatureAlgorithm"]
+    assert effective["digestAlgorithm"] == security["digestAlgorithm"]

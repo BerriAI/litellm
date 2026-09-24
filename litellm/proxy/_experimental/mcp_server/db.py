@@ -593,7 +593,7 @@ def _mcp_identifier_lock_keys(*identifiers: str | None) -> tuple[int, ...]:
     so concurrent requests for the same pair always lock in the same order."""
     return tuple(
         int.from_bytes(
-            hashlib.blake2b(f"mcp_identifier:{normalized}".encode(), digest_size=8).digest(),
+            hashlib.sha256(f"mcp_identifier:{normalized}".encode()).digest()[:8],
             "big",
             signed=True,
         )
@@ -2301,7 +2301,7 @@ async def merge_user_env_vars(
     """
     allowed: Final = set(allowed_names)
     lock_key: Final = int.from_bytes(
-        hashlib.blake2b(f"{user_id}:{server_id}".encode(), digest_size=8).digest(),
+        hashlib.sha256(f"{user_id}:{server_id}".encode()).digest()[:8],
         "big",
         signed=True,
     )

@@ -1,3 +1,4 @@
+import os
 import signal
 import uuid
 from collections.abc import Mapping
@@ -8,9 +9,10 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import psycopg
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
-from integration._support.database import read_rows
+from integration._support.database import advisory_lock_key, advisory_waiters, legacy_advisory_lock_key, read_rows
 from integration._support.mcp import McpPeer, call_tool, mcp_peer, register_mcp, tool_names
 from integration._support.process import owned_proxy_process
 from pydantic import JsonValue, TypeAdapter
@@ -357,3 +359,37 @@ def test_concurrent_stores_of_different_variables_do_not_lose_an_update(gateway:
         with ThreadPoolExecutor(max_workers=2) as pool:
             for _ in range(5):
                 race_once(pool)
+
+
+def test_store_waits_on_the_sha256_advisory_lock_for_the_user_and_server(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        identity: Final = register_user_var_server(scenario, peer, TOKEN)
+        user: Final = scenario.user()
+        key: Final = scenario.key(user_id=user, object_permission=grants(identity))
+        wait_for_tools(gateway, key, identity)
+        lock_key: Final = advisory_lock_key(user, identity)
+        with (
+            ThreadPoolExecutor(max_workers=1) as pool,
+            psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as holder,
+        ):
+            holder.execute("SELECT pg_advisory_lock(%s::bigint)", (lock_key,))
+            pending: Final = pool.submit(store, gateway, key, identity, {TOKEN: "held-value"})
+            eventually(lambda: advisory_waiters(lock_key), lambda rows: len(rows) == 1, seconds=20)
+            assert not pending.done()
+            holder.execute("SELECT pg_advisory_unlock(%s::bigint)", (lock_key,))
+            response: Final = pending.result(timeout=30)
+        assert response.status_code == 200, response.text
+        assert set_names(env_status(gateway, key, identity)) == {TOKEN: True}
+
+
+def test_store_does_not_wait_on_the_legacy_blake2b_lock_id(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        identity: Final = register_user_var_server(scenario, peer, TOKEN)
+        user: Final = scenario.user()
+        key: Final = scenario.key(user_id=user, object_permission=grants(identity))
+        lock_key: Final = legacy_advisory_lock_key(f"{user}:{identity}")
+        with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as holder:
+            holder.execute("SELECT pg_advisory_lock(%s::bigint)", (lock_key,))
+            response: Final = store(gateway, key, identity, {TOKEN: "free-value"})
+        assert response.status_code == 200, response.text
+        assert set_names(env_status(gateway, key, identity)) == {TOKEN: True}

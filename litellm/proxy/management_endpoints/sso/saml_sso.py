@@ -201,6 +201,8 @@ class SAMLAuthHandler:
                 "wantAssertionsSigned": SAMLAuthHandler._bool_env("SAML_WANT_ASSERTIONS_SIGNED", True),
                 "wantMessagesSigned": SAMLAuthHandler._bool_env("SAML_WANT_MESSAGES_SIGNED", False),
                 "authnRequestsSigned": SAMLAuthHandler._bool_env("SAML_AUTHN_REQUESTS_SIGNED", False),
+                "signatureAlgorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+                "digestAlgorithm": "http://www.w3.org/2001/04/xmlenc#sha256",
                 "wantNameId": True,
                 "requestedAuthnContext": False,
                 "rejectUnsolicitedResponsesWithInResponseTo": False,
