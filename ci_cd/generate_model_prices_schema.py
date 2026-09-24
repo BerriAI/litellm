@@ -20,6 +20,11 @@ NONNEG_INTEGER: JsonSchema = {"type": "integer", "minimum": 0}
 BOOLEAN: JsonSchema = {"type": "boolean"}
 STRING: JsonSchema = {"type": "string"}
 TIME_WINDOW: Final[JsonSchema] = {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"}
+ISO_DATE: Final[JsonSchema] = {
+    "type": "string",
+    "format": "date",
+    "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+}
 WEEKDAY_PATTERN: Final = (
     r"(?i)^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)$"
 )
@@ -70,6 +75,21 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
             "weekday_timezone": {
                 "type": "string",
                 "description": "IANA zone the weekdays of each window are read on; defaults to UTC.",
+            },
+            "off_peak_dates": {
+                "type": "array",
+                "items": ISO_DATE,
+                "minItems": 1,
+                "description": "Calendar dates, read on weekday_timezone, that are off-peak all day (public holidays).",
+            },
+            "weekday_dates": {
+                "type": "array",
+                "items": ISO_DATE,
+                "minItems": 1,
+                "description": (
+                    "Calendar dates, read on weekday_timezone, that follow the Monday-to-Friday rules "
+                    "even when they fall on a weekend (make-up workdays)."
+                ),
             },
             "input_cost_per_token": NONNEG_NUMBER,
             "output_cost_per_token": NONNEG_NUMBER,
@@ -258,10 +278,8 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "description": "URL of the provider pricing/model page this entry was taken from.",
         },
         "deprecation_date": {
-            "type": "string",
+            **ISO_DATE,
             "description": "Date the provider deprecates the model, YYYY-MM-DD.",
-            "format": "date",
-            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
         },
         "web_search_billing_unit": {
             "type": "string",

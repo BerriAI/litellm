@@ -249,9 +249,9 @@
         },
         "deprecation_date": {
           "type": "string",
-          "description": "Date the provider deprecates the model, YYYY-MM-DD.",
           "format": "date",
-          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+          "description": "Date the provider deprecates the model, YYYY-MM-DD."
         },
         "gemini_audio_only_live": {
           "type": "boolean"
@@ -571,6 +571,26 @@
             "weekday_timezone": {
               "type": "string",
               "description": "IANA zone the weekdays of each window are read on; defaults to UTC."
+            },
+            "off_peak_dates": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
+              },
+              "minItems": 1,
+              "description": "Calendar dates, read on weekday_timezone, that are off-peak all day (public holidays)."
+            },
+            "weekday_dates": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$"
+              },
+              "minItems": 1,
+              "description": "Calendar dates, read on weekday_timezone, that follow the Monday-to-Friday rules even when they fall on a weekend (make-up workdays)."
             },
             "input_cost_per_token": {
               "type": "number",
