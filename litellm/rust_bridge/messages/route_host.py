@@ -13,15 +13,17 @@ from litellm.rust_bridge import failures
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
-_EFFORT_TIERS: Final = ("minimal", "low", "medium", "high", "xhigh", "max")
 _DROP_PATHS: Final = TypeAdapter(list[object])
-_CAPABILITY_FLAGS: Final = (
-    "supports_reasoning",
-    "supports_adaptive_thinking",
-    "thinking_always_on",
-    "supports_legacy_thinking",
-    "supports_output_config",
-)
+
+
+@dataclass(frozen=True, slots=True)
+class EffortTiers:
+    minimal: bool
+    low: bool
+    medium: bool
+    high: bool
+    xhigh: bool
+    max: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +35,7 @@ class ModelCapabilities:
     supports_output_config: bool
     supports_sampling_params: bool
     supports_speed: bool
-    effort_tiers: Mapping[str, bool]
+    effort_tiers: EffortTiers
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,18 +80,29 @@ def model_capabilities(model: str, custom_llm_provider: str | None) -> ModelCapa
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     resolved_model, provider = _resolved_provider(model, custom_llm_provider)
-    flags: Final = {
-        flag: AnthropicModelInfo._supports_model_capability(model, flag, provider)  # pyright: ignore[reportPrivateUsage]  # same probes the Python transform runs; forking them would drift
-        for flag in _CAPABILITY_FLAGS
-    }
+
+    def supports(flag: str) -> bool:
+        return AnthropicModelInfo._supports_model_capability(model, flag, provider)  # pyright: ignore[reportPrivateUsage]  # same probes the Python transform runs; forking them would drift
+
+    def tier(level: str) -> bool:
+        return AnthropicConfig._supports_effort_level(model, level, provider)  # pyright: ignore[reportPrivateUsage]  # same probe the Python transform runs
+
     return ModelCapabilities(
+        supports_reasoning=supports("supports_reasoning"),
+        supports_adaptive_thinking=supports("supports_adaptive_thinking"),
+        thinking_always_on=supports("thinking_always_on"),
+        supports_legacy_thinking=supports("supports_legacy_thinking"),
+        supports_output_config=supports("supports_output_config"),
         supports_sampling_params=AnthropicModelInfo._supports_sampling_params(resolved_model),  # pyright: ignore[reportPrivateUsage]  # same gate the handler applies
         supports_speed=AnthropicConfig._model_supports_speed_param(resolved_model, provider),  # pyright: ignore[reportPrivateUsage]  # same gate the handler applies
-        effort_tiers={
-            tier: AnthropicConfig._supports_effort_level(model, tier, provider)  # pyright: ignore[reportPrivateUsage]  # same probe the Python transform runs
-            for tier in _EFFORT_TIERS
-        },
-        **flags,
+        effort_tiers=EffortTiers(
+            minimal=tier("minimal"),
+            low=tier("low"),
+            medium=tier("medium"),
+            high=tier("high"),
+            xhigh=tier("xhigh"),
+            max=tier("max"),
+        ),
     )
 
 
@@ -106,7 +119,7 @@ def _additional_drop_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
 
 
 def shaping(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> dict[str, object]:
-    return asdict(  # mutable-ok: the native side depythonizes a plain dict
+    return asdict(
         MessagesShaping(
             capabilities=model_capabilities(model, custom_llm_provider),
             drop_params=_drop_params(kwargs),

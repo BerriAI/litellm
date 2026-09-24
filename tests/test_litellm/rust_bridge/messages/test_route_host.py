@@ -1,3 +1,4 @@
+from dataclasses import astuple
 from typing import Final
 
 import pytest
@@ -39,8 +40,8 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
     assert capabilities.supports_output_config
     assert not capabilities.supports_legacy_thinking
     assert not capabilities.supports_sampling_params
-    assert capabilities.effort_tiers["xhigh"]
-    assert not capabilities.effort_tiers["max"]
+    assert capabilities.effort_tiers.xhigh
+    assert not capabilities.effort_tiers.max
 
 
 def test_unmapped_model_keeps_sampling_params_and_no_reasoning_features() -> None:
@@ -49,7 +50,7 @@ def test_unmapped_model_keeps_sampling_params_and_no_reasoning_features() -> Non
     assert capabilities.supports_sampling_params
     assert not capabilities.supports_reasoning
     assert not capabilities.supports_adaptive_thinking
-    assert not any(capabilities.effort_tiers.values())
+    assert not any(astuple(capabilities.effort_tiers))
 
 
 @pytest.mark.parametrize(
