@@ -4719,9 +4719,7 @@ class BedrockConverseMessagesProcessor:
 
         Relevant Issue: https://github.com/BerriAI/litellm/issues/9063
         """
-        is_anthropic_model = (
-            model is None or "anthropic" in model.lower() or "claude" in model.lower()
-        )
+        is_anthropic_model = model is None or "anthropic" in model.lower() or "claude" in model.lower()
         filtered_thinking_blocks: Final = []
         for block in thinking_blocks:
             reasoning_content = block.get("reasoningContent", None)
