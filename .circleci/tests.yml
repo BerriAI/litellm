@@ -214,7 +214,9 @@ jobs:
           no_output_timeout: 20m
           command: |
             mkdir -p test-results/<< parameters.flag >>
-            mapfile -t files < <(bash .circleci/scripts/unit_selection.sh << parameters.flag >> | circleci tests split --split-by=timings --timings-type=filename)
+            selection="$(bash .circleci/scripts/unit_selection.sh << parameters.flag >>)"
+            [ -n "${selection}" ] || { echo "unit_selection.sh produced no files for << parameters.flag >>"; exit 1; }
+            mapfile -t files < <(printf '%s\n' "${selection}" | circleci tests split --split-by=timings --timings-type=filename)
             if [ "${#files[@]}" -eq 0 ]; then echo "shard ${CIRCLE_NODE_INDEX} received no << parameters.flag >> files; nothing to run"; exit 0; fi
             xdist_args=()
             if [ "<< parameters.workers >>" -gt 0 ]; then xdist_args=(-n << parameters.workers >> --dist=<< parameters.dist >>); fi

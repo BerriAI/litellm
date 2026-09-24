@@ -4,8 +4,6 @@ import pytest
 from mcp.types import Tool as MCPTool
 from typing import Any, cast
 
-
-# Import required modules
 import litellm
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 
@@ -50,7 +48,6 @@ async def test_streaming_responses_api_with_mcp_tools(
 
     Return the user the result of request 2
     """
-    # Skip test if API keys are not set for the respective models
     if ("claude" in model.lower() or "anthropic" in model.lower()) and not os.getenv(
         "ANTHROPIC_API_KEY"
     ):
@@ -64,7 +61,6 @@ async def test_streaming_responses_api_with_mcp_tools(
 
     print("🧪 Testing basic streaming with MCP tools...")
 
-    # Mock MCP tools that would be returned from the manager
     mock_mcp_tools = [
         MCPTool.model_validate({
                 "name": "search_repo",
@@ -79,7 +75,6 @@ async def test_streaming_responses_api_with_mcp_tools(
             }, by_name=False)
     ]
 
-    # Only mock the MCP-specific operations, let LLM responses be real
     with caplog.at_level(logging.ERROR):
         with (
             patch.object(
@@ -93,17 +88,14 @@ async def test_streaming_responses_api_with_mcp_tools(
                 new_callable=AsyncMock,
             ) as mock_execute_tools,
         ):
-            # Setup MCP mocks only
             mock_get_tools.return_value = (mock_mcp_tools, ["litellm_proxy"])
 
-            # Create a dynamic mock that will match the actual tool call ID from the LLM response
             def mock_execute_tool_calls_side_effect(
                 tool_calls, user_api_key_auth, **kwargs
             ):
                 """Mock function that returns results matching the actual tool call IDs from the LLM"""
                 results = []
                 for tool_call in tool_calls:
-                    # Extract call_id from the tool call
                     call_id = None
                     if isinstance(tool_call, dict):
                         call_id = tool_call.get("call_id") or tool_call.get("id")
@@ -123,7 +115,6 @@ async def test_streaming_responses_api_with_mcp_tools(
 
             mock_execute_tools.side_effect = mock_execute_tool_calls_side_effect
 
-            # Make the actual call - LLM responses will be real
             mcp_tool_config = cast(
                 Any,
                 {
@@ -151,7 +142,6 @@ async def test_streaming_responses_api_with_mcp_tools(
                 response, "__aiter__"
             ), "Response should be an async streaming response"
 
-            # Collect streaming chunks
             chunks = []
             async for chunk in response:
                 chunks.append(chunk)
@@ -159,13 +149,11 @@ async def test_streaming_responses_api_with_mcp_tools(
 
             print(f"📊 Total chunks received: {len(chunks)}")
 
-            # Verify MCP mocks were called (may be called multiple times in streaming)
             assert (
                 mock_get_tools.call_count >= 1
             ), f"Expected MCP tools to be fetched at least once, got {mock_get_tools.call_count}"
             print(f"MCP tools fetched: {len(mock_mcp_tools)}")
 
-            # Verify we got a response
             assert response is not None
             assert len(chunks) > 0, "Should have received streaming chunks"
 
