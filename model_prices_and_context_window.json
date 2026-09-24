@@ -56802,7 +56802,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html"
     },
     "bedrock_mantle/openai.gpt-5.6-terra": {
         "input_cost_per_token": 2.2e-06,
@@ -56844,7 +56845,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-terra.html"
     },
     "bedrock_mantle/openai.gpt-5.6-cyber": {
         "input_cost_per_token": 1.375e-05,
@@ -56951,7 +56953,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html"
     },
     "us.openai.gpt-5.6-sol": {
         "input_cost_per_token": 4.4e-06,
@@ -57722,7 +57725,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-xai-grok-4-6.html"
     },
     "bedrock_mantle/anthropic.claude-haiku-4-5": {
         "cache_creation_input_token_cost": 1.25e-06,
