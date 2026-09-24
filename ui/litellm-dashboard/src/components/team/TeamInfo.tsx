@@ -119,6 +119,9 @@ import {
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
+import { chunkMemberIds, customBudgetMemberUserIds, shouldPromptMemberBudgetApplyAll } from "./memberBudgetApplyAll";
+import { fetchClient } from "@/lib/http/api";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -584,6 +587,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
+  const [memberBudgetPrompt, setMemberBudgetPrompt] = useState<{
+    updateData: Record<string, unknown>;
+    userIds: string[];
+    newBudget: number;
+  } | null>(null);
+  const [isApplyingMemberBudgets, setIsApplyingMemberBudgets] = useState(false);
   const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
   const [teamModelMaxBudget, setTeamModelMaxBudget] = useState<ModelMaxBudget>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
@@ -1152,11 +1161,88 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
+      const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
+      if (
+        shouldPromptMemberBudgetApplyAll(
+          updateData.team_member_budget,
+          info.team_member_budget_table?.max_budget,
+          customBudgetUserIds,
+        )
+      ) {
+        setMemberBudgetPrompt({
+          updateData,
+          userIds: customBudgetUserIds,
+          newBudget: updateData.team_member_budget,
+        });
+        return;
+      }
+
       await persistTeamUpdate(accessToken, updateData);
     } catch (error) {
       console.error("Error updating team:", error);
     } finally {
       setIsTeamSaving(false);
+    }
+  };
+
+  const closeMemberBudgetPrompt = () => {
+    setMemberBudgetPrompt(null);
+    setIsApplyingMemberBudgets(false);
+  };
+
+  const saveTeamUpdateOnly = async () => {
+    const pending = memberBudgetPrompt;
+    closeMemberBudgetPrompt();
+    if (!accessToken || !pending) return;
+    setIsTeamSaving(true);
+    try {
+      await persistTeamUpdate(accessToken, pending.updateData);
+    } catch (error) {
+      console.error("Error updating team:", error);
+    } finally {
+      setIsTeamSaving(false);
+    }
+  };
+
+  const saveAndApplyMemberBudgets = async () => {
+    const pending = memberBudgetPrompt;
+    if (!accessToken || !pending) return;
+    setIsApplyingMemberBudgets(true);
+    try {
+      await persistTeamUpdate(accessToken, pending.updateData);
+    } catch (error) {
+      console.error("Error updating team:", error);
+      toast.fromError("Failed to update team settings");
+      setIsApplyingMemberBudgets(false);
+      return;
+    }
+    try {
+      const results: components["schemas"]["TeamMemberBudgetUpdateResult"][] = [];
+      for (const chunk of chunkMemberIds(pending.userIds)) {
+        const { data } = await fetchClient.POST("/management/v1/teams/{team_id}/members/bulk_update", {
+          params: { path: { team_id: teamId } },
+          body: {
+            members: chunk.map((userId) => ({ user_id: userId, max_budget_in_team: null })),
+          },
+        });
+        results.push(...(data?.data ?? []));
+      }
+      const failed = results.filter((r) => !r.success);
+      if (failed.length > 0) {
+        toast.error(
+          `Team updated, but ${failed.length} member ${failed.length === 1 ? "budget" : "budgets"} could not be reset`,
+        );
+      } else {
+        toast.success(
+          `Reset ${results.length} member ${results.length === 1 ? "budget" : "budgets"} to the team default`,
+        );
+      }
+      closeMemberBudgetPrompt();
+      refreshTeamData();
+    } catch (error) {
+      console.error("Error applying member budgets:", error);
+      toast.fromError("Team updated, but member budgets could not be reset");
+      setIsApplyingMemberBudgets(false);
     }
   };
 
@@ -2423,6 +2509,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onCancel={handleDeleteCancel}
         onOk={handleDeleteConfirm}
         confirmLoading={isDeleting}
+      />
+
+      <ResetMemberBudgetsDialog
+        open={memberBudgetPrompt !== null}
+        memberCount={memberBudgetPrompt?.userIds.length ?? 0}
+        newBudget={memberBudgetPrompt?.newBudget ?? 0}
+        applying={isApplyingMemberBudgets}
+        onResetAll={saveAndApplyMemberBudgets}
+        onKeepCustom={saveTeamUpdateOnly}
+        onCancel={closeMemberBudgetPrompt}
       />
     </div>
   );
