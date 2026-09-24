@@ -1227,17 +1227,17 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
         "anthropic.claude-sonnet-5",
     ],
 )
-def test_bedrock_bare_claude_id_is_priced_in_region(local_model_cost_map, bare_key):
-    """A bare Bedrock Claude id is an in-region invocation, so it carries the same
-    in-region rate as its us. inference profile, not the cheaper global. rate."""
+def test_bedrock_bare_claude_id_is_priced_global(local_model_cost_map, bare_key):
+    """A bare Bedrock Claude id is billed at the Global SKU, so it carries the same
+    rate as its global. inference profile and sits below the regional us. rate."""
     bare = litellm.model_cost[bare_key]
     us = litellm.model_cost[f"us.{bare_key}"]
     global_ = litellm.model_cost[f"global.{bare_key}"]
     cost_fields = [f for f in bare if "cost" in f]
     assert cost_fields
     for field in cost_fields:
-        assert bare[field] == us[field], field
-    assert bare["input_cost_per_token"] > global_["input_cost_per_token"]
+        assert bare[field] == global_[field], field
+    assert bare["input_cost_per_token"] < us["input_cost_per_token"]
 
 
 def test_get_model_info_bedrock_mantle_region_prefix_falls_back_to_the_mantle_row(local_model_cost_map):
