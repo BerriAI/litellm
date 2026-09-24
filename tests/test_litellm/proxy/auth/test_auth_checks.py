@@ -5465,6 +5465,35 @@ async def test_virtual_key_max_budget_not_exceeded_does_not_raise():
         )
 
 
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_enforced_via_budget_id_table():
+    """Keys created with budget_id have max_budget None and carry the limit in
+    litellm_budget_table. Spend above that table limit must raise, otherwise
+    budget_id keys bypass enforcement entirely (BerriAI/litellm#26672)."""
+    valid_token = UserAPIKeyAuth(
+        token="b5fe4a81e28b1510430dd87b10e382285026a9241035325fd52fc772f44b7d22",
+        key_alias="budget-id-key",
+        max_budget=None,
+        budget_id="budget-table-30",
+        litellm_budget_table={"budget_id": "budget-table-30", "max_budget": 30.0},
+        spend=99.104445,
+    )
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    async def _spend_is_fallback(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return fallback_spend
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", _spend_is_fallback):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    assert exc_info.value.current_cost == 99.104445
+    assert exc_info.value.max_budget == 30.0
+
+
 class _TTLCapturingInMemoryCache(InMemoryCache):
     """Records the ``ttl`` DualCache forwards into the in-memory layer."""
 

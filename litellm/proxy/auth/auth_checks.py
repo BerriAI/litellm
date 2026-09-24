@@ -5238,6 +5238,17 @@ def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:
     return True
 
 
+def _resolve_key_max_budget(valid_token: UserAPIKeyAuth) -> float | None:
+    if valid_token.max_budget is not None:
+        return valid_token.max_budget
+    table = valid_token.litellm_budget_table
+    if isinstance(table, Mapping):
+        value = table.get("max_budget")
+        return value if isinstance(value, (int, float)) else None
+    candidate = getattr(table, "max_budget", None)
+    return candidate if isinstance(candidate, (int, float)) else None
+
+
 async def _virtual_key_max_budget_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
@@ -5249,7 +5260,8 @@ async def _virtual_key_max_budget_check(
         Triggers a budget alert if the token is over it's max budget.
 
     """
-    if valid_token.max_budget is not None:
+    key_max_budget: Final = _resolve_key_max_budget(valid_token=valid_token)
+    if key_max_budget is not None:
         from litellm.proxy.proxy_server import get_current_spend
 
         fallback_spend: Final = valid_token.spend or 0.0
@@ -5259,7 +5271,7 @@ async def _virtual_key_max_budget_check(
         spend: Final = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=fallback_spend,
-            max_budget=valid_token.max_budget,
+            max_budget=key_max_budget,
         )
 
         ####################################
@@ -5274,7 +5286,7 @@ async def _virtual_key_max_budget_check(
         call_info: Final = CallInfo(
             token=valid_token.token,
             spend=spend,
-            max_budget=valid_token.max_budget,
+            max_budget=key_max_budget,
             soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
@@ -5297,7 +5309,7 @@ async def _virtual_key_max_budget_check(
         # Defense-in-depth (GHSA-2rv4-xv66-fpjg): spend >= NaN is always False,
         # so a NaN max_budget would silently disable enforcement.  Treat a
         # non-finite max_budget as "no configured limit" rather than as a bypass.
-        if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
+        if math.isfinite(key_max_budget) and spend >= key_max_budget:
             if _apply_budget_exceeded_throttle(valid_token):
                 return
             # This message is returned to the caller, and key_name has no enforced
@@ -5311,8 +5323,8 @@ async def _virtual_key_max_budget_check(
             )
             raise litellm.BudgetExceededError(
                 current_cost=spend,
-                max_budget=valid_token.max_budget,
-                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
+                max_budget=key_max_budget,
+                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {key_max_budget}",
                 entity_type=Litellm_EntityType.KEY.value,
                 entity_id=valid_token.token,
             )
@@ -5382,7 +5394,7 @@ async def _virtual_key_soft_budget_check(
         call_info: Final = CallInfo(
             token=valid_token.token,
             spend=valid_token.spend,
-            max_budget=valid_token.max_budget,
+            max_budget=_resolve_key_max_budget(valid_token=valid_token),
             soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
@@ -5454,7 +5466,8 @@ async def _virtual_key_max_budget_alert_check(
 
     """
 
-    if valid_token.max_budget is not None and valid_token.spend is not None and valid_token.spend > 0:
+    key_max_budget: Final = _resolve_key_max_budget(valid_token=valid_token)
+    if key_max_budget is not None and valid_token.spend is not None and valid_token.spend > 0:
         owner_email: Final = user_obj.user_email if user_obj else None
         alert_email_config: Final[dict[str, list[str]] | None] = _merge_budget_alert_email_configs(
             global_cfg=litellm.default_key_max_budget_alert_emails,
@@ -5467,13 +5480,13 @@ async def _virtual_key_max_budget_alert_check(
                 (int(k) for k in alert_email_config if k.isdigit()),
                 default=None,
             )
-            if min_pct is None or valid_token.spend < valid_token.max_budget * (min_pct / 100.0):
+            if min_pct is None or valid_token.spend < key_max_budget * (min_pct / 100.0):
                 return
 
             call_info = CallInfo(
                 token=valid_token.token,
                 spend=valid_token.spend,
-                max_budget=valid_token.max_budget,
+                max_budget=key_max_budget,
                 soft_budget=valid_token.soft_budget,
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
@@ -5492,20 +5505,20 @@ async def _virtual_key_max_budget_alert_check(
             )
         else:
             # Old path: existing single 80% threshold — completely unchanged
-            alert_threshold: Final = valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+            alert_threshold: Final = key_max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
 
-            if valid_token.spend >= alert_threshold and valid_token.spend < valid_token.max_budget:
+            if valid_token.spend >= alert_threshold and valid_token.spend < key_max_budget:
                 verbose_proxy_logger.debug(
                     "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
                     valid_token.token,
                     valid_token.spend,
-                    valid_token.max_budget,
+                    key_max_budget,
                     alert_threshold,
                 )
                 call_info = CallInfo(
                     token=valid_token.token,
                     spend=valid_token.spend,
-                    max_budget=valid_token.max_budget,
+                    max_budget=key_max_budget,
                     soft_budget=valid_token.soft_budget,
                     user_id=valid_token.user_id,
                     team_id=valid_token.team_id,
