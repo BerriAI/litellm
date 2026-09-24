@@ -499,3 +499,38 @@ def test_realtime_health_check_azure_ad_params_drop_reserved_keys():
     assert dict(headers) == {"Authorization": "Bearer ad-token"}
     assert seen[0].api_base == "https://x.openai.azure.com"
     assert seen[0].model_extra == {}
+
+
+def test_ocr_health_check_document_uses_the_native_binding():
+    from litellm.litellm_core_utils.health_check_helpers import (
+        _ocr_health_check_document,  # pyright: ignore[reportPrivateUsage]  # tests the health-check wiring
+    )
+    from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
+
+    document: Final = {
+        "type": "image_url",
+        "image_url": "data:image/png;base64,iVBORw0KGgo=",
+    }
+    NATIVE_OCR_HEALTH_CHECK_DOCUMENT.override(lambda model, provider: document)
+    try:
+        assert (
+            _ocr_health_check_document(model="mistral/mistral-ocr-latest", custom_llm_provider="mistral")
+            is document
+        )
+    finally:
+        NATIVE_OCR_HEALTH_CHECK_DOCUMENT.reset()
+
+
+def test_ocr_health_check_document_raises_without_the_extension():
+    from litellm.litellm_core_utils.health_check_helpers import (
+        _ocr_health_check_document,  # pyright: ignore[reportPrivateUsage]  # tests the health-check wiring
+    )
+    from litellm.rust_bridge import runtime
+    from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
+
+    NATIVE_OCR_HEALTH_CHECK_DOCUMENT.override(None)
+    try:
+        with pytest.raises(runtime.NoPythonImplementationError):
+            _ocr_health_check_document(model="mistral/mistral-ocr-latest", custom_llm_provider="mistral")
+    finally:
+        NATIVE_OCR_HEALTH_CHECK_DOCUMENT.reset()
