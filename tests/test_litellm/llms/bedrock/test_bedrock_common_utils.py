@@ -279,6 +279,16 @@ def test_context_window_suffix_stripped_for_cost_lookup():
     )
 
 
+def test_legacy_mantle_route_prefix_stripped_for_cost_lookup():
+    """The mantle/ route token is a routing prefix like openai/, so a bedrock/mantle/<model>
+    deployment must resolve the bare Bedrock model for cost lookup while still routing to Mantle."""
+    from litellm.llms.bedrock.common_utils import get_bedrock_base_model, strip_bedrock_routing_prefix
+
+    assert strip_bedrock_routing_prefix("mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
+    assert get_bedrock_base_model("bedrock/mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
+    assert BedrockModelInfo.get_bedrock_route("bedrock/mantle/anthropic.claude-sonnet-5") == "mantle"
+
+
 def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch):
     import litellm.llms.bedrock.common_utils as mod
 
@@ -926,3 +936,31 @@ def test_every_bedrock_config_get_error_class_keeps_provider_headers(config):
 
 def test_bedrock_get_error_class_audit_covers_every_surface():
     assert len(_bedrock_configs_with_get_error_class()) >= 30
+
+
+def test_s3_static_key_pair_returns_the_pair_when_both_keys_are_set():
+    from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+    assert s3_static_key_pair(
+        {
+            "aws_access_key_id": "bedrock-key",
+            "aws_secret_access_key": "bedrock-secret",
+            "s3_access_key_id": "s3-key",
+            "s3_secret_access_key": "s3-secret",
+        }
+    ) == ("s3-key", "s3-secret")
+
+
+@pytest.mark.parametrize(
+    "partial_s3_pair",
+    [
+        {},
+        {"s3_access_key_id": "s3-key"},
+        {"s3_secret_access_key": "s3-secret"},
+        {"s3_access_key_id": "", "s3_secret_access_key": ""},
+    ],
+)
+def test_s3_static_key_pair_is_none_without_a_full_pair(partial_s3_pair):
+    from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+    assert s3_static_key_pair({"aws_access_key_id": "bedrock-key", **partial_s3_pair}) is None

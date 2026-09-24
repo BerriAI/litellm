@@ -304,6 +304,26 @@ class TestPerformRedaction:
         assert delta["thinking_blocks"] is None
         assert delta["audio"] is None
 
+    def test_redacts_text_completion_choices_in_standard_logging_object(self):
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "object": "text_completion",
+                    "choices": [
+                        {"text": " Paris.", "finish_reason": "stop", "index": 0},
+                        {"text": "\n\nBlue", "finish_reason": "length", "index": 1},
+                    ],
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        assert details["standard_logging_object"]["response"]["choices"] == [
+            {"text": "redacted-by-litellm", "finish_reason": "stop", "index": 0},
+            {"text": "redacted-by-litellm", "finish_reason": "length", "index": 1},
+        ]
+
     def test_redacts_object_choices_inside_model_response_dict(self):
         result = {
             "choices": [
@@ -1012,3 +1032,11 @@ def test_a_callback_that_redacts_itself_keeps_its_messages_but_not_the_classifie
     assert "classifier_input" not in stored
     assert stored["messages"] == payload["messages"]
     assert stored["response"] == payload["response"]
+
+
+def test_perform_redaction_drops_the_served_output_texts_from_the_callback_kwargs() -> None:
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+
+    details: Final = {"litellm_params": {}, SERVED_OUTPUT_TEXTS_KEY: ("Card: <CREDIT_CARD>",)}
+    perform_redaction(details, None)
+    assert SERVED_OUTPUT_TEXTS_KEY not in details

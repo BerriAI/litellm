@@ -147,7 +147,7 @@ class GeminiPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs: dict[str, Any] = {}
+        kwargs: dict[str, object] = {}
         model = model or GeminiPassthroughLoggingHandler.extract_model_from_url(url_route)
         complete_streaming_response: Final = GeminiPassthroughLoggingHandler._build_complete_streaming_response(
             all_chunks=all_chunks,

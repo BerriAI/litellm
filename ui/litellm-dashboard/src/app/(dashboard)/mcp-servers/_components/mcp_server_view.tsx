@@ -27,6 +27,7 @@ interface MCPServerViewProps {
   userID: string | null;
   isViewOnly?: boolean;
   availableAccessGroups: string[];
+  existingServers?: MCPServer[];
   initialTabIndex?: number;
 }
 
@@ -58,11 +59,13 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userID,
   isViewOnly = false,
   availableAccessGroups,
+  existingServers,
   initialTabIndex = 0,
 }) => {
   // Open the editing Settings tab on first render when returning from the edit OAuth
   // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
-  const returningFromEditOAuth = isReturningFromEditOAuth(isProxyAdmin, mcpServer.server_id);
+  const canEdit = isProxyAdmin && !isViewOnly && !mcpServer.is_config;
+  const returningFromEditOAuth = isReturningFromEditOAuth(canEdit, mcpServer.server_id);
   const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -224,13 +227,18 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           <Card className="p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-medium">MCP Server Settings</h2>
-              {editing ? null : (
-                <Button variant="outline" onClick={() => setEditing(true)}>
+              {editing && canEdit ? null : (
+                <Button variant="outline" disabled={!canEdit} onClick={() => setEditing(true)}>
                   Edit Settings
                 </Button>
               )}
             </div>
-            {editing ? (
+            {mcpServer.is_config && (
+              <p className="mb-4 text-sm text-muted-foreground">
+                Defined in config. Edit your YAML configuration to make changes
+              </p>
+            )}
+            {editing && canEdit ? (
               <MCPServerEdit
                 mcpServer={mcpServer}
                 accessToken={accessToken}
@@ -238,6 +246,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 onCancel={() => setEditing(false)}
                 onSuccess={handleSuccess}
                 availableAccessGroups={availableAccessGroups}
+                existingServers={existingServers}
               />
             ) : (
               <div className="divide-y divide-border">

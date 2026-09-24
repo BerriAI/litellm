@@ -180,6 +180,53 @@ class TestLoggingWorker:
 
         assert sorted(fired) == ["first", "second"]
 
+    @pytest.mark.parametrize("stranded", ["still_queued", "dequeued_never_started"])
+    def test_flush_on_new_loop_drains_tasks_stranded_on_previous_loop(self, stranded):
+        """
+        Regression: ``flush()`` from a new event loop used to ``join()`` the queue bound to the
+        previous loop, whose unfinished counter nothing on the new loop ever decrements. The first
+        such flush hung until pytest-timeout killed it and every later one raised
+        ``RuntimeError: ... is bound to a different event loop`` from the queue's Event.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        callback = AsyncMock()
+
+        async def enqueue_on_first_loop():
+            if stranded == "still_queued":
+                worker._ensure_queue()
+                worker.enqueue(callback())
+                return
+            worker.ensure_initialized_and_enqueue(callback())
+
+        asyncio.run(enqueue_on_first_loop())
+        assert worker._queue is not None
+        expected_shape = (1, 0) if stranded == "still_queued" else (0, 1)
+        assert (worker._queue.qsize(), len(worker._unstarted_dequeued_tasks())) == expected_shape
+        assert callback.await_count == 0, "precondition: the callback never ran before the first loop closed"
+
+        async def flush_twice_on_second_loop():
+            await asyncio.wait_for(worker.flush(), timeout=5)
+            await asyncio.wait_for(worker.flush(), timeout=5)
+
+        asyncio.run(flush_twice_on_second_loop())
+
+        assert callback.await_count == 1
+
+    def test_flush_starts_a_worker_when_the_queue_has_none(self):
+        """``flush()`` must drain a queue that exists on the current loop without a running worker."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        callback = AsyncMock()
+
+        async def enqueue_then_flush():
+            worker._ensure_queue()
+            worker.enqueue(callback())
+            assert worker._worker_task is None, "precondition: nothing is draining the queue yet"
+            await asyncio.wait_for(worker.flush(), timeout=3)
+
+        asyncio.run(enqueue_then_flush())
+
+        assert callback.await_count == 1
+
     def test_flush_on_exit_swallows_cancellation_and_drains_remaining(self):
         """A callback raising CancelledError must not abort the atexit flush of later events."""
         worker = LoggingWorker(timeout=1.0, max_queue_size=10)

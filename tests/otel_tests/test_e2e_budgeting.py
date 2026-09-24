@@ -5,6 +5,7 @@ import uuid
 from typing import Any, Optional
 
 import aiohttp
+import openai
 import pytest
 from httpx import AsyncClient
 
@@ -23,7 +24,7 @@ async def make_calls_until_budget_exceeded(session, key: str, call_function, **k
             call_count += 1
             await asyncio.sleep(0.1)  # allow spend tracking to catch up
         pytest.fail(f"Budget was not exceeded after {MAX_CALLS} calls")
-    except Exception as e:
+    except openai.APIStatusError as e:
         print("vars: ", vars(e))
         print("e.body: ", e.body)
 
@@ -32,8 +33,8 @@ async def make_calls_until_budget_exceeded(session, key: str, call_function, **k
 
         # Check error structure and values that should be consistent
         assert (
-            error_dict["code"] == "429"
-        ), f"Expected error code 429, got: {error_dict['code']}"
+            error_dict["code"] == "422"
+        ), f"Expected error code 422, got: {error_dict['code']}"
         assert (
             error_dict["type"] == "budget_exceeded"
         ), f"Expected error type budget_exceeded, got: {error_dict['type']}"
@@ -506,9 +507,9 @@ async def make_calls_until_team_budget_exceeded_cli_sso(
             call_count += 1
             await asyncio.sleep(0.1)
         pytest.fail(f"Budget was not exceeded after {MAX_CALLS} calls")
-    except Exception as e:
+    except openai.APIStatusError as e:
         error_dict = e.body
-        assert error_dict["code"] == "429"
+        assert error_dict["code"] == "422"
         assert error_dict["type"] == "budget_exceeded"
         message = error_dict["message"]
         assert "Budget has been exceeded!" in message
@@ -556,7 +557,7 @@ async def test_team_budget_enforcement_cli_sso_token():
     1. Create team with a tiny max_budget and a user on that team
     2. Obtain a CLI SSO JWT (HTTP poll flow when Redis is shared, else mint)
     3. Make chat completion calls until the team budget is exceeded
-    4. Verify HTTP 429 budget_exceeded names the team
+    4. Verify HTTP 422 budget_exceeded names the team
     """
     user_id = f"cli-budget-user-{uuid.uuid4().hex[:8]}"
     user_email = f"{user_id}@example.com"

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use litellm_auth::{
+use litellm_auth_types::{
     CredentialResolverHandle, Error, InputSource, SecretValue, Sourced, TokenProviderHandle,
 };
 use serde_json::{Map, Value};
@@ -51,6 +51,21 @@ pub struct AzureAuthInputs {
 }
 
 impl AzureAuthInputs {
+    pub fn default_credential_for_scope(scope: &str) -> Self {
+        Self {
+            azure_scope: ConfigValue::Value(Sourced::new(
+                scope.to_string(),
+                InputSource::Deployment,
+            )),
+            azure_credential: ConfigValue::Value(Sourced::new(
+                "DefaultAzureCredential".to_string(),
+                InputSource::Deployment,
+            )),
+            enable_azure_ad_token_refresh: Sourced::new(true, InputSource::Deployment),
+            ..Self::default()
+        }
+    }
+
     pub fn or_configured_token_refresh(self, enabled: bool) -> Self {
         if *self.enable_azure_ad_token_refresh.value() || !enabled {
             return self;
@@ -126,7 +141,7 @@ fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSourc
 mod tests {
     use std::collections::BTreeMap;
 
-    use litellm_auth::{InputSource, Sourced};
+    use litellm_auth_types::{InputSource, Sourced};
     use serde_json::json;
 
     use super::{AzureAuthInputs, AzureCredentialType, ConfigValue};

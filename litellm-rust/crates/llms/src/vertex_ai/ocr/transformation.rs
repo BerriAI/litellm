@@ -34,6 +34,10 @@ impl BaseOcrConfig for VertexAiOcrConfig {
         Some("VERTEX_AI_API_KEY")
     }
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        litellm_auth_gcp::SECRET_NAMES.to_vec()
+    }
+
     fn map_ocr_params(
         &self,
         non_default_params: &CallArguments,

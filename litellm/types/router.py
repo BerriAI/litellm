@@ -6,7 +6,8 @@ import datetime
 import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -15,6 +16,7 @@ from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_c
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
@@ -58,6 +60,25 @@ class RoutingGroup(BaseModel):
     models: list[str]
     routing_strategy: str
     routing_strategy_args: dict | None = None
+
+    model_priorities: dict[str, Annotated[int, Field(strict=True, ge=1, le=9007199254740991)]] | None = Field(
+        default=None,
+        description="For priority groups, every model's priority. Lower numbers are tried first; equal numbers share traffic.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_model_priorities(self) -> "RoutingGroup":
+        if self.routing_strategy != "priority":
+            if self.model_priorities:
+                raise ValueError("model_priorities requires routing_strategy='priority'")
+            return self
+        if not self.models or len(self.models) != len(frozenset(self.models)):
+            raise ValueError("Priority routing groups require nonempty, distinct models")
+        if self.model_priorities is None or frozenset(self.model_priorities) != frozenset(self.models):
+            raise ValueError("model_priorities must contain exactly the group's models")
+        if self.routing_strategy_args:
+            raise ValueError("Priority routing groups use model_priorities, not routing_strategy_args")
+        return self
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -109,6 +130,7 @@ class RetryPolicy(BaseModel):
     ContentPolicyViolationErrorRetries: int | None = None
     InternalServerErrorRetries: int | None = None
     ServiceUnavailableErrorRetries: int | None = None
+    NotFoundErrorRetries: int | None = None
     DefaultRetries: int | None = None
 
 
@@ -162,6 +184,44 @@ def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
     return value.astimezone(datetime.timezone.utc)
 
 
+class ModelAccessWindow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    start: datetime.time
+    end: datetime.time
+    timezone: str
+    team_ids: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("start", "end")
+    @classmethod
+    def _naive_wall_clock(cls, value: datetime.time) -> datetime.time:
+        if value.tzinfo is not None:
+            raise ValueError("start and end must be local wall-clock times without a UTC offset")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_iana_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA timezone '{value}'") from exc
+        return value
+
+    @field_validator("team_ids")
+    @classmethod
+    def _non_empty_team_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not team_id for team_id in value):
+            raise ValueError("team_ids entries must be non-empty")
+        return value
+
+    @model_validator(mode="after")
+    def _start_differs_from_end(self) -> "ModelAccessWindow":
+        if self.start == self.end:
+            raise ValueError("start and end must differ")
+        return self
+
+
 class ModelInfo(MirroredPricingParams):
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
@@ -186,6 +246,9 @@ class ModelInfo(MirroredPricingParams):
 
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
+    discoverable: bool | None = None
+
+    access_windows: tuple[ModelAccessWindow, ...] | None = None
 
     # Bounds live on the model rather than litellm.constants: names there reach
     # litellm/__init__ through several modules' star re-exports, and a Final rebound that
@@ -251,7 +314,7 @@ class ModelInfo(MirroredPricingParams):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -304,7 +367,10 @@ class CredentialLiteLLMParams(BaseModel):
     s3_bucket_name: str | None = None
     s3_endpoint_url: str | None = None
     s3_region_name: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
     s3_encryption_key_id: str | None = None
+    s3_bucket_owner: str | None = None
     aws_batch_role_arn: str | None = None
     s3_output_bucket_name: str | None = None
     bedrock_tags: list | None = None
@@ -332,6 +398,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     organization: str | None = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
+    provider_affinity_header: str | None = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: str | None = None
@@ -362,7 +429,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
     model_info: dict | None = None
-    mock_response: str | ModelResponse | Exception | Any | None = None
+    mock_response: str | ModelResponse | Exception | object | None = None
 
     # tag-based routing
     tags: list[str] | None = None
@@ -403,6 +470,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
 
+    @field_validator("provider_affinity_header")
+    @classmethod
+    def validate_provider_affinity_header(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_provider_affinity_header_name(value)
+
     @model_validator(mode="before")
     @classmethod
     def preprocess_input_data(cls, data: object) -> object:
@@ -439,7 +513,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -464,7 +538,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -505,6 +579,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     stream_timeout: float | str | None
     max_retries: int | None
     organization: list | str | None  # for openai orgs
+    provider_affinity_header: ReadOnly[str | None]
     configurable_clientside_auth_params: (
         CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     )
@@ -538,6 +613,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
+    output_cost_per_second_768p: ReadOnly[float | None]
+    output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
@@ -1102,11 +1179,11 @@ class RoutingContext(BaseModel):
     plugins that need the exact original payload can read `raw_messages`.
     """
 
-    raw_messages: list[dict[str, Any]]
-    structured_messages: list[dict[str, Any]]
+    raw_messages: list[dict[str, object]]
+    structured_messages: list[dict[str, object]]
     candidate_models: list[str]
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    signals: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, object] = Field(default_factory=dict)
+    signals: dict[str, object] = Field(default_factory=dict)
 
 
 @runtime_checkable

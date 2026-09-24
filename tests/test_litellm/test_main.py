@@ -1049,6 +1049,35 @@ def test_responses_api_bridge_check_gpt_5_4_flat_function_tool_routes_to_respons
     assert model_info.get("mode") == "responses"
 
 
+@pytest.mark.parametrize(
+    "custom_llm_provider, model_name, api_base",
+    [
+        pytest.param("openai", "gpt-5.6", None, id="openai"),
+        pytest.param("azure_ai", "gpt-6-astra", "https://myproject.services.ai.azure.com", id="azure-ai-foundry"),
+    ],
+)
+def test_responses_api_bridge_check_function_tool_without_body_stays_chat(
+    monkeypatch, custom_llm_provider, model_name, api_base
+):
+    import litellm
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider=custom_llm_provider,
+        tools=[{"type": "function"}],
+        reasoning_effort=None,
+        api_base=api_base,
+    )
+
+    assert model == model_name
+    assert model_info.get("mode") != "responses"
+
+
 def test_responses_api_bridge_check_dict_effort_none_stays_chat():
     """The escape hatch must honor litellm's dict form: {"effort": "none"} means reasoning off."""
     from litellm.main import responses_api_bridge_check
@@ -1308,6 +1337,68 @@ def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes(
     assert model_info.get("mode") == "responses"
 
 
+_FOUNDRY_API_BASE: Final = "https://myproject.services.ai.azure.com"
+_FOUNDRY_FUNCTION_TOOL: Final = ({"type": "function", "function": {"name": "get_weather"}},)
+
+
+@pytest.mark.parametrize(
+    "model_name, api_base, reasoning_effort",
+    [
+        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, None, id="gpt-6-unset-effort"),
+        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "low", id="gpt-6-explicit-effort"),
+        pytest.param("gpt-6-astra", "https://myresource.openai.azure.com", None, id="gpt-6-azure-openai-host"),
+        pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "low", id="gpt-5.6-explicit-effort"),
+        pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, {"effort": "high"}, id="gpt-5.6-explicit-effort-dict"),
+    ],
+)
+def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_responses(
+    model_name, api_base, reasoning_effort
+):
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider="azure_ai",
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort=reasoning_effort,
+        api_base=api_base,
+    )
+
+    assert model == model_name
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize(
+    "model_name, api_base, reasoning_effort",
+    [
+        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "none", id="explicit-none-stays-chat"),
+        pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, None, id="gpt-5.6-unset-effort-stays-chat"),
+        pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "none", id="gpt-5.6-explicit-none-stays-chat"),
+        pytest.param("gpt-5.5", _FOUNDRY_API_BASE, "high", id="gpt-5.5-explicit-effort-stays-chat"),
+        pytest.param("gpt-5.4-mini", _FOUNDRY_API_BASE, None, id="gpt-5.4-mini-unset-effort-stays-chat"),
+        pytest.param("gpt-5.4-mini", _FOUNDRY_API_BASE, "low", id="gpt-5.4-mini-explicit-effort-stays-chat"),
+        pytest.param("gpt-6-astra", "https://myproject.models.ai.azure.com", None, id="serverless-host-stays-chat"),
+        pytest.param("Mistral-large-2411", _FOUNDRY_API_BASE, None, id="non-gpt-5-model-stays-chat"),
+        pytest.param("claude-opus-4-1", _FOUNDRY_API_BASE, None, id="claude-on-foundry-stays-chat"),
+    ],
+)
+def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_stays_chat(
+    model_name, api_base, reasoning_effort
+):
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider="azure_ai",
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort=reasoning_effort,
+        api_base=api_base,
+    )
+
+    assert model == model_name
+    assert model_info.get("mode") != "responses"
+
+
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
     """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
     from litellm.main import responses_api_bridge_check
@@ -1486,6 +1577,81 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
 
     request_body: Final = json.loads(response_route.calls[0].request.content)
     assert request_body["reasoning"] == {"effort": "high"}
+
+
+_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY: Final = {
+    "id": "resp_foundry",
+    "object": "response",
+    "created_at": 1789852145,
+    "status": "completed",
+    "model": "gpt-6-astra",
+    "output": [
+        {
+            "id": "fc_1",
+            "type": "function_call",
+            "status": "completed",
+            "arguments": '{"city":"Paris"}',
+            "call_id": "call_1",
+            "name": "get_weather",
+        }
+    ],
+    "parallel_tool_calls": True,
+    "usage": {
+        "input_tokens": 53,
+        "output_tokens": 18,
+        "total_tokens": 71,
+        "output_tokens_details": {"reasoning_tokens": 0},
+    },
+    "error": None,
+    "incomplete_details": None,
+    "instructions": None,
+    "metadata": {},
+    "temperature": 1.0,
+    "tool_choice": "auto",
+    "tools": [],
+    "top_p": 1.0,
+    "max_output_tokens": 200,
+    "previous_response_id": None,
+    "reasoning": {"effort": "medium", "summary": None},
+    "truncation": "disabled",
+    "user": None,
+}
+
+
+def test_completion_bridges_azure_ai_foundry_gpt_5_4_plus_function_tools_to_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/gpt-6-astra",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a city",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+                },
+            }
+        ],
+        max_tokens=200,
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+    )
+
+    assert [str(call.request.url) for call in respx_mock.calls] == [f"{_FOUNDRY_API_BASE}/openai/v1/responses"]
+    request: Final = responses_route.calls[0].request
+    request_body: Final = json.loads(request.content)
+    assert request_body["tools"][0]["type"] == "function"
+    assert request_body["tools"][0]["name"] == "get_weather"
+    assert request.headers["api-key"] == "fake-foundry-key"
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
 
 
 @pytest.mark.parametrize(
@@ -1696,6 +1862,68 @@ async def test_async_mock_delay():
     end_time = time.time()
     delay = end_time - start_time
     assert delay >= 0.01
+
+
+def test_stream_chunk_builder_keeps_tool_calls_carried_only_by_a_later_choice_of_a_multi_choice_chunk():
+    from litellm import stream_chunk_builder
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        ModelResponseStream,
+        StreamingChoices,
+    )
+
+    def chunk(choices: list[StreamingChoices]) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-multi-choice",
+            created=1751934860,
+            model="gpt-4.1-mini",
+            object="chat.completion.chunk",
+            choices=choices,
+        )
+
+    chunks = [
+        chunk(
+            [
+                StreamingChoices(index=0, delta=Delta(role="assistant", content="hello")),
+                StreamingChoices(
+                    index=1,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="call_1",
+                                index=0,
+                                type="function",
+                                function=Function(name="lookup_fruit", arguments='{"fruit":'),
+                            )
+                        ],
+                    ),
+                ),
+            ]
+        ),
+        chunk(
+            [
+                StreamingChoices(index=0, delta=Delta(content=" world"), finish_reason="stop"),
+                StreamingChoices(
+                    index=1,
+                    delta=Delta(
+                        tool_calls=[ChatCompletionDeltaToolCall(index=0, function=Function(arguments='"kiwi"}'))]
+                    ),
+                    finish_reason="tool_calls",
+                ),
+            ]
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+
+    tool_calls = response.choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [(call.id, call.function.name, call.function.arguments) for call in tool_calls] == [
+        ("call_1", "lookup_fruit", '{"fruit":"kiwi"}')
+    ]
 
 
 def test_stream_chunk_builder_thinking_blocks():

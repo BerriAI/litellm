@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -36,12 +36,14 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    FieldSerializationInfo,
     JsonValue,
     PrivateAttr,
     SkipValidation,
     field_serializer,
     field_validator,
 )
+from pydantic.main import IncEx
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
@@ -80,7 +82,30 @@ from .llms.openai import (
 )
 from .rerank import RerankResponse as RerankResponse
 
+
+def _nested_selector(
+    selector: IncEx | None,
+    index: int,
+    count: int,
+    is_include: bool,
+) -> tuple[bool, IncEx | None]:
+    if selector is None:
+        return True, None
+    if isinstance(selector, Mapping):
+        value: Final = selector.get(index, selector.get(index - count, selector.get("__all__")))
+        keep: Final = value is not None if is_include else value is not True
+        per_item_selector: Final = None if value is True or value is None else value
+        return keep, per_item_selector
+    if isinstance(selector, Collection) and not isinstance(selector, (str, bytes)):
+        if all(isinstance(item, int) for item in selector):
+            addressed: Final = index in selector or index - count in selector
+            return (addressed if is_include else not addressed), None
+    return True, selector
+
+
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Tokenizer
+
     from .vector_stores import VectorStoreSearchResponse
 else:
     VectorStoreSearchResponse = Any
@@ -173,6 +198,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_output_config: bool | None
     supports_image_size: bool | None
     supports_anthropic_thinking_payload: ReadOnly[bool | None]
+    supports_anthropic_compaction: ReadOnly[bool | None]
     supported_audio_formats: ReadOnly[Sequence[Literal["mp3", "wav"]] | None]
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
@@ -255,6 +281,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
     cache_read_input_audio_token_cost: ReadOnly[float | None]
+    cache_read_input_image_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -264,6 +291,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None
     cache_read_input_token_cost_above_512k_tokens: float | None
+    cache_read_input_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
@@ -289,7 +320,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
+    input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
+    output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     output_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
@@ -314,6 +347,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_image: float | None
+    output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
@@ -328,7 +362,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
+    output_cost_per_second_768p: ReadOnly[float | None]
+    output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_4k: ReadOnly[float | None]
+    output_cost_per_image_512: ReadOnly[float | None]
+    output_cost_per_image_1024: ReadOnly[float | None]
+    output_cost_per_image_1536: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
@@ -455,6 +494,8 @@ class CallTypes(str, Enum):
     #########################################################
     create_video = "create_video"
     acreate_video = "acreate_video"
+    video_generation = "video_generation"
+    avideo_generation = "avideo_generation"
     avideo_retrieve = "avideo_retrieve"
     video_retrieve = "video_retrieve"
     avideo_content = "avideo_content"
@@ -1313,9 +1354,7 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: di
 class Message(SafeAttributeModel, OpenAIObject):
     content: str | None
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: (
-        list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
-    )  # mutable-ok: public pydantic response field; only the union member is new
+    tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
     function_call: FunctionCall | None
     audio: ChatCompletionAudioResponse | None = None
     images: list[ImageURLListItem] | None = None
@@ -1438,9 +1477,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         content: str | None
         role: str | None
         function_call: FunctionCall | None
-        tool_calls: (
-            list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
-        )  # mutable-ok: public pydantic response field; only the union member is new
+        tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
         audio: ChatCompletionAudioResponse | None
         images: list[ImageURLListItem] | None
         annotations: list[ChatCompletionAnnotation] | None
@@ -2550,6 +2587,37 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
+    @field_serializer("data")
+    def _serialize_image_data(
+        self,
+        data: Sequence[OpenAIImage] | None,
+        info: FieldSerializationInfo,
+    ) -> Sequence[Mapping[str, object]] | None:
+        if data is None:
+            return None
+        include: Final = info.include
+        exclude: Final = info.exclude
+
+        def _serialize_image(index: int, image: OpenAIImage) -> Mapping[str, object] | None:
+            include_keep, include_selector = _nested_selector(include, index, len(data), is_include=True)
+            exclude_keep, exclude_selector = _nested_selector(exclude, index, len(data), is_include=False)
+            if not include_keep or not exclude_keep:
+                return None
+            return image.model_dump(
+                mode=info.mode,
+                include=include_selector,
+                exclude=exclude_selector,
+                context=info.context,
+                exclude_none=info.exclude_none,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
+                round_trip=info.round_trip,
+                by_alias=info.by_alias,
+            )
+
+        serialized_images: Final = tuple(_serialize_image(index, image) for index, image in enumerate(data))
+        return [image for image in serialized_images if image is not None]
+
     def __init__(
         self,
         created: int | None = None,
@@ -2960,6 +3028,7 @@ RoutingDecisionCause = Literal[
 
 InternalCallOrigin = Literal[
     "autorouter_classifier",
+    "autorouter_compaction",
     "shadow_eval_router",
     "shadow_eval_judge",
     "llm_as_a_judge_guardrail",
@@ -3146,6 +3215,15 @@ class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
     custom_pricing: bool | None
 
 
+ZeroCostReason = Literal["missing_pricing_key", "pricing_not_applied", "cost_calculation_error"]
+
+
+class StandardLoggingZeroCostDiagnostic(TypedDict):
+    reason: ReadOnly[ZeroCostReason]
+    pricing_model: ReadOnly[str]
+    missing_pricing_keys: ReadOnly[tuple[str, ...]]
+
+
 class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_code: str | None
     error_class: str | None
@@ -3174,6 +3252,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_budget_entity_id: str | None
     error_budget_limit: float | None
     error_budget_spend: float | None
+    normalized_error: ReadOnly[str | None]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -3464,6 +3543,7 @@ class StandardLoggingPayload(ClassifierAudit):
     autorouter_savings_estimate: ReadOnly[Mapping[str, JsonValue] | None]
     autorouter_baseline_observation: ReadOnly[str | None]
     response_cost_failure_debug_info: StandardLoggingModelCostFailureDebugInformation | None
+    zero_cost_diagnostic: NotRequired[ReadOnly[StandardLoggingZeroCostDiagnostic | None]]
     status: StandardLoggingPayloadStatus
     status_fields: StandardLoggingPayloadStatusFields
     custom_llm_provider: str | None
@@ -3527,6 +3607,10 @@ OPENAI_RESPONSE_HEADERS: Final = [
 ]
 
 
+OtelSpanScope = Literal["full", "llm_only"]
+OTEL_SPAN_SCOPES: Final[frozenset[str]] = frozenset(get_args(OtelSpanScope))
+
+
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
     langfuse_public_key: str | None
@@ -3534,6 +3618,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret_key: str | None
     langfuse_host: str | None
     langfuse_environment: ReadOnly[str | None]
+    langfuse_span_scope: ReadOnly[OtelSpanScope | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None
@@ -3556,6 +3641,8 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_api_key: str | None
     arize_space_key: str | None
     arize_space_id: str | None
+    arize_success_sampling_rate: ReadOnly[float | None]
+    arize_error_sampling_rate: ReadOnly[float | None]
 
     # PostHog dynamic params
     posthog_api_key: str | None
@@ -3604,7 +3691,12 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_second_1080p: float | None = None
     output_cost_per_second_480p: float | None = None
     output_cost_per_second_720p: float | None = None
+    output_cost_per_second_768p: float | None = None
+    output_cost_per_second_2k: float | None = None
     output_cost_per_second_4k: float | None = None
+    output_cost_per_image_512: float | None = None
+    output_cost_per_image_1024: float | None = None
+    output_cost_per_image_1536: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
@@ -3629,7 +3721,12 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
+    cache_read_input_token_cost_batches: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_batches: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
+    cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
@@ -3638,6 +3735,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_above_200k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_flex: float | None = None
+    input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
     input_cost_per_image: float | None = None
     input_cost_per_image_above_128k_tokens: float | None = None
@@ -3661,6 +3759,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_flex: float | None = None
+    output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
     output_cost_per_image_token: float | None = None
@@ -3761,7 +3860,7 @@ def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str
     )
 
 
-def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, ...]:
+def echoed_cost_map_pricing_fields(model_info: Mapping[str, object]) -> tuple[str, ...]:
     """Pricing fields a stored ``model_info`` blob copied from a ``/model/info`` response.
 
     Only ``litellm.get_model_info`` emits ``key`` (the resolved cost-map entry), so a stored
@@ -3774,7 +3873,25 @@ def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, 
     return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
 
 
-def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
+def echoed_cost_map_fields(
+    model_info: Mapping[str, object], *cost_map_entries: Mapping[str, object]
+) -> tuple[str, ...]:
+    """Fields a ``/model/info`` echo copied from the cost map unchanged.
+
+    Only ``litellm.get_model_info`` emits ``key``, so a blob carrying it is an echo of that
+    response. Anything in it that still equals a resolved cost-map entry is a display value
+    nobody typed; a value the operator edited differs from every entry and stays a real override.
+    Callers pass both the live entry, which the router rewrites with each deployment's own
+    overrides, and the catalog entry as loaded, so a reset to the catalog value reads as an echo either way.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(
+        sorted(k for k, v in model_info.items() if any(k in entry and entry[k] == v for entry in cost_map_entries))
+    )
+
+
+def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(
         sorted(
             frozenset(
@@ -3823,6 +3940,10 @@ bedrock_batch_litellm_params: Final = (
     "s3_region_name",
     "s3_endpoint_url",
     "s3_output_bucket_name",
+    "s3_bucket_owner",
+    "s3_access_key_id",
+    "s3_secret_access_key",
+    "s3_encryption_key_id",
     "bedrock_tags",
 )
 
@@ -3830,6 +3951,7 @@ all_litellm_params = (
     agentic_loop_internal_litellm_params
     + [TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD, *bedrock_batch_litellm_params]
     + [
+        "_context_compaction_state",
         "metadata",
         "litellm_metadata",
         "keepalive_seconds",
@@ -3917,6 +4039,7 @@ all_litellm_params = (
         "no-log",
         "base_model",
         "stream_timeout",
+        "stream_chunk_size",
         "supports_system_message",
         "region_name",
         "allowed_model_region",
@@ -3948,6 +4071,7 @@ all_litellm_params = (
         "litellm_credential_name",
         "allowed_openai_params",
         "litellm_session_id",
+        "provider_affinity_header",
         "use_litellm_proxy",
         "use_chat_completions_api",
         "rust",
@@ -4144,6 +4268,7 @@ class LlmProviders(str, Enum):
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
+    EDENAI = "edenai"
     DOTPROMPT = "dotprompt"
     MANUS = "manus"
     WANDB = "wandb"
@@ -4299,7 +4424,7 @@ class ProviderSpecificHeader(TypedDict):
 
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
-    tokenizer: Any
+    tokenizer: ReadOnly["Tokenizer"]
 
 
 class LiteLLMFineTuningJob(FineTuningJob):

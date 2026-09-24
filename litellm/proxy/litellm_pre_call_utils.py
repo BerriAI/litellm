@@ -137,7 +137,7 @@ def add_otel_trace_id_to_request(
         return
     data["litellm_trace_id"] = trace_id  # rebind-ok: data is an out-param
     if isinstance(metadata, dict):
-        metadata["trace_id"] = trace_id  # rebind-ok: metadata is the request's own out-param dict
+        metadata["trace_id"] = trace_id
 
 
 def _session_id_from_baggage(baggage: str) -> str | None:
@@ -1923,6 +1923,8 @@ class LiteLLMProxyRequestSetup:
 
 def refresh_proxy_server_request_body_snapshot(
     data: MutableMapping[str, object],
+    *,
+    guardrails_applied: bool = False,
 ) -> None:
     """
     Re-snapshot ``data["proxy_server_request"]["body"]`` from the current state of ``data``.
@@ -1938,13 +1940,27 @@ def refresh_proxy_server_request_body_snapshot(
     ``Logging`` instance, so it must be excluded here the same way ``secret_fields``
     and ``proxy_server_request`` are.
     """
-    proxy_server_request = data.get("proxy_server_request")
+    from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = data.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.shadow_eval_request_snapshot = None
+    proxy_server_request: Final = data.get("proxy_server_request")
     if not isinstance(proxy_server_request, dict):
         return
-    _body_snapshot_exclude = (
+    _body_snapshot_exclude: Final = (
         frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
     )
-    proxy_server_request["body"] = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
+    body: Final = {  # mutable-ok: audit JSON serialization requires a dict with shared nested messages
+        k: v for k, v in data.items() if k not in _body_snapshot_exclude
+    }
+    proxy_server_request["body"] = body
+    if guardrails_applied and isinstance(logging_obj, Logging):
+        metadata: Final = data.get(get_metadata_variable_name_from_kwargs(data))
+        logging_obj.shadow_eval_request_snapshot = GuardrailRequestSnapshot.capture(
+            body, metadata if isinstance(metadata, Mapping) else MappingProxyType({})
+        )
 
 
 async def add_litellm_data_to_request(
@@ -2029,7 +2045,14 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
-    _logging_safe_headers: Final = redact_credential_headers(_headers)
+    from litellm.proxy._experimental.mcp_server.utils import upstream_credential_headers
+
+    _mcp_credential_headers: Final = upstream_credential_headers(_headers)
+    _logging_safe_headers: Final = redact_credential_headers(
+        MappingProxyType(
+            {name: value for name, value in _headers.items() if name.lower() not in _mcp_credential_headers}
+        )
+    )
     verbose_proxy_logger.debug("Request Headers: %s", _logging_safe_headers)
     verbose_proxy_logger.debug("Raw Headers: %s", _raw_headers)
 
@@ -3116,7 +3139,11 @@ async def move_guardrails_to_metadata(
     - If guardrails not set on API key, then checks request metadata
     - Adds guardrails from policies attached to key/team metadata
     - Adds guardrails from policy engine based on team/key/model context
+    - Moves include_guardrail_response into request metadata before provider dispatch
     """
+    if "include_guardrail_response" in data:
+        data[_metadata_variable_name]["include_guardrail_response"] = data.pop("include_guardrail_response") is True
+
     # Early-out: skip all guardrails processing when nothing is configured
     key_metadata: Final = user_api_key_dict.metadata
     team_metadata: Final = user_api_key_dict.team_metadata
@@ -3216,7 +3243,9 @@ def _match_and_track_policies(
     attachment_registry: Final = (
         attachment_registry_override if attachment_registry_override is not None else get_attachment_registry()
     )
-    matches_with_reasons: Final = attachment_registry.get_attached_policies_with_reasons(context)
+    matches_with_reasons: Final = attachment_registry.get_attached_policies_with_reasons(
+        context, PolicyMatcher.policy_applies(context, policies_override)
+    )
     matching_policy_names: Final = [m["policy_name"] for m in matches_with_reasons]
     policy_reasons: Final = {m["policy_name"]: m["matched_via"] for m in matches_with_reasons}
 
@@ -3418,7 +3447,12 @@ async def add_guardrails_from_policy_engine(
 
 
 _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
-    (LlmProviders.ANTHROPIC.value, LlmProviders.BEDROCK.value, LlmProviders.VERTEX_AI.value)
+    (
+        LlmProviders.ANTHROPIC.value,
+        LlmProviders.BEDROCK.value,
+        LlmProviders.BEDROCK_MANTLE.value,
+        LlmProviders.VERTEX_AI.value,
+    )
 )
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.ANTHROPIC.value
 

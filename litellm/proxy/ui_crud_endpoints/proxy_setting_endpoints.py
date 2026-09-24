@@ -15,8 +15,8 @@ from typing import (
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
-from pydantic.fields import FieldInfo
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
+from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.config_resolvers import FieldSource, SettingsStore, source_for
 from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError
 from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
@@ -35,7 +36,10 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 )
-from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
+from litellm.proxy.spend_tracking.ptu_feature_flag import (
+    PTU_COST_ATTRIBUTION_ENV_VAR,
+    is_ptu_cost_attribution_enabled,
+)
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -45,6 +49,7 @@ from litellm.repositories.table_repositories import (
     UISettingsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.secret_managers.main import get_secret
 from litellm.types.mcp import MCPToolSearchSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -199,6 +204,11 @@ class SettingsResponse(BaseModel):
     """Schema information including descriptions and property types for UI display"""
 
 
+class _SettingsWithSchema(BaseModel):
+    values: dict[str, object]
+    field_schema: dict[str, object]
+
+
 class SSOSettingsResponse(SettingsResponse):
     """Response model for SSO settings"""
 
@@ -330,6 +340,8 @@ class UISettings(BaseModel):
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
 
+    source: dict[str, FieldSource]
+
 
 # Allowlist of UI settings that can be stored
 ALLOWED_UI_SETTINGS_FIELDS: Final = {
@@ -352,11 +364,18 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
 }
 
 ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
+APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING: Final = "apply_user_budget_to_team_keys"
 
 # UI settings derived from the deployment environment. Deliberately kept out of
 # ALLOWED_UI_SETTINGS_FIELDS: they are read-only, never persisted, and PATCH
 # rejects them so an admin cannot flip an env-gated feature at runtime.
-_DERIVED_UI_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset({ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING})
+_DERIVED_UI_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset(
+    {ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING, APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING}
+)
+
+
+def _apply_user_budget_to_team_keys_enabled(settings: Mapping[str, object]) -> bool:
+    return settings.get(APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING) is True
 
 
 def _derived_ui_setting_value(key: str) -> object:
@@ -369,6 +388,12 @@ def _derived_ui_setting_value(key: str) -> object:
     """
     if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
         return is_ptu_cost_attribution_enabled()
+    if key == APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING:
+        from litellm.proxy.proxy_server import general_settings
+
+        return _apply_user_budget_to_team_keys_enabled(
+            cast(Mapping[str, object], general_settings)  # cast-ok: proxy_server declares general_settings as bare dict
+        )
     return None
 
 
@@ -382,6 +407,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
+    "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 ]
@@ -505,6 +531,16 @@ class WebSearchInterceptionSettings(BaseModel):
 
 class WebSearchInterceptionSettingsResponse(SettingsResponse):
     """Response model for web search interception settings"""
+
+    active_on_this_pod: bool = Field(
+        default=False,
+        description=(
+            "Whether the process answering this request has the interception callback "
+            "registered. Read-only: it reports what is running here, while values.enabled "
+            "is the cluster-wide setting, and the two disagree while a pod is still "
+            "applying a change or failed to apply it."
+        ),
+    )
 
 
 def _with_websearch_enabled_resolved(config: Mapping[str, object]) -> dict[str, object]:
@@ -736,6 +772,27 @@ def _root_schema(settings_class: type[BaseModel]) -> _RootSchema:
         nested_defs=raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
         defs=raw_schema["$defs"] if "$defs" in raw_schema else raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
     )
+
+
+def _model_field_default(settings_class: type[BaseModel], field_name: str) -> object:
+    field_info: Final = settings_class.model_fields.get(field_name)
+    if field_info is None or field_info.default is PydanticUndefined:
+        return None
+    return cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+
+
+def _ui_setting_source(
+    key: str,
+    value: object,
+    settings: SettingsStore,
+    settings_class: type[BaseModel],
+) -> FieldSource:
+    if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
+        configured_value: Final = get_secret(PTU_COST_ATTRIBUTION_ENV_VAR, None)
+        return "config" if configured_value is not None or value is True else "default"
+    if key == APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING:
+        return "config" if value is True else "default"
+    return source_for(settings, key, _model_field_default(settings_class, key))
 
 
 async def _get_settings_with_schema(
@@ -1496,10 +1553,21 @@ async def get_websearch_interception_settings(
 
     config: Final = await proxy_config.get_config()
 
-    return await _get_settings_with_schema(
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    settings: Final = await _get_settings_with_schema(
         settings_key="websearch_interception_params",
         settings_class=WebSearchInterceptionSettings,
         config=_with_websearch_enabled_resolved(config),
+    )
+    return WebSearchInterceptionSettingsResponse(
+        values=settings["values"],
+        field_schema=settings["field_schema"],
+        active_on_this_pod=bool(
+            litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)
+        ),
     )
 
 
@@ -1684,7 +1752,7 @@ async def get_ui_settings():
     Get UI-specific configuration flags.
     All authenticated users can fetch these settings for client-side behavior.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
 
     if prisma_client is None:
         raise HTTPException(
@@ -1709,20 +1777,46 @@ async def get_ui_settings():
 
     await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
-    # Build config-like object for schema helper
-    config: Final[dict[str, object]] = {"litellm_settings": {"ui_settings": ui_settings}}
-
-    settings: Final = await _get_settings_with_schema(
-        settings_key="ui_settings",
-        settings_class=_get_effective_ui_settings_class(),
-        config=config,
+    effective_ui_settings: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            **ui_settings,
+            **{key: proxy_config.settings[key] for key in ALLOWED_UI_SETTINGS_FIELDS if key in proxy_config.settings},
+        }
+    )
+    config: Final[Mapping[str, object]] = MappingProxyType(
+        {"litellm_settings": MappingProxyType({"ui_settings": effective_ui_settings})}
+    )
+    settings_class: Final = _get_effective_ui_settings_class()
+    resolved_settings: Final = _SettingsWithSchema.model_validate(
+        await _get_settings_with_schema(
+            settings_key="ui_settings",
+            settings_class=settings_class,
+            config=config,
+        )
+    )
+    values: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            **resolved_settings.values,
+            ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
+            APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING: _derived_ui_setting_value(
+                APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING
+            ),
+        }
+    )
+    source: Final[Mapping[str, FieldSource]] = MappingProxyType(
+        {
+            key: (
+                _ui_setting_source(key, values[key], proxy_config.settings, settings_class)
+                if key in proxy_config.settings or key not in ui_settings
+                else "db"
+            )
+            for key in values
+        }
     )
     return UISettingsResponse(
-        values={
-            **settings["values"],
-            ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
-        },
-        field_schema=settings["field_schema"],
+        values=values,
+        field_schema=resolved_settings.field_schema,
+        source=source,
     )
 
 

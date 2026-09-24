@@ -114,6 +114,10 @@ impl OcrConfigKind {
         with_config!(self, config => config.get_api_key_env_var())
     }
 
+    pub(crate) fn secret_names(self) -> Vec<&'static str> {
+        with_config!(self, config => config.secret_names())
+    }
+
     pub(crate) fn get_health_check_document(self) -> OcrDocument {
         with_config!(self, config => config.get_health_check_document())
     }
@@ -213,6 +217,8 @@ fn is_document_intelligence_model(model: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use litellm_auth::{InputSource, Sourced};
     use litellm_llms::{
         base_llm::ocr::document::InlineDocument, cohere::ocr::transformation::validate_document,
@@ -220,6 +226,27 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case(OcrConfigKind::AwsTextract)]
+    #[case(OcrConfigKind::AwsTextractAnalyze)]
+    #[case(OcrConfigKind::Cohere)]
+    #[case(OcrConfigKind::Mistral)]
+    #[case(OcrConfigKind::AzureAi)]
+    #[case(OcrConfigKind::AzureCohere)]
+    #[case(OcrConfigKind::AzureDocumentIntelligence)]
+    #[case(OcrConfigKind::ReductoLegacy)]
+    #[case(OcrConfigKind::ReductoV3)]
+    #[case(OcrConfigKind::VertexAi)]
+    #[case(OcrConfigKind::VertexDeepSeek)]
+    fn secret_names_include_api_keys_without_duplicates(#[case] config: OcrConfigKind) {
+        let names = config.secret_names();
+        let unique = names.iter().collect::<HashSet<_>>();
+        assert_eq!(names.len(), unique.len());
+        if let Some(api_key) = config.get_api_key_env_var() {
+            assert!(names.contains(&api_key));
+        }
+    }
 
     #[rstest]
     #[case("cohere")]

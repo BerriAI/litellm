@@ -83,6 +83,8 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
     HTTPException,
 )
 
+_CLIENT_FORWARDED_TOKEN_AUTH_TYPES: Final = frozenset((MCPAuth.true_passthrough, MCPAuth.oauth_delegate))
+
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
     reference: Final = uuid4().hex
@@ -203,17 +205,19 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.oauth_utils import (
         get_request_base_url,
     )
-    from litellm.proxy._experimental.mcp_server.server import (
+    from litellm.proxy._experimental.mcp_server.operations import (
         ListMCPToolsRestAPIResponseObject,
         MCPInfo,
         MCPServer,
-        _aggregate_server_key,  # pyright: ignore[reportPrivateUsage]  # same per-server key as the tools/list _meta outcomes
-        _apply_toolset_scope,
+        _aggregate_server_key,
         _fire_mcp_tool_call_logging,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
         filter_tools_by_key_team_permissions,
         fire_mcp_tool_call_failure_logging,
+    )
+    from litellm.proxy._experimental.mcp_server.server import (
+        _apply_toolset_scope,
         reject_disallowed_mcp_client,
     )
 
@@ -670,6 +674,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: UserAPIKeyAuth | None = None,
         extra_headers: dict[str, str] | None = None,
         apply_tool_filters: bool = True,
+        client_ip: str | None = None,
     ):
         """Helper function to get tools for a single server.
 
@@ -684,6 +689,7 @@ if MCP_AVAILABLE:
             extra_headers=extra_headers,
             add_prefix=False,
             raw_headers=raw_headers,
+            client_ip=client_ip,
             user_api_key_auth=user_api_key_auth,
         )
 
@@ -797,6 +803,7 @@ if MCP_AVAILABLE:
                 user_api_key_dict,
                 extra_headers=user_oauth_extra_headers,
                 apply_tool_filters=apply_tool_filters,
+                client_ip=rest_client_ip,
             )
         except MCPUpstreamAuthError:
             # Surface the upstream 401/403 to the caller so it can emit the
@@ -1016,6 +1023,7 @@ if MCP_AVAILABLE:
                             user_api_key_dict,
                             extra_headers=user_oauth_extra_headers,
                             apply_tool_filters=apply_tool_filters,
+                            client_ip=_rest_client_ip,
                         )
                     except Exception as e:
                         verbose_logger.warning(
@@ -1147,6 +1155,7 @@ if MCP_AVAILABLE:
                     route_type=CallTypes.call_mcp_tool.value,
                     proxy_logging_obj=proxy_logging_obj,
                     general_settings=general_settings,
+                    skip_guardrails=True,
                 )
 
                 # Extract MCP auth headers from request and add to data dict
@@ -1180,6 +1189,11 @@ if MCP_AVAILABLE:
                 )
                 if target_server is not None:
                     user_oauth_extra_headers = await _get_user_oauth_extra_headers(target_server, user_api_key_dict)
+                caller_oauth2_headers: Final = (
+                    MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
+                    if target_server is not None and target_server.auth_type in _CLIENT_FORWARDED_TOKEN_AUTH_TYPES
+                    else None
+                )
 
                 # Call execute_mcp_tool directly (permission checks already done)
                 _tool_start_time: Final = datetime.now()
@@ -1191,8 +1205,9 @@ if MCP_AVAILABLE:
                     user_api_key_auth=data.get("user_api_key_auth"),
                     mcp_auth_header=data.get("mcp_auth_header"),
                     mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
-                    oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
+                    oauth2_headers=user_oauth_extra_headers or caller_oauth2_headers,
                     raw_headers=data.get("raw_headers"),
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
                     litellm_logging_obj=data.get("litellm_logging_obj"),
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(data),
                     requested_server_id=canonical_server_id,

@@ -63,7 +63,11 @@ from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
 from litellm.utils import get_llm_provider
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, merge_bedrock_aws_request_params, resolve_s3_encryption_key_id
+from ..common_utils import (
+    BedrockError,
+    merge_bedrock_aws_request_params,
+    resolve_s3_encryption_key_id,
+)
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
 
@@ -148,6 +152,8 @@ class _BedrockS3RequestParams(AwsAuthParams):
     aws_region_name: str | None = None
     s3_region_name: str | None = None
     s3_endpoint_url: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,7 +381,7 @@ def _listed_managed_file(
     )
 
 
-def _uploaded_object_size(litellm_params: Mapping[str, object], raw_response: Response) -> int:
+def _uploaded_object_size(litellm_params: Mapping[str, object], response_headers: Mapping[str, str]) -> int:
     """
     S3 answers PutObject with an empty body, so the stored object size comes from the
     signed request recorded by `transform_create_file_request`, not the response headers.
@@ -383,7 +389,7 @@ def _uploaded_object_size(litellm_params: Mapping[str, object], raw_response: Re
     uploaded_size: Final = litellm_params.get(UPLOAD_CONTENT_LENGTH_PARAM)
     if isinstance(uploaded_size, int):
         return uploaded_size
-    response_content_length: Final = raw_response.headers.get("Content-Length", "0")
+    response_content_length: Final = response_headers.get("Content-Length", "0")
     return int(response_content_length) if response_content_length.isdigit() else 0
 
 
@@ -1147,7 +1153,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model="")
-        credentials: Final = self.resolve_credentials(AwsAuthParams.model_validate(optional_params), aws_region_name)
+        credentials: Final = self.resolve_s3_credentials(optional_params, aws_region_name)
 
         # Calculate SHA256 hash of the content (REQUIRED for S3)
         content_hash: Final = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -1277,7 +1283,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             filename=filename,
             created_at=int(time.time()),  # Current timestamp
             status="uploaded",
-            bytes=_uploaded_object_size(litellm_params=litellm_params, raw_response=raw_response),
+            bytes=_uploaded_object_size(litellm_params=litellm_params, response_headers=raw_response.headers),
             object="file",
         )
 
@@ -1494,7 +1500,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        credentials: Final = self.resolve_credentials(request_params, aws_region_name)
+        credentials: Final = self.resolve_s3_credentials(request_params.model_dump(exclude_none=True), aws_region_name)
 
         empty_body_hash: Final = hashlib.sha256(b"").hexdigest()
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped

@@ -523,6 +523,92 @@ def test_wildcard_credential_hydration_preserves_missing_credential_name(
     }
 
 
+def test_hydrate_credential_name_none_leaves_params_untouched(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.model_checks import _hydrate_litellm_credential_name
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="shared-credential",
+                credential_info={},
+                credential_values={"api_key": "sk-shared"},
+            )
+        ],
+    )
+    params = LiteLLM_Params(model="openai/gpt-4o", litellm_credential_name=None)
+
+    result = _hydrate_litellm_credential_name(params)
+
+    assert result is not None
+    assert result.api_key is None
+    assert result.litellm_credential_name is None
+
+
+def test_hydrate_replaced_credential_uses_new_credential_values(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.model_checks import _hydrate_litellm_credential_name
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="shared-credential",
+                credential_info={},
+                credential_values={"api_key": "sk-shared"},
+            ),
+            CredentialItem(
+                credential_name="other-credential",
+                credential_info={},
+                credential_values={"api_key": "sk-other"},
+            ),
+        ],
+    )
+    params = LiteLLM_Params(model="openai/gpt-4o", litellm_credential_name="other-credential")
+
+    result = _hydrate_litellm_credential_name(params)
+
+    assert result is not None
+    assert result.api_key == "sk-other"
+    assert result.litellm_credential_name is None
+
+
+def test_hydrate_inline_api_key_wins_over_stored_credential(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.model_checks import _hydrate_litellm_credential_name
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="shared-credential",
+                credential_info={},
+                credential_values={"api_key": "sk-shared"},
+            )
+        ],
+    )
+    params = LiteLLM_Params(
+        model="openai/gpt-4o",
+        api_key="sk-inline",
+        litellm_credential_name="shared-credential",
+    )
+
+    result = _hydrate_litellm_credential_name(params)
+
+    assert result is not None
+    assert result.api_key == "sk-inline"
+
+
 @pytest.mark.asyncio
 async def test_get_available_models_for_user_expands_query_team_wildcard(
     monkeypatch,

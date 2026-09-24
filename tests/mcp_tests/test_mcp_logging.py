@@ -142,7 +142,7 @@ async def test_mcp_cost_tracking():
                 local_mcp_server_manager,
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+                "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
                 local_mcp_server_manager,
             ),
         ):
@@ -293,7 +293,7 @@ async def test_mcp_cost_tracking_per_tool():
                 local_mcp_server_manager,
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+                "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
                 local_mcp_server_manager,
             ),
         ):
@@ -451,7 +451,7 @@ async def test_mcp_tool_call_hook():
                 local_mcp_server_manager,
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+                "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
                 local_mcp_server_manager,
             ),
         ):

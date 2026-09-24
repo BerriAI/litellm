@@ -16,7 +16,7 @@ def test_get_model_info_simple_model_name():
     """
     tests if model name given, and model exists in model info - the object is returned
     """
-    model = "claude-3-opus-20240229"
+    model = "claude-opus-5-5"
     litellm.get_model_info(model)
 
 
@@ -24,7 +24,7 @@ def test_get_model_info_custom_llm_with_model_name():
     """
     Tests if {custom_llm_provider}/{model_name} name given, and model exists in model info, the object is returned
     """
-    model = "anthropic/claude-3-opus-20240229"
+    model = "anthropic/claude-opus-5-5"
     litellm.get_model_info(model)
 
 

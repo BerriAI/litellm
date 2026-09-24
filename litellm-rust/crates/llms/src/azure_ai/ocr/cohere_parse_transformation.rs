@@ -28,6 +28,10 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         super::transformation::AzureAiOcrConfig.get_api_key_env_var()
     }
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        super::transformation::AzureAiOcrConfig.secret_names()
+    }
+
     fn get_health_check_document(&self) -> OcrDocument {
         CohereParseConfig.get_health_check_document()
     }

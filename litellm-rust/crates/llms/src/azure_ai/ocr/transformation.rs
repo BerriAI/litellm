@@ -1,5 +1,6 @@
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::AzureAuthInputs;
+use litellm_auth_azure::SECRET_NAMES as AZURE_AUTH_SECRET_NAMES;
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde_json::Value;
 
@@ -35,6 +36,17 @@ impl BaseOcrConfig for AzureAiOcrConfig {
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         Some(AZURE_AI_API_KEY_ENV)
+    }
+
+    fn secret_names(&self) -> Vec<&'static str> {
+        [
+            [AZURE_AI_API_KEY_ENV, AZURE_AI_API_BASE_ENV].as_slice(),
+            AZURE_AUTH_SECRET_NAMES,
+        ]
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect()
     }
 
     fn map_ocr_params(

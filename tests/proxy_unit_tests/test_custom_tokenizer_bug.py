@@ -22,10 +22,8 @@ from litellm.proxy.proxy_server import token_counter
 
 
 def _fake_hf_tokenizer(num_tokens: int) -> MagicMock:
-    encoding = MagicMock()
-    encoding.__len__.return_value = num_tokens
     tokenizer = MagicMock()
-    tokenizer.encode_batch_fast.return_value = [encoding]
+    tokenizer.encode_batch_fast.return_value = [[0] * num_tokens]
     return tokenizer
 
 
@@ -58,7 +56,7 @@ async def test_custom_tokenizer_from_model_info_is_used(monkeypatch):
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
-    with patch.object(litellm.utils, "Tokenizer") as mock_tokenizer_cls:
+    with patch.object(litellm.utils, "tokenizer_dispatch") as mock_tokenizer_cls:
         mock_tokenizer_cls.from_pretrained.return_value = _fake_hf_tokenizer(7)
 
         response = await token_counter(
@@ -92,7 +90,7 @@ async def test_model_without_custom_tokenizer_uses_default(monkeypatch):
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
-    with patch.object(litellm.utils, "Tokenizer") as mock_tokenizer_cls:
+    with patch.object(litellm.utils, "tokenizer_dispatch") as mock_tokenizer_cls:
         response = await token_counter(
             request=TokenCountRequest(
                 model="gpt-4",

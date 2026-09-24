@@ -383,13 +383,17 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         return {**validated, "OpenAI-Project": project_id}  # mutable-ok: BaseConfig signature returns a dict
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseConfig signature
-        refused: Final = {"n", *chat_completions_params_refused_for(model)}
-        base_params: Final = [param for param in super().get_supported_openai_params(model) if param not in refused]
-        if "reasoning_effort" in base_params or not litellm.supports_reasoning(
-            model=model, custom_llm_provider=self.custom_llm_provider
-        ):
-            return base_params
-        return [*base_params, "reasoning_effort"]  # mutable-ok: BaseConfig signature returns a list
+        refused: Final = frozenset(("n", *chat_completions_params_refused_for(model)))
+        base_params: Final = tuple(
+            param for param in super().get_supported_openai_params(model) if param not in refused
+        )
+        reasoning_param: Final = (
+            ("reasoning_effort",)
+            if "reasoning_effort" not in base_params
+            and litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
+            else ()
+        )
+        return [*base_params, *reasoning_param]  # mutable-ok: BaseConfig signature returns a list
 
     def get_model_response_iterator(
         self,

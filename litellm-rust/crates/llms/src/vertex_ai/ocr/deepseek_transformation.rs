@@ -105,6 +105,10 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         VertexAiOcrConfig.get_api_key_env_var()
     }
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        VertexAiOcrConfig.secret_names()
+    }
+
     fn map_ocr_params(
         &self,
         _arguments: &CallArguments,

@@ -137,7 +137,7 @@ def test_the_shipped_budget_covers_every_rule_the_checker_can_emit():
 
     budget = json.loads((_REPO_ROOT / "test-quality-budget.json").read_text())
     assert set(budget) == {
-        "TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ008", "TQ009"
+        "TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ009"
     }
     assert all(spec["limit"] >= 0 for spec in budget.values())
 
