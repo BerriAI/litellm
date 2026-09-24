@@ -196,4 +196,4 @@ class TestBingGroundingSearchTransformation:
         ):
             response = litellm.search(query="pricing check", search_provider="bing_grounding")
 
-        assert response._hidden_params["response_cost"] == pytest.approx(0.035)
+        assert response._hidden_params["response_cost"] == pytest.approx(0.014)

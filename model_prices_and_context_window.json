@@ -22126,11 +22126,11 @@
         }
     },
     "bing_grounding/search": {
-        "input_cost_per_query": 0.035,
+        "input_cost_per_query": 0.014,
         "litellm_provider": "bing_grounding",
         "mode": "search",
         "metadata": {
-            "notes": "Grounding with Bing Search (G1 SKU): $35 per 1,000 transactions. Tokens for the Foundry model deployment that runs the grounded search are billed separately on that deployment."
+            "notes": "Grounding with Bing Search (G1 SKU): $14 per 1,000 transactions. Tokens for the Foundry model deployment that runs the grounded search are billed separately on that deployment."
         }
     },
     "tinyfish/search": {
