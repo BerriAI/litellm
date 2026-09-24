@@ -8,6 +8,7 @@ a batch create through it proves blank means unset, not an empty string.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import socket
@@ -28,7 +29,13 @@ from pydantic import TypeAdapter
 
 STARTUP_TIMEOUT_SECONDS: Final = 240
 LOG_TAIL_BYTES: Final = 4000
-REPO_ROOT: Final = Path(__file__).resolve().parents[3]
+
+
+def litellm_root() -> Path:
+    spec: Final = importlib.util.find_spec("litellm")
+    assert spec is not None and spec.origin is not None, "litellm must be importable to boot the blank-S3-env gateway"
+    return Path(spec.origin).resolve().parents[1]
+
 
 _CONFIG_YAML: Final = """model_list:
   - model_name: bedrock-blank-s3-batch
@@ -68,6 +75,7 @@ class BedrockEnvGateway:
     @classmethod
     def start(cls) -> BedrockEnvGateway:
         assert os.environ.get("DATABASE_URL"), "DATABASE_URL is required for the blank-S3-env gateway"
+        root: Final = litellm_root()
         port: Final = available_port()
         base_url: Final = f"http://127.0.0.1:{port}"
         master_key: Final = f"sk-e2e-blank-s3-{unique_marker()}"
@@ -79,7 +87,7 @@ class BedrockEnvGateway:
             "DATABASE_URL": os.environ["DATABASE_URL"],
             "LITELLM_MASTER_KEY": master_key,
             "STORE_MODEL_IN_DB": "False",
-            "PYTHONPATH": str(REPO_ROOT),
+            "PYTHONPATH": str(root),
             "AWS_S3_ENCRYPTION_KEY_ID": "",
             "AWS_S3_BUCKET_OWNER": "",
         }
@@ -113,13 +121,11 @@ class BedrockEnvGateway:
                 stdout=log,
                 stderr=log,
                 start_new_session=True,
-                cwd=REPO_ROOT,
+                cwd=root,
             )
         deadline: Final = time.monotonic() + STARTUP_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
-            assert gateway._child.poll() is None, (
-                f"blank-S3-env gateway exited early; log tail:\n{gateway.log_tail()}"
-            )
+            assert gateway._child.poll() is None, f"blank-S3-env gateway exited early; log tail:\n{gateway.log_tail()}"
             result = gateway.proxy.transport.probe("/health/liveliness", params=NoBody())
             if result.status_code == 200:
                 return gateway
