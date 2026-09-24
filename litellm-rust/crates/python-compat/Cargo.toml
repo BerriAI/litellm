@@ -12,6 +12,7 @@ num-traits = "0.2"
 serde.workspace = true
 serde-pickle = "1.2"
 serde_json = { workspace = true, features = ["preserve_order"] }
+strum.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
