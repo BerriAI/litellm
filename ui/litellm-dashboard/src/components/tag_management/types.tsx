@@ -7,6 +7,7 @@ export interface Tag {
   updated_at: string;
   created_by?: string;
   updated_by?: string;
+  team_id?: string | null;
   litellm_budget_table?: {
     max_budget?: number;
     soft_budget?: number;
@@ -31,6 +32,7 @@ export interface TagNewRequest {
   tpm_limit?: number;
   rpm_limit?: number;
   budget_duration?: string;
+  team_id?: string | null;
 }
 
 export interface TagUpdateRequest {
@@ -42,6 +44,7 @@ export interface TagUpdateRequest {
   tpm_limit?: number;
   rpm_limit?: number;
   budget_duration?: string | null;
+  team_id?: string | null;
 }
 
 export interface TagDeleteRequest {

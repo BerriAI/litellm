@@ -8,6 +8,8 @@ import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Team } from "@/components/key_team_helpers/key_list";
 import NumericalInput from "@/components/shared/numerical_input";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -40,6 +42,7 @@ const createTagShape = {
   tag_name: z.string().min(1, "Please input a tag name"),
   description: z.string().optional(),
   allowed_llms: z.array(z.string()).optional(),
+  team_id: z.string().nullish(),
   max_budget: z.string().optional(),
   budget_duration: z.string().optional(),
 };
@@ -53,9 +56,16 @@ interface CreateTagModalProps {
   onCancel: () => void;
   onSubmit: (values: CreateTagFormValues) => void;
   availableModels: ModelInfo[];
+  teams?: Team[];
 }
 
-const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSubmit, availableModels }) => {
+const CreateTagModal: React.FC<CreateTagModalProps> = ({
+  visible,
+  onCancel,
+  onSubmit,
+  availableModels,
+  teams = [],
+}) => {
   const [budgetSectionOpen, setBudgetSectionOpen] = React.useState(false);
   const form = useZodForm(createTagSchema, { defaultValues: { tag_name: "" } });
 
@@ -63,6 +73,12 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
     label: model.model_name,
     value: model.model_info.id,
     description: model.model_info.id,
+  }));
+
+  const teamOptions = teams.map((team) => ({
+    label: team.team_alias || team.team_id,
+    value: team.team_id,
+    sublabel: team.team_id,
   }));
 
   const handleFinish = (values: CreateTagFormValues) => {
@@ -107,6 +123,25 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
                     value={value}
                     onValueChange={onChange}
                     placeholder="Select Models"
+                  />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="team_id"
+                label={labelWithHint(
+                  "Owning Team",
+                  "Only keys of the owning team can send this tag on requests. Leave empty to let any key use it",
+                )}
+              >
+                {({ id, value, onChange }) => (
+                  <SearchSelect
+                    inputId={id}
+                    options={teamOptions}
+                    value={value ?? null}
+                    onValueChange={onChange}
+                    placeholder="No owning team"
                   />
                 )}
               </FormField>

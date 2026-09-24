@@ -3,7 +3,8 @@ import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import TagInfoView from "./tag_info";
 import { modelInfoCall } from "@/components/networking";
-import { tagCreateCall, tagListCall, tagDeleteCall } from "@/components/networking";
+import { tagCreateCall, tagListCall, tagDeleteCall, teamListCall } from "@/components/networking";
+import { Team } from "@/components/key_team_helpers/key_list";
 import { Tag } from "@/components/tag_management/types";
 import TagTable from "./TagTable";
 import { toast } from "@/lib/toast";
@@ -37,6 +38,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
   const [isDeleting, setIsDeleting] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
 
   const fetchTags = async () => {
     if (!accessToken) {
@@ -72,6 +74,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
         tpm_limit: formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit,
         budget_duration: formValues.budget_duration,
+        team_id: formValues.team_id ?? null,
       });
       toast.success("Tag created successfully");
       setIsCreateModalVisible(false);
@@ -122,6 +125,19 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
   }, [accessToken, userID, userRole]);
 
   useEffect(() => {
+    if (!accessToken) return;
+    const fetchTeams = async () => {
+      try {
+        const response = await teamListCall(accessToken, null, userRole === "Admin" ? null : userID);
+        setTeams(Array.isArray(response) ? response : []);
+      } catch (error) {
+        console.error("Error fetching teams:", error);
+      }
+    };
+    fetchTeams();
+  }, [accessToken, userID, userRole]);
+
+  useEffect(() => {
     fetchTags();
   }, [accessToken]);
 
@@ -137,6 +153,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
           accessToken={accessToken}
           is_admin={userRole === "Admin"}
           editTag={editTag}
+          teams={teams}
         />
       ) : (
         <div className="flex h-full w-full flex-col p-8 pt-10">
@@ -185,6 +202,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
             onCancel={() => setIsCreateModalVisible(false)}
             onSubmit={handleCreate}
             availableModels={availableModels}
+            teams={teams}
           />
 
           {/* Delete Confirmation Modal */}

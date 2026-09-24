@@ -50,9 +50,7 @@ class FakeVerificationTokenTable:
         self.calls: list[dict[str, object]] = []
 
     async def find_many(self, **kwargs: object) -> tuple[Mock, ...]:
-        inspect.signature(LiteLLM_VerificationTokenActions.find_many).bind(
-            self, **kwargs
-        )
+        inspect.signature(LiteLLM_VerificationTokenActions.find_many).bind(self, **kwargs)
         self.calls.append(kwargs)
         return self._records
 
@@ -77,9 +75,7 @@ async def test_create_and_get_tag():
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
             patch("litellm.proxy.proxy_server.llm_router") as mock_router,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
             patch(
                 "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
             ) as mock_get_deployments,
@@ -102,6 +98,7 @@ async def test_create_and_get_tag():
             created_tag.model_info = {}
             created_tag.spend = 0.0
             created_tag.budget_id = None
+            created_tag.team_id = None
             created_tag.created_at = datetime.now()
             created_tag.updated_at = datetime.now()
             created_tag.created_by = "test-user-123"
@@ -135,6 +132,7 @@ async def test_create_and_get_tag():
             retrieved_tag.model_info = "{}"
             retrieved_tag.spend = 0.0
             retrieved_tag.budget_id = None
+            retrieved_tag.team_id = None
             retrieved_tag.created_at = datetime.now()
             retrieved_tag.updated_at = datetime.now()
             retrieved_tag.created_by = "test-user-123"
@@ -172,9 +170,7 @@ async def test_update_tag():
     try:
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
         ):
             # Setup prisma mocks
             mock_db = Mock()
@@ -186,6 +182,7 @@ async def test_update_tag():
             existing_tag.description = "Original description"
             existing_tag.models = ["model-1"]
             existing_tag.budget_id = None
+            existing_tag.team_id = None
             existing_tag.created_at = datetime.now()
             existing_tag.updated_at = datetime.now()
             existing_tag.created_by = "user-123"
@@ -204,6 +201,7 @@ async def test_update_tag():
             updated_tag.model_info = {}
             updated_tag.spend = 0.0
             updated_tag.budget_id = None
+            updated_tag.team_id = None
             updated_tag.created_at = datetime.now()
             updated_tag.updated_at = datetime.now()
             updated_tag.created_by = "user-123"
@@ -257,6 +255,7 @@ async def test_new_tag_persists_a_budget():
 
     async def create_tag(data, **_):
         created_tag.budget_id = data["budget_id"]
+        created_tag.team_id = None
         return created_tag
 
     mock_db.litellm_budgettable.create = create_budget
@@ -306,9 +305,10 @@ async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
             "budget_duration": "30d",
         }
     )
-    existing_tag = SimpleNamespace(budget_id="budget-1")
+    existing_tag = SimpleNamespace(budget_id="budget-1", team_id=None)
     updated_tag = SimpleNamespace(
         tag_name="budget-tag",
+        team_id=None,
         description=None,
         models=[],
         created_at=datetime(2024, 1, 1),
@@ -360,9 +360,10 @@ async def test_update_tag_explicit_null_clears_budget_duration():
     from litellm.types.tag_management import TagUpdateRequest
 
     budget_state = _BudgetState({"budget_id": "budget-1", "budget_duration": "30d"})
-    existing_tag = SimpleNamespace(budget_id="budget-1")
+    existing_tag = SimpleNamespace(budget_id="budget-1", team_id=None)
     updated_tag = SimpleNamespace(
         tag_name="budget-tag",
+        team_id=None,
         description=None,
         models=[],
         created_at=datetime(2024, 1, 1),
@@ -507,9 +508,7 @@ async def test_new_tag_invalidates_tag_and_registry_caches():
             _tag_cache_doubles() as (recording_cache, mock_publish),
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
             patch("litellm.proxy.proxy_server.llm_router"),
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
             patch(
                 "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
             ) as mock_get_deployments,
@@ -527,6 +526,7 @@ async def test_new_tag_invalidates_tag_and_registry_caches():
             created_tag.model_info = {}
             created_tag.spend = 0.0
             created_tag.budget_id = None
+            created_tag.team_id = None
             created_tag.created_at = datetime.now()
             created_tag.updated_at = datetime.now()
             created_tag.created_by = "test-user-123"
@@ -562,9 +562,7 @@ async def test_update_tag_invalidates_only_the_tag_cache():
         with (
             _tag_cache_doubles() as (recording_cache, mock_publish),
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
         ):
             mock_db = Mock()
             mock_prisma.db = mock_db
@@ -572,6 +570,7 @@ async def test_update_tag_invalidates_only_the_tag_cache():
             existing_tag = Mock()
             existing_tag.tag_name = "cache-tag"
             existing_tag.budget_id = None
+            existing_tag.team_id = None
             mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
             mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
@@ -582,6 +581,7 @@ async def test_update_tag_invalidates_only_the_tag_cache():
             updated_tag.model_info = {}
             updated_tag.spend = 0.0
             updated_tag.budget_id = None
+            updated_tag.team_id = None
             updated_tag.created_at = datetime.now()
             updated_tag.updated_at = datetime.now()
             updated_tag.created_by = "test-user-123"
@@ -668,6 +668,7 @@ async def test_list_tags_with_dynamic_tags():
             stored_tag.model_info = {}
             stored_tag.spend = 0.0
             stored_tag.budget_id = None
+            stored_tag.team_id = None
             stored_tag.created_at = datetime(2025, 1, 1)
             stored_tag.updated_at = datetime(2025, 1, 1)
             stored_tag.created_by = "user-123"
@@ -710,9 +711,7 @@ async def test_list_tags_with_dynamic_tags():
             assert "dynamic-tag-2" in tag_names
 
             # Verify dynamic tags include created_at/updated_at
-            dynamic_tags = {
-                t["name"]: t for t in result if t["name"].startswith("dynamic-")
-            }
+            dynamic_tags = {t["name"]: t for t in result if t["name"].startswith("dynamic-")}
             assert dynamic_tags["dynamic-tag-1"]["created_at"] is not None
             assert dynamic_tags["dynamic-tag-1"]["updated_at"] is not None
 
@@ -748,6 +747,7 @@ async def test_list_tags_no_dynamic_tags():
             stored_tag.model_info = None
             stored_tag.spend = 0.0
             stored_tag.budget_id = None
+            stored_tag.team_id = None
             stored_tag.created_at = datetime(2025, 1, 1)
             stored_tag.updated_at = datetime(2025, 1, 1)
             stored_tag.created_by = "user-123"
@@ -818,6 +818,7 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
             stored_tag.model_info = {}
             stored_tag.spend = 0.0
             stored_tag.budget_id = None
+            stored_tag.team_id = None
             stored_tag.created_at = datetime(2025, 1, 1)
             stored_tag.updated_at = datetime(2025, 1, 1)
             stored_tag.created_by = "admin-user"
@@ -834,9 +835,7 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
                 "stored-owned-tag",
                 "dynamic-owned-tag",
             ]
-            assert fake_token_table.calls == [
-                {"where": {"user_id": "internal-user-123"}}
-            ]
+            assert fake_token_table.calls == [{"where": {"user_id": "internal-user-123"}}]
             mock_db.litellm_dailytagspend.group_by.assert_awaited_once_with(
                 by=["tag"],
                 where={
@@ -890,15 +889,11 @@ async def test_internal_user_list_tags_does_not_500_on_unsupported_prisma_kwarg(
             mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[])
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
 
-            response = client.get(
-                "/tag/list", headers={"Authorization": "Bearer new-user-key"}
-            )
+            response = client.get("/tag/list", headers={"Authorization": "Bearer new-user-key"})
 
             assert response.status_code == 200, response.text
             assert response.json() == []
-            assert fake_token_table.calls == [
-                {"where": {"user_id": "brand-new-internal-user"}}
-            ]
+            assert fake_token_table.calls == [{"where": {"user_id": "brand-new-internal-user"}}]
     finally:
         app.dependency_overrides.clear()
 
@@ -1074,9 +1069,7 @@ async def test_internal_user_tag_daily_activity_scopes_to_current_key_without_us
         assert result == "daily-activity-response"
         assert fake_token_table.calls == []
         mock_get_daily_activity.assert_awaited_once()
-        assert mock_get_daily_activity.await_args.kwargs["api_key"] == [
-            "current-owned-key"
-        ]
+        assert mock_get_daily_activity.await_args.kwargs["api_key"] == ["current-owned-key"]
 
 
 @pytest.mark.asyncio
@@ -1353,9 +1346,7 @@ async def test_add_tag_to_deployment_preserves_encrypted_fields():
         await _add_tag_to_deployment(deployment, "test-tag")
 
         # Verify find_unique was called
-        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-            where={"model_id": "model-123"}
-        )
+        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "model-123"})
 
         # Verify update was called with preserved encrypted fields
         update_call = mock_db.litellm_proxymodeltable.update.call_args
@@ -1513,3 +1504,140 @@ async def test_add_tag_to_deployment_model_not_found():
 
         assert exc_info.value.status_code == 500
         assert "not found in database" in str(exc_info.value.detail)
+
+
+def _team(team_id: str, admin_user_id: str | None = None):
+    from litellm.models.team import LiteLLM_TeamTableCachedObj, Member
+
+    members = [] if admin_user_id is None else [Member(user_id=admin_user_id, role="admin")]
+    return LiteLLM_TeamTableCachedObj(team_id=team_id, members_with_roles=members)
+
+
+def _owned_tag_row(team_id: str | None):
+    from datetime import datetime
+
+    return SimpleNamespace(
+        tag_name="owned-tag",
+        description=None,
+        models=[],
+        model_info=None,
+        budget_id=None,
+        team_id=team_id,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+
+
+@contextmanager
+def _tag_owner_harness(existing_team_id: str | None, teams: Mapping[str, object]):
+    mock_db = Mock()
+    mock_prisma = SimpleNamespace(db=mock_db)
+    mock_db.litellm_tagtable.find_unique = AsyncMock(
+        return_value=None if existing_team_id == "missing" else _owned_tag_row(existing_team_id)
+    )
+    mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_tagtable.create = AsyncMock(side_effect=lambda data, **_: _owned_tag_row(data["team_id"]))
+    mock_db.litellm_tagtable.update = AsyncMock(
+        side_effect=lambda where, data, **_: _owned_tag_row(data.get("team_id", existing_team_id))
+    )
+
+    async def load_team(team_id, **_):
+        if team_id not in teams:
+            raise HTTPException(status_code=404, detail={"error": f"Team doesn't exist in db. Team={team_id}"})
+        return teams[team_id]
+
+    evict = AsyncMock()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.llm_router", object()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.management_endpoints.tag_management_endpoints.get_team_object", side_effect=load_team),
+        patch("litellm.proxy.management_endpoints.tag_management_endpoints._evict_tag_cache_keys", new=evict),
+    ):
+        yield mock_db, evict
+
+
+_PROXY_ADMIN = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+_TEAM_A_ADMIN = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+_OUTSIDER = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", [_PROXY_ADMIN, _TEAM_A_ADMIN], ids=["proxy-admin", "team-admin"])
+async def test_new_tag_persists_owning_team(caller):
+    from litellm.proxy.management_endpoints.tag_management_endpoints import new_tag
+
+    with _tag_owner_harness("missing", {"team-a": _team("team-a", admin_user_id="alice")}) as (mock_db, _):
+        result = await new_tag(tag=TagNewRequest(name="owned-tag", team_id="team-a"), user_api_key_dict=caller)
+
+    assert mock_db.litellm_tagtable.create.call_args.kwargs["data"]["team_id"] == "team-a"
+    assert result["tag"].team_id == "team-a"
+
+
+@pytest.mark.asyncio
+async def test_new_tag_rejects_owner_from_non_admin_of_that_team():
+    from litellm.proxy.management_endpoints.tag_management_endpoints import new_tag
+
+    with _tag_owner_harness("missing", {"team-a": _team("team-a", admin_user_id="alice")}) as (mock_db, _):
+        with pytest.raises(HTTPException) as exc_info:
+            await new_tag(tag=TagNewRequest(name="owned-tag", team_id="team-a"), user_api_key_dict=_OUTSIDER)
+
+    assert exc_info.value.status_code == 403
+    mock_db.litellm_tagtable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_tag_rejects_unknown_owning_team_with_404():
+    from litellm.proxy.management_endpoints.tag_management_endpoints import new_tag
+
+    with _tag_owner_harness("missing", {}) as (mock_db, _):
+        with pytest.raises(HTTPException) as exc_info:
+            await new_tag(tag=TagNewRequest(name="owned-tag", team_id="ghost"), user_api_key_dict=_PROXY_ADMIN)
+
+    assert exc_info.value.status_code == 404
+    mock_db.litellm_tagtable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_tag_without_team_id_keeps_the_current_owner():
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    with _tag_owner_harness("team-a", {}) as (mock_db, _):
+        result = await update_tag(
+            tag=TagUpdateRequest(name="owned-tag", description="renamed"), user_api_key_dict=_PROXY_ADMIN
+        )
+
+    assert "team_id" not in mock_db.litellm_tagtable.update.call_args.kwargs["data"]
+    assert result["tag"].team_id == "team-a"
+
+
+@pytest.mark.asyncio
+async def test_update_tag_explicit_null_releases_ownership_and_evicts_tag_cache():
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    with _tag_owner_harness("team-a", {}) as (mock_db, evict):
+        result = await update_tag(tag=TagUpdateRequest(name="owned-tag", team_id=None), user_api_key_dict=_PROXY_ADMIN)
+
+    assert mock_db.litellm_tagtable.update.call_args.kwargs["data"]["team_id"] is None
+    assert result["tag"].team_id is None
+    evict.assert_awaited_once_with(("tag:owned-tag",))
+
+
+@pytest.mark.asyncio
+async def test_update_tag_move_requires_admin_of_both_teams():
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    teams = {"team-a": _team("team-a", admin_user_id="alice"), "team-b": _team("team-b")}
+    with _tag_owner_harness("team-a", teams) as (mock_db, _):
+        with pytest.raises(HTTPException) as exc_info:
+            await update_tag(tag=TagUpdateRequest(name="owned-tag", team_id="team-b"), user_api_key_dict=_TEAM_A_ADMIN)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {
+        "error": "Only a proxy admin or an admin of team team-b can change the owner of this tag"
+    }
+    mock_db.litellm_tagtable.update.assert_not_awaited()

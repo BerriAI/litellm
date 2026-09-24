@@ -706,7 +706,7 @@ async def _enforce_guardrail_added_tag_budgets(
     added_tags: Final = tuple(
         tag for tag in get_tags_from_request_body(request_body=data) if tag not in tags_before_guardrails
     )
-    if not added_tags or request_skips_budget_checks(route=route, model=_request_model(data), llm_router=llm_router):
+    if not added_tags:
         return
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -717,6 +717,9 @@ async def _enforce_guardrail_added_tag_budgets(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
             valid_token=user_api_key_dict,
+            check_budgets=not request_skips_budget_checks(
+                route=route, model=_request_model(data), llm_router=llm_router
+            ),
         )
     except litellm.BudgetExceededError as e:
         raise ProxyException(

@@ -15328,6 +15328,8 @@ export interface paths {
          *     - description: Optional[str] - Description of what this tag represents
          *     - models: List[str] - List of either 'model_id' or 'model_name' allowed for this tag
          *     - budget_id: Optional[str] - The id for a budget (tpm/rpm/max budget) for the tag
+         *     - team_id: Optional[str] - Owning team. Only keys of this team may send the tag on requests.
+         *       Requires proxy admin or team admin of that team
          *
          *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
          *     - max_budget: Optional[float] - Max budget for tag
@@ -15392,6 +15394,8 @@ export interface paths {
          *     - description: Optional[str] - Updated description
          *     - models: List[str] - Updated list of allowed LLM models
          *     - budget_id: Optional[str] - The id for a budget to associate with the tag
+         *     - team_id: Optional[str] - Owning team. Omit to keep the current owner, send null to release ownership.
+         *       Requires proxy admin or team admin of the current and new owning teams
          *
          *     ### BUDGET UPDATE PARAMS ###
          *     - max_budget: Optional[float] - Max budget for tag
@@ -42583,6 +42587,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Team Id */
+            team_id?: string | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -42642,6 +42648,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Team Id */
+            team_id?: string | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };

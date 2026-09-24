@@ -12,10 +12,16 @@ from e2e_http import NoBody, StreamingResponse, is_ok, unwrap
 from models import (
     ChatBody,
     ChatMessage,
+    ChatMetadata,
     KeyGenerateBody,
     LiteLLMParamsBody,
     ModelInfoBody,
     ModelNewBody,
+    TagDeleteBody,
+    TagInfoBody,
+    TagInfoResponse,
+    TagNewBody,
+    TagUpdateBody,
     TeamDeleteBody,
     TeamInfoParams,
     TeamInfoResponse,
@@ -27,6 +33,7 @@ from models import (
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 TEAM_MODEL_ACCESS_DENIED_MARKER = "team_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
+TAG_OWNER_DENIED_MARKER = "can only be sent by keys of that team"
 
 
 class ApiErrorDetail(BaseModel):
@@ -60,9 +67,7 @@ class AccessControlClient:
     proxy: ProxyClient
 
     def llm_only_key(self) -> str:
-        return self.proxy.generate_key(
-            KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"])
-        )
+        return self.proxy.generate_key(KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"]))
 
     def delete_key(self, key: str) -> None:
         self.proxy.delete_key(key)
@@ -138,6 +143,52 @@ class AccessControlClient:
                 return
             time.sleep(self.proxy.poll_interval)
         raise AssertionError(f"/team/info never resolved team {team_id!r} created by /team/new")
+
+    def team_key(self, team_id: str) -> str:
+        return self.proxy.generate_key(KeyGenerateBody(models=[], team_id=team_id))
+
+    def tagged_chat_status(self, key: str, model: str, content: str, tags: list[str]) -> StreamingResponse:
+        return self.proxy.transport.send(
+            "/chat/completions",
+            headers=self.proxy.transport.bearer(key),
+            json=ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=content)],
+                metadata=ChatMetadata(tags=tags),
+                max_completion_tokens=16,
+            ),
+        )
+
+    def create_owned_tag(self, name: str, team_id: str) -> None:
+        resp = self.proxy.transport.send(
+            "/tag/new", headers=self.proxy.transport.master, json=TagNewBody(name=name, team_id=team_id)
+        )
+        assert resp.ok, resp.body
+
+    def update_tag_owner_status(self, key: str | None, name: str, team_id: str | None) -> StreamingResponse:
+        """`key=None` sends the update as the proxy admin (master key). `team_id=None`
+        is sent as an explicit null, which releases the owner."""
+        headers = self.proxy.transport.master if key is None else self.proxy.transport.bearer(key)
+        return self.proxy.transport.send("/tag/update", headers=headers, json=TagUpdateBody(name=name, team_id=team_id))
+
+    def tag_owner(self, name: str) -> str | None:
+        info = unwrap(
+            self.proxy.transport.post(
+                "/tag/info",
+                headers=self.proxy.transport.master,
+                json=TagInfoBody(names=[name]),
+                response_type=TagInfoResponse,
+            )
+        )
+        return info.root[name].team_id
+
+    def delete_tag(self, name: str) -> None:
+        _ = self.proxy.transport.post(
+            "/tag/delete",
+            headers=self.proxy.transport.master,
+            json=TagDeleteBody(name=name),
+            response_type=NoBody,
+        )
 
     def create_model_status(self, key: str, model_name: str) -> StreamingResponse:
         return self.proxy.transport.send(
