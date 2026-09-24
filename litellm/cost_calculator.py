@@ -1396,7 +1396,7 @@ def completion_cost(
 
         # Extract service_tier from optional_params if not provided directly
         if service_tier is None and optional_params is not None:
-            service_tier = optional_params.get("service_tier")
+            service_tier = _normalize_service_tier(optional_params.get("service_tier"))
             if service_tier is None:
                 service_tier = _service_tier_from_completion_window(cast(dict[str, object], optional_params))
 
