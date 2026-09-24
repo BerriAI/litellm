@@ -34,6 +34,14 @@ NUMERIC_EDGE_LIMITS: Final = (
     pytest.param("1e9", id="exponent-string"),
     pytest.param(10**12, id="huge"),
 )
+NUMERIC_EDGE_EXPECTED: Final = {
+    "zero": 0,
+    "negative": -1,
+    "float": 1,
+    "float-string": 1,
+    "exponent-string": 1_000_000_000,
+    "huge": 10**12,
+}
 
 MODEL_GROUP_INFO_500: Final = (
     "BUG: /model_group/info returns 500 for every caller when one deployment's token limit is non-numeric"
@@ -61,18 +69,15 @@ def _limits(entry: Mapping[str, JsonValue]) -> tuple[JsonValue, JsonValue]:
 
 
 def _assert_listing_spares_the_sibling(
-    gateway: Gateway, broken: str, sibling: str, broken_limits: tuple[JsonValue, JsonValue] | None
+    gateway: Gateway, broken: str, sibling: str, broken_limits: tuple[JsonValue, JsonValue]
 ) -> None:
     for path in ("/v1/models", "/models"):
         listed: Final = _listed(gateway, path)
         assert _limits(listed[sibling]) == (4321, 987), (path, listed[sibling])
-        assert broken in listed, (path, sorted(listed))
-        if broken_limits is not None:
-            assert _limits(listed[broken]) == broken_limits, (path, listed[broken])
+        assert _limits(listed[broken]) == broken_limits, (path, listed[broken])
     single: Final = gateway.get(f"/v1/models/{broken}")
     assert single["id"] == broken, single
-    if broken_limits is not None:
-        assert _limits(single) == broken_limits, single
+    assert _limits(single) == broken_limits, single
     registered: Final = gateway.get("/model/info")["data"]
     assert isinstance(registered, list)
     assert {broken, sibling} <= {str(object_value(entry)["model_name"]) for entry in registered}
@@ -82,10 +87,6 @@ def _assert_serves_chat(gateway: Gateway, *models: str) -> None:
     for model in models:
         reply: Final = gateway.chat(model, text=f"token limit edge {uuid.uuid4().hex}")
         assert reply["model"] == model, reply
-
-
-def _is_absent_or_int(value: JsonValue) -> bool:
-    return value is None or (isinstance(value, int) and not isinstance(value, bool))
 
 
 def _listed_model(gateway: Gateway, model: str) -> dict[str, JsonValue]:
@@ -150,18 +151,17 @@ def test_non_numeric_token_limit_still_serves_chat(
 
 
 @pytest.mark.parametrize("value", NUMERIC_EDGE_LIMITS)
-def test_numeric_edge_token_limit_is_listed_as_an_int_or_absent_without_breaking_the_listing(
-    gateway: Gateway, value: JsonValue
+def test_numeric_edge_token_limit_is_listed_as_its_integer_without_breaking_the_listing(
+    gateway: Gateway, value: JsonValue, request: pytest.FixtureRequest
 ) -> None:
+    expected: Final = NUMERIC_EDGE_EXPECTED[request.node.callspec.id]
     with gateway.scenario() as scenario:
         sibling: Final = scenario.model(model=f"openai/custom-{uuid.uuid4().hex}", model_info=SIBLING_LIMITS)
         broken: Final = scenario.model(
             model=f"openai/custom-{uuid.uuid4().hex}",
             model_info={"max_input_tokens": value, "max_output_tokens": value},
         )
-        _assert_listing_spares_the_sibling(gateway, broken, sibling, None)
-        listed: Final = _listed_model(gateway, broken)
-        assert all(_is_absent_or_int(limit) for limit in _limits(listed)), listed
+        _assert_listing_spares_the_sibling(gateway, broken, sibling, (expected, expected))
         _assert_serves_chat(gateway, broken, sibling)
 
 
