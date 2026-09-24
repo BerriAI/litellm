@@ -72,6 +72,25 @@ def test_validate_fallbacks(model_list):
     router.validate_fallbacks(fallback_param=[{"gpt-5.5": "gpt-5-mini"}])
 
 
+def test_validate_context_window_fallbacks(model_list, monkeypatch):
+    router = Router(
+        model_list=model_list,
+        context_window_fallbacks=[{"gpt-5.5": ["gpt-5-mini"]}],
+    )
+    assert router.context_window_fallbacks == [{"gpt-5.5": ["gpt-5-mini"]}]
+
+    with pytest.raises(ValueError, match="Item 'garbage' is not a dictionary"):
+        Router(
+            model_list=model_list,
+            context_window_fallbacks=["garbage"],
+        )
+
+    with monkeypatch.context() as context:
+        context.setattr(litellm, "context_window_fallbacks", ["garbage"])
+        with pytest.raises(ValueError, match="Item 'garbage' is not a dictionary"):
+            Router(model_list=model_list)
+
+
 def test_routing_strategy_init(model_list):
     """Test if all routing strategies are initialized correctly"""
     from litellm.types.router import RoutingStrategy
