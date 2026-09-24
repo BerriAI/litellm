@@ -56,12 +56,12 @@ pub fn get_base_model_for_pricing(
     }
     if let Some(size) = MODEL_SIZE
         .captures(&name)
-        .and_then(|captures| captures.get(1)?.as_str().parse::<u64>().ok())
+        .and_then(|captures| captures.get(1)?.as_str().parse::<f64>().ok())
     {
-        if size <= thresholds.small {
+        if size <= thresholds.small as f64 {
             return "fireworks-ai-up-to-4b";
         }
-        if size <= thresholds.medium {
+        if size <= thresholds.medium as f64 {
             return "fireworks-ai-4.1b-to-16b";
         }
         return "fireworks-ai-above-16b";

@@ -29,6 +29,8 @@ fn usage(value: Value) -> litellm_cost::responses_usage::ChatUsage {
 #[case("model-8x22b", "fireworks-ai-56b-to-176b")]
 #[case("model-8x30b", "fireworks-ai-above-16b")]
 #[case("model-without-size", "fireworks-ai-default")]
+#[case("foo-99999999999999999999b", "fireworks-ai-above-16b")]
+#[case("99999999999999999999x2b", "fireworks-ai-up-to-4b")]
 fn fireworks_model_size_category_matches_python_pattern_order(
     #[case] model: &str,
     #[case] expected: &str,

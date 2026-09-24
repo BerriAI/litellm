@@ -182,3 +182,39 @@ fn catalog_vertex_cost_routes_token_and_character_calls() {
         (0.01, 0.01)
     );
 }
+
+#[rstest]
+#[case::bare_model("gemini-pro")]
+#[case::provider_prefixed_model("vertex_ai/gemini-pro")]
+fn vertex_cost_matches_models_without_dynamic_pricing_after_stripping_the_prefix(
+    #[case] model: &str,
+) {
+    let catalog = ModelInfoCatalog::new(HashMap::from([(
+        "vertex_ai/gemini-pro".to_owned(),
+        json!({
+            "input_cost_per_character": 1e-6,
+            "input_cost_per_character_above_128k_tokens": 9e-6,
+            "output_cost_per_character": 1e-6
+        }),
+    )]));
+    let usage = ChatUsage::default();
+    let (prompt, _) = vertex_cost(
+        &catalog,
+        ModelCostRequest {
+            model,
+            provider: Some("vertex_ai"),
+            region: None,
+            usage: &usage,
+            service_tier: None,
+            data_residency: None,
+            vertex_location: None,
+            at: at(),
+            response_time_ms: None,
+        },
+        "completion",
+        Some(40_000.0),
+        Some(0.0),
+    )
+    .unwrap();
+    assert!((prompt - 0.04).abs() < 1e-12);
+}

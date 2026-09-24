@@ -140,7 +140,15 @@ pub fn vertex_cost(
     {
         return Ok(cost);
     }
-    if cost_router(request.model, request.provider.unwrap_or(""), call_type) == CostRoute::PerToken
+    let model_without_prefix = request
+        .model
+        .split_once('/')
+        .map_or(request.model, |(_, model)| model);
+    if cost_router(
+        model_without_prefix,
+        request.provider.unwrap_or(""),
+        call_type,
+    ) == CostRoute::PerToken
     {
         return catalog_cost_per_token(catalog, request);
     }
@@ -148,7 +156,7 @@ pub fn vertex_cost(
         .entry(request.model, request.provider, request.region)
         .ok_or(CostError::ModelNotFound)?;
     Ok(cost_per_character(
-        request.model,
+        model_without_prefix,
         request.usage,
         entry,
         (prompt_characters, completion_characters),
