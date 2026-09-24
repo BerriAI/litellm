@@ -1,6 +1,9 @@
 import gzip
 import json
 import threading
+import time
+import uuid
+from collections.abc import Callable
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
@@ -11,7 +14,9 @@ import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
+from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, wire_server
+from integration.cost_calculation.cost_tracking_case import JsonResponse
 from openai import AsyncOpenAI, NotFoundError, OpenAI
 from pydantic import JsonValue
 
@@ -720,3 +725,365 @@ def test_gemini_passthrough_streaming_429_client_disconnect_still_logs_failure(
             assert error_information["normalized_error"] == "500_UPSTREAM_PASSTHROUGH", error_information
             warnings: Final = _upstream_warnings(owned.log, "returned 429")
             assert len(warnings) == 1, warnings
+
+
+async def test_gemini_passthrough_async_streaming_429_first_frame_reaches_client_while_upstream_holds(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    gate: Final = threading.Event()
+    frames: Final = (b'data: {"error":"rate limited"}\n\n', b"data: [DONE]\n\n")
+
+    def respond(request: Request) -> Reply:
+        return Reply(status=429, content_type="text/event-stream", chunks=frames, gate_after_first=gate)
+
+    path: Final = tmp_path / "gemini-async-stream-429.yaml"
+    with wire_server(respond) as wire:
+        _gemini_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            try:
+                async with httpx.AsyncClient(
+                    base_url=str(candidate.client.base_url), timeout=httpx.Timeout(3, connect=5), trust_env=False
+                ) as async_client:
+                    async with async_client.stream(
+                        "POST",
+                        _GEMINI_STREAM_PATH,
+                        params={"alt": "sse"},
+                        json=_GENERATE_CONTENT,
+                        headers=_gemini_headers(candidate),
+                    ) as response:
+                        assert response.status_code == 429, response.text
+                        iterator = response.aiter_bytes()
+                        first: Final = await iterator.__anext__()
+                        assert first.startswith(b'data: {"error":"rate limited"}'), first
+                        gate.set()
+                        rest: Final = b""
+                        async for chunk in iterator:
+                            rest += chunk
+                    assert first + rest == b"".join(frames), first + rest
+            finally:
+                gate.set()
+            warning: Final = _upstream_warning(owned.log)
+            assert "rate limited" in warning, warning
+            error_information: Final = _spend_error_information(response.headers["x-litellm-call-id"])
+            assert error_information["error_code"] == "429", error_information
+
+
+_PROVIDER_STREAM_SPECS: Final = (
+    (
+        "anthropic",
+        "/anthropic/v1/messages",
+        {"ANTHROPIC_API_BASE": None, "ANTHROPIC_API_KEY": "scripted"},
+        "/v1/messages",
+    ),
+    (
+        "cohere",
+        "/cohere/v2/chat",
+        {"COHERE_API_BASE": None, "COHERE_API_KEY": "scripted"},
+        "/v2/chat",
+    ),
+    (
+        "mistral",
+        "/mistral/v1/chat/completions",
+        {"MISTRAL_API_BASE": None, "MISTRAL_API_KEY": "scripted"},
+        "/v1/chat/completions",
+    ),
+    (
+        "openai",
+        "/openai/v1/chat/completions",
+        {"OPENAI_API_BASE": None, "OPENAI_API_KEY": "scripted"},
+        "/v1/chat/completions",
+    ),
+    (
+        "azure",
+        "/azure/openai/deployments/nope-9/chat/completions",
+        {"AZURE_API_BASE": None, "AZURE_API_KEY": "scripted"},
+        "/openai/deployments/nope-9/chat/completions",
+    ),
+    ("config-route", "/audit-pt", None, "/upstream"),
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "proxy_path", "environment", "upstream_suffix"),
+    _PROVIDER_STREAM_SPECS,
+    ids=tuple(spec[0] for spec in _PROVIDER_STREAM_SPECS),
+)
+def test_provider_passthrough_streaming_429_first_frame_reaches_client_while_upstream_holds(
+    gateway: Gateway,
+    tmp_path: Path,
+    name: str,
+    proxy_path: str,
+    environment: dict[str, str | None] | None,
+    upstream_suffix: str,
+) -> None:
+    gate: Final = threading.Event()
+    frames: Final = (b'data: {"error":"rate limited"}\n\n', b"data: [DONE]\n\n")
+
+    def respond(request: Request) -> Reply:
+        return Reply(status=429, content_type="text/event-stream", chunks=frames, gate_after_first=gate)
+
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    path: Final = tmp_path / f"{name}-stream-429.yaml"
+    with wire_server(respond) as wire:
+        if environment is None:
+            config["general_settings"]["pass_through_endpoints"] = [
+                {"path": proxy_path, "target": f"{wire.url}{upstream_suffix}", "include_subpath": True}
+            ]
+        else:
+            config["environment_variables"] = {
+                key: (wire.url if value is None else value) for key, value in environment.items()
+            }
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            with candidate.client.stream(
+                "POST",
+                proxy_path,
+                json={"model": "nope-9", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                headers={"Authorization": f"Bearer {candidate.key}"},
+                timeout=httpx.Timeout(3, connect=5),
+            ) as response:
+                assert response.status_code == 429, response.text
+                iterator: Final = response.iter_bytes()
+                first: Final = next(iterator)
+                assert first.startswith(b'data: {"error":"rate limited"}'), first
+                gate.set()
+                rest: Final = b"".join(iterator)
+            assert first + rest == b"".join(frames), first + rest
+            received: Final = wire.drain()
+            assert any(request.target.endswith(upstream_suffix) for request in received), received
+            warning: Final = _upstream_warning(owned.log)
+            assert "rate limited" in warning, warning
+            error_information: Final = _spend_error_information(response.headers["x-litellm-call-id"])
+            assert error_information["error_code"] == "429", error_information
+
+
+async def test_gemini_passthrough_async_quota_wording_keeps_passthrough_normalized_error(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    body: Final[dict[str, JsonValue]] = {
+        "error": {
+            "message": "You exceeded your current quota, please check your plan and billing details. "
+            f"Budget for Key={_LEAKED_UPSTREAM_KEY} is spent",
+            "type": "insufficient_quota",
+        }
+    }
+
+    def respond(request: Request) -> Reply:
+        return Reply(status=429, body=json.dumps(body).encode())
+
+    path: Final = tmp_path / "gemini-async-quota-429.yaml"
+    with wire_server(respond) as wire:
+        _gemini_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            async with httpx.AsyncClient(
+                base_url=str(candidate.client.base_url), timeout=15, trust_env=False
+            ) as async_client:
+                response: Final = await async_client.post(
+                    _GEMINI_MODEL_PATH, json=_GENERATE_CONTENT, headers=_gemini_headers(candidate)
+                )
+            assert response.status_code == 429, response.text
+            assert response.json() == body, response.text
+            error_information: Final = _spend_error_information(response.headers["x-litellm-call-id"])
+            assert error_information["normalized_error"] == "500_UPSTREAM_PASSTHROUGH", error_information
+            assert _LEAKED_UPSTREAM_KEY not in str(error_information["error_message"]), error_information
+            warning: Final = _upstream_warning(owned.log)
+            assert _LEAKED_UPSTREAM_KEY not in warning, warning
+
+
+def test_gemini_passthrough_near_miss_pattern_body_keeps_liveliness_and_bounded_preview(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    body: Final = (b"Upstream passthrough request faile " * 1873)[: 64 * 1024]
+    assert len(body) == 64 * 1024
+
+    def respond(request: Request) -> Reply:
+        return Reply(
+            status=429,
+            content_type="text/event-stream",
+            chunks=tuple(body[index : index + 512] for index in range(0, len(body), 512)),
+            pause_between_chunks=0.01,
+        )
+
+    liveliness_seconds: list[float] = []
+    liveliness_status: list[int] = []
+
+    def probe_liveliness(client: httpx.Client) -> None:
+        started: Final = time.monotonic()
+        probe: Final = client.get("/health/liveliness")
+        liveliness_seconds.append(time.monotonic() - started)
+        liveliness_status.append(probe.status_code)
+
+    path: Final = tmp_path / "gemini-near-miss-64k.yaml"
+    with wire_server(respond) as wire:
+        _gemini_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            probe_thread: Final = threading.Thread(target=probe_liveliness, args=(candidate.client,))
+            with candidate.client.stream(
+                "POST",
+                _GEMINI_STREAM_PATH,
+                params={"alt": "sse"},
+                json=_GENERATE_CONTENT,
+                headers=_gemini_headers(candidate),
+                timeout=httpx.Timeout(30, connect=5),
+            ) as response:
+                assert response.status_code == 429, response.text
+                iterator: Final = response.iter_bytes()
+                first: Final = next(iterator)
+                probe_thread.start()
+                rest: Final = b"".join(iterator)
+            streamed: Final = first + rest
+            probe_thread.join(timeout=10)
+            assert sha256(streamed).hexdigest() == sha256(body).hexdigest(), "relayed body differs"
+            assert liveliness_status == [200], liveliness_status
+            assert liveliness_seconds[0] < 2, liveliness_seconds
+            warning: Final = _upstream_warning(owned.log)
+            assert warning.endswith("... (truncated at 4096 chars)"), warning
+            error_information: Final = _spend_error_information(response.headers["x-litellm-call-id"])
+            assert error_information["error_code"] == "429", error_information
+            assert error_information["normalized_error"] == "500_UPSTREAM_PASSTHROUGH", error_information
+
+
+def test_gemini_passthrough_streaming_429_upstream_abort_after_first_frame_still_logs_once(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    frames: Final = (b'data: {"error":"rate limited"}\n\n', b"data: second\n\n", b"data: [DONE]\n\n")
+
+    def respond(request: Request) -> Reply:
+        if "streamGenerateContent" in request.target:
+            return Reply(status=429, content_type="text/event-stream", chunks=frames, abort_after=1)
+        return Reply(status=200, body=json.dumps({"ok": True}).encode())
+
+    path: Final = tmp_path / "gemini-stream-429-abort.yaml"
+    with wire_server(respond) as wire:
+        _gemini_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            received: Final = bytearray()
+            call_ids: Final[list[str]] = []
+            try:
+                with candidate.client.stream(
+                    "POST",
+                    _GEMINI_STREAM_PATH,
+                    params={"alt": "sse"},
+                    json=_GENERATE_CONTENT,
+                    headers=_gemini_headers(candidate),
+                    timeout=httpx.Timeout(15, connect=5),
+                ) as response:
+                    assert response.status_code == 429, response.text
+                    call_ids.append(response.headers["x-litellm-call-id"])
+                    for chunk in response.iter_bytes():
+                        received += chunk
+            except httpx.HTTPError:
+                pass
+            assert len(call_ids) == 1, call_ids
+            assert bytes(received).startswith(b'data: {"error":"rate limited"}'), bytes(received)
+            eventually(
+                lambda: _upstream_warnings(owned.log),
+                lambda lines: any("returned 429" in line or "read failed" in line for line in lines),
+                seconds=30,
+            )
+            matching: Final = tuple(
+                line for line in _upstream_warnings(owned.log) if "returned 429" in line or "read failed" in line
+            )
+            assert len(matching) == 1, matching
+            error_information: Final = _spend_error_information(call_ids[0])
+            assert error_information["error_code"] == "429", error_information
+            follow_up: Final = candidate.request(
+                "POST", _GEMINI_MODEL_PATH, _GENERATE_CONTENT, headers=_gemini_headers(candidate)
+            )
+            assert follow_up.status_code == 200, follow_up.text
+
+
+def test_gemini_passthrough_empty_streaming_429_still_logged(gateway: Gateway, tmp_path: Path) -> None:
+    def respond(request: Request) -> Reply:
+        return Reply(status=429, content_type="text/event-stream", chunks=())
+
+    path: Final = tmp_path / "gemini-stream-429-empty.yaml"
+    with wire_server(respond) as wire:
+        _gemini_config(path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            with candidate.client.stream(
+                "POST",
+                _GEMINI_STREAM_PATH,
+                params={"alt": "sse"},
+                json=_GENERATE_CONTENT,
+                headers=_gemini_headers(candidate),
+            ) as response:
+                assert response.status_code == 429, response.text
+                streamed: Final = response.read()
+            assert streamed == b"", streamed
+            warning: Final = _upstream_warning(owned.log)
+            assert "returned 429" in warning, warning
+            error_information: Final = _spend_error_information(response.headers["x-litellm-call-id"])
+            assert error_information["normalized_error"] == "500_UPSTREAM_PASSTHROUGH", error_information
+
+
+_LLM_429_ENDPOINTS: Final = (
+    (
+        "/v1/chat/completions",
+        "openai/gpt-4o-mini",
+        lambda model, stream: {"model": model, "messages": [{"role": "user", "content": "audit"}], "stream": stream},
+    ),
+    (
+        "/v1/messages",
+        "anthropic/claude-sonnet-4-5-20250929",
+        lambda model, stream: {
+            "model": model,
+            "max_tokens": 8,
+            "messages": [{"role": "user", "content": "audit"}],
+            "stream": stream,
+        },
+    ),
+    (
+        "/v1/responses",
+        "openai/gpt-4o-mini",
+        lambda model, stream: {"model": model, "input": "audit", "stream": stream},
+    ),
+)
+_LLM_429_BODY: Final[dict[str, JsonValue]] = {
+    "error": {
+        "message": "You exceeded your current quota, please check your plan and billing details.",
+        "type": "insufficient_quota",
+    }
+}
+_LLM_429_NORMALIZED: Final = "429_RATE_LIMIT_EXCEEDED"
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "litellm_model", "build_body"),
+    _LLM_429_ENDPOINTS,
+    ids=tuple(spec[0] for spec in _LLM_429_ENDPOINTS),
+)
+@pytest.mark.parametrize("stream", [False, True])
+def test_llm_endpoint_upstream_quota_429_normalized_error_unchanged(
+    gateway: Gateway, endpoint: str, litellm_model: str, build_body: Callable[..., dict[str, JsonValue]], stream: bool
+) -> None:
+    scenario_id: Final = f"quota429-{uuid.uuid4().hex}"
+    handle: Final = register_scenario(
+        scenario_id, JsonResponse(content_type="application/json", body=_LLM_429_BODY, status=429)
+    )
+    try:
+        with gateway.scenario() as scenario:
+            api_base: Final = handle.api_base() if litellm_model.startswith("anthropic/") else f"{handle.api_base()}/v1"
+            model: Final = scenario.model(model=litellm_model, api_base=api_base)
+            if stream:
+                with gateway.client.stream(
+                    "POST",
+                    endpoint,
+                    json=build_body(model, True),
+                    headers={"Authorization": f"Bearer {gateway.key}"},
+                ) as response:
+                    assert response.status_code == 429, response.text
+                    response.read()
+            else:
+                response = gateway.request("POST", endpoint, build_body(model, False))
+                assert response.status_code == 429, response.text
+            error_information: Final = _spend_error_information(response.headers["x-litellm-call-id"])
+            assert error_information["normalized_error"] == _LLM_429_NORMALIZED, error_information
+    finally:
+        delete_scenario(handle)

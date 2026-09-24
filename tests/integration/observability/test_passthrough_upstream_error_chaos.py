@@ -2,12 +2,12 @@ import asyncio
 import json
 import re
 import signal
+import threading
 from pathlib import Path
 from typing import Final
 
 import httpx
 import psutil
-import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
@@ -148,3 +148,61 @@ async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gat
                     _single_spend_row(response.headers["x-litellm-call-id"])
             error_information: Final = _error_information(follow_up.headers["x-litellm-call-id"])
             assert "not found for this scripted upstream" in str(error_information["error_message"]), follow_up.text
+
+
+_RATE_LIMITED_FRAMES: Final = (b'data: {"error":"rate limited"}\n\n', b"data: [DONE]\n\n")
+
+
+async def test_passthrough_disconnect_burst_logs_every_failure_once(gateway: Gateway, tmp_path: Path) -> None:
+    gate: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        if "streamGenerateContent" in request.target:
+            return Reply(
+                status=429, content_type="text/event-stream", chunks=_RATE_LIMITED_FRAMES, gate_after_first=gate
+            )
+        return Reply(status=200, body=json.dumps({"ok": True}).encode())
+
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    path: Final = tmp_path / "chaos-disconnect-burst.yaml"
+    with wire_server(respond) as wire:
+        config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            call_ids: Final = await asyncio.gather(
+                *(_first_frame_then_close(str(candidate.client.base_url), candidate.key) for _ in range(20))
+            )
+            assert len(set(call_ids)) == 20, call_ids
+            gate.set()
+            for call_id in call_ids:
+                _single_spend_row(call_id)
+                error_information: Final = _error_information(call_id)
+                assert error_information["error_code"] == "429", error_information
+            eventually(
+                lambda: tuple(line for line in owned.log.read_text().splitlines() if "returned 429" in line),
+                lambda lines: len(lines) == 20,
+                seconds=60,
+            )
+            follow_up: Final = candidate.request(
+                "POST",
+                "/gemini/v1beta/models/nope-9:generateContent",
+                _GENERATE_CONTENT,
+                headers={"x-goog-api-key": candidate.key},
+            )
+            assert follow_up.status_code == 200, follow_up.text
+
+
+async def _first_frame_then_close(base_url: str, key: str) -> str:
+    async with httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(5, connect=5), trust_env=False) as client:
+        async with client.stream(
+            "POST",
+            "/gemini/v1beta/models/nope-9:streamGenerateContent",
+            params={"alt": "sse"},
+            json=_GENERATE_CONTENT,
+            headers={"Authorization": f"Bearer {key}", "x-goog-api-key": key},
+        ) as response:
+            assert response.status_code == 429, response.status_code
+            first: Final = await response.aiter_bytes().__anext__()
+            assert first.startswith(b'data: {"error":"rate limited"}'), first
+            return response.headers["x-litellm-call-id"]
