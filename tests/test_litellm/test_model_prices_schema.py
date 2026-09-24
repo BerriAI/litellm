@@ -266,6 +266,8 @@ def test_openai_reasoning_family_entries_carry_supports_reasoning(prices: dict):
     )
 
 
+_ABSENT: Final = object()
+
 REASONING_ANNOTATION_KEYS: Final = (
     "supports_reasoning",
     "supports_minimal_reasoning_effort",
@@ -307,7 +309,7 @@ def test_chatgpt_rows_carry_their_openai_twin_reasoning_annotations(prices: dict
     mismatched = []
     for name, bare in twins:
         for key in REASONING_ANNOTATION_KEYS:
-            if key in prices[bare] and prices[name].get(key) != prices[bare][key]:
+            if prices[name].get(key, _ABSENT) != prices[bare].get(key, _ABSENT):
                 mismatched.append(f"{name}.{key} is {prices[name].get(key)!r}, {bare}.{key} is {prices[bare][key]!r}")
 
     assert mismatched == [], (
