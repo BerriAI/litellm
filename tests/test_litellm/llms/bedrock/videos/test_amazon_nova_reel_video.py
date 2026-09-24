@@ -4,7 +4,8 @@ import asyncio
 import base64
 import io
 import json
-from typing import cast
+from datetime import datetime, timezone
+from typing import Final, cast
 from unittest.mock import Mock
 
 import httpx
@@ -286,8 +287,9 @@ def test_transform_status_response_maps_aws_enum(raw_status, expected):
         assert video.error == {"message": "blocked by content filters"}
     if raw_status == "Completed":
         assert video.completed_at == 1758000060
-        assert video.usage is not None
-        assert video.usage["output_s3_uri"] == "s3://bucket/out/"
+        # output_s3_uri rides on _hidden_params (provider detail), not usage (F3/C3).
+        assert video.usage is None
+        assert video._hidden_params["output_s3_uri"] == "s3://bucket/out/"
     decoded = decode_video_id_with_provider(video.id)
     assert decoded["video_id"] == TEST_ARN
 
@@ -551,7 +553,7 @@ def test_handler_video_content_downloads_from_s3(monkeypatch):
 
     downloaded_keys: list[str] = []
 
-    def fake_download(bucket, key_candidates, litellm_params, raw, region_default=None):
+    def fake_download(bucket, key_candidates, litellm_params, raw, region_default=None, api_key=None, timeout=None):
         downloaded_keys.extend(key_candidates)
         return b"mp4-bytes"
 
@@ -661,20 +663,37 @@ def test_sign_get_request_without_credentials_or_bearer_raises(monkeypatch):
         )
 
 
-def _patch_s3_download(monkeypatch, handler: BedrockVideoGeneration, get_object_side_effect) -> list[dict]:
-    """Mock boto3 + credentials for _download_s3_object; returns the Session kwargs it saw."""
+def _patch_s3_download(monkeypatch, handler: BedrockVideoGeneration, get_object_side_effect) -> tuple[list, list, list[str]]:
+    """Mock boto3 + credentials for _download_s3_object.
+
+    Returns (session_kwargs, s3_clients, attempted_keys); each fake client records
+    the botocore Config it was built with and whether close() ran.
+    """
     sessions: list[dict] = []
+    clients: list = []
+    attempted: list[str] = []
 
     class _FakeS3Client:
+        def __init__(self):
+            self.config = None
+            self.closed = False
+
         def get_object(self, Bucket, Key):
+            attempted.append(Key)
             return get_object_side_effect(Bucket, Key)
+
+        def close(self):
+            self.closed = True
 
     class _FakeSession:
         def __init__(self, **kwargs):
             sessions.append(kwargs)
 
-        def client(self, service_name):
-            return _FakeS3Client()
+        def client(self, service_name, config=None):
+            client: Final = _FakeS3Client()
+            client.config = config
+            clients.append(client)
+            return client
 
     monkeypatch.setattr("boto3.Session", _FakeSession)
     monkeypatch.setattr(
@@ -682,14 +701,26 @@ def _patch_s3_download(monkeypatch, handler: BedrockVideoGeneration, get_object_
         "_load_credentials",
         lambda optional_params, aws_region_name=None, bearer_token=None: (None, aws_region_name or "us-east-1"),
     )
-    return sessions
+    return sessions, clients, attempted
+
+
+class _TrackingBody(io.BytesIO):
+    """BytesIO that counts close() calls so the download's cleanup is observable."""
+
+    def __init__(self, data: bytes):
+        super().__init__(data)
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+        super().close()
 
 
 def test_download_s3_object_uses_status_region_by_default(monkeypatch):
     """region_default (ARN-derived) beats env/default; explicit litellm_params region still wins (F8)."""
     handler = BedrockVideoGeneration()
     raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
-    sessions = _patch_s3_download(
+    sessions, _, _ = _patch_s3_download(
         monkeypatch,
         handler,
         lambda bucket, key: {"Body": io.BytesIO(b"mp4-bytes")},
@@ -726,7 +757,7 @@ def test_download_s3_object_error_message_redacts_invocation(monkeypatch):
     _patch_s3_download(monkeypatch, handler, _raise)
     with pytest.raises(BedrockError, match="not found in the S3 output location") as excinfo:
         handler._download_s3_object("bucket", ["out/output.mp4"], {}, raw, region_default="us-east-1")
-    message = str(excinfo.value.message)
+    message: Final = str(excinfo.value.message)
     assert "s3://bucket/out/" in message
     assert "out/output.mp4" in message
     assert "NoSuchKey" in message
@@ -747,6 +778,8 @@ def test_get_supported_openai_params_includes_video_params():
     assert "seconds" in supported
     assert "size" in supported
     assert "output_s3_uri" in supported
+    assert "kmsKeyId" in supported
+    assert "bucketOwner" in supported
     assert "parameters" not in supported
 
 
@@ -932,7 +965,6 @@ def test_download_s3_object_falls_back_to_second_candidate_key(monkeypatch):
     attempted: list[str] = []
 
     def _first_key_missing(bucket, key):
-        attempted.append(key)
         if key == "out/abc123-def456/output.mp4":
             raise ClientError(
                 {"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}},
@@ -940,7 +972,7 @@ def test_download_s3_object_falls_back_to_second_candidate_key(monkeypatch):
             )
         return {"Body": io.BytesIO(b"mp4-from-second-key")}
 
-    _patch_s3_download(monkeypatch, handler, _first_key_missing)
+    _, clients, attempted = _patch_s3_download(monkeypatch, handler, _first_key_missing)
     content = handler._download_s3_object(
         "bucket",
         ["out/abc123-def456/output.mp4", "out/output.mp4"],
@@ -991,3 +1023,557 @@ def test_main_layer_bedrock_status_and_content_pass_default_timeout(monkeypatch)
     videos_main.video_content(video_id=video_id, custom_llm_provider="bedrock", timeout=44.5)
     assert status_kwargs["timeout"] == 33.5
     assert content_kwargs["timeout"] == 44.5
+
+
+#################################################
+# C5: _to_epoch iso8601 timestamps
+#################################################
+
+
+def test_to_epoch_iso8601_with_z_suffix():
+    """Real GetAsyncInvoke payloads carry iso8601 submitTime/endTime (Smithy timestampFormat)."""
+    from litellm.llms.bedrock.videos.transformation import _to_epoch
+
+    expected: Final = int(datetime(2026, 1, 15, 10, 30, 0, tzinfo=timezone.utc).timestamp())
+    assert _to_epoch("2026-01-15T10:30:00Z") == expected
+
+
+def test_to_epoch_numeric_epoch_still_works():
+    from litellm.llms.bedrock.videos.transformation import _to_epoch
+
+    assert _to_epoch(1758000000.75) == 1758000000
+    assert _to_epoch("1758000000.75") == 1758000000
+
+
+def test_to_epoch_garbage_warns_and_returns_none(monkeypatch):
+    from litellm.llms.bedrock.videos.transformation import _to_epoch
+
+    logger = Mock()
+    monkeypatch.setattr("litellm.llms.bedrock.videos.transformation.verbose_logger", logger)
+    assert _to_epoch("not-a-timestamp") is None
+    logger.warning.assert_called_once()
+
+
+def test_transform_status_response_iso8601_times_become_epochs():
+    config = _make_config()
+    resp = httpx.Response(
+        200,
+        json={
+            "invocationArn": TEST_ARN,
+            "status": "Completed",
+            "submitTime": "2026-01-15T10:30:00Z",
+            "endTime": "2026-01-15T10:31:00Z",
+            "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}},
+        },
+    )
+    video = config.transform_video_status_retrieve_response(raw_response=resp, logging_obj=None, model=TEST_MODEL)
+    submit: Final = int(datetime(2026, 1, 15, 10, 30, 0, tzinfo=timezone.utc).timestamp())
+    end: Final = int(datetime(2026, 1, 15, 10, 31, 0, tzinfo=timezone.utc).timestamp())
+    assert video.created_at == submit
+    assert video.completed_at == end
+
+
+#################################################
+# C18: empty prompt guard
+#################################################
+
+
+def test_transform_create_request_blank_prompt_raises():
+    with pytest.raises(ValueError, match="prompt is required"):
+        _create_request(prompt="   ")
+
+
+#################################################
+# C7: s3:// scheme validation
+#################################################
+
+
+def test_transform_create_request_non_s3_output_uri_raises():
+    with pytest.raises(ValueError, match="s3://"):
+        _create_request({"output_s3_uri": "https://bucket/out/"})
+
+
+def test_parse_s3_uri_rejects_non_s3_scheme():
+    from litellm.llms.bedrock.videos.handler import _parse_s3_uri
+
+    with pytest.raises(ValueError, match="s3://"):
+        _parse_s3_uri("https://example.com/bucket/key")
+
+
+#################################################
+# C2: MULTI_SHOT body construction
+#################################################
+
+
+def test_transform_multi_shot_automated_uses_automated_params():
+    body = _create_request({"output_s3_uri": "s3://bucket/out/", "taskType": "MULTI_SHOT_AUTOMATED"})
+    model_input = body["modelInput"]
+    assert model_input["taskType"] == "MULTI_SHOT_AUTOMATED"
+    assert model_input["multiShotAutomatedParams"] == {"text": "A drone shot over the ocean"}
+    assert "textToVideoParams" not in model_input
+    # durationSeconds stays on videoGenerationConfig for automated multi-shot.
+    assert model_input["videoGenerationConfig"]["durationSeconds"] == 6
+
+
+def test_transform_multi_shot_automated_preserves_explicit_params():
+    body = _create_request(
+        {
+            "output_s3_uri": "s3://bucket/out/",
+            "taskType": "MULTI_SHOT_AUTOMATED",
+            "multiShotAutomatedParams": {"text": "custom shot plan"},
+        }
+    )
+    assert body["modelInput"]["multiShotAutomatedParams"] == {"text": "custom shot plan"}
+
+
+def test_transform_multi_shot_automated_with_image_raises():
+    with pytest.raises(ValueError, match="does not accept input images"):
+        _create_request(
+            {"output_s3_uri": "s3://bucket/out/", "taskType": "MULTI_SHOT_AUTOMATED", "image": PNG_BYTES}
+        )
+
+
+def test_transform_multi_shot_manual_without_params_raises():
+    with pytest.raises(ValueError, match="multiShotManualParams"):
+        _create_request({"output_s3_uri": "s3://bucket/out/", "taskType": "MULTI_SHOT_MANUAL"})
+
+
+def test_transform_multi_shot_manual_body_omits_duration_seconds():
+    body = _create_request(
+        {
+            "output_s3_uri": "s3://bucket/out/",
+            "taskType": "MULTI_SHOT_MANUAL",
+            "multiShotManualParams": {"shots": [{"text": "shot one", "durationSeconds": 6}]},
+        }
+    )
+    model_input = body["modelInput"]
+    assert model_input["multiShotManualParams"] == {"shots": [{"text": "shot one", "durationSeconds": 6}]}
+    assert "textToVideoParams" not in model_input
+    # Durations live per shot for MANUAL; no top-level durationSeconds.
+    assert "durationSeconds" not in model_input["videoGenerationConfig"]
+
+
+#################################################
+# C23: kmsKeyId/bucketOwner plumbing
+#################################################
+
+
+def test_kms_and_bucket_owner_forwarded_to_s3_output_config():
+    body = _create_request(
+        {
+            "output_s3_uri": "s3://bucket/out/",
+            "kmsKeyId": "arn:aws:kms:us-east-1:111122223333:key/k",
+            "bucketOwner": "111122223333",
+        }
+    )
+    s3_config: Final = body["outputDataConfig"]["s3OutputDataConfig"]
+    assert s3_config["s3Uri"] == "s3://bucket/out/"
+    assert s3_config["kmsKeyId"] == "arn:aws:kms:us-east-1:111122223333:key/k"
+    assert s3_config["bucketOwner"] == "111122223333"
+    assert "kmsKeyId" not in body["modelInput"]
+    assert "bucketOwner" not in body["modelInput"]
+
+
+def test_kms_and_bucket_owner_snake_case_aliases_accepted():
+    body = _create_request(
+        {
+            "output_s3_uri": "s3://bucket/out/",
+            "output_s3_kms_key_id": "key-id-1",
+            "output_s3_bucket_owner": "222233334444",
+        }
+    )
+    s3_config: Final = body["outputDataConfig"]["s3OutputDataConfig"]
+    assert s3_config["kmsKeyId"] == "key-id-1"
+    assert s3_config["bucketOwner"] == "222233334444"
+    assert "output_s3_kms_key_id" not in body["modelInput"]
+    assert "output_s3_bucket_owner" not in body["modelInput"]
+
+
+#################################################
+# C16: non-JSON 2xx responses
+#################################################
+
+
+def test_transform_create_response_non_json_maps_to_bedrock_502():
+    config = _make_config()
+    resp = httpx.Response(200, content=b"<html>gateway error</html>")
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_create_response(model=TEST_MODEL, raw_response=resp, logging_obj=None)
+    assert excinfo.value.status_code == 502
+    assert "non-JSON" in str(excinfo.value.message)
+
+
+def test_transform_status_response_non_json_maps_to_bedrock_502():
+    config = _make_config()
+    resp = httpx.Response(200, content=b"not json at all")
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_status_retrieve_response(raw_response=resp, logging_obj=None, model=TEST_MODEL)
+    assert excinfo.value.status_code == 502
+    assert "non-JSON" in str(excinfo.value.message)
+
+
+#################################################
+# C22: unsupported operations raise a 400-class error
+#################################################
+
+
+def test_unsupported_list_operation_raises_400_class_bedrock_error():
+    """litellm.exception_type maps BedrockError(status_code=400) to BadRequestError;
+    a plain NotImplementedError would surface as APIConnectionError 500."""
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_list_request(
+            api_base="",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+    assert "not supported" in str(excinfo.value.message)
+
+
+def test_unsupported_remix_operation_raises_400_class_bedrock_error():
+    config = _make_config()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_video_remix_request(
+            video_id="vid",
+            prompt="p",
+            api_base="",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+
+
+#################################################
+# C19: text-mode file guard
+#################################################
+
+
+def test_input_reference_text_mode_file_raises_value_error():
+    with pytest.raises(ValueError, match="binary mode"):
+        _create_request({"output_s3_uri": "s3://bucket/out/", "input_reference": io.StringIO("not binary")})
+
+
+#################################################
+# C26: clientRequestToken falls back to litellm_call_id
+#################################################
+
+
+def test_client_request_token_falls_back_to_litellm_call_id():
+    litellm_params = GenericLiteLLMParams()
+    litellm_params.litellm_call_id = "call/abc_123"  # extra field set by the @client decorator
+    body = _create_request(litellm_params=litellm_params)
+    assert body["clientRequestToken"] == "call-abc-123"
+
+
+def test_handler_create_threads_litellm_call_id_from_mapping_into_token(monkeypatch):
+    """A Mapping litellm_params carrying only litellm_call_id (no metadata) must reach
+    the signed POST body through _as_generic_litellm_params."""
+    handler = BedrockVideoGeneration()
+    monkeypatch.setattr(
+        BedrockVideoGeneration,
+        "_get_boto_credentials_from_optional_params",
+        lambda self, params, model=None, bearer_token=None: _FakeCredentialsInfo(),
+    )
+    bodies: list[bytes] = []
+
+    class _RecordingClient:
+        def post(self, **kwargs):
+            bodies.append(kwargs["content"])
+            return httpx.Response(
+                200,
+                json={"invocationArn": TEST_ARN},
+                request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"),
+            )
+
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._get_httpx_client", lambda: _RecordingClient())
+    video = handler.video_generation(
+        model="bedrock/amazon.nova-reel-v1:0",
+        prompt="waves at sunset",
+        optional_params={"output_s3_uri": "s3://bucket/out/"},
+        logging_obj=None,
+        timeout=5.0,
+        avideo_generation=False,
+        litellm_params={"litellm_call_id": "call/xyz_789"},
+    )
+    assert video.status == "processing"
+    parsed: Final = json.loads(bodies[0])
+    assert parsed["clientRequestToken"] == "call-xyz-789"
+
+
+#################################################
+# C1/C28: S3 download error mapping per AWS error code
+#################################################
+
+
+def test_download_s3_object_access_denied_maps_to_403_without_second_get(monkeypatch):
+    from botocore.exceptions import ClientError
+
+    def _deny(bucket, key):
+        raise ClientError(
+            {"Error": {"Code": "AccessDenied", "Message": "Access Denied"}},
+            "GetObject",
+        )
+
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+    _, clients, attempted = _patch_s3_download(monkeypatch, handler, _deny)
+    with pytest.raises(BedrockError) as excinfo:
+        handler._download_s3_object(
+            "bucket",
+            ["out/abc/output.mp4", "out/output.mp4"],
+            {},
+            raw,
+            region_default="us-east-1",
+        )
+    assert excinfo.value.status_code == 403
+    # Aborts immediately: no second candidate get_object.
+    assert attempted == ["out/abc/output.mp4"]
+    assert "s3://bucket/out/" in str(excinfo.value.message)
+    assert "AccessDenied" in str(excinfo.value.message)
+    assert clients[0].closed is True
+
+
+def test_download_s3_object_500_class_client_error_maps_to_502(monkeypatch):
+    from botocore.exceptions import ClientError
+
+    def _internal_error(bucket, key):
+        raise ClientError(
+            {
+                "Error": {"Code": "InternalError", "Message": "We encountered an internal error."},
+                "ResponseMetadata": {"HTTPStatusCode": 500},
+            },
+            "GetObject",
+        )
+
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+    _, _, attempted = _patch_s3_download(monkeypatch, handler, _internal_error)
+    with pytest.raises(BedrockError) as excinfo:
+        handler._download_s3_object("bucket", ["out/output.mp4"], {}, raw, region_default="us-east-1")
+    assert excinfo.value.status_code == 502
+    # The AWS error code is preserved in the message.
+    assert "InternalError" in str(excinfo.value.message)
+    assert attempted == ["out/output.mp4"]
+
+
+def test_download_s3_object_http_404_client_error_falls_through(monkeypatch):
+    """A 404 without a NoSuchKey code still falls through to the next candidate."""
+    from botocore.exceptions import ClientError
+
+    def _missing_via_http_status(bucket, key):
+        if key.endswith("abc123-def456/output.mp4"):
+            raise ClientError(
+                {
+                    "Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."},
+                    "ResponseMetadata": {"HTTPStatusCode": 404},
+                },
+                "GetObject",
+            )
+        return {"Body": io.BytesIO(b"mp4-after-404")}
+
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+    _, _, attempted = _patch_s3_download(monkeypatch, handler, _missing_via_http_status)
+    content = handler._download_s3_object(
+        "bucket",
+        ["out/abc123-def456/output.mp4", "out/output.mp4"],
+        {},
+        raw,
+        region_default="us-east-1",
+    )
+    assert content == b"mp4-after-404"
+    assert len(attempted) == 2
+
+
+#################################################
+# C14: bearer-only S3 path
+#################################################
+
+
+def test_download_s3_object_bearer_without_sigv4_credentials_maps_to_400(monkeypatch):
+    """A bedrock bearer token covers only the async-invoke API; S3 needs SigV4."""
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+    _, clients, attempted = _patch_s3_download(monkeypatch, handler, lambda bucket, key: {"Body": io.BytesIO(b"x")})
+    with pytest.raises(BedrockError) as excinfo:
+        handler._download_s3_object(
+            "bucket",
+            ["out/output.mp4"],
+            {},
+            raw,
+            region_default="us-east-1",
+            api_key="some-bearer-token",
+        )
+    assert excinfo.value.status_code == 400
+    assert "SigV4" in str(excinfo.value.message)
+    assert "bearer" in str(excinfo.value.message)
+    # Failed fast: no S3 client built, no get_object attempted.
+    assert clients == []
+    assert attempted == []
+
+
+#################################################
+# C4: S3 client timeouts + resource closes
+#################################################
+
+
+def test_download_s3_object_builds_client_with_config_timeouts(monkeypatch):
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+    _, clients, _ = _patch_s3_download(monkeypatch, handler, lambda bucket, key: {"Body": io.BytesIO(b"x")})
+
+    # Call timeout threads into read_timeout; connect stays at the 5s default.
+    handler._download_s3_object("bucket", ["out/output.mp4"], {}, raw, region_default="us-east-1", timeout=12.5)
+    assert clients[0].config.read_timeout == 12.5
+    assert clients[0].config.connect_timeout == 5
+
+    # No timeout: sane defaults.
+    handler._download_s3_object("bucket", ["out/output.mp4"], {}, raw, region_default="us-east-1")
+    assert clients[1].config.read_timeout == 60.0
+    assert clients[1].config.connect_timeout == 5
+
+    # A small call timeout caps the connect timeout too.
+    handler._download_s3_object("bucket", ["out/output.mp4"], {}, raw, region_default="us-east-1", timeout=2.0)
+    assert clients[2].config.read_timeout == 2.0
+    assert clients[2].config.connect_timeout == 2.0
+
+
+def test_download_s3_object_closes_body_and_client_on_success(monkeypatch):
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+    body = _TrackingBody(b"mp4-bytes")
+    _, clients, _ = _patch_s3_download(monkeypatch, handler, lambda bucket, key: {"Body": body})
+    content = handler._download_s3_object("bucket", ["out/output.mp4"], {}, raw, region_default="us-east-1")
+    assert content == b"mp4-bytes"
+    assert body.close_calls == 1
+    assert clients[0].closed is True
+
+
+def test_download_s3_object_closes_client_on_404(monkeypatch):
+    from botocore.exceptions import ClientError
+
+    def _raise(bucket, key):
+        raise ClientError(
+            {"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}},
+            "GetObject",
+        )
+
+    handler = BedrockVideoGeneration()
+    raw: dict = {"outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://bucket/out/"}}}
+    _, clients, _ = _patch_s3_download(monkeypatch, handler, _raise)
+    with pytest.raises(BedrockError):
+        handler._download_s3_object("bucket", ["out/output.mp4"], {}, raw, region_default="us-east-1")
+    assert clients[0].closed is True
+
+
+#################################################
+# C20: video id decoded once per status call
+#################################################
+
+
+def test_video_status_decodes_video_id_once(monkeypatch):
+    import litellm.llms.bedrock.videos.handler as handler_module
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    real_decode = handler_module.decode_video_id_with_provider
+    decode_calls: list[str] = []
+
+    def counting_decode(video_id):
+        decode_calls.append(video_id)
+        return real_decode(video_id)
+
+    monkeypatch.setattr(handler_module, "decode_video_id_with_provider", counting_decode)
+
+    handler = BedrockVideoGeneration()
+    video_id = encode_video_id_with_provider(TEST_ARN, "bedrock", TEST_MODEL)
+    monkeypatch.setattr(
+        handler,
+        "_status_request_parts",
+        lambda arn, params, api_base, api_key=None: (
+            "https://example.com/async-invoke/arn",
+            Mock(url="https://example.com/async-invoke/arn", headers={}),
+            "us-east-1",
+        ),
+    )
+    resp = httpx.Response(200, json={"invocationArn": TEST_ARN, "status": "InProgress"})
+    monkeypatch.setattr(handler, "_sync_get", lambda prepped, timeout=None: resp)
+    handler.video_status(video_id=video_id, litellm_params={})
+    assert decode_calls == [video_id]
+
+
+#################################################
+# C24: private async status arm
+#################################################
+
+
+def test_video_status_async_dispatch_uses_private_async_arm(monkeypatch):
+    handler = BedrockVideoGeneration()
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    video_id = encode_video_id_with_provider(TEST_ARN, "bedrock", TEST_MODEL)
+    monkeypatch.setattr(
+        handler,
+        "_status_request_parts",
+        lambda arn, params, api_base, api_key=None: (
+            "https://example.com/async-invoke/arn",
+            Mock(url="https://example.com/async-invoke/arn", headers={}),
+            "us-east-1",
+        ),
+    )
+    resp = httpx.Response(200, json={"invocationArn": TEST_ARN, "status": "InProgress", "submitTime": 1758000000.0})
+
+    async def fake_async_get(prepped, timeout=None):
+        return resp
+
+    monkeypatch.setattr(handler, "_async_get", fake_async_get)
+    assert not hasattr(BedrockVideoGeneration, "async_video_status")
+    video = asyncio.run(handler.video_status(video_id=video_id, litellm_params={}, astatus=True))
+    assert video.status == "processing"
+
+
+#################################################
+# C8: api_key falls back to litellm_params on the bedrock branches
+#################################################
+
+
+def test_bedrock_branches_fall_back_to_litellm_params_api_key(monkeypatch):
+    """kwargs without api_key but litellm_params.api_key set: the handler must receive it."""
+    from litellm.llms.bedrock.videos.handler import BedrockVideoGeneration as _Handler
+    from litellm.types.videos.utils import encode_video_id_with_provider
+    from litellm.videos import main as videos_main
+
+    real_params_cls = videos_main.GenericLiteLLMParams
+
+    class _InjectsApiKey(real_params_cls):
+        def __init__(self, **kw):
+            kw.setdefault("api_key", "sigv4-key-from-litellm-params")
+            super().__init__(**kw)
+
+    seen: dict[str, dict] = {}
+
+    def fake_generation(self, **kwargs):
+        seen["create"] = kwargs
+        return Mock()
+
+    def fake_status(self, **kwargs):
+        seen["status"] = kwargs
+        return Mock()
+
+    def fake_content(self, **kwargs):
+        seen["content"] = kwargs
+        return b"mp4-bytes"
+
+    monkeypatch.setattr(videos_main, "GenericLiteLLMParams", _InjectsApiKey)
+    monkeypatch.setattr(_Handler, "video_generation", fake_generation)
+    monkeypatch.setattr(_Handler, "video_status", fake_status)
+    monkeypatch.setattr(_Handler, "video_content", fake_content)
+
+    videos_main.video_generation(prompt="waves", model="bedrock/amazon.nova-reel-v1:0")
+    video_id = encode_video_id_with_provider(TEST_ARN, "bedrock", TEST_MODEL)
+    videos_main.video_status(video_id=video_id, custom_llm_provider="bedrock")
+    videos_main.video_content(video_id=video_id, custom_llm_provider="bedrock")
+
+    assert seen["create"]["api_key"] == "sigv4-key-from-litellm-params"
+    assert seen["status"]["api_key"] == "sigv4-key-from-litellm-params"
+    assert seen["content"]["api_key"] == "sigv4-key-from-litellm-params"
