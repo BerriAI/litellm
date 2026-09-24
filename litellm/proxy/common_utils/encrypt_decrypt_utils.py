@@ -23,8 +23,6 @@ _V2_GCM_PREFIX: Final = "v2:gcm:"
 _GCM_PREFIXES: Final = (_V3_GCM_PREFIX, _V2_GCM_PREFIX)
 _HKDF_INFO: Final = b"litellm-at-rest-v3"
 
-# general_settings key selecting the at-rest encryption algorithm for new writes.
-# Decrypt is always format-detecting, so the setting never strands stored data.
 _ENCRYPTION_ALGORITHM_SETTING: Final = "encryption_algorithm"
 _ALGO_AES_GCM: Final = "aes-256-gcm"
 _ALGO_XSALSA20: Final = "xsalsa20-poly1305"
