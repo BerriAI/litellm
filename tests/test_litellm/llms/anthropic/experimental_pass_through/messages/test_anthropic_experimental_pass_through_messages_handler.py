@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 
 import httpx
 import pytest
@@ -1246,7 +1246,7 @@ async def _flush_logging_worker(capture: "_SuccessPayloadCapture") -> None:
     await asyncio.sleep(0)
     try:
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
-    except (asyncio.TimeoutError, RuntimeError):
+    except asyncio.TimeoutError:
         pass
     deadline = asyncio.get_running_loop().time() + 10.0
     while not capture.payloads and asyncio.get_running_loop().time() < deadline:
@@ -1438,3 +1438,250 @@ async def test_anthropic_messages_leaves_non_provider_failures_unmapped():
         )
 
     assert "Traceback" not in str(excinfo.value)
+
+
+def _recording_client(seen_urls: list[str]) -> AsyncHTTPHandler:
+    def record_and_answer(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "deepseek-chat",
+                "content": [{"type": "text", "text": "pong"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            },
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(record_and_answer))
+    return upstream
+
+
+@pytest.mark.asyncio
+async def test_provider_messages_api_base_env_is_not_shadowed_by_the_chat_default(monkeypatch):
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    monkeypatch.delenv("DEEPSEEK_API_BASE", raising=False)
+    monkeypatch.setenv("DEEPSEEK_ANTHROPIC_API_BASE", "https://deepseek.internal.example/anthropic")
+    seen_urls: list[str] = []
+
+    await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "ping"}],
+        model="deepseek/deepseek-chat",
+        api_key="sk-test",
+        client=_recording_client(seen_urls),
+    )
+
+    assert seen_urls == ["https://deepseek.internal.example/anthropic/v1/messages"]
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_forwards_safeguards_and_unknown_beta_to_anthropic():
+    """Shapes are what Claude Code 2.1.278 sends and api.anthropic.com returns, captured 2026-09-21."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    client_betas = "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"
+    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
+    captured: dict[str, object] = {}
+
+    def upstream_records_the_request(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        captured["anthropic-beta"] = request.headers.get("anthropic-beta")
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "safeguard_results": safeguard_results,
+            },
+            request=request,
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_records_the_request))
+
+    response = await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="anthropic/claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        api_key="sk-test",
+        client=upstream,
+        safeguards=safeguards,
+        extra_headers={"anthropic-beta": client_betas},
+    )
+
+    assert captured["body"]["safeguards"] == safeguards
+    assert set(captured["anthropic-beta"].split(",")) == set(client_betas.split(","))
+    assert response["safeguard_results"] == safeguard_results
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_forwards_safeguards_and_keeps_safeguard_results():
+    """Shapes are what Claude Code 2.1.278 sends and api.anthropic.com returns, captured 2026-09-21."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
+    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
+    captured: dict[str, object] = {}
+    message_start = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 0},
+            "safeguard_results": safeguard_results,
+        },
+    }
+    message_delta = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None, "safeguard_results": safeguard_results},
+        "usage": {"output_tokens": 1},
+    }
+    sse = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        for event in (message_start, message_delta, {"type": "message_stop"})
+    )
+
+    def upstream_streams_safeguard_results(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse.encode(), request=request)
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_streams_safeguard_results))
+
+    stream = await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="anthropic/claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        api_key="sk-test",
+        client=upstream,
+        stream=True,
+        safeguards=safeguards,
+    )
+    raw = b"".join([chunk async for chunk in stream]).decode()
+    events = [json.loads(line[len("data: ") :]) for line in raw.splitlines() if line.startswith("data: ")]
+
+    assert captured["body"]["safeguards"] == safeguards
+    assert events[0]["message"]["safeguard_results"] == safeguard_results
+    assert [e for e in events if e["type"] == "message_delta"][0]["delta"]["safeguard_results"] == safeguard_results
+
+
+def _claude_code_auto_mode_request() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Shapes are what Claude Code 2.1.278 sends and Bedrock Invoke / Vertex rawPredict return, captured 2026-09-21."""
+    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
+    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
+    return safeguards, safeguard_results
+
+
+def _upstream_answering_with(safeguard_results: list[dict[str, object]], captured: dict[str, object]) -> AsyncHTTPHandler:
+    def upstream_records_the_request(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        captured["anthropic-beta"] = request.headers.get("anthropic-beta")
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "safeguard_results": safeguard_results,
+            },
+            request=request,
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_records_the_request))
+    return upstream
+
+
+_CLIENT_BETA_HEADERS: Final = (
+    pytest.param({"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"}, id="client_sends_beta"),
+    pytest.param({"anthropic-beta": "interleaved-thinking-2025-05-14"}, id="client_omits_beta"),
+    pytest.param({}, id="client_sends_no_beta_header"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
+async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_bedrock_invoke(
+    local_beta_headers_config, client_headers
+):
+    """Bedrock Invoke takes betas in the body's `anthropic_beta` and 400s on `safeguards` without the beta, so the beta rides along with the field."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    safeguards, safeguard_results = _claude_code_auto_mode_request()
+    captured: dict[str, object] = {}
+
+    response = await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="bedrock/us.anthropic.claude-sonnet-5",
+        custom_llm_provider="bedrock",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=_upstream_answering_with(safeguard_results, captured),
+        safeguards=safeguards,
+        extra_headers=client_headers,
+    )
+
+    assert captured["body"]["safeguards"] == safeguards
+    assert captured["body"]["anthropic_beta"] == ["dangerous-tool-use-2026-09-03"]
+    assert response["safeguard_results"] == safeguard_results
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
+async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_vertex(
+    local_beta_headers_config, client_headers
+):
+    """Vertex rawPredict takes the beta as the `anthropic-beta` header and 400s on `safeguards` without it, so the beta rides along with the field."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    safeguards, safeguard_results = _claude_code_auto_mode_request()
+    captured: dict[str, object] = {}
+
+    with patch.object(VertexBase, "_ensure_access_token", return_value=("test-token", "test-project")):
+        response = await handler.anthropic_messages(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="vertex_ai/claude-sonnet-5",
+            custom_llm_provider="vertex_ai",
+            vertex_project="test-project",
+            vertex_location="global",
+            vertex_credentials="{}",
+            client=_upstream_answering_with(safeguard_results, captured),
+            safeguards=safeguards,
+            extra_headers=client_headers,
+        )
+
+    assert captured["body"]["safeguards"] == safeguards
+    assert "anthropic_beta" not in captured["body"]
+    assert captured["anthropic-beta"].split(",").count("dangerous-tool-use-2026-09-03") == 1
+    assert response["safeguard_results"] == safeguard_results

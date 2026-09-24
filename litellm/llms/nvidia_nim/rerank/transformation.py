@@ -215,7 +215,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             elif isinstance(doc, dict):
                 # Preserve only the structured passage fields supported by the
                 # selected rerank route.
-                supported_fields: NvidiaNimPassageObject = {}  # mutable-ok: assembling a request TypedDict
+                supported_fields: NvidiaNimPassageObject = {}
                 if "text" in self.SUPPORTED_PASSAGE_FIELDS and "text" in doc:
                     supported_fields["text"] = doc["text"]
                 if "image" in self.SUPPORTED_PASSAGE_FIELDS and "image" in doc:

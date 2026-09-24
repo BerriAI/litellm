@@ -39,15 +39,38 @@ def openai_shaped_tool_call_item_id(item_type: str, tool_id: str) -> str:
     return f"{prefix}_{tool_id}"
 
 
+class _ToolNameFields(BaseModel):
+    type: str = ""
+    name: str = ""
+    tools: tuple[object, ...] = ()
+
+
+def _tool_name_fields_of(tool: object) -> _ToolNameFields | None:
+    try:
+        return _ToolNameFields.model_validate(tool)
+    except ValidationError:
+        return None
+
+
+def _custom_tool_name_of(tool: object) -> str | None:
+    parsed: Final = _tool_name_fields_of(tool)
+    if parsed is None or parsed.type != "custom" or not parsed.name:
+        return None
+    return parsed.name
+
+
+def _nested_tools_of(tool: object) -> tuple[object, ...]:
+    parsed: Final = _tool_name_fields_of(tool)
+    if parsed is None or parsed.type != "namespace":
+        return ()
+    return parsed.tools
+
+
 def extract_custom_tool_names(tools: Sequence[object] | None) -> set[str]:
-    """Extract names of tools originally defined as ``type: "custom"``."""
-    if not tools:
-        return set()
-    names: Final[set[str]] = set()
-    for tool in tools:
-        if isinstance(tool, dict) and tool.get("type") == "custom" and "name" in tool:
-            names.add(tool["name"])
-    return names
+    """Extract names of ``type: "custom"`` tools, at the top level or one level inside a ``namespace`` tool."""
+    top_level: Final = tuple(tools or ())
+    nested: Final = tuple(nested_tool for tool in top_level for nested_tool in _nested_tools_of(tool))
+    return {name for tool in (*top_level, *nested) if (name := _custom_tool_name_of(tool)) is not None}
 
 
 def is_custom_tool_call(tool_name: str, custom_tool_names: set[str]) -> bool:
@@ -143,7 +166,7 @@ def validated_allowed_callers(value: object) -> list[str] | None:
         raise ValueError("allowed_callers must be a list of strings") from exc
 
 
-def _grammar_suffix(fmt: object) -> str:
+def custom_tool_grammar_suffix(fmt: object) -> str:
     try:
         parsed: Final = _CustomToolFormat.model_validate(fmt)
     except ValidationError:
@@ -167,7 +190,9 @@ def convert_custom_tool_to_function_tool(tool: Mapping[str, object]) -> ChatComp
     raw_name: Final = tool.get("name")
     name: Final = raw_name if isinstance(raw_name, str) else ""
     raw_description: Final = tool.get("description")
-    description = (raw_description if isinstance(raw_description, str) else "") + _grammar_suffix(tool.get("format"))
+    description: Final = (raw_description if isinstance(raw_description, str) else "") + custom_tool_grammar_suffix(
+        tool.get("format")
+    )
     allowed_callers: Final = validated_allowed_callers(tool.get("allowed_callers"))
     function_chunk: Final = ChatCompletionToolParamFunctionChunk(
         name=name,

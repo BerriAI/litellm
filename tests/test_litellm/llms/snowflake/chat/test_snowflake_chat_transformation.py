@@ -6,6 +6,7 @@ Tests tool calling request/response transformations and chat completions
 import asyncio
 import os
 import copy
+import uuid
 import json
 from typing import Any, Dict, List
 
@@ -945,3 +946,48 @@ class TestSnowflakeChatCompletion:
 
         assert len(chunks_received) > 0
         content = "".join(c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content)
+
+
+async def test_snowflake_claude_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
+    image_url = f"http://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = request.content.decode()
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "Green"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="snowflake/claude-sonnet-4-6",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+        api_key="fake-jwt",
+        account_id="FAKE-ACCOUNT",
+        api_base=FAKE_API_BASE,
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    assert image_url not in captured["body"]
+    assert async_only_image_fetch.base64_png in captured["body"]

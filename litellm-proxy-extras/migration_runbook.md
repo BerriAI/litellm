@@ -48,7 +48,7 @@ uv run --with testing.postgresql python ci_cd/run_migration.py "your_migration_n
 
 ## What It Does
 
-1. **Verifies the current branch is up to date with `origin/litellm_internal_staging`** (see [Branch freshness](#branch-freshness-check))
+1. **Verifies the current branch is up to date with origin's current default branch** (see [Branch freshness](#branch-freshness-check))
 2. Creates temp PostgreSQL DB
 3. Applies existing migrations
 4. Compares with `schema.prisma`
@@ -57,11 +57,11 @@ uv run --with testing.postgresql python ci_cd/run_migration.py "your_migration_n
 
 ## Branch Freshness Check
 
-Before generating anything, `run_migration.py` runs `git fetch origin <base>` and refuses to proceed if `HEAD` is behind `origin/<base>`. Default base is `litellm_internal_staging` (the branch PRs target). A previous incident saw a stale branch silently drop production columns; freshness is the first-line defense.
+Before generating anything, `run_migration.py` runs `git fetch origin <base>` and refuses to proceed if `HEAD` is behind `origin/<base>`. The default base is discovered from origin's advertised HEAD on each run, so an existing clone follows a default-branch change without trusting cached `origin/HEAD`. If discovery or fetching fails, migration generation stops. A previous incident saw a stale branch silently drop production columns; freshness is the first-line defense.
 
 Flags:
 
-- `--base-branch <name>` — check against a different base (e.g. `main`). Default is `litellm_internal_staging`.
+- `--base-branch <name>` — check against a different base (e.g. a release branch). Defaults to origin's current default branch
 - `--skip-freshness-check` — bypass entirely. Only for intentional migrations against an older base.
 
 When the guard fires:
@@ -69,8 +69,9 @@ When the guard fires:
 1. Update your branch:
 
    ```bash
-   git fetch origin && git rebase origin/litellm_internal_staging
-   # or git merge origin/litellm_internal_staging — whichever matches your workflow
+   base_branch=$(python3 scripts/default_branch.py --branch) &&
+     git fetch origin "+refs/heads/$base_branch:refs/remotes/origin/$base_branch" &&
+     git rebase "origin/$base_branch"
    ```
 2. Re-run `run_migration.py`.
 

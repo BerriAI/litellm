@@ -6,6 +6,8 @@ import pathlib
 import ssl
 import threading
 import weakref
+from collections.abc import Callable, Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import certifi
@@ -23,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_ssl_configuration,
 )
+from litellm.types.llms.custom_http import VerifyTypes
 
 
 @pytest.mark.asyncio
@@ -1025,6 +1028,86 @@ def test_handed_out_sync_client_pool_survives_handler_collection(keepalive_serve
     consumer_client.close()
 
 
+def _mock_transport() -> httpx.MockTransport:
+    """Answers anything with a short body, left unread when the caller asked to stream."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, content=b"ab")
+
+    return httpx.MockTransport(respond)
+
+
+RELEASED_TOO_EARLY = "the handler was released while its response could still read"
+NEVER_RELEASED = "the handler outlived the response that was holding it"
+
+# Every method that can hand back a body the caller has not read yet, which is
+# every one that passes stream= down to send(). Parametrized so a method added
+# later is covered here rather than being the one that forgets to anchor.
+ASYNC_STREAMING_SENDS = ["post", "delete"]
+SYNC_STREAMING_SENDS = ["post", "patch", "put", "delete"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ASYNC_STREAMING_SENDS)
+async def test_a_streaming_response_holds_its_handler_until_it_is_released(method):
+    """The finalizer must not run while a body this handler issued can still arrive.
+
+    ``_handler_may_close_client`` cannot see that body: it holds the connection it
+    reads from and never the client. Anchoring the handler to the response is what
+    withholds the close, and releasing the anchor is what still delivers one.
+    """
+    handler = AsyncHTTPHandler()
+    handler.client._transport = _mock_transport()
+    ref = weakref.ref(handler)
+    response = await getattr(handler, method)("https://example.invalid/stream", stream=True)
+
+    del handler
+    gc.collect()
+    assert ref() is not None, RELEASED_TOO_EARLY
+
+    assert await response.aread() == b"ab"
+    del response
+    gc.collect()
+    assert ref() is None, NEVER_RELEASED
+
+
+@pytest.mark.parametrize("method", SYNC_STREAMING_SENDS)
+def test_a_sync_streaming_response_holds_its_handler_until_it_is_released(method):
+    """The sync finalizer closes inline, so the same anchor has to hold it off."""
+    handler = HTTPHandler()
+    handler.client._transport = _mock_transport()
+    ref = weakref.ref(handler)
+    response = getattr(handler, method)("https://example.invalid/stream", stream=True)
+
+    del handler
+    gc.collect()
+    assert ref() is not None, RELEASED_TOO_EARLY
+
+    assert response.read() == b"ab"
+    del response
+    gc.collect()
+    assert ref() is None, NEVER_RELEASED
+
+
+@pytest.mark.asyncio
+async def test_a_fully_read_response_does_not_hold_its_handler():
+    """A non-streaming response is complete when ``post`` returns, so it anchors nothing.
+
+    Otherwise every client close would wait on whatever the caller does next with
+    a response it has already read.
+    """
+    handler = AsyncHTTPHandler()
+    handler.client._transport = _mock_transport()
+    ref = weakref.ref(handler)
+    response = await handler.post("https://example.invalid/whole")
+    assert response.content == b"ab"
+
+    del handler
+    gc.collect()
+
+    assert ref() is None, "a fully-read response pinned its handler"
+
+
 def test_sync_close_leaves_caller_supplied_client_open():
     supplied = httpx.Client()
     handler = HTTPHandler(client=supplied)
@@ -1316,6 +1399,47 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
     assert session.closed
 
 
+class _RetryClientHandler(AsyncHTTPHandler):
+    def __init__(self, first: httpx.AsyncClient, retry: httpx.AsyncClient) -> None:
+        self._retry_client: Final = retry
+        super().__init__()
+        self.client = first
+
+    def create_client(
+        self,
+        timeout: float | httpx.Timeout | None = None,
+        event_hooks: Mapping[str, list[Callable[..., object]]] | None = None,
+        ssl_verify: VerifyTypes | None = None,
+        shared_session: ClientSession | None = None,
+    ) -> httpx.AsyncClient:
+        return self._retry_client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_connection_error_retry_forwards_content(method: str):
+    captured: list[bytes] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        captured.append(request.content)
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        body = b'{"post": ["run1"]}'
+        await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
+
+        assert captured == [body], "the retried request must carry the same content= body"
+        await handler.close()
+
+
+
 @pytest.fixture
 def forward_proxy_server():
     """Plain HTTP forward proxy that records the absolute URIs it is asked to fetch."""
@@ -1547,3 +1671,158 @@ def test_sync_force_ipv4_https_proxy_mount_uses_handler_ca_bundle(
         handler.close()
 
     assert response.text == "ok-tls"
+
+
+@pytest.mark.asyncio
+async def test_put_can_refuse_to_follow_a_redirect():
+    """The client follows redirects by default; a caller uploading to a URL it did not choose must be able to opt out."""
+    hops: list[str] = []  # mutable-ok: the fake transport records the paths it was asked for
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        hops.append(request.url.path)
+        if request.url.path == "/first":
+            return httpx.Response(302, request=request, headers={"location": "/second"})
+        return httpx.Response(200, request=request)
+
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler), follow_redirects=True)
+    try:
+        followed = await handler.put("https://uploads.example/first", data=b"x")
+        assert followed.status_code == 200
+        assert hops == ["/first", "/second"]
+
+        hops.clear()
+        with pytest.raises(MaskedHTTPStatusError) as refused:
+            await handler.put("https://uploads.example/first", data=b"x", follow_redirects=False)
+        assert refused.value.status_code == 302
+        assert hops == ["/first"]
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_a_retried_put_stays_a_put_and_still_refuses_redirects():
+    """
+    The connection-error retry used to resend as POST through a client that follows redirects.
+
+    Storage answers a POST to a presigned PUT url with 403 or 405, so the batch looked
+    permanently rejected, and the redirect refusal the caller asked for was silently lost.
+    """
+    attempts: list[tuple[str, str]] = []  # mutable-ok: the fake transports record what they were asked for
+
+    async def refusing_transport(request: httpx.Request) -> httpx.Response:
+        attempts.append((request.method, request.url.path))
+        raise httpx.ConnectError("connection reset", request=request)
+
+    async def retry_transport(request: httpx.Request) -> httpx.Response:
+        attempts.append((request.method, request.url.path))
+        if request.url.path == "/first":
+            return httpx.Response(302, request=request, headers={"location": "/second"})
+        return httpx.Response(200, request=request)
+
+    class HandlerWithFakeRetryClient(AsyncHTTPHandler):
+        def create_client(self, *args, **kwargs) -> httpx.AsyncClient:
+            return httpx.AsyncClient(transport=httpx.MockTransport(retry_transport), follow_redirects=True)
+
+    handler = HandlerWithFakeRetryClient()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(refusing_transport))
+    try:
+        with pytest.raises(MaskedHTTPStatusError) as refused:
+            await handler.put("https://uploads.example/first", data=b"x", follow_redirects=False)
+
+        assert refused.value.status_code == 302
+        assert attempts == [("PUT", "/first"), ("PUT", "/first")]
+    finally:
+        await handler.client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["https://example.com/final.json?next=1", "https://other.example/final.json?next=1"])
+async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_mock, monkeypatch, target):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    respx_mock.get("https://example.com/spec.json?original=1").respond(302, headers={"location": target})
+    destination = respx_mock.get(target).respond(200, json={"paths": {}})
+    handler = AsyncHTTPHandler()
+    try:
+        response = await handler.get(
+            "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
+            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
+        )
+    finally:
+        await handler.close()
+    assert response.json() == {"paths": {}}
+    request = destination.calls[0].request
+    assert request.headers.get("authorization") == (None if "other.example" in target else "Bearer sentinel")
+    assert request.headers["accept-encoding"] == "identity"
+    assert str(request.url) == target
+    assert request.extensions["timeout"]["read"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_stops_redirect_loops(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route = respx_mock.get("https://example.com/spec.json").respond(302, headers={"location": "/spec.json"})
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(ValueError, match="Too many redirects"):
+            await handler.get("https://example.com/spec.json", max_response_bytes=100, follow_redirects=True)
+    finally:
+        await handler.close()
+    assert route.call_count == 11
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_closes_stream_on_cancellation(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    started = asyncio.Event()
+    closed = asyncio.Event()
+
+    class SlowStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"x"
+            started.set()
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            closed.set()
+
+    respx_mock.get("https://example.com/slow.json").respond(200, stream=SlowStream())
+    handler = AsyncHTTPHandler()
+    try:
+        task = asyncio.create_task(handler.get("https://example.com/slow.json", max_response_bytes=100))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        await handler.close()
+    assert closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_http2_flag_bypasses_aiohttp_transport(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+    monkeypatch.delenv("LITELLM_HTTP2", raising=False)
+    monkeypatch.delenv("DISABLE_AIOHTTP_TRANSPORT", raising=False)
+
+    monkeypatch.setattr(litellm, "http2", True)
+    assert AsyncHTTPHandler._should_use_aiohttp_transport() is False
+    assert AsyncHTTPHandler._create_async_transport() is None
+
+    monkeypatch.setattr(litellm, "http2", False)
+    monkeypatch.setenv("LITELLM_HTTP2", "True")
+    assert AsyncHTTPHandler._should_use_aiohttp_transport() is False
+    assert AsyncHTTPHandler._create_async_transport() is None
+
+
+@pytest.mark.asyncio
+async def test_http2_disabled_by_default(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "http2", False)
+    monkeypatch.delenv("LITELLM_HTTP2", raising=False)
+    monkeypatch.delenv("DISABLE_AIOHTTP_TRANSPORT", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+
+    assert AsyncHTTPHandler._should_use_aiohttp_transport() is True

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-category="${1:?usage: path_filter.sh <backend|client>}"
+category="${1:?usage: path_filter.sh <backend|client|provider-harness>}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 run_full() {
@@ -11,7 +11,7 @@ run_full() {
 
 [ -n "${CIRCLE_PULL_REQUEST:-}" ] || run_full "not a pull request"
 
-candidate_bases="main litellm_internal_staging litellm_oss_staging"
+candidate_bases="${PATH_FILTER_BASE_BRANCH:-main}"
 merge_base=""
 for base in $candidate_bases; do
   git fetch --quiet origin "$base" 2>/dev/null || continue
@@ -36,5 +36,5 @@ if [ "$decision" = run ]; then
   run_full "$category-relevant changes detected"
 fi
 
-echo "path-filter[$category]: only unrelated (docs/client) changes detected; halting job as successful"
+echo "path-filter[$category]: only unrelated changes detected; halting job as successful"
 circleci-agent step halt

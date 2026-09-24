@@ -30,6 +30,8 @@ import { ActivityMetrics, processActivityData } from "@/components/activity_metr
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
+import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
+import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
   gatewayDailyActivityCall,
@@ -44,8 +46,7 @@ import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
-import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
-import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
+import { DailyData, MetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import {
   fetchedRangeKey,
@@ -61,7 +62,8 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
-import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
+import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
+import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 
@@ -248,6 +250,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   const loading = aggregatedLoading || paginatedResult.loading;
 
+  // Read through the same range stamp as the tiles, so the export is blocked from the first
+  // render of a new range rather than from whenever the fetch effect gets around to running.
+  const spendFetchState = {
+    coversRange: activeAggregated !== null || paginatedResult.coversRange,
+    cancelled: paginatedResult.cancelled,
+    failed: paginatedResult.failed,
+    apiKeyTruncation: getApiKeyTruncation(
+      userSpendData.metadata?.api_key_limit,
+      userSpendData.metadata?.total_api_keys,
+    ),
+  };
+  const exportBlockedReason = getExportBlockedReason(spendFetchState);
+
   // Clear isDateChanging when paginated data starts arriving
   useEffect(() => {
     if (aggregatedFailed && !paginatedResult.loading && paginatedResult.data.results.length > 0) {
@@ -407,53 +422,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [userSpendData.results]);
 
   // Calculate top API keys from the breakdown data
-  const topKeys = useMemo(() => {
-    const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
-        if (!keySpend[key]) {
-          keySpend[key] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {
-              key_alias: metrics.metadata.key_alias,
-              team_id: null,
-              user_email: metrics.metadata.user_email,
-              tags: metrics.metadata.tags || [],
-            },
-          };
-        }
-        keySpend[key].metrics.spend += metrics.metrics.spend;
-        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
-        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
-        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
-        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
-        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
-      });
-    });
-
-    return Object.entries(keySpend)
-      .map(([api_key, metrics]) => ({
-        api_key,
-        key_alias: keyActivityLabel(metrics.metadata),
-        tags: metrics.metadata.tags || [],
-        spend: metrics.metrics.spend,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, topKeysLimit);
-  }, [userSpendData.results, topKeysLimit]);
+  const topKeys = useMemo<TopKeyItem[]>(
+    () => getGlobalTopKeys(userSpendData.results, topKeysLimit),
+    [userSpendData.results, topKeysLimit],
+  );
 
   const sortedDailyResults = useMemo(
     () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
@@ -488,6 +460,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           <PaginationStatusAlerts
             isFetchingMore={paginatedResult.isFetchingMore}
             cancelled={paginatedResult.cancelled}
+            failed={paginatedResult.failed}
             progress={paginatedResult.progress}
             cancel={paginatedResult.cancel}
           />
@@ -524,10 +497,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Sparkles />
                       Ask AI
                     </Button>
-                    <Button variant="outline" onClick={() => setIsGlobalExportModalOpen(true)}>
-                      <Download />
-                      Export Data
-                    </Button>
+                    <span title={exportBlockedReason}>
+                      <Button
+                        variant="outline"
+                        disabled={exportBlockedReason !== undefined}
+                        onClick={() => setIsGlobalExportModalOpen(true)}
+                      >
+                        <Download />
+                        Export Data
+                      </Button>
+                    </span>
                   </div>
                 </div>
                 {/* Cost Panel */}
@@ -886,7 +865,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <ActivityMetrics modelMetrics={modelMetrics} />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
-                  <ActivityMetrics modelMetrics={keyMetrics} />
+                  <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={spendFetchState.apiKeyTruncation} />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />
