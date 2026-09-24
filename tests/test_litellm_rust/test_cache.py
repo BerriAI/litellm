@@ -50,6 +50,7 @@ from litellm.rust_bridge.response_cache import (
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.llms.custom_llm import CustomLLMItem
 from litellm.types.utils import EmbeddingResponse
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 from tests.test_litellm_rust.support.fake_gcs import FakeGcs
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.s3_stub import S3Stub
@@ -2199,3 +2200,43 @@ def test_native_facade_overridden_helpers_steer_its_own_methods(monkeypatch: pyt
     keyed.add_cache({"answer": "sub"}, **kwargs)
     assert keyed.get_cache(model="other") == {"answer": "sub"}
     assert resolved_kind(keyed) == "python_callback"
+
+
+_FINALIZER_READS_THE_FACADE: Final = """
+from types import SimpleNamespace
+
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.rust_bridge import _native, catalog
+from litellm.rust_bridge.catalog import CacheRule
+from litellm.rust_bridge.configuration import Rollout
+from litellm.types.caching import LiteLLMCacheType
+
+if {native}:
+    catalog.RULES = (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({{LiteLLMCacheType.LOCAL}})),)
+facade = _native.Cache(type=LiteLLMCacheType.LOCAL)
+
+
+class ReadsFacadeWhenCollected:
+    def __del__(self):
+        print("finalizer saw", type(facade.cache).__name__, flush=True)
+
+
+class Replacement(InMemoryCache):
+    pass
+
+
+backend = InMemoryCache()
+backend.finalizer = ReadsFacadeWhenCollected()
+facade.cache = backend
+del backend
+print(_native._CacheResolver(SimpleNamespace(cache=facade)).resolve().kind, flush=True)
+facade.cache = Replacement()
+print("replaced", flush=True)
+"""
+
+
+@pytest.mark.parametrize(("native", "kind"), [(False, "python_callback"), (True, "native")], ids=["python", "native"])
+def test_replacing_the_backend_lets_its_finalizer_read_the_facade(native: bool, kind: str) -> None:
+    result: Final = run_child_interpreter(_FINALIZER_READS_THE_FACADE.format(native=native), timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [kind, "finalizer saw Replacement", "replaced"], result.stderr

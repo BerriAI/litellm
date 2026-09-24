@@ -3129,6 +3129,7 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "aws-sdk-secretsmanager",
  "bytes",
  "criterion",

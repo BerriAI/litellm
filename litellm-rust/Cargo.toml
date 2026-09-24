@@ -48,6 +48,7 @@ litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" 
 litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
 
+arc-swap = "1.9.2"
 bytes = "1"
 http = "1"
 google-cloud-auth = { version = "1.16.0", default-features = false }

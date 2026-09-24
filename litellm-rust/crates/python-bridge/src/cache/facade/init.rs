@@ -1,5 +1,7 @@
 //! `Cache.__init__`.
 
+use std::sync::Arc;
+
 use litellm_host_python::json_loads;
 use pyo3::{
     PyTypeInfo,
@@ -8,7 +10,7 @@ use pyo3::{
     types::{PyBool, PyDict, PyList, PyString, PyTuple},
 };
 
-use super::{Cache, NativeStorage};
+use super::{Cache, NativeStorage, Storage};
 use crate::cache::{binding::ResolvedCache, guard::FacadeGuard};
 
 const PARAMETERS: [&str; 45] = [
@@ -405,9 +407,8 @@ pub(super) fn initialize(
             .getattr("LOCAL")?,
     };
     let type_name = cache_type.extract::<String>().ok();
-    if let Some(backend) = backend_for(&arguments, type_name.as_deref())? {
-        slf.get().set_backend(backend.unbind());
-    }
+    let published = backend_for(&arguments, type_name.as_deref())?
+        .map(|backend| slf.get().set_backend(backend.unbind()));
     register_cache_callbacks(py)?;
 
     let supported_call_types = match arguments.given("supported_call_types")? {
@@ -463,14 +464,14 @@ pub(super) fn initialize(
     {
         backend.bind(py).setattr("namespace", namespace)?;
     }
-    resolve_native(slf)
+    match &published {
+        Some(published) => resolve_native(slf, published),
+        None => Ok(()),
+    }
 }
 
-pub(super) fn resolve_native(slf: &Bound<'_, Cache>) -> PyResult<()> {
+pub(super) fn resolve_native(slf: &Bound<'_, Cache>, published: &Arc<Storage>) -> PyResult<()> {
     let py = slf.py();
-    if slf.get().backend(py).is_err() {
-        return Ok(());
-    }
     let resolved = py
         .import("litellm.rust_bridge.response_cache")?
         .getattr("resolve_native_runtime")?
@@ -484,5 +485,6 @@ pub(super) fn resolve_native(slf: &Bound<'_, Cache>) -> PyResult<()> {
     };
     let guard = FacadeGuard::capture(py, slf.as_any(), &service)?;
     slf.get()
-        .bind_native(py, NativeStorage::new(service, guard))
+        .bind_native(py, published, NativeStorage::new(service, guard));
+    Ok(())
 }

@@ -6,11 +6,12 @@ mod init;
 mod keys;
 mod steps;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use arc_swap::ArcSwapOption;
 use pyo3::{
     PyTraverseError, PyVisit,
-    exceptions::{PyAttributeError, PyException, PyRuntimeError},
+    exceptions::{PyAttributeError, PyException},
     prelude::*,
     sync::PyOnceLock,
     types::{PyDict, PyFrozenSet, PyString, PyTuple},
@@ -35,7 +36,7 @@ impl NativeStorage {
     }
 }
 
-struct Storage {
+pub(super) struct Storage {
     backend: Py<PyAny>,
     native: Option<NativeStorage>,
 }
@@ -54,7 +55,7 @@ pub(super) enum Binding {
     name = "Cache"
 )]
 pub(crate) struct Cache {
-    storage: Mutex<Option<Arc<Storage>>>,
+    storage: ArcSwapOption<Storage>,
 }
 
 pub(super) const SEMANTIC_SCOPE_EXCLUDED_PARAMS: [&str; 3] = ["messages", "prompt", "input"];
@@ -134,7 +135,7 @@ pub(super) fn override_of<'py>(
 
 impl Cache {
     fn storage(&self) -> Option<Arc<Storage>> {
-        self.storage.lock().ok().and_then(|storage| storage.clone())
+        self.storage.load_full()
     }
 
     pub(super) fn backend(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -143,29 +144,26 @@ impl Cache {
             .ok_or_else(missing_backend)
     }
 
-    fn set_backend(&self, backend: Py<PyAny>) {
-        if let Ok(mut storage) = self.storage.lock() {
-            *storage = Some(Arc::new(Storage {
-                backend,
-                native: None,
-            }));
-        }
+    pub(super) fn set_backend(&self, backend: Py<PyAny>) -> Arc<Storage> {
+        let published = Arc::new(Storage {
+            backend,
+            native: None,
+        });
+        self.storage.store(Some(Arc::clone(&published)));
+        published
     }
 
-    pub(super) fn bind_native(&self, py: Python<'_>, native: NativeStorage) -> PyResult<()> {
-        let mut storage = self
-            .storage
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("cache storage lock poisoned"))?;
-        let backend = storage
-            .as_ref()
-            .map(|storage| storage.backend.clone_ref(py))
-            .ok_or_else(missing_backend)?;
-        *storage = Some(Arc::new(Storage {
-            backend,
+    pub(super) fn bind_native(
+        &self,
+        py: Python<'_>,
+        published: &Arc<Storage>,
+        native: NativeStorage,
+    ) {
+        let bound = Arc::new(Storage {
+            backend: published.backend.clone_ref(py),
             native: Some(native),
-        }));
-        Ok(())
+        });
+        drop(self.storage.compare_and_swap(published, Some(bound)));
     }
 
     pub(super) fn native_service(
@@ -236,7 +234,7 @@ impl Cache {
     #[pyo3(signature = (*_args, **_kwargs))]
     fn __new__(_args: &Bound<'_, PyTuple>, _kwargs: Option<&Bound<'_, PyDict>>) -> Self {
         Self {
-            storage: Mutex::new(None),
+            storage: ArcSwapOption::empty(),
         }
     }
 
@@ -257,11 +255,11 @@ impl Cache {
     #[setter(cache)]
     fn assign_cache(slf: &Bound<'_, Self>, backend: Bound<'_, PyAny>) -> PyResult<()> {
         let py = slf.py();
-        slf.get().set_backend(backend.unbind());
+        let published = slf.get().set_backend(backend.unbind());
         if !slf.hasattr("type")? {
             return Ok(());
         }
-        match init::resolve_native(slf) {
+        match init::resolve_native(slf, &published) {
             Ok(()) => Ok(()),
             Err(error) if error.is_instance_of::<PyException>(py) => keys::debug(
                 py,
@@ -618,9 +616,7 @@ impl Cache {
     }
 
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        let Ok(storage) = self.storage.try_lock() else {
-            return Ok(());
-        };
+        let storage = self.storage.load();
         let Some(storage) = storage.as_ref() else {
             return Ok(());
         };
@@ -633,8 +629,6 @@ impl Cache {
     }
 
     fn __clear__(&self) {
-        if let Ok(mut storage) = self.storage.lock() {
-            *storage = None;
-        }
+        self.storage.store(None);
     }
 }
