@@ -51,6 +51,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
@@ -771,6 +772,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/provider",
         "/global/spend/tags",
         "/global/spend/all_tag_names",
+        "/spend/capture_rate",
     ]
 
     public_routes = frozenset(
@@ -2933,6 +2935,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Spreads the proxy's scheduled background jobs (spend flushes, budget resets, "
             "config reloads, exports) across a window instead of firing them together on "
             "every replica. On by default; set to tune the window, pin a job, or turn it off."
+        ),
+    )
+    spend_capture_rate_check: SpendCaptureRateCheckSettings | None = Field(
+        None,
+        description=(
+            "Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). "
+            "Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window "
+            "falls under the threshold (default 0.9). Off unless set."
         ),
     )
     maximum_spend_logs_retention_period: str | None = Field(

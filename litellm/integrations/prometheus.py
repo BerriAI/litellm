@@ -729,6 +729,15 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_zero_cost_requests_total"),
             )
 
+            self.litellm_spend_capture_rate = self._gauge_factory(
+                "litellm_spend_capture_rate",
+                (
+                    "Share of the provider's bill LiteLLM captured as spend over the scheduled check's window "
+                    "(captured spend / provider bill), by api_provider"
+                ),
+                labelnames=self.get_labels_for_metric("litellm_spend_capture_rate"),
+            )
+
             # Cache metrics
             self.litellm_cache_hits_metric = self._counter_factory(
                 name="litellm_cache_hits_metric",
@@ -2027,6 +2036,13 @@ class PrometheusLogger(CustomLogger):
             }
         )
         self.litellm_zero_cost_requests_total.labels(**labels).inc()
+
+    def set_spend_capture_rate(self, api_provider: str, capture_rate: float) -> None:
+        labels: Final = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric("litellm_spend_capture_rate"),
+            enum_values=UserAPIKeyLabelValues(api_provider=api_provider),
+        )
+        self.litellm_spend_capture_rate.labels(**labels).set(capture_rate)
 
     @staticmethod
     def _get_remaining_from_v3_rate_limit_headers(

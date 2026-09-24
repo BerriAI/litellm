@@ -24,6 +24,7 @@ class httpxSpecialProvider(str, Enum):
     Search = "search"
     MCP = "mcp"
     RAG = "rag"
+    ProviderBilling = "provider_billing"
     A2AProvider = "a2a_provider"
     AgentHealthCheck = "agent_health_check"
     A2A = "a2a"

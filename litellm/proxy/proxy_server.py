@@ -292,6 +292,7 @@ from litellm.constants import (
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
+    SPEND_CAPTURE_RATE_CHECK_JOB_ID,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -757,6 +758,9 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
     run_scheduled_daily_global_spend_reconcile,
 )
+from litellm.proxy.spend_tracking.spend_capture_rate import (
+    run_scheduled_spend_capture_rate_check,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     PendingSpendIncrement,
     active_spend_counter_batch,
@@ -855,6 +859,7 @@ from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     ModelDeprecationResponse,
 )
+from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     ClassifierPlugin,
@@ -10447,6 +10452,13 @@ class ProxyStartupEvent:
             prisma_client=prisma_client,
         )
 
+        cls._initialize_spend_capture_rate_check_job(
+            scheduler=scheduler,
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+            general_settings=general_settings,
+        )
+
         ### PTU DAILY ROLLUP ###
         from litellm.proxy.spend_tracking.ptu_feature_flag import (
             is_ptu_cost_attribution_enabled,
@@ -10816,6 +10828,54 @@ class ProxyStartupEvent:
             minute=30,
             timezone="UTC",
             id=DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
+        )
+
+    @classmethod
+    def _initialize_spend_capture_rate_check_job(
+        cls,
+        scheduler: AsyncIOScheduler,
+        proxy_logging_obj: ProxyLogging,
+        prisma_client: PrismaClient,
+        general_settings: Mapping[str, object],
+    ) -> None:
+        raw_settings: Final = general_settings.get("spend_capture_rate_check")
+        if raw_settings is None:
+            return
+        settings: Final = SpendCaptureRateCheckSettings.model_validate(raw_settings)
+
+        async def alert(message: str) -> None:
+            await proxy_logging_obj.alerting_handler(
+                message=message,
+                level="High",
+                alert_type=AlertType.failed_tracking_spend,
+            )
+
+        def publish(provider: str, capture_rate: float) -> None:
+            from litellm.integrations.prometheus import PrometheusLogger
+
+            for logger in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=PrometheusLogger):
+                if isinstance(logger, PrometheusLogger):
+                    logger.set_spend_capture_rate(api_provider=provider, capture_rate=capture_rate)
+
+        async def check() -> None:
+            await run_scheduled_spend_capture_rate_check(
+                prisma_client,
+                settings,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+                alert=alert,
+                publish=publish,
+            )
+
+        scheduler.add_job(
+            check,
+            "cron",
+            hour=1,
+            minute=15,
+            timezone="UTC",
+            id=SPEND_CAPTURE_RATE_CHECK_JOB_ID,
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
