@@ -222,13 +222,9 @@ export const applyToolDenyWrite = ({
   };
 };
 
-// Every checkbox write goes through here, decided on the GRANT not on what narrows it. A denylist
-// cannot grant a tool, so the deny write is only valid for a server the level grants independently
-// of any tool list — a direct server or one reached through an access group — that NO selected
-// toolset contributes tools to: the backend unions toolset tools into the allowlist, so clearing
-// the key while a toolset applies would leave a partial allowlist shape that denies nothing. Any
-// other shape keeps the standing-grant write instead: checking a tool records it under the
-// server's key rather than being a no-op.
+// A denylist cannot grant a tool, so the deny write is only valid for a server granted directly or
+// through an access group with no selected toolset feeding it (the backend unions toolset tools
+// into the allowlist). Every other shape keeps the allowlist write so checking a tool still grants it.
 export const applyToolCheckboxWrite = ({
   toolPermissions,
   deniedTools,
