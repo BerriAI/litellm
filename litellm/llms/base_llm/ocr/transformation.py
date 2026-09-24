@@ -10,10 +10,7 @@ from pydantic import PrivateAttr
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
-
-# DocumentType for OCR - callers pass a dict with
-# type="document_url", type="image_url" or type="file".
-DocumentType = dict[str, Any]
+DocumentType = Mapping[str, object]
 
 OCRRequestFormat = Literal["litellm", "native"]
 

@@ -47,13 +47,7 @@ def aocr(
     kwargs: dict[str, object],
 ) -> Coroutine[object, object, OCRResponse]: ...
 def ocr_health_check_document(model: str, custom_llm_provider: str | None) -> dict[str, object]: ...
-def ocr_passthrough_response(
-    model: str,
-    api_base: str,
-    endpoint: str,
-    status_code: int,
-    body: bytes,
-) -> dict[str, object] | None: ...
+def ocr_passthrough_response(model: str, endpoint: str, body: bytes) -> dict[str, object] | None: ...
 def embedding(
     request: LiteLLMEmbeddingRequest,
     args: tuple[object, ...],

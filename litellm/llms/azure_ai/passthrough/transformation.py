@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -13,6 +13,7 @@ from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
     get_azure_ai_auth_headers,
 )
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.passthrough.transformation import (
     BasePassthroughConfig,
     RelayShape,
@@ -21,9 +22,7 @@ from litellm.llms.base_llm.passthrough.transformation import (
     relayed_body,
     strip_leading_model_segment,
 )
-from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.bindings import native_exception_types
-from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_PASSTHROUGH_RESPONSE
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_PASSTHROUGH_RESPONSE, NativeOcrPassthroughResponse
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CallTypes, ImageResponse, StandardPassThroughResponseObject
@@ -93,10 +92,7 @@ FOUNDRY_RELAY_SHAPES: Final = (
 
 
 class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
-    def __init__(
-        self,
-        passthrough_ocr: Callable[..., Mapping[str, object] | None] | None = None,
-    ) -> None:
+    def __init__(self, passthrough_ocr: NativeOcrPassthroughResponse | None = None) -> None:
         super().__init__()
         self._passthrough_ocr: Final = passthrough_ocr
 
@@ -177,22 +173,15 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         )
         if passthrough_ocr is None or httpx_response.status_code != 200:
             return None
-        relayed_url: Final = httpx_response.request.url
-        relayed_origin: Final = str(relayed_url.copy_with(path="/", query=None, fragment=None)).rstrip("/")
         known_prefixes: Final = (model, model_group_from(logging_obj.litellm_params))
         native_endpoint: Final = strip_leading_model_segment(endpoint, known_prefixes)
-        native_errors: Final = native_exception_types() or ()
         try:
-            result: Final = passthrough_ocr(
-                model,
-                relayed_origin,
-                native_endpoint,
-                httpx_response.status_code,
-                httpx_response.content,
-            )
+            result: Final = passthrough_ocr(model, native_endpoint, httpx_response.content)
             ocr_response: Final = OCRResponse.model_validate(result) if result is not None else None
-        except (*native_errors, ValidationError) as error:
-            verbose_logger.warning("azure_ai passthrough: OCR body from %s is not costable: %s", relayed_url, error)
+        except (ValueError, RuntimeError) as error:
+            verbose_logger.warning(
+                "azure_ai passthrough: OCR body from %s is not costable: %s", httpx_response.request.url, error
+            )
             return None
         if ocr_response is None:
             return None

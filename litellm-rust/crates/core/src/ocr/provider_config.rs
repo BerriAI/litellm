@@ -1,27 +1,20 @@
-use std::collections::BTreeMap;
-
-use litellm_auth::{InputSource, Sourced};
-use litellm_core_utils::{
-    call_arguments::CallArguments,
-    get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
-};
+use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_llms::{
     aws_textract::ocr::{
         analyze_transformation::TextractAnalyzeDocumentConfig, common_utils::TextractOperation,
         transformation::TextractDetectTextConfig,
     },
     azure_ai::ocr::{
-        cohere_parse_transformation::AzureAICohereParseConfig,
+        cohere_parse_transformation::{AZURE_COHERE_PARSE_PATH, AzureAICohereParseConfig},
         document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig,
-        transformation::AzureAiOcrConfig,
+        transformation::{AZURE_AI_OCR_PATH, AzureAiOcrConfig},
     },
     base_llm::ocr::{
         error::Error,
         handler::{self, CallHooks, OcrClient},
-        settings::OcrSettings,
         transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrCredentialInputs, OcrDocument,
-            OcrResponseFormat, OcrTransportConfig, PreparedOcrRequest, ResolvedOcrCredentials,
+            BaseOcrConfig, LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
+            PreparedOcrRequest, ResolvedOcrCredentials,
         },
     },
     cohere::ocr::transformation::CohereParseConfig,
@@ -164,80 +157,34 @@ pub fn get_health_check_document(
         .get_health_check_document())
 }
 
-/// The URL the resolved Azure AI OCR config would call for `model` on
-/// `api_base`, used by the passthrough logger to tell whether a relayed
-/// response is OCR-costable.
-pub fn passthrough_url(
+/// Normalize a relayed Azure AI response into the LiteLLM OCR shape when
+/// `endpoint` is the OCR route of the model's resolved config.
+pub fn passthrough_response(
     model: &str,
-    api_base: &str,
-    settings: OcrSettings,
-) -> Result<String, Error> {
+    endpoint: &str,
+    body: &[u8],
+) -> Result<Option<LiteLLMOcrResponse>, Error> {
     let (model, config) = resolve_provider_config(model, Some("azure_ai"))?;
-    let arguments = CallArguments::default();
-    let request = PreparedOcrRequest {
-        model: model.clone(),
-        document: OcrDocument::DocumentUrl {
-            document_url: String::new(),
-            extra_fields: BTreeMap::new(),
-        },
-        connection: OcrConnection::new(
-            ResolvedOcrCredentials {
-                api_key: None,
-                api_base: Some(Sourced::new(api_base.to_owned(), InputSource::Deployment)),
-            },
-            OcrTransportConfig::default(),
-            settings,
-            std::sync::Arc::new(|_: &str| -> Option<String> { None }),
-        ),
-        caller_document: false,
-        optional_params: arguments.clone(),
-        input_sources: BTreeMap::new(),
-        azure_ad_token_provider: None,
+    let segments: Vec<&str> = endpoint
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let is_ocr_endpoint = match config {
+        OcrConfigKind::AzureAi => segments == AZURE_AI_OCR_PATH,
+        OcrConfigKind::AzureCohere => segments == AZURE_COHERE_PARSE_PATH,
+        OcrConfigKind::AzureDocumentIntelligence => {
+            segments == AzureDocumentIntelligenceOcrConfig::analyze_path(&model)?
+        }
+        other => {
+            let provider: &'static str = other.provider().into();
+            return Err(Error::InvalidProvider(provider.to_owned()));
+        }
     };
-    let environment: Vec<(String, String)> = Vec::new();
-    match config {
-        OcrConfigKind::AzureAi => AzureAiOcrConfig.get_complete_url(
-            &request,
-            &AzureAiOcrConfig.map_ocr_params(&arguments, &model)?,
-            &environment,
-        ),
-        OcrConfigKind::AzureCohere => AzureAICohereParseConfig.get_complete_url(
-            &request,
-            &AzureAICohereParseConfig.map_ocr_params(&arguments, &model)?,
-            &environment,
-        ),
-        OcrConfigKind::AzureDocumentIntelligence => AzureDocumentIntelligenceOcrConfig
-            .get_complete_url(
-                &request,
-                &AzureDocumentIntelligenceOcrConfig.map_ocr_params(&arguments, &model)?,
-                &environment,
-            ),
-        other => {
-            let provider: &'static str = other.provider().into();
-            Err(Error::InvalidProvider(provider.to_owned()))
-        }
+    if !is_ocr_endpoint {
+        return Ok(None);
     }
-}
-
-/// Normalize a relayed Azure AI OCR response body into the LiteLLM OCR shape.
-pub fn passthrough_transform(model: &str, body: &[u8]) -> Result<LiteLLMOcrResponse, Error> {
-    let (model, config) = resolve_provider_config(model, Some("azure_ai"))?;
-    match config {
-        OcrConfigKind::AzureAi => {
-            AzureAiOcrConfig.transform_ocr_response(&model, body, OcrResponseFormat::Litellm)
-        }
-        OcrConfigKind::AzureCohere => AzureAICohereParseConfig.transform_ocr_response(
-            &model,
-            body,
-            OcrResponseFormat::Litellm,
-        ),
-        OcrConfigKind::AzureDocumentIntelligence => AzureDocumentIntelligenceOcrConfig
-            .transform_ocr_response(&model, body, OcrResponseFormat::Litellm),
-        other => {
-            let provider: &'static str = other.provider().into();
-            Err(Error::InvalidProvider(provider.to_owned()))
-        }
-    }
+    with_config!(config, config => config.transform_ocr_response(&model, body, OcrResponseFormat::Litellm))
+        .map(Some)
 }
 
 #[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, PartialEq, Eq)]
@@ -604,50 +551,67 @@ mod tests {
         assert_eq!(error.http_status_code(), Some(400));
     }
 
-    fn passthrough_url_for(model: &str, api_base: &str) -> String {
-        passthrough_url(model, api_base, OcrSettings::default()).unwrap()
+    #[rstest]
+    #[case("azure_ai/mistral-document-ai-2512", "providers/mistral/azure/ocr")]
+    #[case("azure_ai/mistral-document-ai-2512", "/providers/mistral/azure/ocr/")]
+    #[case("azure_ai/Cohere-parse-v5", "providers/cohere/v2/parse")]
+    #[case(
+        "azure_ai/doc-intelligence/prebuilt-layout",
+        "documentintelligence/documentModels/prebuilt-layout:analyze"
+    )]
+    fn passthrough_response_recognizes_the_resolved_config_ocr_route(
+        #[case] model: &str,
+        #[case] endpoint: &str,
+    ) {
+        assert!(passthrough_response(model, endpoint, b"not json").is_err());
     }
 
     #[rstest]
-    #[case(
-        "azure_ai/mistral-document-ai-2512",
-        "https://foundry.services.ai.azure.com",
-        "/providers/mistral/azure/ocr"
-    )]
-    #[case(
-        "azure_ai/Cohere-parse-v5",
-        "https://foundry.services.ai.azure.com",
-        "/providers/cohere/v2/parse"
-    )]
+    #[case("azure_ai/mistral-document-ai-2512", "models/info")]
+    #[case("azure_ai/mistral-document-ai-2512", "providers/cohere/v2/parse")]
+    #[case("azure_ai/Cohere-parse-v5", "providers/mistral/azure/ocr")]
     #[case(
         "azure_ai/doc-intelligence/prebuilt-layout",
-        "https://foundry.services.ai.azure.com",
-        "/documentintelligence/documentModels/prebuilt-layout:analyze"
+        "documentintelligence/documentModels/prebuilt-read:analyze"
     )]
-    fn passthrough_url_builds_the_resolved_provider_ocr_endpoint(
-        #[case] model: &str,
-        #[case] api_base: &str,
-        #[case] expected_path: &str,
-    ) {
-        let url = passthrough_url_for(model, api_base);
-        assert_eq!(url::Url::parse(&url).unwrap().path(), expected_path);
+    fn passthrough_response_skips_other_routes(#[case] model: &str, #[case] endpoint: &str) {
+        assert!(
+            passthrough_response(model, endpoint, b"not json")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
-    fn passthrough_transform_normalizes_the_provider_body() {
+    fn passthrough_response_normalizes_the_mistral_body() {
         let body = br#"{
             "pages": [{"index": 0, "markdown": "page one"}, {"index": 1, "markdown": "page two"}],
             "model": "mistral-document-ai-2512",
             "usage_info": {"pages_processed": 2}
         }"#;
-        let response = passthrough_transform("azure_ai/mistral-document-ai-2512", body).unwrap();
-        let json = response.into_json();
+        let json = passthrough_response(
+            "azure_ai/mistral-document-ai-2512",
+            "providers/mistral/azure/ocr",
+            body,
+        )
+        .unwrap()
+        .unwrap()
+        .into_json();
         assert_eq!(json["usage_info"]["pages_processed"], 2);
         assert_eq!(json["pages"][0]["markdown"], "page one");
     }
 
     #[test]
-    fn passthrough_transform_rejects_unparseable_bodies() {
-        assert!(passthrough_transform("azure_ai/mistral-document-ai-2512", b"not json").is_err());
+    fn passthrough_response_counts_cohere_billed_pages() {
+        let body = br#"{"id": "parse-1", "pages": [], "meta": {"billed_units": {"pages": 3}}}"#;
+        let json = passthrough_response(
+            "azure_ai/Cohere-parse-v5",
+            "providers/cohere/v2/parse",
+            body,
+        )
+        .unwrap()
+        .unwrap()
+        .into_json();
+        assert_eq!(json["usage_info"]["pages_processed"], 3);
     }
 }

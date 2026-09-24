@@ -122,25 +122,13 @@ pub(crate) fn ocr_health_check_document(
 pub(crate) fn ocr_passthrough_response(
     py: Python<'_>,
     model: &str,
-    api_base: &str,
     endpoint: &str,
-    status_code: u16,
     body: &[u8],
 ) -> PyResult<Option<Py<PyAny>>> {
-    if status_code != 200 {
-        return Ok(None);
-    }
-    let url = provider_config::passthrough_url(model, api_base, ocr_settings(py)?)
-        .map_err(errors::to_pyerr)?;
-    let expected_path = format!("/{}", endpoint.trim_matches('/'));
-    let matches = url::Url::parse(&url)
-        .map(|url| url.path() == expected_path)
-        .unwrap_or(false);
-    if !matches {
-        return Ok(None);
-    }
-    let response = provider_config::passthrough_transform(model, body).map_err(errors::to_pyerr)?;
-    to_py(py, &response.into_json()).map(Some)
+    provider_config::passthrough_response(model, endpoint, body)
+        .map_err(errors::to_pyerr)?
+        .map(|response| to_py(py, &response.into_json()))
+        .transpose()
 }
 
 #[cfg(test)]

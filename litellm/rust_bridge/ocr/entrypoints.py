@@ -58,14 +58,7 @@ class NativeOcrHealthCheckDocument(Protocol):
 
 
 class NativeOcrPassthroughResponse(Protocol):
-    def __call__(
-        self,
-        model: str,
-        api_base: str,
-        endpoint: str,
-        status_code: int,
-        body: bytes,
-    ) -> Mapping[str, object] | None: ...
+    def __call__(self, model: str, endpoint: str, body: bytes) -> Mapping[str, object] | None: ...
 
 
 def _health_check_document_binding(value: object) -> NativeOcrHealthCheckDocument | None:
