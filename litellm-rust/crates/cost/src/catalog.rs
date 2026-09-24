@@ -4,10 +4,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::anthropic_cost::fast_speed_multiplier;
-use crate::azure_ai_cost::{
-    calculate_azure_model_router_flat_cost, is_azure_model_router, router_fee_entry_name,
-    router_fee_name,
-};
+use crate::azure_ai_cost::azure_ai_cost_per_token;
 use crate::azure_ai_image_cost::{
     AzureAiImageRequest, cost_calculator as azure_ai_image_cost_calculator,
 };
@@ -28,7 +25,7 @@ use crate::completion_input::{
 };
 use crate::custom_pricing::{CustomPricing, CustomTokenRates, cost_from_chat_usage};
 use crate::dashscope_cost::cost_per_token as dashscope_cost_per_token;
-use crate::databricks_cost::registry_key as databricks_registry_key;
+use crate::databricks_cost::databricks_cost_per_token;
 use crate::error::CostError;
 use crate::fal_ai_image_cost::{
     cost_calculator as fal_ai_image_cost_calculator,
@@ -43,6 +40,7 @@ use crate::image_response_cost::{
     gemini_image_generation_cost, resolve_image_model_info, vertex_image_edit_cost,
     vertex_image_generation_cost,
 };
+use crate::lemonade_cost::lemonade_cost_per_token;
 use crate::model_selection::{
     ModelSelectionRequest, get_provider_for_cost_calc, select_model_name_for_cost_calc,
 };
@@ -74,12 +72,10 @@ use crate::speech_cost::{
 };
 use crate::together_cost::{
     TogetherThresholds, get_model_params_and_category, has_together_registry_pricing,
+    together_ai_cost_per_token,
 };
 use crate::tool_cost_dispatch::{BuiltInToolCostRequest, get_cost_for_built_in_tools};
-use crate::vertex_cost::{
-    CostRoute, cost_per_character as vertex_cost_per_character,
-    cost_per_token as vertex_cost_per_token, cost_router as vertex_cost_router,
-};
+use crate::vertex_cost::{cost_per_token as vertex_cost_per_token, vertex_cost};
 use crate::xai_cost::{cost_per_token as xai_cost_per_token, reported_cost as xai_reported_cost};
 
 #[derive(Clone, Debug, Default)]
@@ -228,6 +224,26 @@ impl ModelInfoCatalog {
         Self { entries }
     }
 
+    pub fn entries(&self) -> &HashMap<String, Value> {
+        &self.entries
+    }
+
+    pub fn entry_for_key(&self, key: &str) -> &Value {
+        self.entries
+            .get(key)
+            .expect("key came from select_model_key")
+    }
+
+    pub fn entry(
+        &self,
+        model: &str,
+        provider: Option<&str>,
+        region: Option<&str>,
+    ) -> Option<&Value> {
+        self.select_model_key(model, provider, region)
+            .and_then(|key| self.entries.get(key))
+    }
+
     pub fn select_model_key<'a>(
         &'a self,
         model: &str,
@@ -350,7 +366,8 @@ impl ModelInfoCatalog {
                 request_model,
             } => {
                 if provider == Some(LlmProviders::VERTEX_AI) {
-                    return self.vertex_cost(
+                    return vertex_cost(
+                        self,
                         request,
                         call_type,
                         prompt_characters,
@@ -364,10 +381,10 @@ impl ModelInfoCatalog {
                             | Some(crate::call_type::CallTypes::aembedding)
                     )
                 {
-                    return self.together_ai_cost_per_token(request, call_type);
+                    return together_ai_cost_per_token(self, request, call_type);
                 }
                 if provider == Some(LlmProviders::AZURE_AI) {
-                    return self.azure_ai_cost_per_token(request, request_model);
+                    return azure_ai_cost_per_token(self, request, request_model);
                 }
                 Ok(self.cost_per_token(request)?)
             }
@@ -434,122 +451,6 @@ impl ModelInfoCatalog {
                 Ok((cost.prompt, cost.completion))
             }
         }
-    }
-
-    pub fn vertex_cost(
-        &self,
-        request: ModelCostRequest<'_>,
-        call_type: &str,
-        prompt_characters: Option<f64>,
-        completion_characters: Option<f64>,
-    ) -> Result<(f64, f64), CostError> {
-        if let Some(cost) = self
-            .select_model_key(request.model, request.provider, request.region)
-            .and_then(|key| self.entries.get(key))
-            .and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
-        {
-            return Ok(cost);
-        }
-        if vertex_cost_router(request.model, request.provider.unwrap_or(""), call_type)
-            == CostRoute::PerToken
-        {
-            return self.cost_per_token(request);
-        }
-        let key = self
-            .select_model_key(request.model, request.provider, request.region)
-            .ok_or(CostError::ModelNotFound)?;
-        Ok(vertex_cost_per_character(
-            request.model,
-            request.usage,
-            &self.entries[key],
-            (prompt_characters, completion_characters),
-            request.service_tier,
-            request.vertex_location,
-            request.at,
-        ))
-    }
-
-    pub fn databricks_cost_per_token(
-        &self,
-        request: ModelCostRequest<'_>,
-    ) -> Result<(f64, f64), CostError> {
-        if let Some(cost) = self
-            .select_model_key(request.model, Some("databricks"), request.region)
-            .and_then(|key| self.entries.get(key))
-            .and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
-        {
-            return Ok(cost);
-        }
-        let key = self
-            .select_model_key(
-                databricks_registry_key(request.model),
-                Some("databricks"),
-                request.region,
-            )
-            .ok_or(CostError::ModelNotFound)?;
-        Ok(calculate_generic_cost_from_model_info_with_region(
-            request.usage,
-            &self.entries[key],
-            None,
-            false,
-            None,
-            None,
-            request.at,
-        ))
-    }
-
-    pub fn lemonade_cost_per_token(&self, _request: ModelCostRequest<'_>) -> (f64, f64) {
-        (0.0, 0.0)
-    }
-
-    pub fn azure_ai_cost_per_token(
-        &self,
-        request: ModelCostRequest<'_>,
-        request_model: Option<&str>,
-    ) -> Result<(f64, f64), CostError> {
-        let model_info = self
-            .select_model_key(request.model, Some("azure_ai"), request.region)
-            .and_then(|key| self.entries.get(key));
-        if let Some(cost) =
-            model_info.and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
-        {
-            return Ok(cost);
-        }
-        let (prompt, completion) = match model_info {
-            Some(info) => calculate_generic_cost_from_model_info_with_region(
-                request.usage,
-                info,
-                request.service_tier,
-                false,
-                request.data_residency,
-                request.vertex_location,
-                request.at,
-            ),
-            None if is_azure_model_router(request.model) => (0.0, 0.0),
-            None => return Err(CostError::ModelNotFound),
-        };
-        let fee = self
-            .azure_ai_router_fee(request.model, request_model, request.usage.prompt_tokens)?
-            .unwrap_or(0.0);
-        Ok((prompt + fee, completion))
-    }
-
-    pub fn azure_ai_router_fee(
-        &self,
-        model: &str,
-        request_model: Option<&str>,
-        prompt_tokens: u64,
-    ) -> Result<Option<f64>, CostError> {
-        let Some(fee_name) = router_fee_name(model, request_model) else {
-            return Ok(None);
-        };
-        let fee_entry = router_fee_entry_name(fee_name);
-        let fee_key = self
-            .select_model_key(fee_entry, Some("azure_ai"), None)
-            .ok_or(CostError::ModelNotFound)?;
-        let fee =
-            calculate_azure_model_router_flat_cost(fee_name, prompt_tokens, &self.entries[fee_key]);
-        Ok((fee > 0.0).then_some(fee))
     }
 
     pub fn speech_cost(
@@ -719,13 +620,13 @@ impl ModelInfoCatalog {
         }
         let provider = request.provider.and_then(LlmProviders::parse);
         if provider == Some(LlmProviders::AZURE_AI) {
-            return self.azure_ai_cost_per_token(request, None);
+            return azure_ai_cost_per_token(self, request, None);
         }
         if provider == Some(LlmProviders::DATABRICKS) {
-            return self.databricks_cost_per_token(request);
+            return databricks_cost_per_token(self, request);
         }
         if provider == Some(LlmProviders::LEMONADE) {
-            return Ok(self.lemonade_cost_per_token(request));
+            return Ok(lemonade_cost_per_token(self, request));
         }
         if provider == Some(LlmProviders::PERPLEXITY)
             && let Some(cost) = request.usage.cost
@@ -855,23 +756,6 @@ impl ModelInfoCatalog {
             1.0
         };
         Ok((cost.0 * speed, cost.1 * speed))
-    }
-
-    pub fn together_ai_cost_per_token(
-        &self,
-        request: ModelCostRequest<'_>,
-        call_type: &str,
-    ) -> Result<(f64, f64), CostError> {
-        if has_together_registry_pricing(request.model, &self.entries) {
-            return self.cost_per_token(request);
-        }
-        let category =
-            get_model_params_and_category(request.model, call_type, TogetherThresholds::default());
-        self.cost_per_token(ModelCostRequest {
-            model: &category,
-            provider: Some("together_ai"),
-            ..request
-        })
     }
 
     pub fn get_billed_token_rates(

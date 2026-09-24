@@ -5,7 +5,7 @@ use litellm_token_counter::{CountableRequest, TokenCounter};
 use serde_json::Value;
 
 use crate::a2a_cost::calculate_a2a_cost;
-use crate::azure_ai_cost::is_azure_model_router;
+use crate::azure_ai_cost::{azure_ai_router_fee, is_azure_model_router};
 use crate::billed_token_rates::TokenTypeCostBreakdown;
 use crate::catalog::{CostCall, ModelCostRequest, ModelInfoCatalog};
 use crate::completion_cost::{
@@ -810,7 +810,7 @@ pub fn completion_cost_from_response(
         },
     )?;
     let router_fee = (!is_search && provider == Some("azure_ai") && !is_azure_model_router(&model))
-        .then(|| catalog.azure_ai_router_fee(&model, request_model, usage.prompt_tokens))
+        .then(|| azure_ai_router_fee(catalog, &model, request_model, usage.prompt_tokens))
         .and_then(Result::ok)
         .flatten();
     let supplied_additional_costs = if is_search {

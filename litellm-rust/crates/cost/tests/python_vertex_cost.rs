@@ -1,6 +1,6 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/test_cost_calculator.py::test_vertex_uplift_composes_with_above_128k_pricing
+use litellm_cost::vertex_cost::vertex_cost;
 
 use std::collections::HashMap;
 
@@ -167,20 +167,18 @@ fn catalog_vertex_cost_routes_token_and_character_calls() {
         response_time_ms: None,
     };
     assert_eq!(
-        catalog
-            .vertex_cost(request("claude-model"), "completion", None, None)
-            .unwrap(),
+        vertex_cost(&catalog, request("claude-model"), "completion", None, None).unwrap(),
         (0.01, 0.01)
     );
     assert_eq!(
-        catalog
-            .vertex_cost(
-                request("gemini-3-model"),
-                "completion",
-                Some(100.0),
-                Some(50.0)
-            )
-            .unwrap(),
+        vertex_cost(
+            &catalog,
+            request("gemini-3-model"),
+            "completion",
+            Some(100.0),
+            Some(50.0),
+        )
+        .unwrap(),
         (0.01, 0.01)
     );
 }

@@ -1,7 +1,7 @@
 #![allow(clippy::disallowed_types)]
-
 // mirrors: test_litellm/llms/openai/test_cost_calculation.py::test_shipped_per_second_models_bill_a_non_zero_cost
 // mirrors: test_litellm/llms/databricks/test_databricks_cost_calculator.py
+use litellm_cost::lemonade_cost::lemonade_cost_per_token;
 
 use std::collections::HashMap;
 
@@ -134,7 +134,7 @@ fn lemonade_provider_is_free_for_unmapped_and_token_priced_models() {
         (0.0, 0.0)
     );
     assert_eq!(
-        catalog.lemonade_cost_per_token(request("duration", "lemonade", &usage)),
+        lemonade_cost_per_token(&catalog, request("duration", "lemonade", &usage)),
         (0.0, 0.0)
     );
     let elapsed = catalog

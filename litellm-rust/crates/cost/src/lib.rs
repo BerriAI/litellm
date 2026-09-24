@@ -59,6 +59,8 @@ pub mod image_response_cost;
 #[allow(clippy::disallowed_types)]
 pub mod interactions_usage;
 #[allow(clippy::disallowed_types)]
+pub mod lemonade_cost;
+#[allow(clippy::disallowed_types)]
 pub mod mcp_cost;
 #[allow(clippy::disallowed_types)]
 pub mod model_selection;

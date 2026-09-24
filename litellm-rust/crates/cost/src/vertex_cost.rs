@@ -1,7 +1,10 @@
 use jiff::Timestamp;
 use serde_json::Value;
 
+use crate::catalog::{ModelCostRequest, ModelInfoCatalog};
+use crate::error::CostError;
 use crate::generic_cost::calculate_generic_cost_from_model_info_with_region;
+use crate::per_second::per_second_pricing_cost;
 use crate::regional_uplift::get_vertex_regional_endpoint_uplift;
 use crate::responses_usage::ChatUsage;
 
@@ -121,4 +124,35 @@ pub fn cost_per_character(
         );
     let uplift = get_vertex_regional_endpoint_uplift(model_info, vertex_location);
     (input * uplift, output * uplift)
+}
+
+pub fn vertex_cost(
+    catalog: &ModelInfoCatalog,
+    request: ModelCostRequest<'_>,
+    call_type: &str,
+    prompt_characters: Option<f64>,
+    completion_characters: Option<f64>,
+) -> Result<(f64, f64), CostError> {
+    if let Some(cost) = catalog
+        .entry(request.model, request.provider, request.region)
+        .and_then(|info| per_second_pricing_cost(info, request.response_time_ms))
+    {
+        return Ok(cost);
+    }
+    if cost_router(request.model, request.provider.unwrap_or(""), call_type) == CostRoute::PerToken
+    {
+        return catalog.cost_per_token(request);
+    }
+    let entry = catalog
+        .entry(request.model, request.provider, request.region)
+        .ok_or(CostError::ModelNotFound)?;
+    Ok(cost_per_character(
+        request.model,
+        request.usage,
+        entry,
+        (prompt_characters, completion_characters),
+        request.service_tier,
+        request.vertex_location,
+        request.at,
+    ))
 }

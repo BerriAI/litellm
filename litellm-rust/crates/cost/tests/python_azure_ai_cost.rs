@@ -1,5 +1,6 @@
 #![allow(clippy::disallowed_types)]
 // mirrors: test_litellm/llms/azure_ai/test_azure_ai_cost_calculator.py::TestAzureModelRouterFlatCost
+use litellm_cost::azure_ai_cost::azure_ai_cost_per_token;
 use litellm_cost::error::CostError;
 
 use std::collections::HashMap;
@@ -100,16 +101,19 @@ fn azure_ai_cost_per_token_prices_unmapped_router_and_cached_prompt_once() {
     let usage = get_usage_object(&json!({"usage": {"prompt_tokens": 1000, "completion_tokens": 500, "cache_read_input_tokens": 200}}))
         .unwrap()
         .unwrap();
-    let actual = catalog()
-        .azure_ai_cost_per_token(request("azure-model-router", &usage, None), None)
-        .unwrap();
+    let actual = azure_ai_cost_per_token(
+        &catalog(),
+        request("azure-model-router", &usage, None),
+        None,
+    )
+    .unwrap();
     assert_eq!(actual, (1.0, 0.0));
-    let both_names = catalog()
-        .azure_ai_cost_per_token(
-            request("model_router/deployment", &usage, None),
-            Some("azure_ai/model-router"),
-        )
-        .unwrap();
+    let both_names = azure_ai_cost_per_token(
+        &catalog(),
+        request("model_router/deployment", &usage, None),
+        Some("azure_ai/model-router"),
+    )
+    .unwrap();
     assert_eq!(both_names, (1.0, 0.0));
 }
 
@@ -124,21 +128,21 @@ fn azure_ai_cost_per_token_adds_fee_for_routed_response_model_only_once() {
         .cost_per_token(request("routed", &usage, None))
         .unwrap();
     assert_eq!(response_only, (0.2, 0.06));
-    let routed = catalog
-        .azure_ai_cost_per_token(
-            request("routed", &usage, None),
-            Some("azure_ai/model_router"),
-        )
-        .unwrap();
+    let routed = azure_ai_cost_per_token(
+        &catalog,
+        request("routed", &usage, None),
+        Some("azure_ai/model_router"),
+    )
+    .unwrap();
     assert!((routed.0 - (response_only.0 + 100.0 * 0.001)).abs() < 1e-12);
     assert_eq!(routed.1, response_only.1);
     assert_eq!(
-        catalog
-            .azure_ai_cost_per_token(
-                request("model_router", &usage, None),
-                Some("azure_ai/model_router")
-            )
-            .unwrap(),
+        azure_ai_cost_per_token(
+            &catalog,
+            request("model_router", &usage, None),
+            Some("azure_ai/model_router"),
+        )
+        .unwrap(),
         (0.1, 0.0)
     );
 }
@@ -150,15 +154,18 @@ fn azure_ai_cost_per_token_passes_service_tier_to_response_model() {
             .unwrap()
             .unwrap();
     let catalog = catalog();
-    let standard = catalog
-        .azure_ai_cost_per_token(request("routed", &usage, None), Some("model-router"))
-        .unwrap();
-    let priority = catalog
-        .azure_ai_cost_per_token(
-            request("routed", &usage, Some("priority")),
-            Some("model-router"),
-        )
-        .unwrap();
+    let standard = azure_ai_cost_per_token(
+        &catalog,
+        request("routed", &usage, None),
+        Some("model-router"),
+    )
+    .unwrap();
+    let priority = azure_ai_cost_per_token(
+        &catalog,
+        request("routed", &usage, Some("priority")),
+        Some("model-router"),
+    )
+    .unwrap();
     assert!((priority.0 - (100.0 * 0.005 + 100.0 * 0.001)).abs() < 1e-12);
     assert!((priority.1 - 20.0 * 0.007).abs() < 1e-12);
     assert!(priority.0 > standard.0);
@@ -169,7 +176,11 @@ fn azure_ai_cost_per_token_passes_service_tier_to_response_model() {
 fn azure_ai_cost_per_token_rejects_unknown_non_router_model() {
     let catalog = catalog();
     assert_eq!(
-        catalog.azure_ai_cost_per_token(request("unknown", &ChatUsage::default(), None), None),
+        azure_ai_cost_per_token(
+            &catalog,
+            request("unknown", &ChatUsage::default(), None),
+            None
+        ),
         Err(CostError::ModelNotFound)
     );
 }
@@ -190,14 +201,14 @@ fn azure_ai_cost_per_token_preserves_wall_clock_precedence_over_router_fee() {
         get_usage_object(&json!({"usage": {"prompt_tokens": 100, "completion_tokens": 20}}))
             .unwrap()
             .unwrap();
-    let actual = catalog
-        .azure_ai_cost_per_token(
-            ModelCostRequest {
-                response_time_ms: Some(2000.0),
-                ..request("duration", &usage, None)
-            },
-            Some("model_router"),
-        )
-        .unwrap();
+    let actual = azure_ai_cost_per_token(
+        &catalog,
+        ModelCostRequest {
+            response_time_ms: Some(2000.0),
+            ..request("duration", &usage, None)
+        },
+        Some("model_router"),
+    )
+    .unwrap();
     assert_eq!(actual, (0.04, 0.0));
 }

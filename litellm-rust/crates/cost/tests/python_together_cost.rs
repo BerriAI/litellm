@@ -1,6 +1,7 @@
 #![allow(clippy::disallowed_types)]
 // mirrors: local_testing/test_completion_cost.py::test_together_ai_qwen_completion_cost
 use litellm_cost::error::CostError;
+use litellm_cost::together_cost::together_ai_cost_per_token;
 
 use std::collections::HashMap;
 
@@ -143,9 +144,8 @@ fn catalog_routes_embedding_to_size_category() {
         json!({"input_cost_per_token": 4e-8, "output_cost_per_token": 0.0}),
     )]));
     let usage = usage();
-    let (prompt, completion) = catalog
-        .together_ai_cost_per_token(request("model-200m", &usage), "aembedding")
-        .unwrap();
+    let (prompt, completion) =
+        together_ai_cost_per_token(&catalog, request("model-200m", &usage), "aembedding").unwrap();
     assert!((prompt - 100.0 * 4e-8).abs() < 1e-12);
     assert_eq!(completion, 0.0);
 }
