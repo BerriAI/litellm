@@ -235,6 +235,7 @@ class FakeDb:
 class FakePrismaClient:
     def __init__(self, objects: dict[str, StoredObject]) -> None:
         self.db = FakeDb(objects)
+        self.replica_db = self.db
 
 
 class FakeRouter:

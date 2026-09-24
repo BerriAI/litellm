@@ -170,6 +170,7 @@ def _prisma_with_models(rows, existing_sentinel_rows=()):
     daily.upsert = AsyncMock()
     daily.delete_many = AsyncMock()
     prisma.db = types.SimpleNamespace(litellm_proxymodeltable=model_table, litellm_dailyteamspend=daily)
+    prisma.replica_db = prisma.db
     return prisma, daily
 
 
@@ -757,6 +758,7 @@ def _prisma_for(model_rows, daily_table):
     model_table = MagicMock()
     model_table.find_many = AsyncMock(return_value=model_rows)
     prisma.db = types.SimpleNamespace(litellm_proxymodeltable=model_table, litellm_dailyteamspend=daily_table)
+    prisma.replica_db = prisma.db
     return prisma
 
 
