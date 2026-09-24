@@ -385,6 +385,10 @@ def _get_cached_prometheus_logger():
     return _PrometheusLogger
 
 
+class RawRequestCaptured(Exception):
+    pass
+
+
 _DEPLOYMENT_PRICING_KEYS: Final = (
     "input_cost_per_token",
     "output_cost_per_token",
@@ -591,6 +595,7 @@ class Logging(LiteLLMLoggingBaseClass):
         kwargs: dict | None = None,
         log_raw_request_response: bool = False,
         supports_correlation_logging: bool = True,
+        raw_request_only: bool = False,
     ):
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
@@ -651,6 +656,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
         self._litellm_internal_model_credentials: Mapping[str, object] | None = None
+        self.raw_request_only = raw_request_only
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
@@ -1476,6 +1482,9 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.error("LiteLLM.Logging: is sentry capture exception initialized %s", capture_exception)
             if capture_exception:  # log this error to sentry for debugging
                 capture_exception(e)
+
+        if self.raw_request_only:
+            raise RawRequestCaptured()
 
     def _print_llm_call_debugging_log(
         self,

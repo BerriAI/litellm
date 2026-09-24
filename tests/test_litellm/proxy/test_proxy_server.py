@@ -11205,6 +11205,49 @@ class TestTransformRequestBannedParams:
         )
 
 
+class TestTransformRequestOffEventLoop:
+    @pytest.fixture
+    def client(self):
+        mock_auth = UserAPIKeyAuth(user_id="test-internal", user_role=LitellmUserRoles.INTERNAL_USER)
+        original = app.dependency_overrides.copy()
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides = original
+
+    def test_transform_request_runs_return_raw_request_off_the_event_loop(self, client, monkeypatch):
+        import litellm.utils
+        from litellm.types.utils import RawRequestTypedDict
+
+        seen: dict[str, bool] = {}
+
+        def fake_return_raw_request(endpoint, kwargs):
+            try:
+                asyncio.get_running_loop()
+                seen["on_event_loop"] = True
+            except RuntimeError:
+                seen["on_event_loop"] = False
+            return RawRequestTypedDict(
+                raw_request_api_base="https://api.openai.com/v1/",
+                raw_request_body=kwargs,
+                raw_request_headers={},
+                error=None,
+            )
+
+        monkeypatch.setattr(litellm.utils, "return_raw_request", fake_return_raw_request)
+        response = client.post(
+            "/utils/transform_request",
+            json={
+                "call_type": "completion",
+                "request_body": {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hi"}]},
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["raw_request_body"]["model"] == "gpt-5.6-sol"
+        assert seen == {"on_event_loop": False}, "return_raw_request ran on the event loop thread"
+
+
 class TestSortModelsByDisplayName:
     """Regression: team BYOK rows persist an internal `model_name` like
     `model_name_{team_id}_{uuid}` and expose the user-facing name via
