@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import IO, Final, cast
 
-from httpx._types import RequestFiles  # pyright: ignore[reportPrivateImportUsage]  # same source the base transform classes use
+from httpx._types import (
+    RequestFiles,  # pyright: ignore[reportPrivateImportUsage]  # same source the base transform classes use
+)
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.token_counter import get_image_type

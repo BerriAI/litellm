@@ -26,9 +26,9 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _DEPLOYMENT_PRICING_KEYS,  # pyright: ignore[reportPrivateUsage]  # declared-pricing key set shared with sibling calculators
     BilledTokenRates,
     CostCalculatorUtils,
-    _DEPLOYMENT_PRICING_KEYS,  # pyright: ignore[reportPrivateUsage]  # declared-pricing key set shared with sibling calculators
     _generic_cost_per_character,
     _get_regional_uplift_multiplier,
     _get_service_tier_cost_key,
