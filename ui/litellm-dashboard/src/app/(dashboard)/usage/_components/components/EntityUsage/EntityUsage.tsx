@@ -26,7 +26,7 @@ import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
 import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
-import type { EntityType } from "@/components/EntityUsageExport/types";
+import type { EntityType, ServerExport } from "@/components/EntityUsageExport/types";
 import {
   agentDailyActivityCall,
   customerDailyActivityCall,
@@ -34,6 +34,7 @@ import {
   tagDailyActivityCall,
   teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
+  teamDailyActivityExportCall,
   userDailyActivityCall,
 } from "@/components/networking";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -673,7 +674,20 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
 
-  const spendFetchState = { coversRange, cancelled, failed, apiKeyTruncation };
+  const spendFetchState = { coversRange, cancelled, failed };
+
+  const serverExport: ServerExport | undefined =
+    entityType === "team" && apiKeyTruncation !== undefined && accessToken && startTime && endTime
+      ? (scope, format) =>
+          teamDailyActivityExportCall({
+            accessToken,
+            startTime,
+            endTime,
+            teamIds: entityFilterArg as string[] | null,
+            exportType: scope,
+            format,
+          })
+      : undefined;
 
   return (
     <div style={{ width: "100%" }} className="relative">
@@ -707,6 +721,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         filterOptions={getAllTags() || undefined}
         teams={teams || []}
         exportBlockedReason={getExportBlockedReason(spendFetchState)}
+        serverExport={serverExport}
       />
       <Tabs defaultValue={tabs[0].key}>
         <TabsList className="mt-1">

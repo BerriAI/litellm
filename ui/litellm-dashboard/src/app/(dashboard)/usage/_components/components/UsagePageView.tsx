@@ -252,14 +252,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   // Read through the same range stamp as the tiles, so the export is blocked from the first
   // render of a new range rather than from whenever the fetch effect gets around to running.
+  const apiKeyTruncation = getApiKeyTruncation(
+    userSpendData.metadata?.api_key_limit,
+    userSpendData.metadata?.total_api_keys,
+  );
   const spendFetchState = {
     coversRange: activeAggregated !== null || paginatedResult.coversRange,
     cancelled: paginatedResult.cancelled,
     failed: paginatedResult.failed,
-    apiKeyTruncation: getApiKeyTruncation(
-      userSpendData.metadata?.api_key_limit,
-      userSpendData.metadata?.total_api_keys,
-    ),
   };
   const exportBlockedReason = getExportBlockedReason(spendFetchState);
 
@@ -865,7 +865,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <ActivityMetrics modelMetrics={modelMetrics} />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
-                  <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={spendFetchState.apiKeyTruncation} />
+                  <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={apiKeyTruncation} />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />

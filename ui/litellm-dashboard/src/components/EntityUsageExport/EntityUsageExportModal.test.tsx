@@ -20,6 +20,7 @@ vi.mock("./utils", () => {
   return {
     handleExportCSV: vi.fn(),
     handleExportJSON: vi.fn(),
+    handleServerExport: vi.fn(async () => undefined),
     generateExportData: vi.fn(() => [{ Date: "2025-10-01" }]),
     generateMetadata: vi.fn(() => ({ meta: true })),
   };
@@ -112,6 +113,25 @@ describe("EntityUsageExportModal", () => {
     expect(handleExportCSV).toHaveBeenCalledWith(baseProps.spendData, "daily_with_models", "Tag", "tag", {});
 
     // Modal closes after export
+    expect(baseProps.onClose).toHaveBeenCalled();
+  });
+
+  it("routes the export through the server export when one is provided, so truncated key lists still export", async () => {
+    /**
+     * When the spend fetch was capped at the top-N keys, the caller supplies a
+     * serverExport that hits the uncapped export route. The modal must defer to
+     * it instead of generating a CSV from the truncated on-screen data.
+     */
+    const user = userEvent.setup();
+    const { handleExportCSV, handleServerExport } = await import("./utils");
+    const serverExport = vi.fn(async () => new Blob(["csv"]));
+
+    renderWithProviders(<EntityUsageExportModal {...baseProps} entityType="team" serverExport={serverExport} />);
+
+    await user.click(screen.getByRole("button", { name: /Export CSV/i }));
+
+    expect(handleServerExport).toHaveBeenCalledWith(serverExport, "daily", "team", "csv");
+    expect(handleExportCSV).not.toHaveBeenCalled();
     expect(baseProps.onClose).toHaveBeenCalled();
   });
 });

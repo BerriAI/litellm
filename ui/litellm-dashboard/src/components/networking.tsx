@@ -111,6 +111,7 @@ import type {
   CoordinationRedisTestResponse,
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
+import type { ExportFormat, ExportScope } from "./EntityUsageExport/types";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
@@ -1465,6 +1466,39 @@ export const teamDailyActivityAggregatedCall = async (
     console.error("Failed to fetch aggregated team daily activity:", error);
     throw error;
   }
+};
+
+export const teamDailyActivityExportCall = async ({
+  accessToken,
+  startTime,
+  endTime,
+  teamIds,
+  exportType,
+  format,
+}: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  teamIds: string[] | null;
+  exportType: ExportScope;
+  format: ExportFormat;
+}): Promise<Blob> => {
+  /**
+   * Server-side Team Usage export, not subject to the top-N key cap
+   */
+  return apiClient.get<Blob>(`/team/daily/activity/export`, {
+    accessToken,
+    responseType: "blob",
+    query: {
+      start_date: formatDate(startTime),
+      end_date: formatDate(endTime),
+      timezone: new Date().getTimezoneOffset().toString(),
+      export_type: exportType,
+      format,
+      team_id: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
+      exclude_team_ids: "litellm-dashboard",
+    },
+  });
 };
 
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
