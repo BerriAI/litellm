@@ -36,6 +36,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.oauth_utils import _redact_mcp_resource_url
+from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat, complete_call_tool_result
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     acting_user_auth,
     build_effective_auth_contexts,
@@ -82,6 +83,8 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
     ModifyResponseException,
     HTTPException,
 )
+
+_CLIENT_FORWARDED_TOKEN_AUTH_TYPES: Final = frozenset((MCPAuth.true_passthrough, MCPAuth.oauth_delegate))
 
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
@@ -1153,6 +1156,7 @@ if MCP_AVAILABLE:
                     route_type=CallTypes.call_mcp_tool.value,
                     proxy_logging_obj=proxy_logging_obj,
                     general_settings=general_settings,
+                    skip_guardrails=True,
                 )
 
                 # Extract MCP auth headers from request and add to data dict
@@ -1186,10 +1190,15 @@ if MCP_AVAILABLE:
                 )
                 if target_server is not None:
                     user_oauth_extra_headers = await _get_user_oauth_extra_headers(target_server, user_api_key_dict)
+                caller_oauth2_headers: Final = (
+                    MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
+                    if target_server is not None and target_server.auth_type in _CLIENT_FORWARDED_TOKEN_AUTH_TYPES
+                    else None
+                )
 
                 # Call execute_mcp_tool directly (permission checks already done)
                 _tool_start_time: Final = datetime.now()
-                result: Final = await execute_mcp_tool(
+                executed: Final = await execute_mcp_tool(
                     name=tool_name,
                     arguments=tool_arguments,
                     allowed_mcp_servers=allowed_mcp_servers,
@@ -1197,13 +1206,14 @@ if MCP_AVAILABLE:
                     user_api_key_auth=data.get("user_api_key_auth"),
                     mcp_auth_header=data.get("mcp_auth_header"),
                     mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
-                    oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
+                    oauth2_headers=user_oauth_extra_headers or caller_oauth2_headers,
                     raw_headers=data.get("raw_headers"),
                     client_ip=IPAddressUtils.get_mcp_client_ip(request),
                     litellm_logging_obj=data.get("litellm_logging_obj"),
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(data),
                     requested_server_id=canonical_server_id,
                 )
+                result: Final = complete_call_tool_result(executed, WireCompat.LEGACY)
             except Exception as e:
                 request_data: Final = proxy_base_llm_response_processor.data
                 await _safe_fire_mcp_tool_call_failure_logging(

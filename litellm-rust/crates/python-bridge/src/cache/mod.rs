@@ -20,9 +20,7 @@ use pyo3::{
     types::PyDict,
 };
 
-pub(crate) use self::{
-    binding::ResolvedCache, handle::CacheTestHandle, resolver::CacheTestResolver,
-};
+pub(crate) use self::{binding::ResolvedCache, handle::CacheTestHandle, resolver::CacheResolver};
 
 fn cache_error(error: Error) -> PyErr {
     match error {

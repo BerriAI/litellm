@@ -111,6 +111,13 @@ _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
 _MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
 
 
+def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
+    from litellm.proxy.proxy_server import origins  # noqa: PLC0415  # proxy imports this module during startup
+
+    if "*" not in origins and any(origin not in origins for origin in request.headers.getlist("origin")):
+        raise HTTPException(status_code=403, detail="Invalid Origin header")
+
+
 def unsupported_protocol_version(scope: Scope) -> str | None:
     """Return the unsupported ``MCP-Protocol-Version`` header value, if any.
 
@@ -138,6 +145,7 @@ try:
 
     from mcp import ReadResourceResult, Resource
     from mcp.server import Server
+    from mcp.server.runner import serve_loop
     from mcp.server.session import ServerSession as _McpServerSession
     from mcp.types import (
         BlobResourceContents,
@@ -497,6 +505,7 @@ if MCP_AVAILABLE:
         _invalidate_byok_cred_cache,
         _mcp_session_id_from_headers,
     )
+    from litellm.proxy._experimental.mcp_server.result_conversion import wire_compat_for
 
     try:
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -509,6 +518,7 @@ if MCP_AVAILABLE:
         GetPromptRequestParams,
         Implementation,
         InitializeRequest,
+        InputRequiredResult,
         ListPromptsResult,
         ListResourcesResult,
         ListResourceTemplatesResult,
@@ -811,7 +821,15 @@ if MCP_AVAILABLE:
                 client_ip,
             ) = await get_or_extract_auth_context()
             yield operations.prepare_context(
-                auth, token, servers, server_headers, oauth_headers, headers, client_ip, _mcp_proxy_mode.get()
+                auth,
+                token,
+                servers,
+                server_headers,
+                oauth_headers,
+                headers,
+                client_ip,
+                _mcp_proxy_mode.get(),
+                wire_compat_for(ctx.protocol_version),
             )
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:
@@ -868,7 +886,9 @@ if MCP_AVAILABLE:
         _dispatch_virtual_mcp_tool,
     )
 
-    async def mcp_server_tool_call(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    async def mcp_server_tool_call(
+        ctx: ServerRequestContext, params: CallToolRequestParams
+    ) -> CallToolResult | InputRequiredResult:
         async with _legacy_operation_context(ctx, trace=True) as context:
             return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
                 CallToolRequest(params=params), context
@@ -1931,6 +1951,7 @@ if MCP_AVAILABLE:
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
+            reject_disallowed_mcp_origin(StarletteRequest(scope))
             bad_version: Final = unsupported_protocol_version(scope)
             if bad_version is not None:
                 supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
@@ -2275,6 +2296,7 @@ if MCP_AVAILABLE:
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
         try:
+            reject_disallowed_mcp_origin(StarletteRequest(scope))
             bad_version: Final = unsupported_protocol_version(scope)
             if bad_version is not None:
                 supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
@@ -2375,8 +2397,17 @@ if MCP_AVAILABLE:
                 scoped_server_endpoint=scoped_server_endpoint,
                 is_initialize=scope.get("method") == "GET",
             ):
-                async with sse.connect_sse(transport_scope, receive, send) as (read_stream, write_stream):
-                    await server.run(read_stream, write_stream, server.create_initialization_options())
+                async with (
+                    sse.connect_sse(transport_scope, receive, send) as (read_stream, write_stream),
+                    server.lifespan(server) as lifespan_state,
+                ):
+                    await serve_loop(
+                        server,
+                        read_stream,
+                        write_stream,
+                        lifespan_state=lifespan_state,
+                        init_options=server.create_initialization_options(),
+                    )
         except MCPUpstreamAuthError as e:
             # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.

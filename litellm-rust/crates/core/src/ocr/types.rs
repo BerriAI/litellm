@@ -25,9 +25,6 @@ pub enum OcrDocumentInput {
         file_name: Option<String>,
         mime_type: Option<String>,
     },
-    HostReader {
-        mime_type: Option<String>,
-    },
 }
 
 impl From<OcrDocument> for OcrDocumentInput {
@@ -43,12 +40,6 @@ impl From<PathBuf> for OcrDocumentInput {
             mime_type: None,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OcrFileContent {
-    pub bytes: Bytes,
-    pub file_name: Option<String>,
 }
 
 /// Caller-supplied connection overrides for a [`LiteLLMOcrRequest`], in the
