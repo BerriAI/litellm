@@ -5,6 +5,9 @@ Covers schema utilities, signing helpers, and credential resolution paths
 that require no real OCI credentials or network calls.
 """
 
+import sys
+import types
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -212,6 +215,132 @@ def test_get_oci_base_url_empty_region_falls_back_to_default(monkeypatch):
 def test_get_oci_base_url_accepts_valid_region(region):
     url = get_oci_base_url({"oci_region": region})
     assert url == f"https://inference.generativeai.{region}.oci.oraclecloud.com"
+
+
+_NON_COMMERCIAL_REALM_REGIONS = [
+    ("us-langley-1", "oraclegovcloud.com"),
+    ("us-gov-ashburn-1", "oraclegovcloud.com"),
+    ("uk-gov-london-1", "oraclegovcloud.uk"),
+]
+
+
+@pytest.mark.parametrize(("region", "second_level_domain"), _NON_COMMERCIAL_REALM_REGIONS)
+def test_get_oci_base_url_resolves_realm_from_region_via_sdk(monkeypatch, region, second_level_domain):
+    pytest.importorskip("oci.regions")
+    monkeypatch.delenv("OCI_DEFAULT_REALM", raising=False)
+    # Realm domains per the OCI Python SDK's oci.regions_definitions (v2.184.0, checked 2026-09-25)
+    url = get_oci_base_url({"oci_region": region})
+    assert url == f"https://inference.generativeai.{region}.oci.{second_level_domain}"
+
+
+@pytest.fixture
+def without_oci_sdk(monkeypatch):
+    monkeypatch.setitem(sys.modules, "oci", None)
+    monkeypatch.setitem(sys.modules, "oci.regions", None)
+
+
+@pytest.fixture
+def isolated_region_metadata(monkeypatch, tmp_path):
+    monkeypatch.delenv("OCI_REGION_METADATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    return tmp_path
+
+
+_LUKE_METADATA = '{"realmKey": "OC2", "realmDomainComponent": "oraclegovcloud.com", "regionKey": "LUF", "regionIdentifier": "us-luke-1"}'
+
+
+@pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
+def test_get_oci_base_url_without_sdk_uses_region_metadata_env(monkeypatch):
+    monkeypatch.setenv("OCI_REGION_METADATA", _LUKE_METADATA)
+    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    assert url == "https://inference.generativeai.us-luke-1.oci.oraclegovcloud.com"
+
+
+@pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
+def test_get_oci_base_url_without_sdk_region_metadata_leaves_other_regions_commercial(monkeypatch):
+    monkeypatch.setenv("OCI_REGION_METADATA", _LUKE_METADATA)
+    url = get_oci_base_url({"oci_region": "us-chicago-1"})
+    assert url == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
+
+
+@pytest.mark.usefixtures("without_oci_sdk")
+def test_get_oci_base_url_without_sdk_uses_regions_config_file(isolated_region_metadata):
+    oci_dir = isolated_region_metadata / ".oci"
+    oci_dir.mkdir()
+    (oci_dir / "regions-config.json").write_text(f"[{_LUKE_METADATA}]")
+    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    assert url == "https://inference.generativeai.us-luke-1.oci.oraclegovcloud.com"
+
+
+@pytest.mark.usefixtures("without_oci_sdk")
+def test_get_oci_base_url_without_sdk_keeps_valid_regions_config_entries_next_to_a_bad_one(isolated_region_metadata):
+    oci_dir = isolated_region_metadata / ".oci"
+    oci_dir.mkdir()
+    (oci_dir / "regions-config.json").write_text(f'[{{"regionIdentifier": "us-langley-1"}}, {_LUKE_METADATA}]')
+    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    assert url == "https://inference.generativeai.us-luke-1.oci.oraclegovcloud.com"
+
+
+@pytest.mark.usefixtures("without_oci_sdk")
+@pytest.mark.parametrize("content", [b"\xff\xfe\x00[", b'{"regionIdentifier": "us-luke-1"}', b"not json"])
+def test_get_oci_base_url_without_sdk_ignores_unusable_regions_config_file(isolated_region_metadata, content):
+    oci_dir = isolated_region_metadata / ".oci"
+    oci_dir.mkdir()
+    (oci_dir / "regions-config.json").write_bytes(content)
+    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    assert url == "https://inference.generativeai.us-luke-1.oci.oraclecloud.com"
+
+
+@pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
+def test_get_oci_base_url_without_sdk_defaults_to_commercial_realm():
+    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    assert url == "https://inference.generativeai.us-luke-1.oci.oraclecloud.com"
+
+
+@pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        '{"regionIdentifier": "us-luke-1", "realmDomainComponent": "evil.com/#"}',
+        '{"regionIdentifier": "us-luke-1", "realmDomainComponent": "ORACLEGOVCLOUD.COM"}',
+        '{"regionIdentifier": "us-luke-1"}',
+        "not json",
+    ],
+)
+def test_get_oci_base_url_without_sdk_ignores_invalid_region_metadata(monkeypatch, metadata):
+    monkeypatch.setenv("OCI_REGION_METADATA", metadata)
+    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    assert url == "https://inference.generativeai.us-luke-1.oci.oraclecloud.com"
+
+
+def _fake_oci_regions(endpoint_for=None):
+    module = types.ModuleType("oci.regions")
+    if endpoint_for is not None:
+        module.endpoint_for = endpoint_for
+    return module
+
+
+def test_get_oci_base_url_uses_sdk_region_registry_when_present(monkeypatch):
+    calls = []
+
+    def endpoint_for(service, region, service_endpoint_template):
+        calls.append((service, region))
+        return service_endpoint_template.format(region=region, secondLevelDomain="example.test")
+
+    monkeypatch.setitem(sys.modules, "oci", types.ModuleType("oci"))
+    monkeypatch.setitem(sys.modules, "oci.regions", _fake_oci_regions(endpoint_for))
+    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    assert url == "https://inference.generativeai.us-luke-1.oci.example.test"
+    assert calls == [("generative_ai_inference", "us-luke-1")]
+
+
+@pytest.mark.usefixtures("isolated_region_metadata")
+def test_get_oci_base_url_falls_back_to_metadata_when_sdk_registry_lacks_endpoint_for(monkeypatch):
+    monkeypatch.setitem(sys.modules, "oci", types.ModuleType("oci"))
+    monkeypatch.setitem(sys.modules, "oci.regions", _fake_oci_regions())
+    monkeypatch.setenv("OCI_REGION_METADATA", _LUKE_METADATA)
+    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    assert url == "https://inference.generativeai.us-luke-1.oci.oraclegovcloud.com"
 
 
 # ---------------------------------------------------------------------------
