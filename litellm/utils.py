@@ -212,6 +212,7 @@ def _get_cached_audio_utils():
     return _audio_utils_module
 
 
+from litellm.types.litellm_params import INTERNAL_KWARG_PREFIX
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -10124,7 +10125,7 @@ def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict:
     openai_params: Final = litellm.OPENAI_CHAT_COMPLETION_PARAMS
     default_params: Final = openai_params + all_litellm_params
     non_default_params: Final = {
-        k: v for k, v in kwargs.items() if k not in default_params
+        k: v for k, v in kwargs.items() if k not in default_params and not k.startswith(INTERNAL_KWARG_PREFIX)
     }  # model-specific params - pass them straight to the model/provider
 
     return non_default_params

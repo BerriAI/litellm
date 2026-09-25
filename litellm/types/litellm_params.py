@@ -1,5 +1,6 @@
 """LiteLLM-owned request kwargs declared as typed fields; types/utils.py splices these with the callback and pricing
-models and KWARG_ARTIFACTS into all_litellm_params."""
+models and KWARG_ARTIFACTS into all_litellm_params. Kwargs LiteLLM code introduces for its own use are named with
+INTERNAL_KWARG_PREFIX, which makes them LiteLLM-owned without a declaration here."""
 
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
@@ -48,6 +49,7 @@ RoutingStrategyName: TypeAlias = Literal[
     "lar1",
 ]
 
+INTERNAL_KWARG_PREFIX: Final = "_litellm_"
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
 

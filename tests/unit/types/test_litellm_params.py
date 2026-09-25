@@ -25,6 +25,7 @@ from litellm.types import utils as types_utils
 from litellm.types.caching import DynamicCacheControl
 from litellm.types.litellm_params import (
     ADDRESSED_RESPONSE_ID_FIELD,
+    INTERNAL_KWARG_PREFIX,
     LITELLM_OWNED_ROOTS,
     TRUSTED_CALLBACK_VARS_FIELD,
     CachingOptions,
@@ -289,6 +290,17 @@ def test_a_name_no_object_declares_reaches_the_provider() -> None:
     result: Final = CLASSIFIERS["completion"]({PROVIDER_KNOB: 1})  # mutable-ok: classifier input type
 
     assert result == MappingProxyType({PROVIDER_KNOB: 1})
+
+
+def test_an_undeclared_internal_prefixed_name_is_kept_out_of_provider_params() -> None:
+    undeclared: Final = f"{INTERNAL_KWARG_PREFIX}never_declared_anywhere"
+    lookalike: Final = f"provider{INTERNAL_KWARG_PREFIX}knob"
+    assert undeclared not in all_litellm_params
+    kwargs: Final = {undeclared: object(), PROVIDER_KNOB: 1, lookalike: 2}  # mutable-ok: classifier input type
+
+    result: Final = CLASSIFIERS["completion"](kwargs)
+
+    assert result == MappingProxyType({PROVIDER_KNOB: 1, lookalike: 2})
 
 
 def _cache_key_for_model_group(cache: Cache, model_group: str, options: CachingOptions) -> str:
