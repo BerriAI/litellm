@@ -598,3 +598,70 @@ async def test_discovery_lists_each_capability_with_the_same_caller(available):
     assert (result.capabilities.resources is not None) == (available in {"resources", "templates"})
     for listing in (tools, prompts, resources, templates):
         assert listing.await_args.args[0] is context
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
+async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(outcome):
+    from mcp.types import DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
+    from litellm.proxy._experimental.mcp_server import operations
+
+    ready = [asyncio.Event() for _ in range(4)]
+    closed = [asyncio.Event() for _ in range(4)]
+    release = asyncio.Event()
+    responses = (ListToolsResult(tools=[]), ListPromptsResult(prompts=[]), ListResourcesResult(resources=[]), ListResourceTemplatesResult(resource_templates=[]))
+
+    def listing(index):
+        async def run(*args, **kwargs):
+            ready[index].set()
+            try:
+                await release.wait()
+                if index == 0 and outcome == "failure":
+                    raise ValueError("discovery failed")
+                if outcome != "success":
+                    await asyncio.Event().wait()
+                return responses[index]
+            finally:
+                closed[index].set()
+        return run
+
+    with (
+        patch.object(operations, "_execute_handle_list_tools", side_effect=listing(0)) as tools,
+        patch.object(operations, "_execute_list_prompts", side_effect=listing(1)),
+        patch.object(operations, "_execute_list_resources", side_effect=listing(2)),
+        patch.object(operations, "_execute_list_resource_templates", side_effect=listing(3)),
+    ):
+        task = asyncio.create_task(GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="scoped"))))
+        try:
+            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in ready)), 1)
+            if outcome == "cancel":
+                task.cancel()
+            else:
+                release.set()
+            if outcome == "success":
+                result = await asyncio.wait_for(task, 1)
+                assert result.capabilities.model_dump(exclude_none=True) == {}
+            else:
+                with pytest.raises(asyncio.CancelledError if outcome == "cancel" else ValueError):
+                    await asyncio.wait_for(task, 1)
+            assert all(event.is_set() for event in closed)
+            assert tools.call_args.kwargs["log_list_tools_to_spendlogs"] is False
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_enabled", [False, True])
+async def test_tools_listing_preserves_explicit_spend_log_policy(log_enabled):
+    from mcp.types import PaginatedRequestParams
+    from litellm.proxy._experimental.mcp_server import operations
+
+    listing = AsyncMock(return_value=operations.AggregateToolListing(tools=[], outcomes={}))
+    with patch.object(operations, "_list_mcp_tools", listing):
+        result = await operations._execute_handle_list_tools(
+            prepare_context(UserAPIKeyAuth(user_id="caller")), PaginatedRequestParams(),
+            log_list_tools_to_spendlogs=log_enabled,
+        )
+    assert result.tools == []
+    assert listing.await_args.kwargs["log_list_tools_to_spendlogs"] is log_enabled

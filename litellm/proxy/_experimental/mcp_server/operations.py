@@ -2670,7 +2670,11 @@ class _McpDeniedDetail(TypedDict):
 
 
 async def _execute_handle_list_tools(
-    context: OperationContext, params: PaginatedRequestParams, host_progress_callback: ProgressCallback | None = None
+    context: OperationContext,
+    params: PaginatedRequestParams,
+    host_progress_callback: ProgressCallback | None = None,
+    *,
+    log_list_tools_to_spendlogs: bool = True,
 ) -> ListToolsResult:
     try:
         (
@@ -2713,7 +2717,7 @@ async def _execute_handle_list_tools(
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
-            log_list_tools_to_spendlogs=True,
+            log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
             list_tools_log_source="mcp_protocol",
             client_ip=_client_ip,
         )
@@ -3158,16 +3162,28 @@ class GatewayOperations:
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
             case DiscoverRequest():
-                tools: Final = await self.execute(ListToolsRequest(), context)
-                prompts: Final = (
-                    await self.execute(ListPromptsRequest(), context) if not context.mcp_proxy_mode else None
+                listings: Final = (
+                    ()
+                    if context.mcp_proxy_mode
+                    else (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest())
                 )
-                resources: Final = (
-                    await self.execute(ListResourcesRequest(), context) if not context.mcp_proxy_mode else None
+                tasks: Final = (
+                    asyncio.create_task(
+                        _execute_handle_list_tools(
+                            context,
+                            PaginatedRequestParams(),
+                            self._host_progress_callback,
+                            log_list_tools_to_spendlogs=False,
+                        )
+                    ),
+                    *(asyncio.create_task(self.execute(listing, context)) for listing in listings),
                 )
-                templates: Final = (
-                    await self.execute(ListResourceTemplatesRequest(), context) if not context.mcp_proxy_mode else None
-                )
+                try:
+                    results: Final = await asyncio.gather(*tasks)
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
                 return build_discovery(
                     configured=configured_versions(),
                     revision=context.protocol_version or "2025-11-25",
@@ -3175,11 +3191,18 @@ class GatewayOperations:
                     authorized_operations=GATEWAY_OPERATIONS,
                     upstream_versions=frozenset(MCP_LEGACY_VERSIONS),
                     capabilities=ServerCapabilities(
-                        tools=ToolsCapability() if tools.tools else None,
-                        prompts=PromptsCapability() if prompts is not None and prompts.prompts else None,
+                        tools=ToolsCapability()
+                        if any(isinstance(result, ListToolsResult) and result.tools for result in results)
+                        else None,
+                        prompts=PromptsCapability()
+                        if any(isinstance(result, ListPromptsResult) and result.prompts for result in results)
+                        else None,
                         resources=ResourcesCapability()
-                        if (resources is not None and resources.resources)
-                        or (templates is not None and templates.resource_templates)
+                        if any(
+                            (isinstance(result, ListResourcesResult) and result.resources)
+                            or (isinstance(result, ListResourceTemplatesResult) and result.resource_templates)
+                            for result in results
+                        )
                         else None,
                     ),
                 )
