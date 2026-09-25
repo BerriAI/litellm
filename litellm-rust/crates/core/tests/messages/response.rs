@@ -290,3 +290,32 @@ fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
         "{error:?}"
     );
 }
+
+#[rstest]
+#[case::unrelated_bad_request(400, "invalid tool signature", 1)]
+#[case::server_error(500, "invalid thinking signature", 1)]
+#[case::bounded_recovery(400, "invalid thinking signature", 2)]
+#[tokio::test]
+async fn thinking_recovery_is_specific_and_bounded(
+    call: MessagesCall,
+    #[case] status: u16,
+    #[case] message: &str,
+    #[case] attempts: usize,
+) {
+    let error = json!({"error": {"type": "invalid_request_error", "message": message}});
+    let upstream = upstream([
+        status_response(status, error.clone()),
+        status_response(status, error),
+    ])
+    .await;
+    let result = run(MessagesCall {
+        api_key: Some("sk-ant".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await;
+    assert!(
+        matches!(result, Err(Error::Transport(TransportError::Http { status: actual, .. })) if actual == status)
+    );
+    assert_eq!(received(&upstream).await.len(), attempts);
+}

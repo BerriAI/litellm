@@ -260,3 +260,133 @@ def test_native_messages_dispatches_each_callback_phase_once_when_logger_is_regi
     assert recorder.names.count("logging_hook") == 1
     assert recorder.names.count("log_success_event") == 1
     assert "log_failure_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+async def test_native_pre_request_hooks_share_the_callers_objects_and_chain_edits(
+    messages_server: RecordingServer,
+) -> None:
+    import asyncio
+
+    messages: Final = [{"role": "user", "content": "hello"}]
+    tools: Final = [{"name": "original", "input_schema": {"type": "object"}}]
+    renamed: Final = [{"name": "renamed", "input_schema": {"type": "object"}}]
+    task: Final = asyncio.current_task()
+
+    class Rewrite(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: object
+        ) -> dict[str, object]:
+            return {**kwargs, "messages": caller_messages}
+
+        async def async_pre_request_hook(
+            self, model: str, messages: object, kwargs: dict[str, object]
+        ) -> dict[str, object]:
+            assert asyncio.current_task() is task
+            assert kwargs["tools"] is tools
+            assert kwargs["litellm_params"] == {"custom_llm_provider": "anthropic"}
+            return {**kwargs, "tools": renamed, "max_tokens": 128}
+
+    class Observe(CustomLogger):
+        async def async_pre_request_hook(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
+            assert asyncio.current_task() is task
+            assert kwargs["tools"] is renamed
+            assert kwargs["max_tokens"] == 128
+            assert messages is caller_messages
+
+    caller_messages: Final = messages
+    litellm.callbacks.extend((Rewrite(), Observe()))
+    recorder: Final = RecordingLogger()
+    await litellm.anthropic.messages.acreate(
+        **arguments(messages_server, messages=messages, tools=tools, callbacks=[recorder])
+    )
+    assert_served_natively(messages_server)
+    assert messages_server.requests[0].body["tools"] == renamed
+    assert messages_server.requests[0].body["max_tokens"] == 128
+    assert request_body(recorder.wait_for("log_pre_api_call")[0].kwargs) == messages_server.requests[0].body
+
+
+@pytest.mark.asyncio
+async def test_native_pre_request_rejection_preserves_the_error_without_sending(
+    messages_server: RecordingServer,
+) -> None:
+    refused: Final = ValueError("pre-request refused")
+
+    class Reject(CustomLogger):
+        async def async_pre_request_hook(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
+            raise refused
+
+    messages_server.expected_requests = 0
+    litellm.callbacks.append(Reject())
+    recorder: Final = RecordingLogger()
+    with pytest.raises(ValueError, match="pre-request refused") as raised:
+        await litellm.anthropic.messages.acreate(**arguments(messages_server, callbacks=[recorder]))
+    assert raised.value is refused
+    assert messages_server.requests == []
+    failure: Final = await recorder.wait_for_async("async_log_failure_event")
+    assert len(failure) == 1
+    assert failure[0].kwargs["exception"] is refused
+    assert "async_log_success_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+async def test_native_pre_request_stream_conversion_preserves_content_and_billed_usage(
+    messages_server: RecordingServer,
+) -> None:
+    class Convert(CustomLogger):
+        async def async_pre_request_hook(
+            self, model: str, messages: object, kwargs: dict[str, object]
+        ) -> dict[str, object]:
+            return {**kwargs, "stream": False}
+
+    litellm.callbacks.append(Convert())
+    recorder: Final = RecordingLogger()
+    stream: Final = await litellm.anthropic.messages.acreate(
+        **arguments(messages_server, stream=True, callbacks=[recorder])
+    )
+    assert isinstance(stream, AsyncIterator)
+    chunks: Final = tuple([chunk async for chunk in stream])
+    assert chunks and b"event: message_stop" in chunks[-1]
+    assert_served_natively(messages_server)
+    assert messages_server.requests[0].body["stream"] is False
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert len(success) == 1
+    assert success[0].response.usage.completion_tokens == MESSAGES_RESPONSE["usage"]["output_tokens"]
+    assert success[0].response.usage.prompt_tokens == MESSAGES_RESPONSE["usage"]["input_tokens"]
+    assert success[0].response.choices[0].message.content == MESSAGES_RESPONSE["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stream_collects_a_cycle_through_retained_callback_headers(
+    messages_server: RecordingServer,
+) -> None:
+    import gc
+    import weakref
+
+    from tests.test_litellm_rust.support.requests import request_headers
+
+    class Capture(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.headers: dict[str, object] | None = None
+
+        def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
+            self.headers = request_headers(kwargs)
+
+    async def create_cycle() -> weakref.ReferenceType[object]:
+        observer: Final = Capture()
+        stream: Final = await litellm.anthropic.messages.acreate(
+            **arguments(messages_server, stream=True, callbacks=[observer])
+        )
+        assert observer.headers is not None
+        observer.headers["cycle"] = stream
+        return weakref.ref(stream)
+
+    from tests.test_litellm_rust.support.isolation import isolated_callback_registries
+
+    messages_server.enqueue(STREAM)
+    with isolated_callback_registries():
+        reference: Final = await create_cycle()
+        await drain_logging()
+    gc.collect()
+    assert reference() is None

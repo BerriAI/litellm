@@ -59,7 +59,7 @@ pub enum HostStep<V, S> {
 
 /// An in-process host: answers custom operations and observes the call without leaving
 /// the Rust runtime. Language hosts implement their own driver instead.
-pub trait Host<R: Protocol>: Send + Sync {
+pub trait Host<R: Protocol<Error: From<crate::MachineFault>>>: Send + Sync {
     fn project(&self) -> impl Future<Output = Result<R::Projection, R::Error>> + Send;
 
     /// Answers `op` through its reply, or fails the call.
@@ -92,10 +92,10 @@ pub trait Host<R: Protocol>: Send + Sync {
     }
 
     fn open(&self, _head: R::StreamHead) -> impl Future<Output = Result<Demand, R::Error>> + Send {
-        async { Ok(Demand::More) }
+        async { Err(crate::MachineFault::Unsupported("streaming").into()) }
     }
 
     fn deliver(&self, _chunk: R::Chunk) -> impl Future<Output = Result<Demand, R::Error>> + Send {
-        async { Ok(Demand::More) }
+        async { Err(crate::MachineFault::Unsupported("streaming").into()) }
     }
 }

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use super::{HostChannel, MachineFault};
+use super::HostChannel;
+use crate::MachineFault;
 use crate::{host::Reply, protocol::Protocol};
 use litellm_auth::{Error, ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 

@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use bytes::Bytes;
 use litellm_core::messages::{
     Error, MessagesCall, MessagesShaping, messages_body,
-    route::{Messages, MessagesOutput, MessagesStreamHead},
+    route::{BODY_FIELDS, Messages, MessagesOutput, MessagesStreamHead},
 };
 use litellm_host_python::{InvokeError, ProtocolHost, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
@@ -23,31 +23,6 @@ use crate::{
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
 const REQUEST_ERROR_MARKER: &str = "messages_request_error";
-
-const BODY_FIELDS: [&str; 22] = [
-    "max_tokens",
-    "metadata",
-    "stop_sequences",
-    "stream",
-    "system",
-    "temperature",
-    "thinking",
-    "tool_choice",
-    "tools",
-    "top_k",
-    "inference_geo",
-    "top_p",
-    "mcp_servers",
-    "context_management",
-    "compaction",
-    "container",
-    "output_format",
-    "speed",
-    "output_config",
-    "cache_control",
-    "reasoning_effort",
-    "safeguards",
-];
 
 fn merge_headers(
     forwarded: Option<Map<String, Value>>,
@@ -290,6 +265,20 @@ mod tests {
 
     fn map(value: Value) -> Map<String, Value> {
         serde_json::from_value(value).unwrap()
+    }
+
+    #[rstest]
+    #[case::abandoned(litellm_host::MachineFault::Abandoned)]
+    #[case::unsupported(litellm_host::MachineFault::Unsupported("streaming"))]
+    fn host_faults_are_internal_errors(#[case] fault: litellm_host::MachineFault) {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = Error::from(fault);
+            assert!(!error.is_request());
+            let mapped = native_error(py, error).unwrap();
+            assert!(mapped.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
+            assert!(!mapped.value(py).hasattr(REQUEST_ERROR_MARKER).unwrap());
+        });
     }
 
     #[rstest]

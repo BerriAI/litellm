@@ -4,7 +4,7 @@ use std::task::Poll;
 use futures_util::future::{AbortHandle, Abortable};
 use litellm_host::event::WireRequest;
 use litellm_host::event::{FailureOrigin, Timing, epoch_seconds};
-use litellm_host::host::{Demand, HostOp, HostStep, Reply};
+use litellm_host::host::{Demand, HostOp, HostStep, Reply, Verdict};
 use litellm_host::machine::{HostFailure, Machine, MachineStep};
 use litellm_host::protocol::Protocol;
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
@@ -49,6 +49,7 @@ enum Stage {
 enum Expect {
     Started,
     Arguments,
+    Params(Reply<serde_json::Map<String, serde_json::Value>>),
     Wire(Reply<WireRequest>),
     Emitted(Reply<()>),
     Response,
@@ -225,6 +226,10 @@ where
                 self.stage = Stage::Call;
                 self.resume_machine(py, None)
             }
+            (Expect::Params(reply), LifecycleStep::Params(params)) => {
+                reply.send(params);
+                self.resume_machine(py, None)
+            }
             (Expect::Wire(reply), LifecycleStep::Wire(wire)) => {
                 reply.send(*wire);
                 self.resume_machine(py, None)
@@ -304,8 +309,21 @@ where
                 answered(projected.map(|projection| reply.send(projection)))
             }
             HostOp::Custom(op) => answered(self.host.invoke(py, op)),
-            HostOp::PreRequest { .. } | HostOp::AfterResponse { .. } => {
-                return Err(missing_state());
+            HostOp::PreRequest { request, reply } => match self.adapter.pre_request(py, request) {
+                Ok(LifecycleStep::Params(params)) => {
+                    reply.send(params);
+                    Ok(Ok(()))
+                }
+                Ok(LifecycleStep::Await(awaitable)) => {
+                    self.pending = Some(Pending::Adapter(Expect::Params(reply)));
+                    return Ok(Next::Return(ExecutionStep::Await(awaitable)));
+                }
+                Ok(_) => return Err(missing_state()),
+                Err(error) => Err(error),
+            },
+            HostOp::AfterResponse { response, reply } => {
+                reply.send(Verdict::Return(*response));
+                Ok(Ok(()))
             }
             HostOp::BeforeSend {
                 wire,
@@ -570,7 +588,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use litellm_host::event::{MachineEvent, PublicRequest, RawResponse, RequestContext};
-    use litellm_host::machine::{CallMachine, MachineFault};
+    use litellm_host::{MachineFault, machine::CallMachine};
     use pyo3::exceptions::{PyBaseException, PyValueError};
     use pyo3::types::PyDict;
 

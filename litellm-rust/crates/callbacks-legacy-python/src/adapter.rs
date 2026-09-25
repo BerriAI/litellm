@@ -3,7 +3,7 @@
 //! `@client` path makes them.
 
 use litellm_host::event::{
-    FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest, epoch_seconds,
+    FailureOrigin, MachineEvent, PublicRequest, RequestContext, Timing, WireRequest, epoch_seconds,
 };
 use litellm_host_python::{
     LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, missing_state, to_py,
@@ -49,6 +49,7 @@ struct DeliveredStream {
 }
 
 enum Pending {
+    PreRequest(Box<PublicRequest>),
     DeploymentPreCall,
     DeploymentPostCall,
     DeploymentFailure,
@@ -293,15 +294,50 @@ impl PythonLifecycle for LegacyLogging {
         )?;
         self.logger = Some(result.logger()?);
         self.call.set_kwargs(result.kwargs()?);
+        self.call
+            .kwargs()
+            .bind(py)
+            .set_item("litellm_logging_obj", self.logger()?.object(py))?;
         if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPreCall);
             return Ok(LifecycleStep::Await(DeploymentHooks::before_call(
                 py,
+                self.logger()?,
                 self.call.kwargs(),
                 self.surface.call_type,
             )?));
         }
         self.prepare(py)
+    }
+
+    fn pre_request(
+        &mut self,
+        py: Python<'_>,
+        request: Box<PublicRequest>,
+    ) -> PyResult<LifecycleStep> {
+        if !self.asynchronous {
+            return Ok(LifecycleStep::Params(request.params));
+        }
+        let kwargs = self.call.kwargs().bind(py).copy()?;
+        for name in request.fields {
+            if !kwargs.contains(name)?
+                && let Some(value) = self.call.lookup(py, name)?
+            {
+                kwargs.set_item(name, value)?;
+            }
+        }
+        let params = PyDict::new(py);
+        params.set_item("custom_llm_provider", &request.custom_llm_provider)?;
+        kwargs.set_item("litellm_params", params)?;
+        let messages = match self.call.lookup(py, "messages")? {
+            Some(messages) => messages.unbind(),
+            None => to_py(py, &request.messages)?,
+        };
+        let awaitable = crate::python::DeploymentHooks::PreRequest
+            .call(py, (&request.model, messages, kwargs))?
+            .unbind();
+        self.pending = Some(Pending::PreRequest(request));
+        Ok(LifecycleStep::Await(awaitable))
     }
 
     fn before_send(
@@ -445,6 +481,29 @@ impl PythonLifecycle for LegacyLogging {
 
     fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep> {
         match self.pending.take().ok_or_else(missing_state)? {
+            Pending::PreRequest(request) => {
+                let returned = result?;
+                if returned.is_none(py) {
+                    return Ok(LifecycleStep::Params(request.params));
+                }
+                let view = returned.into_bound(py).cast_into::<PyDict>()?.copy()?;
+                if view.contains("litellm_params")? {
+                    view.del_item("litellm_params")?;
+                }
+                self.call.set_kwargs(view.unbind());
+                let params = request
+                    .fields
+                    .iter()
+                    .filter_map(|name| match self.call.kwargs().bind(py).get_item(name) {
+                        Ok(Some(value)) => {
+                            Some(from_py(&value).map(|value| (name.to_string(), value)))
+                        }
+                        Ok(None) => None,
+                        Err(error) => Some(Err(error)),
+                    })
+                    .collect::<PyResult<_>>()?;
+                Ok(LifecycleStep::Params(params))
+            }
             Pending::DeploymentPreCall => {
                 self.call
                     .set_kwargs(result?.into_bound(py).cast_into::<PyDict>()?.unbind());

@@ -130,12 +130,32 @@ def test_failure_handler_of_an_internal_call_leaves_the_outer_budget_reservation
     pending.close()
 
 
-CONTRACT_PATH: Final = (
-    Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
-)
+CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
 
 
 def test_the_rust_contract_matches_the_shim_signatures() -> None:
     contract: Final = TypeAdapter(dict[str, list[str]]).validate_json(CONTRACT_PATH.read_text())
 
     assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}
+
+
+@pytest.mark.asyncio
+async def test_deployment_hook_replacement_updates_the_logger_stream_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    logger: Final = _supplied_logger()
+    logger.stream = True
+
+    class Convert(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: object
+        ) -> dict[str, object]:
+            assert kwargs["litellm_logging_obj"] is logger
+            return {**kwargs, "stream": False}
+
+    monkeypatch.setattr(litellm, "callbacks", [Convert()])
+    result: Final = await legacy.before_deployment_call(
+        logger, {"litellm_logging_obj": logger, "stream": True}, "anthropic_messages"
+    )
+    assert isinstance(result, dict) and result["stream"] is False
+    assert logger.stream is False

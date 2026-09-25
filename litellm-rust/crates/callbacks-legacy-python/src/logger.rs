@@ -87,11 +87,12 @@ pub struct DeploymentHooks;
 impl DeploymentHooks {
     pub fn before_call(
         py: Python<'_>,
+        logger: &PythonLogger,
         kwargs: &Py<PyDict>,
         call_type: &str,
     ) -> PyResult<Py<PyAny>> {
         python::DeploymentHooks::BeforeDeploymentCall
-            .call(py, (kwargs, call_type))
+            .call(py, (logger.object(py), kwargs, call_type))
             .map(Bound::unbind)
     }
 

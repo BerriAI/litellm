@@ -175,6 +175,12 @@ class StreamingLogBuilder(Protocol):
     ) -> Coroutine[object, object, None]: ...
 
 
+class PreRequestHook(Protocol):
+    def __call__(
+        self, model: str, messages: object, kwargs: Mapping[str, object]
+    ) -> Awaitable[Mapping[str, object] | None]: ...
+
+
 class DeploymentHook(Protocol):
     def __call__(self, kwargs: dict[str, object], call_type: str) -> Awaitable[object]: ...
 
@@ -283,13 +289,37 @@ def is_internal_call() -> bool:
     return internal.get()
 
 
-def before_deployment_call(kwargs: dict[str, object], call_type: str) -> Awaitable[object]:
+async def pre_request_hooks(model: str, messages: object, kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm import callbacks
+    from litellm.integrations.custom_logger import CustomLogger
+
+    view: Mapping[str, object] = kwargs  # rebind-ok: each callback consumes the previous callback's returned view
+    for callback in callbacks:
+        if not isinstance(callback, CustomLogger):
+            continue
+        hook: Final = cast(  # cast-ok: preserve caller objects at the legacy hook boundary
+            PreRequestHook, callback.async_pre_request_hook
+        )
+        updated: Final = await hook(model, messages, view)
+        if updated is not None:
+            view = updated  # rebind-ok: preserve replacement dict identity across sequential hooks
+    return view
+
+
+async def before_deployment_call(logger: Logging, kwargs: dict[str, object], call_type: str) -> object:
+    from pydantic import TypeAdapter
+
     from litellm import utils
 
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
         DeploymentHook, utils.async_pre_call_deployment_hook
     )
-    return hook(kwargs, call_type)
+    result: Final = await hook(kwargs, call_type)
+    prepared: Final = TypeAdapter(dict[str, object]).validate_python(result)
+    stream: Final = prepared.get("stream")
+    if isinstance(stream, bool):
+        logger.stream = stream  # rebind-ok: synchronize the caller-owned logger after deployment hooks
+    return result
 
 
 def after_deployment_success(kwargs: dict[str, object], response: object, call_type: str) -> Awaitable[object]:

@@ -23,9 +23,9 @@ use super::{
     types::invalid_request,
 };
 
-struct ResolvedProvider {
+pub(super) struct ResolvedProvider {
     model: String,
-    provider: MessagesProvider,
+    pub(super) provider: MessagesProvider,
 }
 
 pub(super) struct ProviderMessagesRequest {
@@ -49,7 +49,7 @@ pub(super) async fn prepare(
     prepare_provider_request(call, resolved, secrets.as_ref())
 }
 
-fn resolve_provider(
+pub(super) fn resolve_provider(
     model: &str,
     custom_llm_provider: Option<&str>,
 ) -> Result<ResolvedProvider, Error> {

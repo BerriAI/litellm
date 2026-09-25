@@ -77,6 +77,21 @@ mod tests {
 
     use super::*;
 
+    #[rstest::rstest]
+    #[case::abandoned(litellm_host::MachineFault::Abandoned)]
+    #[case::unsupported(litellm_host::MachineFault::Unsupported("streaming"))]
+    fn host_faults_are_internal_errors(#[case] fault: litellm_host::MachineFault) {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = Error::from(fault);
+            assert!(!error.is_request());
+            assert_eq!(error.http_status_code(), None);
+            let mapped = to_pyerr(error);
+            assert!(mapped.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
+            assert!(!mapped.value(py).hasattr("status_code").unwrap());
+        });
+    }
+
     #[test]
     fn preserves_python_validation_and_provider_details() {
         Python::initialize();

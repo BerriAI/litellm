@@ -37,6 +37,8 @@ pub enum RouteError {
     Http(#[from] litellm_http::Error),
     #[error(transparent)]
     Secret(#[from] SecretError),
+    #[error(transparent)]
+    HostFault(#[from] litellm_host::MachineFault),
 }
 
 /// Whether the provider had already been called when the route failed. Before the send, a
@@ -63,7 +65,8 @@ impl RouteError {
             | Self::Auth(_)
             | Self::Headers(_)
             | Self::Http(_)
-            | Self::Secret(_) => Phase::BeforeSend,
+            | Self::Secret(_)
+            | Self::HostFault(_) => Phase::BeforeSend,
         }
     }
 
@@ -78,9 +81,11 @@ impl RouteError {
             | Self::Unsupported(_)
             | Self::Headers(_) => true,
             Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
-            Self::InvalidResponse(_) | Self::Transport(_) | Self::Http(_) | Self::Secret(_) => {
-                false
-            }
+            Self::InvalidResponse(_)
+            | Self::Transport(_)
+            | Self::Http(_)
+            | Self::Secret(_)
+            | Self::HostFault(_) => false,
         }
     }
 }

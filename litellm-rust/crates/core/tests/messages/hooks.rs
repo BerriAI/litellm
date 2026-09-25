@@ -384,3 +384,64 @@ async fn a_relayed_stream_is_never_offered_as_a_decoded_message(call: MessagesCa
     assert!(host.after_responses.lock().unwrap().is_empty());
     assert_eq!(host.delivered_text(), SSE_BODY);
 }
+
+#[rstest]
+#[tokio::test]
+async fn a_null_hook_value_removes_the_projected_field(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let host =
+        HookingHost::new(hooked(call, upstream.uri(), json!({}))).editing(json!({"tools": null}));
+    message_through(&host).await;
+    assert!(only_request(&upstream).await.json().get("tools").is_none());
+}
+
+#[rstest]
+#[tokio::test]
+async fn synthetic_events_preserve_tools_thinking_and_usage(call: MessagesCall) {
+    let blocks = json!([
+        {"type": "tool_use", "id": "tool-1", "name": "lookup", "input": {"query": "hello"}},
+        {"type": "thinking", "thinking": "reasoning", "signature": "signed"},
+        {"type": "redacted_thinking", "data": "opaque"},
+    ]);
+    let usage = json!({"input_tokens": 12, "output_tokens": 8, "cache_read_input_tokens": 7});
+    let body = Value::Object(
+        message_body()
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "content" | "usage"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .chain([
+                ("content".into(), blocks.clone()),
+                ("usage".into(), usage.clone()),
+            ])
+            .collect(),
+    );
+    let upstream = upstream([json_response(body)]).await;
+    let host = HookingHost::new(hooked(call, upstream.uri(), json!({"stream": true})))
+        .editing(json!({"stream": false}));
+    assert!(matches!(
+        run_hooked(&host).await.unwrap(),
+        MessagesOutput::Streamed
+    ));
+    let events: Vec<Value> = host
+        .delivered_text()
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect();
+    assert_eq!(
+        events[0]["message"]["usage"]["cache_read_input_tokens"],
+        usage["cache_read_input_tokens"]
+    );
+    assert_eq!(events[1]["content_block"]["id"], blocks[0]["id"]);
+    assert_eq!(
+        serde_json::from_str::<Value>(events[2]["delta"]["partial_json"].as_str().unwrap())
+            .unwrap(),
+        blocks[0]["input"]
+    );
+    assert_eq!(events[5]["delta"]["thinking"], blocks[1]["thinking"]);
+    assert_eq!(events[6]["delta"]["signature"], blocks[1]["signature"]);
+    assert_eq!(events[8]["content_block"], blocks[2]);
+    assert_eq!(events[10]["usage"], usage);
+}

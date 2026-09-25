@@ -4,7 +4,7 @@
 
 use std::{future::Future, pin::Pin};
 
-use litellm_coroutine::{Co, Coroutine, CoroutineState, ResumeError};
+use litellm_coroutine::{Co, Coroutine, CoroutineState};
 
 use super::{HostFailure, Interrupted, Machine, MachineStep, Step};
 use serde_json::{Map, Value};
@@ -15,14 +15,7 @@ use crate::{
     protocol::Protocol,
 };
 
-/// The machine's own failures, distinct from anything the provider call reports.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MachineFault {
-    /// The host dropped an op's reply unanswered, or went away while the call waited.
-    Abandoned,
-    /// The host resumed the call out of turn.
-    Protocol(ResumeError),
-}
+use crate::MachineFault;
 
 pub type ExecuteFuture<R> =
     Pin<Box<dyn Future<Output = Result<<R as Protocol>::Response, <R as Protocol>::Error>> + Send>>;

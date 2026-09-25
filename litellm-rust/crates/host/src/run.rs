@@ -11,6 +11,7 @@ pub async fn run<M, H>(
 ) -> Result<M::Complete, <M::Protocol as Protocol>::Error>
 where
     M: Machine,
+    <M::Protocol as Protocol>::Error: From<crate::MachineFault>,
     H: Host<M::Protocol>,
 {
     let start_time = epoch_seconds();
@@ -40,7 +41,10 @@ where
     outcome
 }
 
-async fn perform<R: Protocol, H: Host<R>>(host: &H, op: HostOp<R>) -> Result<(), R::Error> {
+async fn perform<R: Protocol<Error: From<crate::MachineFault>>, H: Host<R>>(
+    host: &H,
+    op: HostOp<R>,
+) -> Result<(), R::Error> {
     match op {
         HostOp::Project(reply) => host
             .project()
@@ -81,7 +85,7 @@ mod tests {
     use super::*;
     use crate::event::PublicRequest;
     use crate::host::{Reply, Verdict};
-    use crate::machine::{CallMachine, MachineFault};
+    use crate::{MachineFault, machine::CallMachine};
 
     struct Unit;
 
@@ -90,8 +94,8 @@ mod tests {
         type Error = &'static str;
         type Projection = ();
         type Op = (&'static str, Reply<()>);
-        type Chunk = std::convert::Infallible;
-        type StreamHead = std::convert::Infallible;
+        type Chunk = ();
+        type StreamHead = ();
     }
 
     impl From<MachineFault> for &'static str {
@@ -148,6 +152,13 @@ mod tests {
                 outcome
             })
         })
+    }
+
+    #[tokio::test]
+    async fn a_host_without_stream_support_refuses_instead_of_discarding_output() {
+        let host = Recording::default();
+        assert_eq!(host.open(()).await, Err("machine fault"));
+        assert_eq!(host.deliver(()).await, Err("machine fault"));
     }
 
     #[tokio::test]

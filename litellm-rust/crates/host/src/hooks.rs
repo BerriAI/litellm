@@ -2,7 +2,8 @@ use std::future::Future;
 
 use crate::{
     event::{MachineEvent, RequestContext, WireRequest},
-    machine::{HostChannel, MachineFault},
+    MachineFault,
+    machine::HostChannel,
     protocol::Protocol,
 };
 
