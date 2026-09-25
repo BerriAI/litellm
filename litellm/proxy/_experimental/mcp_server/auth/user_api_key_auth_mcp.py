@@ -2256,9 +2256,7 @@ class MCPRequestHandler:
                 else None
             )
 
-            key_tools: Final = _as_list(
-                MCPRequestHandler._union_tool_grants(key_direct_tools, key_toolset_tools)
-            )
+            key_tools: Final = _as_list(MCPRequestHandler._union_tool_grants(key_direct_tools, key_toolset_tools))
             team_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
                 if team_obj_perm
