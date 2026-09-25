@@ -7722,3 +7722,162 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
     users.create.assert_not_awaited()
     if existing_user:
         assert users.find_unique.await_count == (0 if warm_cache else 1)
+
+
+# --- B5: JWT algorithm allowlists (LIT-8429) ---
+
+
+def _okp_keypair_and_jwk() -> "tuple[object, dict]":
+    import json
+
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    jwk = {
+        **json.loads(__import__("jwt").algorithms.OKPAlgorithm.to_jwk(private_key.public_key())),
+        "kid": "ed",
+        "alg": "EdDSA",
+        "use": "sig",
+    }
+    return private_key, jwk
+
+
+def _eddsa_jwt(private_key: object, kid: str = "ed") -> str:
+    import jwt
+
+    current_time = int(time.time())
+    return jwt.encode(
+        {"sub": "test-subject", "iat": current_time, "exp": current_time + 300},
+        private_key,  # pyright: ignore[reportArgumentType]
+        algorithm="EdDSA",
+        headers={"kid": kid},
+    )
+
+
+def test_approved_jwt_algorithm_literal_matches_tuple():
+    from typing import get_args
+
+    from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, ApprovedJwtAlgorithm
+
+    assert set(get_args(ApprovedJwtAlgorithm)) == set(APPROVED_JWT_ALGORITHMS)
+
+
+def test_allowed_jwt_algorithms_drops_legacy_only_in_fips_mode():
+    from litellm.proxy.auth.jwt_algorithms import allowed_jwt_algorithms
+
+    assert "EdDSA" not in allowed_jwt_algorithms(True)
+    assert list(allowed_jwt_algorithms(False)) == JWTHandler.SUPPORTED_JWT_ALGORITHMS
+
+
+@pytest.mark.parametrize(
+    "key,algorithms,expected",
+    [
+        ({"kty": "RSA", "alg": "RS256", "kid": "a"}, ("RS256",), True),
+        ({"kty": "RSA", "alg": "HS256", "kid": "a"}, ("RS256", "ES256"), False),
+        ({"kty": "OKP", "alg": "EdDSA", "kid": "a"}, ("RS256", "ES256"), False),
+        ({"kty": "RSA", "kid": "a"}, ("RS256", "ES256"), True),
+        ({"kty": "EC", "kid": "a"}, ("RS256", "ES256"), True),
+        ({"kty": "EC", "kid": "a"}, ("RS256",), False),
+        ({"kty": "OKP", "kid": "a"}, ("RS256", "EdDSA"), True),
+        ({"kty": "OKP", "kid": "a"}, ("RS256", "ES256"), False),
+        ({"kty": "oct", "kid": "a"}, ("RS256", "HS256"), False),
+        ({"kid": "a"}, ("RS256",), False),
+    ],
+)
+def test_jwks_keys_for_filters_by_declared_or_inferred_algorithm(key, algorithms, expected):
+    from litellm.proxy.auth.jwt_algorithms import jwks_keys_for
+
+    assert list(jwks_keys_for([key], algorithms)) == ([key] if expected else [])
+
+
+def test_fips_mode_rejects_eddsa_token_but_accepts_rs256():
+    import jwt
+
+    ed_private, ed_jwk = _okp_keypair_and_jwk()
+    rsa_private, rsa_jwk = _rsa_keypair_and_jwk()
+    handler = JWTHandler(fips_mode=lambda: True)
+
+    with pytest.raises(jwt.exceptions.InvalidAlgorithmError):
+        handler._decode_jwt_with_public_key(
+            token=_eddsa_jwt(ed_private),
+            public_key=ed_jwk,
+            audience=None,
+            disable_audience_validation=True,
+        )
+    claims: Final = handler._decode_jwt_with_public_key(
+        token=_encode_rsa_jwt(rsa_private, "iss", "aud", "rsa"),
+        public_key=rsa_jwk,
+        audience="aud",
+        issuer="iss",
+    )
+    assert claims["sub"] == "test-subject"
+
+
+def test_eddsa_token_accepted_with_deprecation_log_outside_fips(caplog):
+    import logging
+
+    from litellm.proxy.auth.handle_jwt import _log_eddsa_deprecation
+
+    ed_private, ed_jwk = _okp_keypair_and_jwk()
+    handler = JWTHandler(fips_mode=lambda: False)
+
+    _log_eddsa_deprecation.cache_clear()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        claims: Final = handler._decode_jwt_with_public_key(
+            token=_eddsa_jwt(ed_private),
+            public_key=ed_jwk,
+            audience=None,
+            disable_audience_validation=True,
+        )
+    assert claims["sub"] == "test-subject"
+    assert "EdDSA" in caplog.text and "deprecated" in caplog.text and "LITELLM_FIPS_MODE" in caplog.text
+
+    _log_eddsa_deprecation.cache_clear()
+    caplog.clear()
+    rsa_private, rsa_jwk = _rsa_keypair_and_jwk()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        handler._decode_jwt_with_public_key(
+            token=_encode_rsa_jwt(rsa_private, "iss", "aud", "rsa"),
+            public_key=rsa_jwk,
+            audience="aud",
+            issuer="iss",
+        )
+    assert "deprecated" not in caplog.text
+    _log_eddsa_deprecation.cache_clear()
+
+
+def _rsa_keypair_and_jwk() -> "tuple[object, dict]":
+    import json
+
+    import jwt as jwt_lib
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = {
+        **json.loads(jwt_lib.algorithms.RSAAlgorithm.to_jwk(private_key.public_key())),
+        "kid": "rsa",
+        "alg": "RS256",
+        "use": "sig",
+    }
+    return private_key, jwk
+
+
+@pytest.mark.asyncio
+async def test_jwks_url_kid_matching_only_a_filtered_key_raises():
+    _, ed_jwk = _okp_keypair_and_jwk()
+    jwks_url = "https://idp.example.com/jwks"
+
+    fips_handler = JWTHandler(fips_mode=lambda: True)
+    fips_handler.user_api_key_cache = DualCache()
+    await fips_handler.user_api_key_cache.async_set_cache(
+        key=f"litellm_jwt_auth_keys_{jwks_url}", value=[ed_jwk], ttl=600
+    )
+    with pytest.raises(NoMatchingJWTPublicKeyError):
+        await fips_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="ed")
+
+    normal_handler = JWTHandler(fips_mode=lambda: False)
+    normal_handler.user_api_key_cache = DualCache()
+    await normal_handler.user_api_key_cache.async_set_cache(
+        key=f"litellm_jwt_auth_keys_{jwks_url}", value=[ed_jwk], ttl=600
+    )
+    assert (await normal_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="ed"))["kid"] == "ed"

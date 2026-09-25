@@ -23,20 +23,12 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy.auth.jwt_algorithms import jwks_keys_for
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS
 
-_ALLOWED_ID_TOKEN_ALGORITHMS: Final = (
-    "RS256",
-    "RS384",
-    "RS512",
-    "ES256",
-    "ES384",
-    "ES512",
-    "PS256",
-    "PS384",
-    "PS512",
-)
+_ALLOWED_ID_TOKEN_ALGORITHMS: Final = APPROVED_JWT_ALGORITHMS
 _JWKS_CACHE_TTL_SECONDS: Final = 3600
 _jwks_cache: Final = InMemoryCache(default_ttl=_JWKS_CACHE_TTL_SECONDS)
 
@@ -126,7 +118,7 @@ async def _discover_jwks_url(issuer: str) -> str:
 def _select_signing_key(id_token: str, keys: Sequence[Mapping[str, object]]) -> "jwt.PyJWK | _BindingRejection":
     header: Final = jwt.get_unverified_header(id_token)
     kid: Final = header.get("kid")
-    for key in keys:
+    for key in jwks_keys_for(keys, _ALLOWED_ID_TOKEN_ALGORITHMS):
         if kid is None or key.get("kid") == kid:
             return jwt.PyJWK(dict(key))  # mutable-ok: PyJWT requires a concrete JWK dictionary
     return _BindingRejection(

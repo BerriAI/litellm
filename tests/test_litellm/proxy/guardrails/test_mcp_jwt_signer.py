@@ -1269,3 +1269,101 @@ async def test_inject_mcp_jwt_signs_for_tool_call_path():
     scopes = set(decoded["scope"].split())
     assert "mcp:tools/call" in scopes
     assert "mcp:tools/search_web:call" in scopes
+
+
+# ---------------------------------------------------------------------------
+# B5: incoming-JWT JWKS allowlist (LIT-8429)
+# ---------------------------------------------------------------------------
+
+
+def _okp_idp_key_and_token(now: int):
+    import json
+
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    jwk = {
+        **json.loads(jwt.algorithms.OKPAlgorithm.to_jwk(private_key.public_key())),
+        "kid": "ed",
+        "alg": "EdDSA",
+    }
+    token = jwt.encode(
+        {"sub": "idp-user", "iat": now, "exp": now + 300},
+        private_key,
+        algorithm="EdDSA",
+        headers={"kid": "ed"},
+    )
+    return jwk, token
+
+
+def _oct_idp_key_and_token(now: int):
+    secret = b"integration-hs256-client-secret-0123456789abcdef"
+    jwk = {
+        "kty": "oct",
+        "kid": "sym",
+        "alg": "HS256",
+        "k": base64.urlsafe_b64encode(secret).rstrip(b"=").decode(),
+    }
+    token = jwt.encode(
+        {"sub": "idp-user", "iat": now, "exp": now + 300},
+        secret,
+        algorithm="HS256",
+        headers={"kid": "sym"},
+    )
+    return jwk, token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_and_token", (_oct_idp_key_and_token, _okp_idp_key_and_token), ids=("oct-HS256", "OKP-EdDSA")
+)
+async def test_verify_incoming_jwt_rejects_jwks_without_approved_algorithms(key_and_token):
+    """A JWKS whose only keys use non-approved algorithms can never verify the incoming token."""
+    jwks_key, incoming_token = key_and_token(int(time.time()))
+    signer = _make_signer(
+        access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration",
+    )
+    with patch.object(
+        signer,
+        "_get_oidc_discovery",
+        new_callable=AsyncMock,
+        return_value={"jwks_uri": "https://idp.example.com/jwks"},
+    ):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer._fetch_jwks",
+            new_callable=AsyncMock,
+            return_value=[jwks_key],
+        ):
+            with pytest.raises(jwt.exceptions.PyJWKSetError, match="approved signing algorithm"):
+                await signer._verify_incoming_jwt(incoming_token)
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_ignores_filtered_keys_sharing_kid():
+    """An approved RS256 key still verifies when the JWKS also carries a non-approved key with the same kid."""
+    signer = _make_signer(
+        access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration",
+    )
+    now = int(time.time())
+    oct_jwk, _ = _oct_idp_key_and_token(now)
+    oct_jwk["kid"] = signer._kid
+    incoming_token = jwt.encode(
+        {"sub": "idp-user", "iat": now, "exp": now + 300},
+        signer._private_key,
+        algorithm="RS256",
+        headers={"kid": signer._kid},
+    )
+    jwks = [oct_jwk, *signer.get_jwks()["keys"]]
+    with patch.object(
+        signer,
+        "_get_oidc_discovery",
+        new_callable=AsyncMock,
+        return_value={"jwks_uri": "https://idp.example.com/jwks"},
+    ):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer._fetch_jwks",
+            new_callable=AsyncMock,
+            return_value=jwks,
+        ):
+            payload = await signer._verify_incoming_jwt(incoming_token)
+    assert payload["sub"] == "idp-user"

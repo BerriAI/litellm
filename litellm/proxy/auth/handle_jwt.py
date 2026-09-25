@@ -16,6 +16,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
@@ -53,6 +54,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import can_team_access_model
+from litellm.proxy.auth.jwt_algorithms import allowed_jwt_algorithms, jwks_keys_for
 from litellm.proxy.auth.model_access_denied import (
     ModelAccessDeniedHTTPException,
     model_access_denied_client_message,
@@ -60,6 +62,7 @@ from litellm.proxy.auth.model_access_denied import (
 from litellm.proxy.auth.resolvers.grants import GrantResolver, UserLookup, canonical_user_id
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.team_grants import team_grants, team_model_aliases
+from litellm.proxy.common_utils.fips import is_fips_mode
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
@@ -68,6 +71,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, LEGACY_JWT_ALGORITHMS
 
 from .auth_checks import (
     TeamNotFoundError,
@@ -102,6 +106,14 @@ STALE_WRITTEN_AT_CACHE_KEY_PREFIX: Final = "litellm_stale_written_at_"
 UNREACHABLE_CACHE_KEY_PREFIX: Final = "litellm_jwks_unreachable_"
 
 _CachedValueT = TypeVar("_CachedValueT", bound=JWKKeyValue | str)
+
+
+@lru_cache(maxsize=1)
+def _log_eddsa_deprecation() -> None:
+    verbose_proxy_logger.warning(
+        "JWT Auth: accepted a token signed with EdDSA, which is deprecated and not FIPS 140-3 approved; "
+        "it is rejected when LITELLM_FIPS_MODE=true. Move the IdP signing key to RS256, PS256 or ES256"
+    )
 
 
 class _JWTAuthSettings(Protocol):
@@ -209,17 +221,9 @@ class JWTHandler:
     # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
     # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
     #   the key in different ways (e.g. HS* and RS*)."
-    SUPPORTED_JWT_ALGORITHMS = [
-        "RS256",
-        "RS384",
-        "RS512",
-        "PS256",
-        "PS384",
-        "PS512",
-        "ES256",
-        "ES384",
-        "ES512",
-        "EdDSA",
+    SUPPORTED_JWT_ALGORITHMS = [  # mutable-ok: list kept for backward compatibility
+        *APPROVED_JWT_ALGORITHMS,
+        *LEGACY_JWT_ALGORITHMS,
     ]
     LITELLM_JWT_ISSUER_CLAIM = "_litellm_jwt_issuer"
     LITELLM_USER_ID_CLAIM = "_litellm_user_id"
@@ -240,12 +244,23 @@ class JWTHandler:
 
     def __init__(
         self,
+        fips_mode: Callable[[], bool] = is_fips_mode,
     ) -> None:
+        self._fips_mode: Final = fips_mode
         self.http_handler = HTTPHandler()
         self.leeway = 0
         # Per-cache-key locks so a TTL lapse triggers one refresh instead of one per in-flight request.
         self._refresh_locks: dict[str, asyncio.Lock] = {}  # mutable-ok: lock registry, keyed by JWKS url
         self.agent_lookup: AgentLookup = _NoRegisteredAgents()
+
+    def allowed_algorithms(self) -> tuple[str, ...]:
+        return allowed_jwt_algorithms(self._fips_mode())
+
+    def _warn_deprecated_signing_algorithm(self, token: str) -> None:
+        if self._fips_mode():
+            return
+        if jwt.get_unverified_header(token).get("alg") == "EdDSA":
+            _log_eddsa_deprecation()
 
     def bind_agent_lookup(self, agent_lookup: AgentLookup) -> None:
         self.agent_lookup = agent_lookup
@@ -943,7 +958,13 @@ class JWTHandler:
             log_context=f"kid={kid}",
         )
 
-        public_key: Final = self.parse_keys(keys=keys, kid=kid)
+        allowed: Final = self.allowed_algorithms()
+        usable_keys: Final[JWKKeyValue] = (
+            list(jwks_keys_for(keys, allowed))  # mutable-ok: parse_keys consumes a JWKKeyValue list
+            if isinstance(keys, list)
+            else next(iter(jwks_keys_for((keys,), allowed)), {})  # mutable-ok: single-key dict is a JWKKeyValue
+        )
+        public_key: Final = self.parse_keys(keys=usable_keys, kid=kid)
         if public_key is not None:
             return cast(dict, public_key)
 
@@ -1214,32 +1235,27 @@ class JWTHandler:
             )
         )
 
-        if isinstance(public_key, dict):
-            public_key_obj: Final = PyJWK.from_dict(self._get_jwk_from_public_key(public_key=public_key)).key
-            return jwt.decode(
-                token,
-                public_key_obj,
-                algorithms=self.SUPPORTED_JWT_ALGORITHMS,
-                options=decode_options,
-                audience=audience,
-                issuer=issuer,
-                leeway=self.leeway,
+        key_obj: Final = (
+            PyJWK.from_dict(self._get_jwk_from_public_key(public_key=public_key)).key
+            if isinstance(public_key, dict)
+            else x509.load_pem_x509_certificate(public_key.encode(), default_backend())
+            .public_key()
+            .public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
             )
-
-        cert: Final = x509.load_pem_x509_certificate(public_key.encode(), default_backend())
-        key: Final = cert.public_key().public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
         )
-        return jwt.decode(
+        payload: Final = jwt.decode(
             token,
-            key,
-            algorithms=self.SUPPORTED_JWT_ALGORITHMS,
+            key_obj,
+            algorithms=self.allowed_algorithms(),
             audience=audience,
             issuer=issuer,
             options=decode_options,
             leeway=self.leeway,
         )
+        self._warn_deprecated_signing_algorithm(token)
+        return payload
 
     async def _auth_jwt_with_issuer(self, token: str, issuer_config: JWTIssuerConfig, kid: str | None) -> dict:
         try:

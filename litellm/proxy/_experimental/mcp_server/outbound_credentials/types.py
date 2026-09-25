@@ -45,6 +45,7 @@ from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     normalize_upstream_header_name,
 )
+from litellm.types.proxy.auth.jwt_algorithms import ApprovedJwtAlgorithm
 
 
 class AuthResolution(str, Enum):
@@ -326,7 +327,7 @@ class PrivateKeyJwtAuth(BaseModel):
     source: Literal["private_key_jwt"] = "private_key_jwt"
     private_key: SecretStr
     key_id: str | None = None
-    signing_alg: str = "RS256"
+    signing_alg: ApprovedJwtAlgorithm = "RS256"
 
 
 class ClientSecretAuth(BaseModel):

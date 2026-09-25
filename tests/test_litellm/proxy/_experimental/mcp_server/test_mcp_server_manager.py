@@ -14637,3 +14637,37 @@ class TestSharedIdentifierPrefixWarning:
         assert "srv-b" in shared_warnings[0]
         assert "srv-c" not in shared_warnings[0]
         assert "'shared'" in shared_warnings[0]
+
+
+def test_stored_client_assertion_signing_alg_falls_back_to_rs256_for_non_approved(caplog):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        _stored_client_assertion_signing_alg,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert _stored_client_assertion_signing_alg("HS256", "srv") == "RS256"
+    assert "client_assertion_signing_alg" in caplog.text and "HS256" in caplog.text and "srv" in caplog.text
+
+
+def test_stored_client_assertion_signing_alg_passes_through_approved(caplog):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        _stored_client_assertion_signing_alg,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert _stored_client_assertion_signing_alg("PS384", "srv") == "PS384"
+        assert _stored_client_assertion_signing_alg(None, "srv") == "RS256"
+    assert "approved algorithm" not in caplog.text
+
+
+def test_mcp_server_model_rejects_non_approved_client_assertion_signing_alg():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc:
+        MCPServer(
+            server_id="srv",
+            name="srv",
+            transport="http",
+            client_assertion_signing_alg="EdDSA",
+        )
+    assert "client_assertion_signing_alg" in str(exc.value)

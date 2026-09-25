@@ -12,6 +12,7 @@ from litellm.types.mcp import (
     MCPTransportType,
     normalize_upstream_header_name,
 )
+from litellm.types.proxy.auth.jwt_algorithms import ApprovedJwtAlgorithm
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 MCPInfo = dict[str, Any]
@@ -145,7 +146,7 @@ class MCPServer(BaseModel):
     id_jag_resource: str | None = None
     client_private_key: str | None = None
     client_private_key_id: str | None = None
-    client_assertion_signing_alg: str = "RS256"
+    client_assertion_signing_alg: ApprovedJwtAlgorithm = "RS256"
     # Wire dialect: "rfc8693" (standard token-exchange grant) or "entra_obo" (Microsoft Entra
     # On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use extension)
     token_exchange_profile: str = "rfc8693"

@@ -89,8 +89,10 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.jwt_algorithms import jwks_keys_for
 from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS
 from litellm.types.utils import CallTypesLiteral
 
 if TYPE_CHECKING:
@@ -449,12 +451,18 @@ class MCPJWTSigner(CustomGuardrail):
         unverified_header: Final = jwt.get_unverified_header(raw_token)
         kid: Final = unverified_header.get("kid")
 
+        approved_keys: Final = jwks_keys_for(jwks_keys, APPROVED_JWT_ALGORITHMS)
+        if not approved_keys:
+            raise jwt.exceptions.PyJWKSetError(f"No JWKS key at {jwks_uri!r} uses an approved signing algorithm")
+
         # Build a JWKS object and pick the matching key.
         # PyJWT's PyJWKSet handles key-type parsing and kid matching correctly.
         from jwt import PyJWKSet
 
         try:
-            jwks_set: Final = PyJWKSet.from_dict({"keys": jwks_keys})
+            jwks_set: Final = PyJWKSet.from_dict(
+                {"keys": list(approved_keys)}  # mutable-ok: PyJWKSet.from_dict takes a dict
+            )
         except Exception as exc:
             raise jwt.exceptions.PyJWKSetError(f"Failed to parse JWKS from {jwks_uri!r}: {exc}") from exc
 
