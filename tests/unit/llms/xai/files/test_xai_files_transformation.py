@@ -1,5 +1,6 @@
 from typing import Final
 
+import httpx
 import pytest
 import respx
 from pydantic import TypeAdapter
@@ -105,6 +106,23 @@ async def test_list_files_reads_data_array() -> None:
 
     files: Final = TypeAdapter(tuple[OpenAIFileObject, ...]).validate_python(listed)
     assert [f.id for f in files] == ["file_07"]
+
+
+@respx.mock
+async def test_list_files_walks_every_page_by_pagination_token() -> None:
+    route: Final = respx.get(f"{API_BASE}/v1/files").mock(
+        side_effect=[
+            httpx.Response(200, json={"data": [_XAI_FILE], "pagination_token": "file_07"}),
+            httpx.Response(200, json={"data": [{**_XAI_FILE, "id": "file_08"}], "pagination_token": "file_08"}),
+            httpx.Response(200, json={"data": [], "pagination_token": "file_08"}),
+        ]
+    )
+
+    listed: Final = await litellm.afile_list(custom_llm_provider="xai", api_key=KEY, api_base=API_BASE)
+
+    files: Final = TypeAdapter(tuple[OpenAIFileObject, ...]).validate_python(listed)
+    assert [f.id for f in files] == ["file_07", "file_08"]
+    assert [call.request.url.params.get("pagination_token") for call in route.calls] == [None, "file_07", "file_08"]
 
 
 async def _retrieve_file(sync_mode: bool, file_id: str) -> None:

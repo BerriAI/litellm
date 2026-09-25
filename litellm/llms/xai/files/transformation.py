@@ -58,6 +58,7 @@ class XAIFileList(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     data: tuple[XAIFile, ...] = ()
+    pagination_token: str | None = None
 
 
 class XAIFileDeleted(BaseModel):
@@ -203,6 +204,17 @@ class XAIFilesConfig(BaseFilesConfig):
         litellm_params: Mapping[str, object],
     ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
         return f"{_api_base_from(litellm_params)}/v1/files", _NO_QUERY_PARAMS
+
+    def transform_list_files_next_request(
+        self,
+        raw_response: httpx.Response,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]] | None:  # mutable-ok: BaseFilesConfig signature
+        page: Final = XAIFileList.model_validate(raw_response.json())
+        if not page.pagination_token or not page.data:
+            return None
+        return f"{_api_base_from(litellm_params)}/v1/files", {"pagination_token": page.pagination_token}
 
     def transform_list_files_response(
         self,
