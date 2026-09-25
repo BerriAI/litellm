@@ -12,6 +12,7 @@ from litellm.batches.batch_utils import (
     _get_response_from_batch_job_output_file,  # pyright: ignore[reportPrivateUsage]  # same reuse
     _iter_batch_output_entries,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # same reuse; helper is untyped upstream
     _safe_output_line_stats,  # pyright: ignore[reportPrivateUsage]  # same reuse
+    _uses_native_vertex_output,  # pyright: ignore[reportPrivateUsage]  # same reuse
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
@@ -125,6 +126,14 @@ def _line_status_code(entry: Mapping[str, object], custom_llm_provider: str) -> 
         if result is not None and result.get("type") == "succeeded":
             return 200
     return None
+
+
+def _line_error_payload(entry: Mapping[str, object], custom_llm_provider: _BatchLineProvider) -> object:
+    if custom_llm_provider == "anthropic":
+        return (
+            (_as_object_mapping(entry.get("result")) or _EMPTY_BODY).get("error") or entry.get("result") or _EMPTY_BODY
+        )
+    return entry.get("error") or entry.get("response") or _EMPTY_BODY
 
 
 def _call_type_for_request(request_line: Mapping[str, object] | None) -> str:
@@ -311,9 +320,7 @@ async def _emit_line_event(
 
     now: Final = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
     if result is None:
-        exception: Final = _BatchLineFailure(
-            entry.get("error") or entry.get("response") or {}  # mutable-ok: fallback payload dict passed to Exception
-        )
+        exception: Final = _BatchLineFailure(_line_error_payload(entry, custom_llm_provider))
         exception._hidden_params = _line_hidden_params(batch, custom_id, status_code)  # pyright: ignore[reportPrivateUsage]  # _hidden_params is set on the exception instance itself
         await child.async_failure_handler(
             exception=exception,
@@ -398,6 +405,13 @@ async def log_batch_line_items(
         requests_by_id: Final = _requests_by_custom_id(input_file_content)
 
         output_content: Final = await _fetch_managed_file_or_empty(batch.output_file_id, line_provider, fetch_params)
+        first_row: Final = next(_output_entries(output_content), None)
+        if _uses_native_vertex_output(line_provider, model_name, first_row):
+            verbose_logger.warning(
+                "batch line-item callbacks do not support native vertex_ai batch output rows yet, skipping. batch_id=%s",
+                batch.id,
+            )
+            return 0
         error_content: Final = await _fetch_managed_file_or_empty(batch.error_file_id, line_provider, fetch_params)
         for content in (output_content, error_content):
             for entry in _output_entries(content):
