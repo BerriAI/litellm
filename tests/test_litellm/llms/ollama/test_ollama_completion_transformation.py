@@ -572,6 +572,55 @@ class TestOllamaConfig:
         assert result.choices[0]["finish_reason"] == "stop"
 
 
+class TestOllamaConfigTransformRequest:
+    def test_custom_prompt_allows_missing_initial_and_final_values(self):
+        result = OllamaConfig().transform_request(
+            model="llama2",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={},
+            litellm_params={
+                "custom_prompt_dict": {
+                    "llama2": {
+                        "roles": {
+                            "user": {
+                                "pre_message": "[INST] ",
+                                "post_message": " [/INST]",
+                            }
+                        }
+                    }
+                }
+            },
+            headers={},
+        )
+
+        assert "[INST] hello [/INST]" in result["prompt"]
+
+    def test_custom_prompt_keeps_initial_and_final_values(self):
+        result = OllamaConfig().transform_request(
+            model="llama2",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={},
+            litellm_params={
+                "custom_prompt_dict": {
+                    "llama2": {
+                        "roles": {
+                            "user": {
+                                "pre_message": "[INST] ",
+                                "post_message": " [/INST]",
+                            }
+                        },
+                        "initial_prompt_value": "<start>",
+                        "final_prompt_value": "<end>",
+                    }
+                }
+            },
+            headers={},
+        )
+
+        assert result["prompt"].startswith("<start>")
+        assert result["prompt"].endswith("<end>")
+
+
 class TestOllamaTextCompletionResponseIterator:
     def test_chunk_parser_with_thinking_field(self):
         """Test that chunks with 'thinking' field and empty 'response' are handled correctly."""
