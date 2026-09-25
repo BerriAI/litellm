@@ -113,7 +113,7 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
             Key search failed
           </span>
         )}
-        {apiKeyTruncation !== undefined && (
+        {apiKeyTruncation !== undefined && totalKeys < apiKeyTruncation.total && (
           <span className="text-sm text-muted-foreground" role="note">
             Only the {totalKeys.toLocaleString()} highest-spend keys of {apiKeyTruncation.total.toLocaleString()} are
             loaded
