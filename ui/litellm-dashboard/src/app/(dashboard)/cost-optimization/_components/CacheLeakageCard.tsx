@@ -108,7 +108,11 @@ const KeyQueryNotice = ({ query, shown }: { query: ReturnType<typeof useCacheLea
       </div>
     );
   }
-  if (query.data != null && shown < query.data.metadata.total_api_keys) {
+  if (
+    query.data != null &&
+    query.data.results.length < query.data.metadata.total_api_keys &&
+    shown < query.data.metadata.total_api_keys
+  ) {
     return (
       <p className="mt-2 text-sm text-muted-foreground">
         {`Showing the top ${shown} of ${query.data.metadata.total_api_keys} keys, ranked by uncached prompt tokens.`}
