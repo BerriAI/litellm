@@ -7,7 +7,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum
-from typing import Any, Final, TypedDict, cast, overload
+from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -17,6 +17,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import anthropic_system_messages
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
@@ -48,8 +49,8 @@ from litellm.types.utils import GenericImageParsingChunk
 from .common_utils import (
     convert_content_list_to_str,
     infer_content_type_from_url_and_content,
-    is_encrypted_reasoning_block,
     is_non_content_values_set,
+    is_unsignable_thinking_block,
     parse_tool_call_arguments,
 )
 from .image_handling import convert_url_to_base64
@@ -2329,37 +2330,25 @@ def sanitize_messages_for_tool_calling(
     return sanitized_messages
 
 
-def _is_unsignable_thinking_block(block: object) -> bool:
-    """A thinking block that Anthropic cannot accept on input.
-
-    Anthropic verifies the thinking signature cryptographically, so a block whose
-    signature is null, empty, or missing (e.g. from an open-source reasoning model)
-    is rejected with a 400 and must be dropped rather than blanked or repaired, and
-    so is a block whose signature or data carries another provider's encrypted
-    reasoning. A `redacted_thinking` block Anthropic minted is always kept.
-    """
-    if is_encrypted_reasoning_block(block):
-        return True
-    if not isinstance(block, dict) or block.get("type") != "thinking":
-        return False
-    signature: Final = block.get("signature")
-    return not (isinstance(signature, str) and len(signature) > 0)
-
-
 def _drop_unsignable_thinking_blocks(
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
 ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
-    return [block for block in thinking_blocks if not _is_unsignable_thinking_block(block)]
+    return [block for block in thinking_blocks if not is_unsignable_thinking_block(block)]
+
+
+_AnthropicMessageList: TypeAlias = list[AllAnthropicPassThroughMessageValues]
 
 
 def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
     llm_provider: str,
-) -> list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]:
+) -> _AnthropicMessageList:
     """
     format messages for anthropic
-    1. Anthropic supports roles like "user" and "assistant" (system prompt sent separately)
+    1. Anthropic supports roles like "user" and "assistant" (system prompt sent separately).
+       Models flagged ``supports_mid_conversation_system`` also accept "system" inside
+       messages after a user turn; the caller decides placement, this keeps such messages.
     2. The first message always needs to be of role "user"
     3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
     4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
@@ -2384,7 +2373,7 @@ def anthropic_messages_pt(
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages: Final[list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]] = []
+    new_messages: Final[_AnthropicMessageList] = []  # mutable-ok: accumulator behind the mutable return contract
 
     if len(messages) == 0:
         if not litellm.modify_params:
@@ -2697,7 +2686,7 @@ def anthropic_messages_pt(
                         if (
                             m.get("type", "") == "thinking"
                             and len(thinking_block) > 0
-                            and not _is_unsignable_thinking_block(m)
+                            and not is_unsignable_thinking_block(m)
                         ):  # don't pass empty text blocks. anthropic api raises errors.
                             anthropic_message: ChatCompletionThinkingBlock | AnthropicMessagesTextParam = cast(
                                 ChatCompletionThinkingBlock, m
@@ -2776,6 +2765,11 @@ def anthropic_messages_pt(
 
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
+
+        ## MID-CONVERSATION SYSTEM MESSAGES (placement is the caller's job) ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "system":
+            new_messages.extend(anthropic_system_messages(messages[msg_i]))
+            msg_i += 1
 
         if msg_i == init_msg_i:  # prevent infinite loops
             raise litellm.BadRequestError(

@@ -2,9 +2,7 @@ from collections.abc import Mapping, Sequence
 from itertools import groupby
 from typing import Final
 
-CONVERTED_SYSTEM_NOTE: Final = (
-    "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
-)
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 
 
 def as_system_content_blocks(value: object) -> list[object]:

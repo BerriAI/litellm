@@ -1989,6 +1989,26 @@ def is_encrypted_reasoning_block(block: object) -> bool:
     return _carries_encrypted_reasoning(_encrypted_reasoning_field(mapping))
 
 
+def is_unsignable_thinking_block(block: object) -> bool:
+    """A thinking block Anthropic cannot accept on input.
+
+    Anthropic verifies the thinking signature cryptographically, so a block whose
+    signature is null, empty, or missing (e.g. from an open-source reasoning model)
+    is rejected with a 400 and must be dropped rather than blanked or repaired, and
+    so is a block whose signature or data carries another provider's encrypted
+    reasoning. A `redacted_thinking` block Anthropic minted is always kept.
+    """
+    if is_encrypted_reasoning_block(block):
+        return True
+    if not isinstance(block, Mapping):
+        return False
+    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
+    if mapping.get("type") != "thinking":
+        return False
+    signature: Final = mapping.get("signature")
+    return not (isinstance(signature, str) and len(signature) > 0)
+
+
 def strip_encrypted_reasoning_from_messages(messages: object) -> None:
     """Drop the bridge-tagged reasoning blocks a routed deployment cannot decrypt from
     Anthropic-shaped history.
