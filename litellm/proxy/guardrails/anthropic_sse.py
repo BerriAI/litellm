@@ -7,6 +7,7 @@ hook scan such a stream, and re-emit it when the guardrail rewrote the response.
 
 from __future__ import annotations
 
+import codecs
 import json
 from collections.abc import Mapping, Sequence
 from typing import Final
@@ -38,7 +39,7 @@ def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
         if isinstance(chunk, (str, bytes))
     )
     try:
-        return raw.decode("utf-8")
+        return codecs.getincrementaldecoder("utf-8")().decode(raw, final=False)
     except UnicodeDecodeError:
         return None
 
