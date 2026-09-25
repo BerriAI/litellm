@@ -1,16 +1,3 @@
-"""Live e2e: Sail bills each completion window at that window's cost-map rates.
-
-Sail has no `service_tier`; it prices a request by `metadata.completion_window`
-(`asap`, `balanced`, `flex`). The gateway rewrites a caller's `service_tier` into
-that window for Sail only, and the cost calculator reads the window back off the
-request to pick the base, `*_balanced` or `*_flex` cost keys (#42840). Every rate
-these tests compare against is read off the proxy's own cost map at run time, and
-the three windows carry three distinct rate sets, so a bill computed from the
-wrong window cannot match. A non-Sail provider keeps its own `service_tier`
-semantics: OpenAI's row is priced on the tier OpenAI reports back, and a tier the
-provider refuses surfaces as the provider's 4xx with nothing billed.
-"""
-
 from __future__ import annotations
 
 import re
@@ -109,8 +96,6 @@ class _StatusRows(RootModel[list[_StatusRow]]):
 
 
 class _ChatUsage(BaseModel):
-    """The four token counts a chat bill is computed from."""
-
     prompt_tokens: int
     cached_tokens: int
     completion_tokens: int
@@ -178,7 +163,6 @@ def _row_shape(row: _StatusRow) -> tuple[float | None, str | None, bool]:
 
 
 def _poll_key_rows(proxy: ProxyClient, key: str) -> tuple[_StatusRow, ...]:
-    """Every /spend/logs row filed under the key once at least one has landed."""
     landed = proxy.poll_logs_for_key(key)
     assert landed, f"no spend row landed for the key before the {proxy.poll_timeout}s deadline"
     return tuple(

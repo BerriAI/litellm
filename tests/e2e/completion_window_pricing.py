@@ -21,18 +21,15 @@ COST_REL_TOLERANCE: Final = 1e-9
 
 
 def within_rel(actual: float | None, expected: float) -> bool:
-    """Spend math agrees to one part in 1e9, the tightest tolerance float sums hold; no value never agrees."""
     return actual is not None and abs(actual - expected) <= abs(expected) * COST_REL_TOLERANCE
 
 
 def all_within_rel(actual: Sequence[float], expected: Sequence[float]) -> bool:
-    """Every component of one bill agrees with the matching component of another."""
     return len(actual) == len(expected) and all(within_rel(a, e) for a, e in zip(actual, expected, strict=True))
 
 
 @dataclass(frozen=True, slots=True)
 class TierRates:
-    """The three per-token rates one window bills at."""
 
     input: float
     output: float
@@ -41,10 +38,6 @@ class TierRates:
     def bill(
         self, *, prompt_tokens: int, cached_tokens: int, completion_tokens: int, reasoning_tokens: int
     ) -> tuple[float, float, float, float, float]:
-        """(input_cost, output_cost, cache_read_cost, reasoning_cost, total_cost) the
-        gateway must file for this usage: cached prompt tokens at the cache-read rate,
-        the rest of the prompt at the input rate, every completion token (reasoning
-        included) at the output rate, reasoning also reported on its own line."""
         cache_read_cost: Final = cached_tokens * self.cache_read
         input_cost: Final = (prompt_tokens - cached_tokens) * self.input + cache_read_cost
         output_cost: Final = completion_tokens * self.output
@@ -59,7 +52,6 @@ class TierRates:
 
 @dataclass(frozen=True, slots=True)
 class WindowPricedModel:
-    """A Sail cost-map row priced for every completion window."""
 
     model: str
     asap: TierRates
@@ -69,7 +61,6 @@ class WindowPricedModel:
 
 @dataclass(frozen=True, slots=True)
 class FlexOnlyModel:
-    """A Sail cost-map row priced for the flex window and nothing else."""
 
     model: str
     flex: TierRates
@@ -118,8 +109,6 @@ def _window_priced(model: str, entry: CostMapEntry) -> WindowPricedModel | None:
 
 
 def cheapest_window_priced_model(cost_map: Mapping[str, CostMapEntry]) -> WindowPricedModel:
-    """The Sail chat row with distinct asap, balanced and flex rate sets whose asap
-    input rate is lowest, so the tier comparison runs on the cheapest eligible model."""
     priced: Final = tuple(
         priced_row
         for model, entry in _sail_chat_rows(cost_map)
@@ -130,7 +119,6 @@ def cheapest_window_priced_model(cost_map: Mapping[str, CostMapEntry]) -> Window
 
 
 def cheapest_flex_only_model(cost_map: Mapping[str, CostMapEntry]) -> FlexOnlyModel:
-    """The Sail chat row that carries flex rates and no balanced rates, cheapest first."""
     priced: Final = tuple(
         FlexOnlyModel(model=model, flex=flex)
         for model, entry in _sail_chat_rows(cost_map)

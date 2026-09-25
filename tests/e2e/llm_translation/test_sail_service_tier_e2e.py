@@ -1,14 +1,3 @@
-"""Live e2e: the gateway translates `service_tier` into Sail's `metadata.completion_window`.
-
-Sail is a JSON-registered OpenAI-compatible provider that has no `service_tier`.
-A caller's `flex` or `balanced` becomes `metadata.completion_window` on the wire
-and `default` becomes `asap` (#42840). The proof a real provider gives: a window
-the model does not offer comes back as Sail's own 400 naming the rewritten
-field, a served call carries no `service_tier` at all, and its
-`x-litellm-response-cost` is that window's cost-map rates times the usage Sail
-reported. Every rate is read off the proxy's cost map at run time, never pinned.
-"""
-
 from __future__ import annotations
 
 import re
@@ -202,8 +191,6 @@ class TestSailServiceTier:
 
 
 def _refused_window(client: PassthroughClient, key: str, model: str, service_tier: str) -> str:
-    """Sail's own message for a completion_window the model does not offer, once the
-    gateway has relayed it as a 400 naming the rewritten field."""
     outcome = client.proxy.transport.send(
         "/chat/completions",
         headers=client.proxy.transport.bearer(key),

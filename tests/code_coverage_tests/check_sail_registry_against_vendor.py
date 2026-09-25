@@ -38,7 +38,7 @@ TIER_FIELDS: Final = (
 )
 
 
-def sail_rows() -> dict:
+def sail_rows() -> dict[str, dict]:
     cost_map: Final = json.loads(COST_MAP_PATH.read_text())
     return {key.split("sail/", 1)[1]: row for key, row in cost_map.items() if key.startswith("sail/")}
 
