@@ -882,9 +882,8 @@ def _get_session_id_for_spend_log(
     omit_when_missing: bool,
     batch_trace_session_id: str | None = None,
 ) -> str | None:
-    """Under `omit` only `metadata.session_id`, the key Langfuse reads, counts as a session; `litellm_session_id` may
-    be a copied trace id. Batch call types carry a deterministic session derived from the batch id, which outranks
-    the per-request trace ids because those differ between the create call and the cost poller's row."""
+    """Resolve the session id for the spend log row: `omit` honors only metadata.session_id,
+    batch sessions outrank everything, then the caller's litellm_session_id, then trace ids."""
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
         return str(session_id) if session_id else None
@@ -893,6 +892,9 @@ def _get_session_id_for_spend_log(
 
     if batch_trace_session_id is not None:
         return batch_trace_session_id
+    caller_session_id: Final = kwargs.get("litellm_session_id")
+    if caller_session_id:
+        return str(caller_session_id)
     if standard_logging_payload is not None and standard_logging_payload.get("trace_id") is not None:
         return str(standard_logging_payload.get("trace_id"))
     if kwargs.get("litellm_trace_id") is not None:
