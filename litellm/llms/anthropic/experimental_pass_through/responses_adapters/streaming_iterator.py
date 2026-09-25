@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+    INCOMPLETE_STREAM_ERROR_MESSAGE,
     refusal_stop_details,
     responses_output_refusal_text,
 )
@@ -39,13 +40,32 @@ class _UpstreamFailure(BaseModel):
 
     @field_validator("status_code", mode="before")
     @classmethod
-    def int_or_none(cls, value: object) -> int | None:
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
+    def http_error_status_or_none(cls, value: object) -> int | None:
+        candidate: Final = (
+            value
+            if isinstance(value, int) and not isinstance(value, bool)
+            else int(value)
+            if isinstance(value, str) and value.isdecimal()
+            else None
+        )
+        return candidate if candidate is not None and 400 <= candidate <= 599 else None
 
     @field_validator("message", mode="before")
     @classmethod
     def str_or_none(cls, value: object) -> str | None:
         return value if isinstance(value, str) else None
+
+
+class _FailedResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    error: object | None = None
+
+
+class _FailedResponseEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    response: _FailedResponse | None = None
 
 
 def _original_failure(exception: Exception) -> Exception:
@@ -61,7 +81,7 @@ def _failure_status_and_message(exception: Exception) -> tuple[int, str]:
         {"status_code": getattr(original, "status_code", None), "message": getattr(original, "message", None)}
     )
     status_code: Final = failure.status_code if failure.status_code is not None else 500
-    message: Final = failure.message or str(original) or "Upstream stream ended before completion"
+    message: Final = failure.message or str(original) or INCOMPLETE_STREAM_ERROR_MESSAGE
     return status_code, message
 
 
@@ -347,13 +367,10 @@ class AnthropicResponsesStreamWrapper:
             return
 
         if event_type == "response.failed":
-            failed_response: Final = getattr(event, "response", None) or (
-                event.get("response") if isinstance(event, dict) else None
+            failed: Final = _FailedResponseEvent.model_validate(event)
+            status_code, message = stream_error_status_and_message(
+                failed.response.error if failed.response is not None else None
             )
-            error_obj: Final = getattr(failed_response, "error", None) or (
-                failed_response.get("error") if isinstance(failed_response, dict) else None
-            )
-            status_code, message = stream_error_status_and_message(error_obj)
             verbose_logger.error(
                 "AnthropicResponsesStreamWrapper: upstream Responses stream for %s failed (%s): %s",
                 self.model,
@@ -427,19 +444,16 @@ class AnthropicResponsesStreamWrapper:
         return self
 
     async def __anext__(self) -> dict[str, object]:
-        # Return any queued chunks first
         if self._chunk_queue:
             return self._chunk_queue.popleft()
         if self._stream_failed:
             raise StopAsyncIteration
 
-        # Emit message_start if not yet done (fallback if response.created wasn't fired)
         if not self._sent_message_start:
             self._sent_message_start = True
             self._chunk_queue.append(self._make_message_start())
             return self._chunk_queue.popleft()
 
-        # Consume the upstream stream
         try:
             if hasattr(self.responses_stream, "__aiter__"):
                 async for event in self.responses_stream:
@@ -457,13 +471,19 @@ class AnthropicResponsesStreamWrapper:
                         return self._chunk_queue.popleft()
         except StopAsyncIteration:
             pass
-        except Exception as e:  # noqa: BLE001  # boundary before the client socket: every upstream failure becomes an error event
+        except Exception as e:  # noqa: BLE001  # every upstream failure becomes a client error event
             verbose_logger.exception(
                 "AnthropicResponsesStreamWrapper: upstream Responses stream for %s failed", self.model
             )
             self._fail_stream(*_failure_status_and_message(e))
 
-        # Drain any remaining queued chunks
+        if not self._chunk_queue and not self._sent_message_stop and not self._stream_failed:
+            verbose_logger.error(
+                "AnthropicResponsesStreamWrapper: upstream Responses stream for %s ended without a terminal event",
+                self.model,
+            )
+            self._fail_stream(500, INCOMPLETE_STREAM_ERROR_MESSAGE)
+
         if self._chunk_queue:
             return self._chunk_queue.popleft()
 
