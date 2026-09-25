@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from sentry_sdk.types import Event, Hint
 
 EventScrubFn: TypeAlias = "Callable[[Event, Hint], Event]"
+JsonPath: TypeAlias = tuple[str, ...]
 
 FILTERED: Final = "[Filtered]"
 SEND_DEFAULT_PII_ENV: Final = "SENTRY_SEND_DEFAULT_PII"
@@ -24,6 +25,13 @@ PII_FIELD_NAMES: Final = tuple(DEFAULT_PII_DENYLIST) + tuple(SENTRY_PII_DENYLIST
 
 LITELLM_KEY_PATTERN: Final = re.compile(r"sk-[A-Za-z0-9_-]{16,}")
 SOURCE_CONTEXT_KEYS: Final = frozenset({"pre_context", "context_line", "post_context"})
+STACK_FRAME_PATHS: Final = frozenset(
+    {
+        ("exception", "values", "*", "stacktrace", "frames", "*"),
+        ("threads", "values", "*", "stacktrace", "frames", "*"),
+        ("stacktrace", "frames", "*"),
+    }
+)
 MAX_SCRUB_DEPTH: Final = 64
 EMAIL_PATTERN: Final = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 SHA256_HEX_PATTERN: Final = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{64}(?![0-9A-Za-z])")
@@ -80,18 +88,19 @@ def _substitute_all(patterns: Sequence[re.Pattern[str]], text: str) -> str:
     return reduce(lambda scrubbed, pattern: pattern.sub(FILTERED, scrubbed), patterns, text)
 
 
-def scrub_json_strings(value: JsonValue, scrub: Callable[[str], str], depth: int = 0) -> JsonValue:
-    if depth > MAX_SCRUB_DEPTH:
+def scrub_json_strings(value: JsonValue, scrub: Callable[[str], str], path: JsonPath = ()) -> JsonValue:
+    if len(path) > MAX_SCRUB_DEPTH:
         return FILTERED
     if isinstance(value, str):
         return scrub(value)
     if isinstance(value, dict):
+        unscrubbed_keys: Final = SOURCE_CONTEXT_KEYS if path in STACK_FRAME_PATHS else frozenset[str]()
         return {  # mutable-ok: JSON object
-            key: item if key in SOURCE_CONTEXT_KEYS else scrub_json_strings(item, scrub, depth + 1)
+            key: item if key in unscrubbed_keys else scrub_json_strings(item, scrub, (*path, key))
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [scrub_json_strings(item, scrub, depth + 1) for item in value]  # mutable-ok: JSON array
+        return [scrub_json_strings(item, scrub, (*path, "*")) for item in value]  # mutable-ok: JSON array
     return value
 
 

@@ -1,6 +1,6 @@
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from functools import reduce
 from typing import Final, cast
 
@@ -58,11 +58,17 @@ def raise_with_identity_locals() -> None:
     )
 
 
-def capture_serialized_event(env: Mapping[str, str]) -> str:
+def raise_with_source_context_named_locals() -> None:
+    metadata: Final = {"context_line": f"Bearer {VIRTUAL_KEY}", "pre_context": [EMAIL], "post_context": [KEY_HASH]}
+    stacktrace: Final = {"frames": [{"context_line": MASTER_KEY, "pre_context": [EMAIL]}]}
+    raise RuntimeError(f"rejected with {len(metadata)} metadata fields and {len(stacktrace)} stack fields")
+
+
+def capture_serialized_event(env: Mapping[str, str], raiser: Callable[[], None] = raise_with_identity_locals) -> str:
     transport: Final = RecordingTransport()
     client: Final = sentry_sdk.Client(transport=transport, **build_sentry_init_options(env))
     try:
-        raise_with_identity_locals()
+        raiser()
     except RuntimeError as error:
         event, hint = event_from_exception(error, client_options=client.options)
         client.capture_event(event, hint=hint)
@@ -103,6 +109,24 @@ def test_source_context_lines_are_left_readable() -> None:
     )
     assert any("token=KEY_HASH" in line for line in source_lines)
     assert not any(FILTERED in line for line in source_lines)
+
+
+def test_source_context_names_outside_stack_frames_are_scrubbed() -> None:
+    serialized: Final = capture_serialized_event(PII_OFF, raise_with_source_context_named_locals)
+    assert VIRTUAL_KEY not in serialized
+    assert MASTER_KEY not in serialized
+    assert EMAIL not in serialized
+    assert KEY_HASH not in serialized
+    frame_vars: Final = innermost_frame_vars(serialized)
+    assert frame_vars["metadata"] == {
+        "context_line": f"'Bearer {FILTERED}'",
+        "pre_context": [f"'{FILTERED}'"],
+        "post_context": [f"'{FILTERED}'"],
+    }
+    assert frame_vars["stacktrace"] == {"frames": [{"context_line": f"'{FILTERED}'", "pre_context": [f"'{FILTERED}'"]}]}
+    innermost_frame: Final = json.loads(serialized)["exception"]["values"][0]["stacktrace"]["frames"][-1]
+    assert "raise RuntimeError" in innermost_frame["context_line"]
+    assert FILTERED not in json.dumps(innermost_frame["pre_context"])
 
 
 def test_default_event_keeps_the_exception_message_shape() -> None:
