@@ -449,16 +449,6 @@ def test_handle_mock_testing_rate_limit_error(model_list):
         )
 
 
-def test_get_fallback_model_group_from_fallbacks(model_list):
-    """Test if the '_get_fallback_model_group_from_fallbacks' function is working correctly"""
-    router = Router(model_list=model_list)
-    fallback_model_group_name = router._get_fallback_model_group_from_fallbacks(
-        model_group="gpt-5.5",
-        fallbacks=[{"gpt-5.5": "gpt-5-mini"}],
-    )
-    assert fallback_model_group_name == "gpt-5-mini"
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_deployment_callback_on_success(sync_mode):

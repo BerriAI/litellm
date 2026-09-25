@@ -139,6 +139,18 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
+def inferred_provider(model: str | None) -> str | None:
+    if not model:
+        return None
+    declared: Final = declared_authenticating_provider(model)
+    if declared is not None:
+        return declared
+    try:
+        return get_llm_provider(model=model)[1]
+    except Exception:  # noqa: BLE001  # get_llm_provider raises for an unknown name, which then has no provider
+        return None
+
+
 def get_llm_provider(
     model: str,
     custom_llm_provider: str | None = None,
