@@ -59,7 +59,7 @@ fn manager(provider: Provider, server: &MockServer) -> SecretManager {
         ),
         Provider::Azure => SecretManager::AzureKeyVault(
             AzureKeyVault::with_client(
-                reqwest::Client::new(),
+                litellm_http::Client::plain_for_test(),
                 server.uri().parse().unwrap(),
                 environment,
             )
@@ -67,7 +67,7 @@ fn manager(provider: Provider, server: &MockServer) -> SecretManager {
         ),
         Provider::Google => SecretManager::GoogleSecretManager(
             GoogleSecretManager::with_client(
-                reqwest::Client::new(),
+                litellm_http::Client::plain_for_test(),
                 server.uri().parse().unwrap(),
                 "project".into(),
                 environment,
@@ -84,7 +84,7 @@ fn manager(provider: Provider, server: &MockServer) -> SecretManager {
             .unwrap(),
         ),
         Provider::Cyberark => SecretManager::Cyberark(CyberArkSecretManager::with_client(
-            reqwest::Client::new(),
+            litellm_http::Client::plain_for_test(),
             server.uri().parse().unwrap(),
             "acct".into(),
             "admin".into(),

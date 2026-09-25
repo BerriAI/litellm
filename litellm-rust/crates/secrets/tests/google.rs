@@ -25,7 +25,7 @@ async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16)
             _ => None,
         });
     let manager = GoogleSecretManager::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         server.uri().parse().unwrap(),
         "project".into(),
         environment.clone(),

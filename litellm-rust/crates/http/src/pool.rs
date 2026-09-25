@@ -116,7 +116,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{HttpSettings, Resolution, Verify};
+    use crate::{ClientIdentity, HttpSettings, Resolution, Verify};
 
     struct FixedResolver(SocketAddr);
 
@@ -288,7 +288,9 @@ mod tests {
     fn media_variant_never_loads_the_client_certificate() {
         let pool = pool();
         let with_identity = HttpClientConfig {
-            client_certificate: Some(std::env::temp_dir().join("litellm-http-absent-client.pem")),
+            client_certificate: Some(ClientIdentity::Pem(
+                std::env::temp_dir().join("litellm-http-absent-client.pem"),
+            )),
             ..config("a")
         };
         assert!(
