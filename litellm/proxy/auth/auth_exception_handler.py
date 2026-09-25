@@ -104,6 +104,10 @@ def _with_client_context(
     return {**request_data, key: {**base, **stamped}}  # mutable-ok: logging needs dicts
 
 
+def _escape_control_chars(value: str) -> str:
+    return "".join(ch if ch.isprintable() else ch.encode("unicode_escape").decode("ascii") for ch in value)
+
+
 def _identity_log_suffix(resolved_identity: UserAPIKeyAuth | None) -> str:
     """Names the owner of the rejected key so the failure log line alone identifies the caller."""
     if resolved_identity is None:
@@ -115,7 +119,7 @@ def _identity_log_suffix(resolved_identity: UserAPIKeyAuth | None) -> str:
         ("team_id", resolved_identity.team_id),
         ("team_alias", resolved_identity.team_alias),
     )
-    known: Final = " ".join(f"{name}={value}" for name, value in fields if value)
+    known: Final = " ".join(f"{name}={_escape_control_chars(value)}" for name, value in fields if value)
     return f"\nKey Identity: {known}" if known else ""
 
 

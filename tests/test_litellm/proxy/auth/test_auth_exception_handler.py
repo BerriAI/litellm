@@ -617,6 +617,12 @@ async def test_resolved_identity_exported_on_auth_failure():
             "key_alias=",
             id="unset_fields_omitted",
         ),
+        pytest.param(
+            UserAPIKeyAuth(token="hashed-token", team_alias="ops\nRequester IP Address:10.0.0.1"),
+            "Key Identity: team_alias=ops\\nRequester IP Address:10.0.0.1",
+            "\nRequester IP Address:10.0.0.1",
+            id="control_chars_in_alias_cannot_forge_log_lines",
+        ),
         pytest.param(None, None, "Key Identity", id="unknown_key_has_no_identity_line"),
     ],
 )
