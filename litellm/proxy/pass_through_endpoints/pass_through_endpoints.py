@@ -607,7 +607,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # body that mirrors them cannot clobber the authenticated key, the real
         # parent span, or the proxy's own session-id decision.
         _metadata.pop(SESSION_ID_OMITTED_METADATA_KEY, None)
-        _metadata["user_api_key"] = user_api_key_dict.api_key
+        _metadata["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
         _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
