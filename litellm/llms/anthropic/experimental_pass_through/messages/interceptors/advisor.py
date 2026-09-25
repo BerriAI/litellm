@@ -109,10 +109,12 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             None if (advisor_api_key or advisor_api_base) else _resolve_advisor_router(advisor_model)
         )
         iteration = 0
+        pending_executor_response: AnthropicMessagesResponse | None
+        pending_executor_response = None  # rebind-ok: advance queued advisor calls within this loop
 
         while True:
             # --- Executor call (always non-streaming) ---
-            executor_response: AnthropicMessagesResponse = await _call_messages_handler(
+            executor_response: AnthropicMessagesResponse = pending_executor_response or await _call_messages_handler(
                 model=model,
                 messages=current_messages,
                 tools=executor_tools,
@@ -126,6 +128,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 },
                 **kwargs,
             )
+            pending_executor_response = None
 
             advisor_use_block = _find_advisor_tool_use(executor_response)
 
@@ -176,6 +179,27 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 raise
 
             advisor_text = _extract_response_text(advisor_response)
+
+            if any(
+                isinstance(block, dict) and block.get("type") == "tool_use" and block is not advisor_use_block
+                for block in executor_response.get("content") or ()
+            ):
+                resolved_response: AnthropicMessagesResponse = {
+                    **executor_response,
+                    "content": [  # mutable-ok: Anthropic response content must remain a list for callers and streaming
+                        {"type": "text", "text": f"<advisor_feedback>\n{advisor_text}\n</advisor_feedback>"}
+                        if block is advisor_use_block
+                        else block
+                        for block in executor_response.get("content") or ()
+                    ],
+                    "stop_reason": "tool_use",
+                }
+                if _find_advisor_tool_use(resolved_response) is not None:
+                    pending_executor_response = resolved_response
+                    continue
+                if stream:
+                    return FakeAnthropicMessagesStreamIterator(resolved_response)
+                return resolved_response
 
             # --- Inject advisor result and continue loop ---
             current_messages = _inject_advisor_turn(

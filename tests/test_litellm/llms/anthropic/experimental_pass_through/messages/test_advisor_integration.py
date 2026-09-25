@@ -8,8 +8,10 @@ The only thing mocked is _call_messages_handler (the outbound LLM call), so the
 interceptor detection, loop logic, and message assembly all run for real.
 """
 
-from typing import Dict
-from unittest.mock import patch
+import copy
+import json
+from typing import Dict, Final
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -25,6 +27,99 @@ MESSAGES = [
         "content": "Write a Python function to check if a number is prime.",
     }
 ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("advisor_count", [1, 2])
+async def test_mixed_tools_wait_for_client_results_and_preserve_history(stream: bool, advisor_count: int) -> None:
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import anthropic_messages
+
+    thinking: Final = {"type": "thinking", "thinking": "Check the task and seek advice.", "signature": "opaque-signature"}
+    client_tools: Final = [
+        {"type": "tool_use", "id": "toolu_task", "name": "TaskUpdate", "input": {"taskId": "1"}},
+        {"type": "tool_use", "id": "toolu_read", "name": "Read", "input": {"path": "example.txt"}},
+    ]
+    advisor_call: Final = _advisor_call_resp(question="Check the plan before continuing.", tool_id="toolu_advisor")
+    advisor_calls: Final = [{**advisor_call["content"][0], "id": f"toolu_advisor_{index}"} for index in range(advisor_count)]
+    executor_response: Final = {**advisor_call, "content": [thinking, client_tools[0], *advisor_calls, client_tools[1]]}
+    original_response: Final = copy.deepcopy(executor_response)
+    expected_content: Final = [
+        thinking,
+        client_tools[0],
+        *[
+            {"type": "text", "text": f"<advisor_feedback>\nAdvice {index}: check the file.\n</advisor_feedback>"}
+            for index in range(advisor_count)
+        ],
+        client_tools[1],
+    ]
+    outbound: Final = AsyncMock(
+        side_effect=[
+            executor_response,
+            *[_text_resp(f"Advice {index}: check the file.") for index in range(advisor_count)],
+        ]
+    )
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        outbound,
+    ):
+        result: Final = await anthropic_messages(
+            model="bedrock/us.anthropic.claude-opus-5-5",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=stream,
+            max_tokens=512,
+            custom_llm_provider="bedrock",
+        )
+    assert outbound.await_count == 1 + advisor_count
+    assert executor_response == original_response
+    assistant_turn: Final
+    if stream:
+        events: Final = [
+            json.loads(line.removeprefix("data: "))
+            async for chunk in result
+            for line in chunk.decode().splitlines()
+            if line.startswith("data: ")
+        ]
+        starts: Final = [event for event in events if event["type"] == "content_block_start"]
+        stops: Final = [event for event in events if event["type"] == "content_block_stop"]
+        assert [event["index"] for event in starts] == list(range(3 + advisor_count))
+        assert [event["index"] for event in stops] == list(range(3 + advisor_count))
+        assert [event["content_block"].get("id") for event in starts] == [
+            None,
+            "toolu_task",
+            *([None] * advisor_count),
+            "toolu_read",
+        ]
+        assert next(event for event in events if event["type"] == "message_delta")["delta"]["stop_reason"] == "tool_use"
+        assert result.response["content"] == expected_content
+        assistant_turn = {"role": "assistant", "content": result.response["content"]}
+    else:
+        assert result["stop_reason"] == "tool_use"
+        assert result["content"] == expected_content
+        assistant_turn = {"role": "assistant", "content": result["content"]}
+    client_result_turn: Final = {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_task", "content": "Task updated"},
+            {"type": "tool_result", "tool_use_id": "toolu_read", "content": "File contents"},
+        ],
+    }
+    resumed: Final = AsyncMock(return_value=_text_resp("Done"))
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        resumed,
+    ):
+        await anthropic_messages(
+            model="bedrock/us.anthropic.claude-opus-5-5",
+            messages=[*MESSAGES, assistant_turn, client_result_turn],
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="bedrock",
+        )
+    resumed.assert_awaited_once()
+    assert resumed.call_args.kwargs["messages"][-2:] == [assistant_turn, client_result_turn]
 
 
 def _text_resp(text: str, model: str = "gpt-4o-mini") -> Dict:
