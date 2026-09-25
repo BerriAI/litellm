@@ -561,3 +561,44 @@ def test_router_silent_experiment_completion():
         assert silent_call[1]["model"] == "openai/gpt-4"
         # Verify model_group is set to the silent model name for correct metric attribution
         assert silent_call[1]["metadata"]["model_group"] == "silent-model"
+
+
+SILENT_EXPERIMENT_RUNNERS: Final = (
+    pytest.param(lambda router, **kwargs: router._silent_experiment_completion(**kwargs), id="sync"),
+    pytest.param(lambda router, **kwargs: asyncio.run(router._silent_experiment_acompletion(**kwargs)), id="async"),
+)
+
+
+@pytest.mark.parametrize("run_silent_experiment", SILENT_EXPERIMENT_RUNNERS)
+def test_silent_experiment_sends_shadow_request_attributed_to_the_silent_model(run_silent_experiment):
+    router = Router(model_list=_streaming_model_list(["shadow-a"]))
+    primary_metadata: Final = {"model_group": "primary-model"}
+    with patch.object(router, "acompletion", new_callable=AsyncMock, return_value=None) as acompletion:
+        run_silent_experiment(
+            router,
+            silent_model="shadow-a",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=primary_metadata,
+        )
+
+    acompletion.assert_awaited_once()
+    shadow_call: Final = acompletion.await_args.kwargs
+    assert shadow_call["model"] == "shadow-a"
+    assert shadow_call["messages"] == [{"role": "user", "content": "hi"}]
+    assert shadow_call["metadata"]["model_group"] == "shadow-a"
+    assert shadow_call["metadata"]["is_silent_experiment"] is True
+    assert primary_metadata == {"model_group": "primary-model"}
+
+
+@pytest.mark.parametrize("run_silent_experiment", SILENT_EXPERIMENT_RUNNERS)
+def test_silent_experiment_does_not_launch_from_a_shadow_request(run_silent_experiment):
+    router = Router(model_list=_streaming_model_list(["shadow-a"]))
+    with patch.object(router, "acompletion", new_callable=AsyncMock, return_value=None) as acompletion:
+        run_silent_experiment(
+            router,
+            silent_model="shadow-a",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"is_silent_experiment": True},
+        )
+
+    acompletion.assert_not_awaited()
