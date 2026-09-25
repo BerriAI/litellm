@@ -1475,3 +1475,103 @@ async def test_get_agent_daily_activity_export_csv_headers(monkeypatch):
     body = _json.loads(json_response.body)
     assert body["data"][0]["entity_id"] == "agent-1"
     assert body["data"][0]["entity_alias"] == "First Agent"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_daily_activity_model_top_keys_admin_param_passing(monkeypatch):
+    mock_prisma = AsyncMock()
+    mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(agent_endpoints, "check_feature_access_for_user", AsyncMock())
+
+    mocked_response = MagicMock(name="ModelTopApiKeysResponse")
+    top_keys_mock = AsyncMock(return_value=mocked_response)
+    monkeypatch.setattr(agent_endpoints, "get_daily_activity_model_top_api_keys", top_keys_mock)
+
+    from litellm.proxy.agent_endpoints.endpoints import get_agent_daily_activity_model_top_keys
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    result = await get_agent_daily_activity_model_top_keys(
+        user_api_key_dict=auth,
+        model="gpt-4",
+        group_by="model_group",
+        agent_ids="agent-1,agent-2",
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        exclude_agent_ids="agent-3",
+        timezone=480,
+    )
+
+    top_keys_mock.assert_awaited_once()
+    kwargs = top_keys_mock.call_args.kwargs
+    assert kwargs["table_name"] == "litellm_dailyagentspend"
+    assert kwargs["entity_id_field"] == "agent_id"
+    assert kwargs["entity_id"] == ["agent-1", "agent-2"]
+    assert kwargs["model"] == "gpt-4"
+    assert kwargs["group_by"] == "model_group"
+    assert kwargs["api_key"] is None
+    assert kwargs["exclude_entity_ids"] == ["agent-3"]
+    assert kwargs["timezone_offset_minutes"] == 480
+    assert result is mocked_response
+
+
+@pytest.mark.asyncio
+async def test_get_agent_daily_activity_model_top_keys_missing_dates_raises_400(monkeypatch):
+    mock_prisma = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(agent_endpoints, "check_feature_access_for_user", AsyncMock())
+    top_keys_mock = AsyncMock()
+    monkeypatch.setattr(agent_endpoints, "get_daily_activity_model_top_api_keys", top_keys_mock)
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.agent_endpoints.endpoints import get_agent_daily_activity_model_top_keys
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    with pytest.raises(HTTPException) as exc:
+        await get_agent_daily_activity_model_top_keys(
+            user_api_key_dict=auth,
+            model="gpt-4",
+            group_by="model",
+            agent_ids="agent-1",
+            start_date=None,
+            end_date=None,
+            exclude_agent_ids=None,
+            timezone=None,
+        )
+
+    assert exc.value.status_code == 400
+    top_keys_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_agent_daily_activity_model_top_keys_empty_scope_returns_empty(monkeypatch):
+    """A restricted caller with no accessible agents gets an empty response without querying."""
+    mock_prisma = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(agent_endpoints, "check_feature_access_for_user", AsyncMock())
+    monkeypatch.setattr(
+        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
+        AsyncMock(return_value=RestrictedAgentAccess(frozenset())),
+    )
+    top_keys_mock = AsyncMock()
+    monkeypatch.setattr(agent_endpoints, "get_daily_activity_model_top_api_keys", top_keys_mock)
+
+    from litellm.proxy.agent_endpoints.endpoints import get_agent_daily_activity_model_top_keys
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user")
+    result = await get_agent_daily_activity_model_top_keys(
+        user_api_key_dict=auth,
+        model="gpt-4",
+        group_by="model",
+        agent_ids="agent-1",
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        exclude_agent_ids=None,
+        timezone=None,
+    )
+
+    assert result.api_keys == []
+    assert result.model == "gpt-4"
+    assert result.group_by == "model"
+    top_keys_mock.assert_not_called()

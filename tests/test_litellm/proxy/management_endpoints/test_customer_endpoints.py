@@ -1151,3 +1151,109 @@ async def test_get_customer_daily_activity_aggregated_alias_metadata_and_breakdo
     assert kwargs["entity_metadata_field"] == {"end-user-1": {"alias": "Customer One"}}
     assert kwargs["include_entity_breakdown"] is True
     assert kwargs["timezone_offset_minutes"] == 480
+
+
+@pytest.mark.asyncio
+async def test_get_customer_daily_activity_model_top_keys_admin_param_passing(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity_model_top_keys,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mocked_response = MagicMock(name="ModelTopApiKeysResponse")
+    top_keys_mock = AsyncMock(return_value=mocked_response)
+    monkeypatch.setattr(customer_endpoints, "get_daily_activity_model_top_api_keys", top_keys_mock)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    result = await get_customer_daily_activity_model_top_keys(
+        user_api_key_dict=auth,
+        model="gpt-4",
+        group_by="model_group",
+        end_user_ids="end-user-1,end-user-2",
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        exclude_end_user_ids="end-user-3",
+        timezone=480,
+    )
+
+    top_keys_mock.assert_awaited_once()
+    kwargs = top_keys_mock.call_args.kwargs
+    assert kwargs["table_name"] == "litellm_dailyenduserspend"
+    assert kwargs["entity_id_field"] == "end_user_id"
+    assert kwargs["entity_id"] == ["end-user-1", "end-user-2"]
+    assert kwargs["model"] == "gpt-4"
+    assert kwargs["group_by"] == "model_group"
+    assert kwargs["api_key"] is None
+    assert kwargs["exclude_entity_ids"] == ["end-user-3"]
+    assert kwargs["timezone_offset_minutes"] == 480
+    assert result is mocked_response
+
+
+@pytest.mark.asyncio
+async def test_get_customer_daily_activity_model_top_keys_missing_dates_raises_400(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity_model_top_keys,
+    )
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    top_keys_mock = AsyncMock()
+    monkeypatch.setattr(customer_endpoints, "get_daily_activity_model_top_api_keys", top_keys_mock)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    with pytest.raises(HTTPException) as exc_info:
+        await get_customer_daily_activity_model_top_keys(
+            user_api_key_dict=auth,
+            model="gpt-4",
+            group_by="model",
+            end_user_ids="end-user-1",
+            start_date=None,
+            end_date=None,
+            exclude_end_user_ids=None,
+            timezone=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    top_keys_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_customer_daily_activity_model_top_keys_non_admin_is_rejected(monkeypatch):
+    """Non-admin callers must get 401 before any scoping or querying happens."""
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity_model_top_keys,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    top_keys_mock = AsyncMock()
+    monkeypatch.setattr(customer_endpoints, "get_daily_activity_model_top_api_keys", top_keys_mock)
+
+    non_admin_key = UserAPIKeyAuth(
+        user_id="regular-user-abc",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_customer_daily_activity_model_top_keys(
+            user_api_key_dict=non_admin_key,
+            model="gpt-4",
+            group_by="model",
+            end_user_ids=None,
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            exclude_end_user_ids=None,
+            timezone=None,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert "Admin-only endpoint" in str(exc_info.value.detail)
+    top_keys_mock.assert_not_called()

@@ -2784,6 +2784,7 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
         "/tag/daily/activity",
         "/tag/daily/activity/aggregated",
         "/tag/daily/activity/aggregated/search",
+        "/tag/daily/activity/aggregated/model_top_keys",
         "/tag/daily/activity/export",
     ],
 )
@@ -3673,6 +3674,7 @@ def test_team_daily_activity_routes_reachable_by_non_admin(route, user_role):
         "/organization/daily/activity",
         "/organization/daily/activity/aggregated",
         "/organization/daily/activity/aggregated/search",
+        "/organization/daily/activity/aggregated/model_top_keys",
         "/organization/daily/activity/export",
     ],
 )

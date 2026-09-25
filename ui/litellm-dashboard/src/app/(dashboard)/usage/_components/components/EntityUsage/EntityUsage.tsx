@@ -27,30 +27,14 @@ import { ActivityMetrics, processActivityData, toTopApiKeyData } from "@/compone
 import { UsageExportHeader } from "@/components/EntityUsageExport";
 import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import type { EntityType, ServerExport } from "@/components/EntityUsageExport/types";
+import { agentDailyActivityCall } from "@/components/networking";
 import {
-  agentDailyActivityAggregatedCall,
-  agentDailyActivityCall,
-  agentDailyActivityExportCall,
-  agentDailyActivityKeySearchCall,
-  customerDailyActivityAggregatedCall,
-  customerDailyActivityCall,
-  customerDailyActivityExportCall,
-  customerDailyActivityKeySearchCall,
-  organizationDailyActivityAggregatedCall,
-  organizationDailyActivityCall,
-  organizationDailyActivityExportCall,
-  organizationDailyActivityKeySearchCall,
-  tagDailyActivityAggregatedCall,
-  tagDailyActivityCall,
-  tagDailyActivityExportCall,
-  tagDailyActivityKeySearchCall,
-  teamDailyActivityAggregatedCall,
-  teamDailyActivityCall,
-  teamDailyActivityExportCall,
-  teamDailyActivityKeySearchCall,
-  teamDailyActivityModelTopKeysCall,
-  userDailyActivityCall,
-} from "@/components/networking";
+  ENTITY_AGGREGATED_FETCH_FNS,
+  ENTITY_EXPORT_FNS,
+  ENTITY_FETCH_FNS,
+  ENTITY_KEY_SEARCH_FNS,
+  ENTITY_MODEL_TOP_KEYS_FNS,
+} from "./entityFetchFns";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
 import { EntityMetricWithMetadata } from "@/components/UsagePage/types";
@@ -108,58 +92,6 @@ interface EntityUsageProps {
   isOrgAdmin?: boolean;
 }
 
-const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
-  tag: tagDailyActivityCall,
-  team: teamDailyActivityCall,
-  organization: organizationDailyActivityCall,
-  customer: customerDailyActivityCall,
-  agent: agentDailyActivityCall,
-  user: userDailyActivityCall,
-};
-
-// Single-shot endpoints returning the whole range in one response; entity types
-// without one fall back to page-draining the paginated endpoint.
-const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, (...args: any[]) => Promise<any>>> = {
-  tag: tagDailyActivityAggregatedCall,
-  team: teamDailyActivityAggregatedCall,
-  organization: organizationDailyActivityAggregatedCall,
-  customer: customerDailyActivityAggregatedCall,
-  agent: agentDailyActivityAggregatedCall,
-};
-
-const ENTITY_KEY_SEARCH_FNS: Partial<
-  Record<
-    EntityType,
-    (accessToken: string, startTime: Date, endTime: Date, ...options: [string, (string[] | null)?]) => Promise<any>
-  >
-> = {
-  tag: tagDailyActivityKeySearchCall,
-  team: teamDailyActivityKeySearchCall,
-  organization: organizationDailyActivityKeySearchCall,
-  customer: customerDailyActivityKeySearchCall,
-  agent: agentDailyActivityKeySearchCall,
-};
-
-type EntityExportCall = (options: {
-  accessToken: string;
-  startTime: Date;
-  endTime: Date;
-  entityIds: string[] | null;
-  exportType: Parameters<typeof teamDailyActivityExportCall>[0]["exportType"];
-  format: Parameters<typeof teamDailyActivityExportCall>[0]["format"];
-}) => Promise<Blob>;
-
-const teamExportCall: EntityExportCall = ({ entityIds, ...rest }) =>
-  teamDailyActivityExportCall({ ...rest, teamIds: entityIds });
-
-const ENTITY_EXPORT_FNS: Partial<Record<EntityType, EntityExportCall>> = {
-  tag: tagDailyActivityExportCall,
-  team: teamExportCall,
-  organization: organizationDailyActivityExportCall,
-  customer: customerDailyActivityExportCall,
-  agent: agentDailyActivityExportCall,
-};
-
 const ENTITY_CAPABILITIES: Partial<Record<EntityType, Capability>> = {
   organization: "viewOrganizationUsage",
   agent: "viewAgentUsage",
@@ -189,6 +121,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     if (entityType === "user") return selectedTags.length > 0 ? selectedTags[0] : null;
     return selectedTags.length > 0 ? selectedTags : null;
   }, [entityType, selectedTags]);
+
+  const entityIds = useMemo(() => {
+    if (entityFilterArg === null) return null;
+    return Array.isArray(entityFilterArg) ? entityFilterArg : [entityFilterArg];
+  }, [entityFilterArg]);
 
   const fetchFn = ENTITY_FETCH_FNS[entityType];
   const aggregatedFetchFn = ENTITY_AGGREGATED_FETCH_FNS[entityType];
@@ -240,29 +177,27 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     (query: string) => {
       const searchTimesReady = accessToken && startTime && endTime;
       if (!keySearchFn || !searchTimesReady) return Promise.resolve({});
-      const entityIds = Array.isArray(entityFilterArg) ? entityFilterArg : null;
       return keySearchFn(accessToken, startTime, endTime, query, entityIds).then((data) =>
         processActivityData(data, "api_keys", teams || []),
       );
     },
-    [keySearchFn, accessToken, startTime, endTime, entityFilterArg, teams],
+    [keySearchFn, accessToken, startTime, endTime, entityIds, teams],
   );
   const agentMetrics = showAgentBreakdown ? processActivityData(agentSpendData, "entities", teams || []) : {};
 
   const fetchModelTopApiKeys = useCallback(
     (modelName: string) => {
       if (!accessToken || !startTime || !endTime) return Promise.resolve([]);
-      const teamIds = Array.isArray(entityFilterArg) ? entityFilterArg : null;
-      return teamDailyActivityModelTopKeysCall(
+      return ENTITY_MODEL_TOP_KEYS_FNS[entityType](
         accessToken,
         startTime,
         endTime,
         modelName,
         modelViewType === "groups" ? "model_group" : "model",
-        teamIds,
+        entityIds,
       ).then(toTopApiKeyData);
     },
-    [accessToken, startTime, endTime, entityFilterArg, modelViewType],
+    [accessToken, startTime, endTime, entityType, entityIds, modelViewType],
   );
 
   const getAllTags = () => {
@@ -736,7 +671,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <ActivityMetrics
             modelMetrics={modelMetrics}
             hidePromptCachingMetrics={entityType === "agent"}
-            fetchTopApiKeys={entityType === "team" && hasRequestWindow ? fetchModelTopApiKeys : undefined}
+            fetchTopApiKeys={hasRequestWindow ? fetchModelTopApiKeys : undefined}
           />
         </>
       ),
@@ -768,7 +703,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             accessToken,
             startTime,
             endTime,
-            entityIds: entityFilterArg as string[] | null,
+            entityIds,
             exportType: scope,
             format,
           };

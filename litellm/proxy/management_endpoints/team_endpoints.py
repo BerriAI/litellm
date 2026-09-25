@@ -6597,7 +6597,7 @@ async def _resolve_team_daily_activity_scope(
             check_db_only=True,
         )
         if user_info is None:
-            raise daily_activity_error(status_code=404, message=f"User= {user_api_key_dict.user_id} not found")
+            raise _daily_activity_error(status_code=404, message=f"User= {user_api_key_dict.user_id} not found")
 
         if team_ids_list is None:
             team_ids_list = user_info.teams
@@ -6605,7 +6605,7 @@ async def _resolve_team_daily_activity_scope(
             # check if all team_ids are in user_info.teams
             for team_id in team_ids_list:
                 if team_id not in user_info.teams:
-                    raise daily_activity_error(
+                    raise _daily_activity_error(
                         status_code=404,
                         message=f"User does not belong to Team= {team_id}. Call `/user/info` to see user's teams",
                     )
@@ -6702,7 +6702,7 @@ async def get_team_daily_activity(
     )
 
     if prisma_client is None:
-        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,
@@ -6770,11 +6770,11 @@ async def get_team_daily_activity_aggregated(
     )
 
     if prisma_client is None:
-        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = aggregated_date_range_error(start_date, end_date)
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
     if range_error is not None:
-        raise daily_activity_error(status_code=400, message=range_error)
+        raise _daily_activity_error(status_code=400, message=range_error)
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,
@@ -6834,11 +6834,11 @@ async def get_team_daily_activity_export(
     )
 
     if prisma_client is None:
-        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = aggregated_date_range_error(start_date, end_date)
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
     if range_error is not None or start_date is None or end_date is None:
-        raise daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_id,
@@ -6956,11 +6956,11 @@ async def search_team_daily_activity_keys(
     )
 
     if prisma_client is None:
-        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = aggregated_date_range_error(start_date, end_date)
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
     if range_error is not None:
-        raise daily_activity_error(status_code=400, message=range_error)
+        raise _daily_activity_error(status_code=400, message=range_error)
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,
@@ -7123,14 +7123,14 @@ async def get_team_spend_by_user(
     )
 
     if prisma_client is None:
-        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = aggregated_date_range_error(start_date, end_date)
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
     if range_error is not None or start_date is None or end_date is None:
-        raise daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
 
     if not team_ids:
-        raise daily_activity_error(status_code=400, message="Please provide team_ids")
+        raise _daily_activity_error(status_code=400, message="Please provide team_ids")
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,

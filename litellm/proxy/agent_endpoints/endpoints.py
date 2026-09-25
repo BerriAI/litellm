@@ -20,6 +20,7 @@ from typing_extensions import NamedTuple, ReadOnly, Required, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import USAGE_MODEL_TOP_API_KEYS_LIMIT
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -61,6 +62,7 @@ from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     get_daily_activity_aggregated,
+    get_daily_activity_model_top_api_keys,
 )
 from litellm.proxy.management_endpoints.common_daily_activity_routes import (
     DailyActivityExportLabels,
@@ -91,6 +93,8 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailyActivityExportResponse,
     DailyActivityExportType,
     DailySpendMetadata,
+    ModelTopApiKeysGroupBy,
+    ModelTopApiKeysResponse,
     SpendAnalyticsPaginatedResponse,
 )
 
@@ -1445,6 +1449,63 @@ async def search_agent_daily_activity_keys(
         exclude_entity_ids=scope.exclude_agent_ids,
         timezone_offset_minutes=timezone,
         include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/agent/daily/activity/aggregated/model_top_keys",
+    tags=["Agent Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ModelTopApiKeysResponse,
+)
+async def get_agent_daily_activity_model_top_keys(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    model: str = Query(
+        ...,
+        min_length=1,
+        description="Model or model group to rank keys by spend for",
+    ),
+    group_by: ModelTopApiKeysGroupBy = "model",
+    agent_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    exclude_agent_ids: str | None = None,
+    timezone: int | None = None,
+) -> ModelTopApiKeysResponse:
+    """Top keys by spend on one model or model group, across every key rather
+    than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend."""
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None or start_date is None or end_date is None:
+        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+
+    scope: Final = await _resolve_agent_daily_activity_scope(
+        prisma_client=prisma_client,
+        agent_ids=agent_ids,
+        exclude_agent_ids=exclude_agent_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if scope.agent_ids == []:
+        return ModelTopApiKeysResponse(model=model, group_by=group_by, limit=USAGE_MODEL_TOP_API_KEYS_LIMIT)
+
+    return await get_daily_activity_model_top_api_keys(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyagentspend",
+        entity_id_field="agent_id",
+        entity_id=scope.agent_ids,
+        start_date=start_date,
+        end_date=end_date,
+        group_by=group_by,
+        model=model,
+        api_key=None,
+        exclude_entity_ids=scope.exclude_agent_ids,
+        timezone_offset_minutes=timezone,
     )
 
 
