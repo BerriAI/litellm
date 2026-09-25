@@ -134,7 +134,16 @@ def main(
         uncompressed_wheel_size: Final = sum(member.file_size for member in wheel_members)
         native_path: Final = wheel.parent / "native" / Path(native_member.filename).name
         native_path.parent.mkdir(parents=True, exist_ok=True)
-        native_path.write_bytes(archive.read(native_member))
+        native_bytes: Final = archive.read(native_member)
+        native_path.write_bytes(native_bytes)
+        duplicated_vocabularies: Final = tuple(
+            member.filename
+            for member in wheel_members
+            if member.filename.startswith("litellm/litellm_core_utils/tokenizers/")
+            and re.fullmatch(r"[0-9a-f]{40}", PurePosixPath(member.filename).name)
+            and member.file_size > 0
+            and archive.read(member) in native_bytes
+        )
 
     wheel_metadata_tags_match: Final = (
         len(wheel_metadata_tags) == len(expanded_filename_tags)
@@ -223,6 +232,7 @@ def main(
         ("Native module loads", native_module_loads),
         ("Production module omits the panic test hook", panic_test_hook_absent),
         (f"Native extension does not exceed {native_size_limit / 1_000_000:.0f} MB", native_size_within_limit),
+        ("Tokenizer vocabularies are not duplicated in the native extension", not duplicated_vocabularies),
         ("Wheel contents are valid", not unexpected_members),
     )
 

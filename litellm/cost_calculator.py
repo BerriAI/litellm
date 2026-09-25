@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_service_tier_cost_key,
     calculate_cost_component,
     generic_cost_per_token,
+    get_batch_cost_rates,
     get_billable_input_tokens,
     get_token_type_cost_breakdown,
     parse_prompt_tokens_details,
@@ -115,6 +116,7 @@ from litellm.types.utils import (
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
+    ModelInfoBase,
     PromptTokensDetailsWrapper,
     ServiceTier,
     StandardBuiltInToolsParams,
@@ -322,6 +324,48 @@ class OCRPricing(TypedDict, total=False):
     annotation_cost_per_page: ReadOnly[float | None]
 
 
+_WALL_CLOCK_PRICED_MODES: Final = frozenset({"chat", "completion", "embedding", "responses"})
+
+
+def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
+    return (
+        (model_info.get("input_cost_per_token") or 0.0) > 0
+        or (model_info.get("output_cost_per_token") or 0.0) > 0
+        or model_info.get("tiered_pricing") is not None
+    )
+
+
+def _bills_wall_clock_seconds(model_info: ModelInfoBase) -> bool:
+    mode: Final = model_info.get("mode")
+    return mode is None or mode in _WALL_CLOCK_PRICED_MODES
+
+
+def _per_second_pricing_cost(
+    model: str,
+    custom_llm_provider: str | None,
+    response_time_ms: float | None,
+) -> tuple[float, float] | None:
+    try:
+        model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
+        return None
+    if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
+        return None
+    input_cost_per_second: Final = model_info.get("input_cost_per_second")
+    output_cost_per_second: Final = model_info.get("output_cost_per_second")
+    if input_cost_per_second is None and output_cost_per_second is None:
+        return None
+    seconds: Final = (response_time_ms or 0.0) / 1000
+    verbose_logger.debug(
+        "For model=%s - input_cost_per_second: %s; output_cost_per_second: %s; response time: %s",
+        model,
+        input_cost_per_second,
+        output_cost_per_second,
+        response_time_ms,
+    )
+    return (input_cost_per_second or 0.0) * seconds, (output_cost_per_second or 0.0) * seconds
+
+
 def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
@@ -448,9 +492,6 @@ def cost_per_token(
     if response_cost is not None:
         return response_cost[0], response_cost[1]
 
-    # given
-    prompt_tokens_cost_usd_dollar: float = 0
-    completion_tokens_cost_usd_dollar: float = 0
     model_cost_ref: Final = litellm.model_cost
     # Only callers that explicitly pass `custom_llm_provider` get the
     # dedup/prefix-join treatment. When provider is omitted, preserve legacy
@@ -611,6 +652,14 @@ def cost_per_token(
             number_of_queries=number_of_queries or 1,
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
         )
+    elif (
+        per_second_cost := _per_second_pricing_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            response_time_ms=response_time_ms,
+        )
+    ) is not None:
+        return per_second_cost
     elif custom_llm_provider == "vertex_ai":
         cost_router: Final = google_cost_router(
             model=model_without_prefix,
@@ -685,12 +734,7 @@ def cost_per_token(
         )
     else:
         model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-
-        if (
-            (model_info.get("input_cost_per_token") or 0.0) > 0
-            or (model_info.get("output_cost_per_token") or 0.0) > 0
-            or model_info.get("tiered_pricing") is not None
-        ):
+        if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
@@ -698,36 +742,8 @@ def cost_per_token(
                 service_tier=service_tier,
                 data_residency=data_residency,
             )
-
-        input_cost_per_second: Final = model_info.get("input_cost_per_second")
-        if input_cost_per_second is not None and response_time_ms is not None:
-            verbose_logger.debug(
-                "For model=%s - input_cost_per_second: %s; response time: %s",
-                model,
-                input_cost_per_second,
-                response_time_ms,
-            )
-            ## COST PER SECOND ##
-            prompt_tokens_cost_usd_dollar = input_cost_per_second * response_time_ms / 1000
-
-        output_cost_per_second: Final = model_info.get("output_cost_per_second")
-        if output_cost_per_second is not None and response_time_ms is not None:
-            verbose_logger.debug(
-                "For model=%s - output_cost_per_second: %s; response time: %s",
-                model,
-                output_cost_per_second,
-                response_time_ms,
-            )
-            ## COST PER SECOND ##
-            completion_tokens_cost_usd_dollar = output_cost_per_second * response_time_ms / 1000
-
-        verbose_logger.debug(
-            "Returned custom cost for model=%s - prompt_tokens_cost_usd_dollar: %s, completion_tokens_cost_usd_dollar: %s",
-            model,
-            prompt_tokens_cost_usd_dollar,
-            completion_tokens_cost_usd_dollar,
-        )
-        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+        verbose_logger.debug("No per-token, tiered, or per-second pricing for model=%s; cost is 0", model)
+        return 0.0, 0.0
 
 
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
@@ -948,7 +964,7 @@ def _extract_service_tier(source: object) -> str | None:
     return None
 
 
-def _get_usage_object(
+def get_usage_object(
     completion_response: object,
 ) -> Usage | None:
     usage_obj: Final = cast(
@@ -1222,6 +1238,21 @@ def _split_responses_ws_logging_object_by_service_tier(
     )
 
 
+def _response_time_ms_for_cost(
+    completion_response: object,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    total_time: float | None,
+) -> float:
+    stamped: Final = getattr(completion_response, "_response_ms", None)
+    if isinstance(stamped, (int, float)):
+        return float(stamped)
+    if total_time:
+        return total_time
+    if litellm_logging_obj is not None:
+        return litellm_logging_obj.get_response_ms()
+    return 0.0
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1336,7 +1367,7 @@ def completion_cost(
         cache_creation_input_tokens: int | None = None
         cache_read_input_tokens: int | None = None
         audio_transcription_file_duration: float = 0.0
-        provider_usage_object: Final = _get_usage_object(completion_response=completion_response)
+        provider_usage_object: Final = get_usage_object(completion_response=completion_response)
         cost_per_token_usage_object: Final[Usage | None] = (
             _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
         )
@@ -1443,8 +1474,6 @@ def completion_cost(
                         prompt_tokens_details = _usage.get("prompt_tokens_details") or {}
                         cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
 
-                    total_time = getattr(completion_response, "_response_ms", 0)
-
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
                         custom_llm_provider = hidden_params.get("custom_llm_provider", custom_llm_provider or None)
@@ -1503,6 +1532,7 @@ def completion_cost(
                         size=size,
                         optional_params=optional_params,
                         call_type=call_type,
+                        model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -1676,6 +1706,11 @@ def completion_cost(
                     )
 
                     return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
+                response_time_ms = _response_time_ms_for_cost(
+                    completion_response=completion_response,
+                    litellm_logging_obj=litellm_logging_obj,
+                    total_time=total_time,
+                )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
@@ -1686,7 +1721,7 @@ def completion_cost(
                 # see https://replicate.com/pricing
                 elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
                     # for unmapped replicate model, default to replicate's time tracking logic
-                    return get_replicate_completion_pricing(completion_response, total_time)
+                    return get_replicate_completion_pricing(completion_response, response_time_ms)
 
                 if model is None:
                     raise ValueError(
@@ -1718,7 +1753,7 @@ def completion_cost(
                     prompt_tokens=prompt_tokens or 0,
                     completion_tokens=completion_tokens or 0,
                     custom_llm_provider=custom_llm_provider,
-                    response_time_ms=total_time,
+                    response_time_ms=response_time_ms,
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
                     custom_cost_per_token=custom_cost_per_token,
@@ -1977,17 +2012,13 @@ def _deployment_model_info(
 ) -> ModelInfo | None:
     if not custom_pricing:
         return None
-    registered_deployment_info: Final = (
-        _cost_map_model_info(router_model_id, None)
-        if router_model_id is not None and router_model_id in litellm.model_cost
-        else None
-    )
+    registered_deployment_info: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
     if registered_deployment_info is not None:
-        return registered_deployment_info
+        return cast(ModelInfo, registered_deployment_info)  # cast-ok: router registers deployment prices under its id
     if litellm_logging_obj is None:
         return None
-    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
-    if litellm_params is None:
+    litellm_params: Final = litellm_logging_obj.litellm_params
+    if not litellm_params:
         return None
     return next(
         (
@@ -2005,7 +2036,9 @@ def _ocr_model_info(
     router_model_id: str | None,
 ) -> OCRPricing | None:
     deployment_info: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
-    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None) if custom_pricing else None
+    litellm_params: Final = (
+        litellm_logging_obj.litellm_params if custom_pricing and litellm_logging_obj is not None else None
+    )
     if litellm_params is None:
         return deployment_info
     return _layered_ocr_pricing(litellm_params, deployment_info)
@@ -2031,6 +2064,44 @@ def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelIn
         return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
+
+
+def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
+    raw_entry: Final = litellm.model_cost.get(key)
+    return raw_entry if isinstance(raw_entry, Mapping) else None
+
+
+def pricing_entry_for_cost_calc(
+    model: str | None,
+    completion_response: object | None,
+    custom_llm_provider: str | None,
+    custom_pricing: bool | None,
+    base_model: str | None,
+    router_model_id: str | None,
+    region_name: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+) -> tuple[str, Mapping[str, object]] | None:
+    deployment_entry: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
+    deployment_key: Final = router_model_id or model
+    if deployment_entry is not None and deployment_key is not None:
+        return deployment_key, deployment_entry
+    selected_model: Final = _select_model_name_for_cost_calc(
+        model=model,
+        completion_response=completion_response,
+        base_model=base_model,
+        custom_pricing=custom_pricing,
+        custom_llm_provider=custom_llm_provider,
+        router_model_id=router_model_id,
+        region_name=region_name,
+    )
+    candidates: Final = (selected_model, _get_response_model(completion_response), model)
+    resolved: Final = next(
+        (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
+        None,
+    )
+    if resolved is None:
+        return None
+    return resolved["key"], _raw_cost_map_entry(resolved["key"]) or resolved
 
 
 def ocr_cost(
@@ -2273,6 +2344,7 @@ def default_image_cost_calculator(
     n: int | None = 1,  # Default to 1 image
     size: str | None = "1024-x-1024",  # OpenAI default
     optional_params: dict | None = None,
+    model_info: ModelInfo | None = None,
 ) -> float:
     """
     Default image cost calculator for image generation
@@ -2283,6 +2355,7 @@ def default_image_cost_calculator(
         quality (Optional[str]): Image quality setting
         n (Optional[int]): Number of images generated
         size (Optional[str]): Image size (e.g. "1024x1024" or "1024-x-1024")
+        model_info (Optional[ModelInfo]): The deployment's own prices, consulted before the cost map
 
     Returns:
         float: Cost in USD for the image generation
@@ -2304,6 +2377,11 @@ def default_image_cost_calculator(
         model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
         base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
     model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
+    provider_first_model_name_with_quality: Final = (
+        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
+        if quality and custom_llm_provider
+        else None
+    )
 
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
@@ -2313,32 +2391,42 @@ def default_image_cost_calculator(
     model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
     model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
 
-    # Try model with quality first, fall back to base model name
-    cost_info: dict | None = None
-    models_to_check: Final[list[str | None]] = [
+    models_to_check: Final = (
         model_name_with_quality,
+        provider_first_model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
         model_with_quality_without_provider,
         model_without_provider,
         model,
         model_name_without_custom_llm_provider,
-    ]
-    for _model in models_to_check:
-        if _model is not None and _model in litellm.model_cost:
-            cost_info = litellm.model_cost[_model]
-            break
-    if cost_info is None:
+    )
+    matched_model: Final = next(
+        (_model for _model in models_to_check if _model is not None and _model in litellm.model_cost), None
+    )
+    if matched_model is None and model_info is None:
         raise Exception(f"Model not found in cost map. Tried checking {models_to_check}")
 
-    # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
-    if "input_cost_per_image" in cost_info and cost_info["input_cost_per_image"] is not None:
-        return cost_info["input_cost_per_image"] * n
-    # Priority 2: Fall back to per-pixel pricing for backward compatibility
-    elif "input_cost_per_pixel" in cost_info and cost_info["input_cost_per_pixel"] is not None:
-        return cost_info["input_cost_per_pixel"] * height * width * n
-    else:
+    shared_cost_info: Final = litellm.model_cost[matched_model] if matched_model is not None else None
+    price_tables: Final = tuple(table for table in (model_info, shared_cost_info) if table is not None)
+    image_count: Final = n if n is not None else 1
+    unit_counts: Final = (
+        ("input_cost_per_image", image_count),
+        ("output_cost_per_image", image_count),
+        ("input_cost_per_pixel", height * width * image_count),
+    )
+    cost: Final = next(
+        (
+            price * units
+            for price_table in price_tables
+            for cost_key, units in unit_counts
+            if (price := price_table.get(cost_key)) is not None
+        ),
+        None,
+    )
+    if cost is None:
         raise Exception(f"No pricing information found for model {model}. Tried checking {models_to_check}")
+    return cost
 
 
 def default_video_cost_calculator(
@@ -2485,35 +2573,14 @@ def batch_cost_calculator(
     if not model_info:
         return 0.0, 0.0
 
-    input_cost_per_token_batches: Final = model_info.get("input_cost_per_token_batches")
+    batch_rates: Final = get_batch_cost_rates(model_info, usage, custom_llm_provider)
     input_cost_per_token: Final = model_info.get("input_cost_per_token")
-    output_cost_per_token_batches: Final = model_info.get("output_cost_per_token_batches")
     output_cost_per_token: Final = model_info.get("output_cost_per_token")
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
-    if input_cost_per_token_batches is not None:
-        batch_details: Final = parse_prompt_tokens_details(usage)
-        audio_tokens, image_tokens, video_tokens = (
-            batch_details["audio_tokens"],
-            batch_details["image_tokens"],
-            batch_details["video_tokens"],
-        )
-        modality_rates: Final = (
-            _batch_rate(model_info, "input_cost_per_audio_token_batches", input_cost_per_token_batches),
-            _batch_rate(model_info, "input_cost_per_image_token_batches", input_cost_per_token_batches),
-            _batch_rate(model_info, "input_cost_per_video_token_batches", input_cost_per_token_batches),
-        )
-        total_prompt_cost = sum(
-            tokens * rate
-            for tokens, rate in zip(
-                (
-                    max((usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens, 0),
-                    audio_tokens,
-                    image_tokens,
-                    video_tokens,
-                ),
-                (input_cost_per_token_batches, *modality_rates),
-            )
+    if batch_rates.input is not None:
+        total_prompt_cost = _batch_prompt_cost(
+            usage, model_info, batch_rates.input, batch_rates.cache_read, batch_rates.cache_creation
         )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
@@ -2533,8 +2600,8 @@ def batch_cost_calculator(
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
-    if output_cost_per_token_batches is not None:
-        total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
+    if batch_rates.output is not None:
+        total_completion_cost = usage.completion_tokens * batch_rates.output
     elif output_cost_per_token:
         total_completion_cost = (
             usage.completion_tokens * (output_cost_per_token) / 2
@@ -2546,6 +2613,34 @@ def batch_cost_calculator(
         total_completion_cost *= uplift
 
     return total_prompt_cost, total_completion_cost
+
+
+def _batch_prompt_cost(
+    usage: Usage,
+    model_info: ModelInfo,
+    input_rate: float,
+    cache_read_rate: float | None,
+    cache_creation_rate: float | None,
+) -> float:
+    details: Final = parse_prompt_tokens_details(usage)
+    cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
+    written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
+    audio_tokens, image_tokens, video_tokens = (
+        details["audio_tokens"],
+        details["image_tokens"],
+        details["video_tokens"],
+    )
+    text_tokens: Final = max(
+        (usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens - cached_tokens - written_tokens, 0
+    )
+    return (
+        text_tokens * input_rate
+        + audio_tokens * _batch_rate(model_info, "input_cost_per_audio_token_batches", input_rate)
+        + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
+        + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
+        + cached_tokens * (cache_read_rate or 0.0)
+        + written_tokens * (cache_creation_rate or 0.0)
+    )
 
 
 def _attribute_value(obj: object, name: str) -> object:

@@ -381,6 +381,7 @@ enable_model_config_credential_overrides: bool = False
 enable_key_alias_format_validation: bool = (
     False  # opt-in validation of key_alias format on /key/generate and /key/update
 )
+key_alias_pattern: str | None = None
 enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
@@ -1401,6 +1402,7 @@ from .exceptions import (
     JSONSchemaValidationError,
     LITELLM_EXCEPTION_TYPES,
     MockException,
+    ModelNotMappedError as ModelNotMappedError,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
@@ -1456,6 +1458,7 @@ from .skills.main import (
 from .containers.main import *
 from .ocr.dispatch import *
 from .chat_completions.dispatch import *
+from .embeddings.dispatch import *
 from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
@@ -1869,6 +1872,9 @@ if TYPE_CHECKING:
     from .llms.openrouter.responses.transformation import (
         OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig,
     )
+    from .llms.bedrock.responses.transformation import (
+        BedrockOpenAIResponsesConfig as BedrockOpenAIResponsesConfig,
+    )
     from .llms.bedrock_mantle.responses.transformation import (
         BedrockMantleResponsesAPIConfig as BedrockMantleResponsesAPIConfig,
     )
@@ -2145,6 +2151,10 @@ if TYPE_CHECKING:
     )
     from .llms.edenai.videos.transformation import (
         EdenAIVideoConfig as EdenAIVideoConfig,
+    )
+    from .llms.fal_ai.chat.transformation import (
+        FalAIChatConfig as FalAIChatConfig,
+        FalAIError as FalAIError,
     )
     from .llms.ovhcloud.chat.transformation import (
         OVHCloudChatConfig as OVHCloudChatConfig,

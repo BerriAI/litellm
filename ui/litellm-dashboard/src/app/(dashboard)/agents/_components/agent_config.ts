@@ -4,6 +4,14 @@ import { parseIdentityForForm } from "./agent_identity";
  * Used across create, view, and update operations
  */
 
+import {
+  EMPTY_KILL_SWITCH_FORM,
+  buildKillSwitchFromForm,
+  parseKillSwitchForForm,
+  type KillSwitchConfig,
+  type KillSwitchFormValue,
+} from "./kill_switch_config";
+
 export interface FieldConfig {
   name: string;
   label: string;
@@ -237,6 +245,7 @@ export const getDefaultFormValues = () => {
   const defaults: any = {
     defaultInputModes: ["text"],
     defaultOutputModes: ["text"],
+    kill_switch: { ...EMPTY_KILL_SWITCH_FORM },
   };
 
   Object.values(AGENT_FORM_CONFIG).forEach((section) => {
@@ -311,7 +320,20 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
     agentData.extra_headers = values.extra_headers;
   }
 
+  applyKillSwitchToPayload(agentData, values.kill_switch, existingAgent);
+
   return agentData;
+};
+
+export const applyKillSwitchToPayload = (
+  agentData: { kill_switch?: KillSwitchConfig | null },
+  form: KillSwitchFormValue | undefined,
+  existingAgent?: { kill_switch?: KillSwitchConfig | null },
+) => {
+  const killSwitch = buildKillSwitchFromForm(form);
+  if (killSwitch !== undefined && (killSwitch !== null || existingAgent?.kill_switch)) {
+    agentData.kill_switch = killSwitch;
+  }
 };
 
 export const parseAccessGroupIdsForForm = (agent: { access_group_ids?: string[] | null }) => ({
@@ -382,6 +404,7 @@ export const parseAgentForForm = (agent: any) => {
       : [],
     // extra_headers: already an array of strings
     extra_headers: agent.extra_headers ?? [],
+    kill_switch: parseKillSwitchForForm(agent.kill_switch),
     ...parseMcpPermissionsForForm(agent),
     ...parseAccessGroupIdsForForm(agent),
   };

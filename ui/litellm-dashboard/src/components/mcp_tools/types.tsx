@@ -407,6 +407,7 @@ export interface MCPToolsViewerProps {
 
 export interface MCPServer {
   server_id: string;
+  is_config?: boolean;
   server_name?: string | null;
   alias?: string | null;
   description?: string | null;

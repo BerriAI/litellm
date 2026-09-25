@@ -13,6 +13,7 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
+from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedVectorStoresTable as _VectorStoreRow
@@ -54,6 +55,32 @@ def _vector_store_table(prisma_client: "PrismaClient") -> "TableActions[_VectorS
 
 def _row_to_vector_store(row: "_VectorStoreRow") -> LiteLLM_ManagedVectorStore:
     return LiteLLM_ManagedVectorStore(**row.model_dump())
+
+
+class _ConfigOwnedDetail(TypedDict):
+    error: ReadOnly[str]
+    vector_store_id: ReadOnly[str]
+
+
+def _raise_if_config_owned(vector_store_id: str) -> None:
+    if litellm.vector_store_registry is None or not litellm.vector_store_registry.is_config_vector_store(
+        vector_store_id
+    ):
+        return
+    detail: Final[_ConfigOwnedDetail] = {
+        "error": (
+            f"Vector store {vector_store_id} is defined in the config file, so the config file owns it and it "
+            "cannot be changed here. Edit the config file to change it, or remove it from the file to let the "
+            "database own it."
+        ),
+        "vector_store_id": vector_store_id,
+    }
+    raise HTTPException(status_code=400, detail=detail)
+
+
+def _with_ownership(vector_store: LiteLLM_ManagedVectorStore) -> LiteLLM_ManagedVectorStore:
+    ownership: Final = LiteLLM_ManagedVectorStore(is_config=vector_store.get("is_config", False))
+    return vector_store | ownership
 
 
 _LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset(("connection",)))
@@ -274,6 +301,7 @@ async def new_vector_store(
                 status_code=400,
                 detail="vector_store_id and custom_llm_provider are required",
             )
+        _raise_if_config_owned(vector_store_id)
 
         # Extract and validate metadata
         metadata: Final = vector_store.get("vector_store_metadata")
@@ -306,6 +334,8 @@ async def new_vector_store(
             "message": f"Vector store {vector_store.get('vector_store_id')} created successfully",
             "vector_store": response_vs,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error creating vector store: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -331,7 +361,9 @@ async def list_vector_stores(
     """
     List all available vector stores with optional filtering and pagination.
     Combines both in-memory vector stores and those stored in the database.
-    Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+    Database is the source of truth for stores it owns: deleted stores are removed from memory, updated stores
+    sync to memory. Stores declared in the config file are owned by the config file, are always listed, and are
+    never overwritten by database rows.
 
     Parameters:
     - page: int - Page number for pagination (default: 1)
@@ -366,8 +398,10 @@ async def list_vector_stores(
                 if not vector_store_id:
                     continue
 
+                if vector_store.get("is_config", False):
+                    vector_store_map[vector_store_id] = vector_store
                 # If vector store is in memory but NOT in database, it was deleted
-                if vector_store_id not in db_vector_store_ids:
+                elif vector_store_id not in db_vector_store_ids:
                     verbose_proxy_logger.info(
                         "Vector store %s exists in memory but not in database - marking for deletion from cache",
                         vector_store_id,
@@ -394,7 +428,7 @@ async def list_vector_stores(
         # Filter vector stores based on access control
         accessible_vector_stores: Final = []
         for vs in await filter_listable_vector_stores(vector_store_map.values(), user_api_key_dict):
-            redacted = LiteLLM_ManagedVectorStore(**vs)
+            redacted = _with_ownership(vs)
             redacted["litellm_params"] = _redact_sensitive_litellm_params(vs.get("litellm_params"))
             accessible_vector_stores.append(redacted)
 
@@ -467,6 +501,7 @@ async def delete_vector_store(
                 status_code=404,
                 detail=f"Vector store with ID {data.vector_store_id} not found",
             )
+        _raise_if_config_owned(data.vector_store_id)
 
         # Check access control
         if vector_store_to_check and not await _check_vector_store_access(vector_store_to_check, user_api_key_dict):
@@ -545,6 +580,7 @@ async def get_vector_store_info(
                     litellm_params=_redact_sensitive_litellm_params(vector_store.get("litellm_params")),
                     team_id=vector_store.get("team_id") or None,
                     user_id=vector_store.get("user_id") or None,
+                    is_config=vector_store.get("is_config", False),
                 )
                 return {"vector_store": vector_store_pydantic_obj}
 
@@ -591,6 +627,7 @@ async def update_vector_store(
         update_data: Final = data.model_dump(exclude_unset=True)
         vector_store_id: Final[str] = data.vector_store_id
         update_data.pop("vector_store_id")
+        _raise_if_config_owned(vector_store_id)
 
         # Per-store access control: anyone authenticated who passes the
         # premium-feature gate could otherwise update *any* vector store —

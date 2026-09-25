@@ -1,8 +1,10 @@
+from typing import Final
+
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
-from litellm.llms.fal_ai.cost_calculator import cost_calculator
+from litellm.llms.fal_ai.cost_calculator import cost_calculator, fal_ai_passthrough_cost
 from litellm.types.utils import ImageObject, ImageResponse
 
 
@@ -78,14 +80,27 @@ def test_gpt_image_response_dimensions_override_request_size():
     assert cost == expected
 
 
-def test_gpt_image_response_dimensions_fall_back_to_request_size_when_unpriced():
+def test_gpt_image_response_dimensions_use_nearest_keyed_row_when_unpriced():
     model = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
     cost = cost_calculator(
         model=model,
         image_response=_image_response_with_dimensions(((777, 888),)),
         optional_params={"quality": "low", "image_size": {"width": 1024, "height": 1536}},
     )
-    expected = litellm.model_cost[f"fal_ai/low/1024-x-1536/{model.removeprefix('fal_ai/')}"]["output_cost_per_image"]
+    expected = litellm.model_cost[f"fal_ai/low/1024-x-768/{model.removeprefix('fal_ai/')}"]["output_cost_per_image"]
+    assert cost == expected
+
+
+def test_gpt_image_25_noncanonical_response_uses_nearest_keyed_row():
+    model: Final = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
+    cost: Final = cost_calculator(
+        model=model,
+        image_response=_image_response_with_dimensions(((1536, 1024),)),
+        optional_params={"quality": "low", "image_size": {"width": 1536, "height": 1024}},
+    )
+    expected: Final = litellm.model_cost[
+        "fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"
+    ]["output_cost_per_image"]
     assert cost == expected
 
 
@@ -160,3 +175,70 @@ def test_image_edit_call_type_routes_to_fal_keyed_pricing():
         call_type="aimage_edit",
     )
     assert cost == litellm.model_cost[f"fal_ai/medium/1024-x-1024/{model}"]["output_cost_per_image"] > 0
+
+
+def test_passthrough_trellis_charges_flat_rate():
+    assert (
+        fal_ai_passthrough_cost("fal-ai/trellis", {})
+        == litellm.model_cost["fal_ai/fal-ai/trellis"]["output_cost_per_image"]
+        > 0
+    )
+
+
+@pytest.mark.parametrize("resolution", [512, 1024, 1536])
+def test_passthrough_trellis_2_resolution_picks_keyed_tier(resolution):
+    assert (
+        fal_ai_passthrough_cost("fal-ai/trellis-2", {"resolution": resolution})
+        == litellm.model_cost["fal_ai/fal-ai/trellis-2"][f"output_cost_per_image_{resolution}"]
+        > 0
+    )
+
+
+def test_passthrough_trellis_2_without_resolution_falls_back_to_default_rate():
+    assert (
+        fal_ai_passthrough_cost("fal-ai/trellis-2", {"image_url": "https://a"})
+        == litellm.model_cost["fal_ai/fal-ai/trellis-2"]["output_cost_per_image"]
+        > 0
+    )
+
+
+def test_passthrough_unknown_model_returns_none():
+    assert fal_ai_passthrough_cost("fal-ai/no-such-model", {"resolution": 512}) is None
+
+
+def test_passthrough_string_resolution_is_priced_like_the_integer(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/keyed-model",
+        {
+            "litellm_provider": "fal_ai",
+            "mode": "image_generation",
+            "output_cost_per_image": 0.3,
+            "output_cost_per_image_512": 0.25,
+            "output_cost_per_image_1536": 0.35,
+        },
+    )
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": "512"}) == 0.25
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": 512}) == 0.25
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": "1536"}) == 0.35
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": True}) == 0.3
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": 512.0}) == 0.3
+
+
+def test_passthrough_cost_is_none_only_when_no_price_applies_to_the_request(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/priceless-model",
+        {"litellm_provider": "fal_ai", "mode": "image_generation"},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/keyed-only-model",
+        {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_image_512": 0.02},
+    )
+    assert fal_ai_passthrough_cost("fal-ai/priceless-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/priceless-model", {"resolution": 512}) is None
+    assert fal_ai_passthrough_cost("fal-ai/no-such-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {"resolution": 1024}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {"resolution": "512"}) == 0.02

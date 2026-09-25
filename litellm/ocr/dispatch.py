@@ -1,16 +1,15 @@
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
-from typing import Final, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
+from collections.abc import Coroutine, Mapping
+from typing import Final
 
 import httpx
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.ocr import main
-from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
-from litellm.rust_bridge.catalog import Context, Route
+from litellm.rust_bridge import runtime
+from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, LiteLLMOcrRequest
 
-__all__ = ("aocr", "convert_file_document_to_url_document", "get_mime_type", "ocr")
+__all__ = ("aocr", "ocr")
 
 
 def _bind_request(
@@ -42,20 +41,10 @@ def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, ob
         raise TypeError(str(error).replace("_bind_request()", f"{name}()")) from None
 
 
-_PYTHON_OCR: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
-    Callable[..., OCRResponse | Coroutine[object, object, OCRResponse]],
-    main.ocr,  # noqa: TID251  # dispatch boundary owns this Python fallback
-)
-_PYTHON_AOCR: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
-    Callable[..., Awaitable[OCRResponse]],
-    main.aocr,  # noqa: TID251  # dispatch boundary owns this Python fallback
-)
-
-
-def _context(request: LiteLLMOcrRequest) -> Context:
+def _context(request: LiteLLMOcrRequest) -> RouteContext:
     prefix, separator, _ = request.model.partition("/")
     provider: Final = request.custom_llm_provider or (prefix if separator else None)
-    return Context(Route.OCR, provider=provider, model=request.model)
+    return RouteContext(Route.OCR, provider=provider, model=request.model)
 
 
 _DISPATCH: Final = PublicDispatch(
@@ -79,7 +68,7 @@ def ocr(
     return _DISPATCH.run(
         args,
         kwargs,
-        python=_PYTHON_OCR,
+        python=runtime.NO_PYTHON,
         binding=NATIVE_OCR,
         native=call_hook,
     )
@@ -89,7 +78,7 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
     return await _ADISPATCH.arun(
         args,
         kwargs,
-        python=_PYTHON_AOCR,
+        python=runtime.NO_PYTHON,
         binding=NATIVE_AOCR,
         native=call_hook,
     )

@@ -74,6 +74,7 @@ from litellm.types.proxy.agent_identity import AgentIdentityFailure
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 from .auth_checks import (
+    TeamNotFoundError,
     _allowed_routes_check,
     allowed_routes_check,
     get_actual_routes,
@@ -149,6 +150,12 @@ class JWTIdentity:
 class _JWTProvisioning:
     user_id_upsert: bool
     team_id_upsert: bool
+
+
+@dataclass(frozen=True, slots=True)
+class HeaderTeam:
+    header_value: str
+    team_id: str
 
 
 class AgentLookup(Protocol):
@@ -1889,48 +1896,108 @@ class JWTAuthManager:
         return True
 
     @staticmethod
-    def get_team_id_from_header(
-        request_headers: Mapping[str, str] | None,
-        allowed_team_ids: set[str],
-        fallback_to_db_teams: bool = False,
-    ) -> str | None:
-        """
-        Extract team_id from x-litellm-team-id header if present.
-        Validates that the team is in the user's allowed teams from JWT.
-
-        Args:
-            request_headers: Dictionary of request headers
-            allowed_team_ids: Set of team IDs the user is allowed to access (from JWT)
-            fallback_to_db_teams: When True and the JWT carries no team claims
-                (allowed_team_ids is empty), the header value is returned
-                provisionally and validated against DB memberships later in
-                auth_builder instead of being rejected here.
-
-        Returns:
-            The team_id from header if valid, None otherwise
-
-        Raises:
-            HTTPException: If team_id is provided but not in allowed_team_ids
-        """
+    def _team_header_value(request_headers: Mapping[str, str] | None) -> str | None:
         if not request_headers:
             return None
-
-        # Normalize headers to lowercase for case-insensitive lookup
         normalized_headers: Final = {k.lower(): v for k, v in request_headers.items()}
-        header_team_id: Final = normalized_headers.get("x-litellm-team-id")
+        return normalized_headers.get("x-litellm-team-id")
 
-        if not header_team_id:
+    @staticmethod
+    def _raise_header_team_not_allowed(header_value: str, allowed_team_ids: set[str]) -> NoReturn:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"x-litellm-team-id '{header_value}' does not resolve to a team id or a unique team alias in your "
+                f"JWT's allowed teams. Allowed team ids: {sorted(allowed_team_ids)}"
+            ),
+        )
+
+    @staticmethod
+    async def _team_id_by_alias(
+        team_alias: str,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+    ) -> str | None:
+        if prisma_client is None:
+            return None
+        try:
+            team: Final = await get_team_object_by_alias(
+                team_alias=team_alias,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except HTTPException as exc:
+            if exc.status_code >= 500:
+                raise
+            return None
+        return team.team_id
+
+    @staticmethod
+    async def resolve_team_from_header(
+        request_headers: Mapping[str, str] | None,
+        allowed_team_ids: set[str],
+        fallback_to_db_teams: bool,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+    ) -> HeaderTeam | None:
+        """
+        The team named by x-litellm-team-id, which may carry a team id or a team
+        alias. A value that is already an allowed team id (or, under the DB
+        fallback, an existing team id) never costs an alias lookup; an alias is
+        accepted only when the team it names would have been accepted by id.
+        Under the DB fallback only a team row that is provably absent falls
+        through to the alias lookup; a read that failed for any other reason
+        keeps the membership denial the id path already gives.
+
+        Raises:
+            HTTPException: 403 when neither the value nor the team it aliases is
+                an allowed team, or the DB fallback's membership denial when the
+                value names no team at all; an alias several teams share resolves
+                to no team and is denied like an unknown value; a 5xx from the
+                alias lookup itself is re-raised rather than reported as a denial
+        """
+        header_value: Final = JWTAuthManager._team_header_value(request_headers)
+        if not header_value:
             return None
 
-        defer_to_db_membership: Final = fallback_to_db_teams and not allowed_team_ids
-        if not defer_to_db_membership and header_team_id not in allowed_team_ids:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Team '{header_team_id}' from x-litellm-team-id header is not in your JWT's allowed teams. Allowed teams: {list(allowed_team_ids)}",
-            )
+        if fallback_to_db_teams and not allowed_team_ids:
+            try:
+                await get_team_object(
+                    team_id=header_value,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    team_id_upsert=False,
+                )
+            except TeamNotFoundError:
+                aliased_team_id: Final = await JWTAuthManager._team_id_by_alias(
+                    header_value, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
+                )
+                if aliased_team_id is None:
+                    JWTAuthManager._raise_header_team_membership_denial(header_value)
+                return HeaderTeam(header_value=header_value, team_id=aliased_team_id)
+            except HTTPException:
+                JWTAuthManager._raise_header_team_membership_denial(header_value)
+            return HeaderTeam(header_value=header_value, team_id=header_value)
 
-        verbose_proxy_logger.debug("Using team_id from x-litellm-team-id header: %s", header_team_id)
-        return header_team_id
+        if header_value in allowed_team_ids:
+            verbose_proxy_logger.debug("Using team_id from x-litellm-team-id header: %s", header_value)
+            return HeaderTeam(header_value=header_value, team_id=header_value)
+
+        team_id_by_alias: Final = await JWTAuthManager._team_id_by_alias(
+            header_value, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
+        )
+        if team_id_by_alias is None or team_id_by_alias not in allowed_team_ids:
+            JWTAuthManager._raise_header_team_not_allowed(header_value, allowed_team_ids)
+        verbose_proxy_logger.debug("Using team_id %s for x-litellm-team-id alias: %s", team_id_by_alias, header_value)
+        return HeaderTeam(header_value=header_value, team_id=team_id_by_alias)
 
     @staticmethod
     async def map_user_to_teams(
@@ -2117,8 +2184,11 @@ class JWTAuthManager:
         spend / metadata can be attributed correctly.
 
         Returns (team_id, team_object, team_membership_object).
-        Any DB error is debug-logged and the tuple is (None, None, None) — no
-        exception ever propagates from this helper.
+        A team that cannot be loaded (HTTPException from get_team_object) is
+        debug-logged and the tuple is (None, None, None), the same as the DB
+        team fallback. A failed membership read propagates, so a database
+        outage surfaces as the 503 the rest of auth answers with instead of
+        serving the request with the member's limits dropped.
         """
         if user_object is None or not user_object.teams or len(user_object.teams) != 1:
             return None, None, None
@@ -2133,28 +2203,28 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=team_id_upsert,
             )
-            if team_row is None:
-                return None, None, None
-
-            if not user_id:
-                return _tid, team_row, None
-
-            team_membership: Final = await get_team_membership(
-                user_id=user_id,
-                team_id=_tid,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            return _tid, team_row, team_membership
-        except Exception:
+        except HTTPException:
             verbose_proxy_logger.debug(
-                "JWT single-team fallback error, skipping. team_id=%s",
+                "JWT single-team fallback: team could not be loaded, skipping. team_id=%s",
                 _tid,
                 exc_info=True,
             )
             return None, None, None
+        if team_row is None:
+            return None, None, None
+
+        if not user_id:
+            return _tid, team_row, None
+
+        team_membership: Final = await get_team_membership(
+            user_id=user_id,
+            team_id=_tid,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        return _tid, team_row, team_membership
 
     @staticmethod
     async def _resolve_db_team_fallback(
@@ -2279,31 +2349,37 @@ class JWTAuthManager:
         )
 
     @staticmethod
-    def _raise_header_team_membership_denial(team_id: str) -> NoReturn:
+    def _raise_header_team_membership_denial(header_value: str) -> NoReturn:
         """
         The single denial shape for a provisional x-litellm-team-id header,
         raised identically for nonexistent teams and for teams the user is not
-        a member of, so the response does not reveal whether a team id exists.
+        a member of, and naming only the value the caller sent, so the response
+        reveals neither whether a team exists nor which id an alias maps to.
         """
         raise HTTPException(
             status_code=403,
-            detail=(f"Team '{team_id}' (from x-litellm-team-id header) is not in your team memberships."),
+            detail=(
+                f"x-litellm-team-id '{header_value}' does not resolve to a team id or a unique team alias among your "
+                "team memberships."
+            ),
         )
 
     @staticmethod
     def _validate_header_team_in_db_membership(
         team_id: str,
         user_object: LiteLLM_UserTable | None,
+        header_value: str,
     ) -> None:
         """
         A provisional team_id from the x-litellm-team-id header (accepted without
         JWT-team validation when the JWT carries no team claims) must exist in the
-        user's DB team memberships before it becomes request context.
+        user's DB team memberships before it becomes request context. The denial
+        names `header_value`, the id or alias the caller sent, not `team_id`.
         """
         user_team_ids: Final = user_object.teams if user_object else []
         if team_id in user_team_ids:
             return
-        JWTAuthManager._raise_header_team_membership_denial(team_id)
+        JWTAuthManager._raise_header_team_membership_denial(header_value)
 
     @staticmethod
     async def auth_builder(
@@ -2568,13 +2644,17 @@ class JWTAuthManager:
         if specific_team_id and not db_team_fallback:
             all_team_ids.add(specific_team_id)
 
-        header_team_id: Final = JWTAuthManager.get_team_id_from_header(
+        header_team: Final = await JWTAuthManager.resolve_team_from_header(
             request_headers=request_headers,
             allowed_team_ids=all_team_ids,
             fallback_to_db_teams=db_team_fallback,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
         )
-        if header_team_id:
-            team_id = header_team_id
+        if header_team:
+            team_id = header_team.team_id
             # A provisional header team (accepted only because the JWT carries no
             # team claims) is validated against DB membership further down; never
             # upsert it here or an attacker-supplied x-litellm-team-id would create
@@ -2592,7 +2672,7 @@ class JWTAuthManager:
             except HTTPException:
                 if not db_team_fallback:
                     raise
-                JWTAuthManager._raise_header_team_membership_denial(team_id)
+                JWTAuthManager._raise_header_team_membership_denial(header_team.header_value)
         elif not team_id and not db_team_fallback:
             ## SPECIFIC TEAM ID
             (
@@ -2733,10 +2813,11 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=team_id_upsert,
             )
-        elif db_team_fallback and team_id == header_team_id:
+        elif db_team_fallback and header_team is not None and team_id == header_team.team_id:
             JWTAuthManager._validate_header_team_in_db_membership(
                 team_id=team_id,
                 user_object=user_object,
+                header_value=header_team.header_value,
             )
             if not JWTAuthManager._is_team_route_allowed(
                 route=route,
@@ -2746,7 +2827,8 @@ class JWTAuthManager:
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        f"Team '{team_id}' (from x-litellm-team-id header) is not allowed to access route '{route}'."
+                        f"Team '{header_team.header_value}' (from x-litellm-team-id header) "
+                        f"is not allowed to access route '{route}'."
                     ),
                 )
 

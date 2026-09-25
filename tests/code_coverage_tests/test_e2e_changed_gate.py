@@ -106,14 +106,33 @@ def test_short_values_are_written_without_masking_every_digit_in_the_log(tmp_pat
     env_path: Final = tmp_path / ".env"
 
     result: Final = subprocess.run(
-        [sys.executable, str(SECRETS_TO_ENV), str(env_path)],
+        [sys.executable, "-I", str(SECRETS_TO_ENV), str(env_path)],
         input='{"FLAG": "1", "API_KEY": "sk-0123456789abcdef"}',
         capture_output=True,
         text=True,
+        env={**os.environ, "GITHUB_ACTIONS": "true"},
     )
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "::add-mask::sk-0123456789abcdef\n"
+    assert env_path.read_text() == "FLAG='1'\nAPI_KEY='sk-0123456789abcdef'\n"
+
+
+def test_outside_actions_no_value_is_printed(tmp_path: Path) -> None:
+    env_path: Final = tmp_path / ".env"
+    local_env: Final = {key: value for key, value in os.environ.items() if key != "GITHUB_ACTIONS"}
+
+    result: Final = subprocess.run(
+        [sys.executable, "-I", str(SECRETS_TO_ENV), str(env_path)],
+        input='{"FLAG": "1", "API_KEY": "sk-0123456789abcdef"}',
+        capture_output=True,
+        text=True,
+        env=local_env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert "sk-0123456789abcdef" not in result.stderr
     assert env_path.read_text() == "FLAG='1'\nAPI_KEY='sk-0123456789abcdef'\n"
 
 
@@ -212,6 +231,11 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
         (("tests/e2e/batches/test_managed_files_enforcement_e2e.py",), ()),
         (("tests/e2e/guardrails/test_presidio_masking_e2e.py",), ()),
         (("tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e.py",), ()),
+        (("tests/e2e/logging/test_otel_v2_langfuse_generation_output_e2e.py",), ()),
+        (
+            ("tests/e2e/logging/test_team_langfuse_callback_e2e.py",),
+            ("tests/e2e/logging/test_team_langfuse_callback_e2e.py",),
+        ),
         (
             ("tests/e2e/llm_translation/realtime/test_realtime_e2e.py",),
             ("tests/e2e/llm_translation/realtime/test_realtime_e2e.py",),

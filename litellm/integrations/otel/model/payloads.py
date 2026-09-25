@@ -407,6 +407,7 @@ class LLMCallSpanData:
     call_type: str | None = None
     request_route: str | None = None
     trace: TraceControls = field(default_factory=TraceControls)
+    session_id: str | None = None
     embedding_output: EmbeddingOutput | None = None
 
     @classmethod
@@ -417,6 +418,7 @@ class LLMCallSpanData:
         time_to_first_chunk_seconds: float | None = None,
         request_route: str | None = None,
         trace: TraceControls | None = None,
+        session_id: str | None = None,
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -427,7 +429,7 @@ class LLMCallSpanData:
         # plain ``.get`` — no repeated ``isinstance`` guards.
         raw_response: Final = payload.get("response")
         response: Final = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
-        choices_out: Final = _dicts(response.get("choices")) or _responses_choices(response) or _ocr_choices(response)
+        choices_out: Final = _output_choices(response)
         # ``finish_reasons`` is metadata, not content, so derive it from
         # ``choices_out`` before gating. The raw message/choice bodies are only
         # retained when content capture is enabled (see ``capture_span_content``);
@@ -463,6 +465,7 @@ class LLMCallSpanData:
             call_type=call_type or None,
             request_route=request_route or context.identity.request_route,
             trace=trace or TraceControls(),
+            session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
         )
 
@@ -752,20 +755,133 @@ def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
     return (choice,)
 
 
-def _ocr_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
-    markdowns: Final = tuple(
-        text for page in _dicts(response.get("pages")) if (text := as_str(page.get("markdown"))) is not None
+def _output_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    """The response output as chat-shaped choices; images and binary bodies become size summaries, never bytes."""
+    return (
+        _completion_choices(response)
+        or _responses_choices(response)
+        or _ocr_choices(response)
+        or _transcription_choices(response)
+        or _moderation_choices(response)
+        or _rerank_choices(response)
+        or _search_choices(response)
+        or _image_choices(response)
+        or _binary_choices(response)
     )
-    if not markdowns:
+
+
+def _text_choice(content: str, finish_reason: str | None = None) -> _Choice:
+    message: Final[_AssistantMessage] = {"role": "assistant", "content": content, "refusal": None, "tool_calls": None}
+    return {"message": message, "finish_reason": finish_reason}
+
+
+def _joined_choice(parts: tuple[str, ...]) -> tuple[_Choice, ...]:
+    return (_text_choice("\n\n".join(parts)),) if parts else ()
+
+
+def _text_completion_choice(choice: Mapping[str, object], text: str) -> Mapping[str, object]:
+    synthesized: Final = _text_choice(text, as_str(choice.get("finish_reason")))
+    merged: Final = (*choice.items(), *synthesized.items())
+    return {k: v for k, v in merged if k != "text"}  # mutable-ok: mappers json.dumps and isinstance(dict) it
+
+
+def _completion_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        _text_completion_choice(choice, text)
+        if "message" not in choice and isinstance(text := choice.get("text"), str)
+        else choice
+        for choice in _dicts(response.get("choices"))
+    )
+
+
+def _ocr_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    return _joined_choice(
+        tuple(text for page in _dicts(response.get("pages")) if (text := as_str(page.get("markdown"))) is not None)
+    )
+
+
+def _transcription_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    text: Final = response.get("text")
+    return (_text_choice(text),) if isinstance(text, str) and text else ()
+
+
+def _moderation_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    return _joined_choice(
+        tuple(
+            _moderation_verdict(flagged, result.get("categories"))
+            for result in _dicts(response.get("results"))
+            if isinstance(flagged := result.get("flagged"), bool)
+        )
+    )
+
+
+def _moderation_verdict(flagged: bool, categories: object) -> str:
+    if not flagged:
+        return "not flagged"
+    hits: Final = (
+        tuple(name for name, hit in cast(Mapping[str, object], categories).items() if hit is True)
+        if isinstance(categories, dict)
+        else ()
+    )
+    return f"flagged: {', '.join(hits)}" if hits else "flagged"
+
+
+def _rerank_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    return _joined_choice(
+        tuple(
+            _rerank_line(index, score, result.get("document"))
+            for result in _dicts(response.get("results"))
+            if (index := as_int(result.get("index"))) is not None
+            if (score := as_float(result.get("relevance_score"))) is not None
+        )
+    )
+
+
+def _rerank_line(index: int, score: float, document: object) -> str:
+    text: Final = as_str((as_str_mapping(document) or {}).get("text"))
+    return f"[{index}] {score}\n{text}" if text else f"[{index}] {score}"
+
+
+def _search_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    return _joined_choice(
+        tuple(
+            line
+            for result in _dicts(response.get("results"))
+            if (line := "\n".join(part for key in ("title", "url", "snippet") if (part := as_str(result.get(key)))))
+        )
+    )
+
+
+def _image_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    return _joined_choice(
+        tuple(summary for item in _dicts(response.get("data")) if (summary := _image_summary(item)) is not None)
+    )
+
+
+def _image_summary(item: Mapping[str, object]) -> str | None:
+    location: Final = _image_location(item)
+    if location is None:
+        return None
+    revised: Final = as_str(item.get("revised_prompt"))
+    return f"{revised}\n{location}" if revised else location
+
+
+def _image_location(item: Mapping[str, object]) -> str | None:
+    url: Final = as_str(item.get("url"))
+    if url is not None:
+        return url
+    encoded: Final = item.get("b64_json")
+    if not isinstance(encoded, str):
+        return None
+    return f"b64_json image ({len(encoded) * 3 // 4 - encoded[-2:].count('=')} bytes)"
+
+
+def _binary_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    size: Final = as_int(response.get("num_bytes"))
+    if size is None:
         return ()
-    message: Final[_AssistantMessage] = {
-        "role": "assistant",
-        "content": "\n\n".join(markdowns),
-        "refusal": None,
-        "tool_calls": None,
-    }
-    choice: Final[_Choice] = {"message": message, "finish_reason": None}
-    return (choice,)
+    content_type: Final = as_str(response.get("content_type"))
+    return (_text_choice(f"{content_type} ({size} bytes)" if content_type else f"{size} bytes"),)
 
 
 def _responses_parts_text(parts: tuple[Mapping[str, object], ...], part_type: str, field: str) -> str | None:

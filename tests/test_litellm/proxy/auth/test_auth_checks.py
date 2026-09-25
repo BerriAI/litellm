@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -75,6 +75,8 @@ from litellm.constants import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
@@ -644,6 +646,114 @@ async def test_fetch_key_object_from_db_bounds_in_flight_prisma_requests():
     assert prisma.max_in_flight == PROXY_DB_LOOKUP_MAX_CONCURRENCY
 
 
+@pytest.fixture
+def _clear_db_lookup_stall() -> Iterator[None]:
+    from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
+
+    db_lookup_stall_tracker.clear()
+    yield
+    db_lookup_stall_tracker.clear()
+
+
+class _StalledPrisma:
+    def __init__(self) -> None:
+        self.attempt_db_reconnect = AsyncMock(return_value=True)
+        self.db = MagicMock()
+        self.db.litellm_teamtable.find_unique = AsyncMock(side_effect=_stall_forever)
+        self.db.litellm_teamtable.update = AsyncMock(side_effect=_answer_slowly)
+
+    async def get_data(self, token: str, table_name: str, parent_otel_span: None, proxy_logging_obj: None) -> None:
+        await _stall_forever()
+
+
+async def _stall_forever(**kwargs: object) -> None:
+    await asyncio.Event().wait()
+
+
+async def _answer_slowly(**kwargs: object) -> Mapping[str, object]:
+    await asyncio.sleep(0.15)
+    return {"team_id": "slow-write"}
+
+
+@pytest.mark.asyncio
+async def test_fetch_key_object_from_db_fails_a_stalled_burst_within_the_deadline_without_reconnecting(
+    _clear_db_lookup_stall,
+):
+    """The incident: a stalled database parked every request in the pod with liveness
+    and readiness green until it OOMed. Every lookup in a burst larger than the gate,
+    the ones queued behind it included, must fail within one deadline, must not try to
+    reconnect (the transport is fine, the query is slow), and must leave every gate slot
+    free for the next burst."""
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+
+    prisma: Final = _StalledPrisma()
+    burst: Final = PROXY_DB_LOOKUP_MAX_CONCURRENCY * 3
+    started: Final = time.monotonic()
+
+    results: Final = await asyncio.gather(
+        *(
+            _fetch_key_object_from_db_with_reconnect(
+                hashed_token=f"hashed-token-{i}",
+                prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+                deadline_seconds=0.2,
+            )
+            for i in range(burst)
+        ),
+        return_exceptions=True,
+    )
+    elapsed: Final = time.monotonic() - started
+
+    assert len(results) == burst
+    assert all(isinstance(result, DBLookupDeadlineExceeded) for result in results)
+    assert all(PrismaDBExceptionHandler.is_database_service_unavailable_error(result) for result in results)
+    assert elapsed < 3
+    prisma.attempt_db_reconnect.assert_not_awaited()
+
+    recovered: Final = _InFlightCountingPrisma()
+    after: Final = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                _fetch_key_object_from_db_with_reconnect(
+                    hashed_token=f"after-{i}",
+                    prisma_client=recovered,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+                    parent_otel_span=None,
+                    proxy_logging_obj=None,
+                )
+                for i in range(PROXY_DB_LOOKUP_MAX_CONCURRENCY)
+            )
+        ),
+        timeout=5,
+    )
+    assert {r.token for r in after if r is not None} == {f"after-{i}" for i in range(PROXY_DB_LOOKUP_MAX_CONCURRENCY)}
+
+
+@pytest.mark.asyncio
+async def test_team_lookup_fails_at_the_db_lookup_deadline_while_writes_stay_unbounded(_clear_db_lookup_stall):
+    """Team, user, budget, and membership reads share the key lookup's deadline through
+    the typed table wrappers; writes do not, since a slow write must land rather than
+    fail the request that already passed auth."""
+    from litellm.proxy.auth.auth_checks import _team_table
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+    from litellm.repositories.table_repositories import TeamRepository
+
+    prisma: Final = _StalledPrisma()
+    with patch(  # test-quality-ok: lowers the module-level lookup deadline so the stalled-read test finishes fast
+        "litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05
+    ):
+        started: Final = time.monotonic()
+        with pytest.raises(DBLookupDeadlineExceeded, match=r"team lookup did not answer within 0\.05s"):
+            await _get_team_db_check(team_id="stalled-team", prisma_client=prisma)  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+        assert time.monotonic() - started < 2
+
+        written: Final = await _team_table(TeamRepository(prisma)).update(
+            where={"team_id": "slow-write"}, data={"spend": 1.0}
+        )
+
+    assert written == {"team_id": "slow-write"}
+
+
 def _fake_redis_cache():
     fake_redis = MagicMock()
     fake_redis.async_get_cache = AsyncMock(return_value=None)
@@ -892,36 +1002,80 @@ async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budg
         assert "budget_reset_at" not in creation_args
 
 
-@pytest.mark.asyncio
-async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context():
-    """Pin get_user_object's exception contract: it catches every DB failure in a broad except and
-    re-raises a bare ValueError, so a real outage survives only as __context__ rather than as the
-    exception type. The MCP dcr_bridge admission and refresh paths depend on this to tell a transient
-    outage (retry, 503) from a missing user (fail closed), which is why they classify across the cause
-    chain instead of the top exception's type. If this wrapping ever changes, that classification must
-    change with it, so this test guards the contract the callers rely on."""
-    from unittest.mock import AsyncMock, MagicMock, patch
+def _user_read_raising(error: Exception) -> tuple[MagicMock, MagicMock]:
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=error)
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    return prisma_client, cache
 
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db = AsyncMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        side_effect=ConnectionError("can't reach database server")
-    )
-    mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outage",
+    [
+        httpx.ConnectError("All connection attempts failed"),
+        httpx.ReadTimeout("timed out"),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "message": "Can't reach database server at `127.0.0.1:41071`",
+                    "error_code": "P1001",
+                }
+            }
+        ),
+    ],
+    ids=["connect_error", "read_timeout", "p1001_as_data_error"],
+)
+async def test_get_user_object_surfaces_a_db_outage_as_503_not_as_a_missing_user(outage):
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+
+    prisma_client, cache = _user_read_raising(outage)
 
     with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
-        with pytest.raises(ValueError, match="User doesn't exist in db\\.") as exc_info:
+        with pytest.raises(type(outage)) as raised:
             await get_user_object(
-                user_id="outage-contract-probe-user",
-                prisma_client=mock_prisma_client,
-                user_api_key_cache=mock_cache,
+                user_id="outage-probe-user",
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
                 user_id_upsert=False,
                 proxy_logging_obj=None,
             )
 
-    assert isinstance(exc_info.value.__context__, ConnectionError)
+    assert raised.value is outage
+    assert PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(raised.value) is outage
+    surfaced = _as_proxy_exception(raised.value)
+    assert (surfaced.code, surfaced.type) == ("503", ProxyErrorTypes.no_db_connection)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        DataError(data={"user_facing_error": {"message": "invalid byte sequence for encoding UTF8: 0x00"}}),
+        RuntimeError("row validation failed"),
+    ],
+    ids=["query_level_data_error", "runtime_error"],
+)
+async def test_get_user_object_still_reports_a_non_outage_read_failure_as_a_missing_user(failure):
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+
+    prisma_client, cache = _user_read_raising(failure)
+
+    with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
+        with pytest.raises(ValueError, match="User doesn't exist in db\\.") as raised:
+            await get_user_object(
+                user_id="data-error-probe-user",
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
+                user_id_upsert=False,
+                proxy_logging_obj=None,
+            )
+
+    assert raised.value.__context__ is failure
+    surfaced = _as_proxy_exception(raised.value)
+    assert (surfaced.code, surfaced.type) == ("401", ProxyErrorTypes.auth_error)
 
 
 @pytest.mark.asyncio
@@ -6138,7 +6292,9 @@ async def test_get_org_object_for_request_serves_last_known_org_through_db_outag
             proxy_logging_obj=None,
         )
 
-    with patch("litellm.proxy.proxy_server.general_settings", {}):  # test-quality-ok: the outage fallback reads this module global; no dependency injection seam exists
+    with patch(
+        "litellm.proxy.proxy_server.general_settings", {}
+    ):  # test-quality-ok: the outage fallback reads this module global; no dependency injection seam exists
         warm = await _lookup()
         assert warm is not None and warm.organization_alias == "platform-org"
         await user_api_key_cache.async_delete_cache("org_id:org-1:with_budget")
@@ -8011,7 +8167,6 @@ def test_model_has_no_cost_mapping_no_model_or_router_is_false():
     [
         "azure/speech/azure-tts",
         "mistral/mistral-ocr-latest",
-        "vertex_ai/imagen-3.0-generate-001",
         "dashscope/qwen-flash",
     ],
 )
@@ -8888,20 +9043,34 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
     reader: Final = AsyncMock(return_value=group)
     client: Final = MagicMock(db=MagicMock(litellm_accessgrouptable=MagicMock(find_unique=reader)))
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: [TQ008] prove reads stay on the injected connection
-        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),  # test-quality-ok: [TQ008] isolate the process cache
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: [TQ008] prove reads stay on the injected connection
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()
+        ),  # test-quality-ok: [TQ008] isolate the process cache
     ):
         if channel == "team":
-            assert await can_team_access_model(
-                model="allowed", team_object=LiteLLM_TeamTable(team_id="team-a", models=["other"], access_group_ids=["group-a"]),
-                llm_router=None, prisma_client=client,
-            ) is True
+            assert (
+                await can_team_access_model(
+                    model="allowed",
+                    team_object=LiteLLM_TeamTable(team_id="team-a", models=["other"], access_group_ids=["group-a"]),
+                    llm_router=None,
+                    prisma_client=client,
+                )
+                is True
+            )
         else:
-            assert await can_key_call_model(
-                model="allowed", llm_model_list=None,
-                valid_token=UserAPIKeyAuth(models=["other"], access_group_ids=["group-a"]),
-                llm_router=None, prisma_client=client,
-            ) is True
+            assert (
+                await can_key_call_model(
+                    model="allowed",
+                    llm_model_list=None,
+                    valid_token=UserAPIKeyAuth(models=["other"], access_group_ids=["group-a"]),
+                    llm_router=None,
+                    prisma_client=client,
+                )
+                is True
+            )
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
 
 
@@ -8921,6 +9090,7 @@ def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
         user_route="/token",
         litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=[]),
     )
+
 
 def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/models") is True
@@ -9038,7 +9208,9 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap():
         return fallback_spend
 
     with (
-        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+        ),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
         patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,
@@ -9066,7 +9238,9 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap():
         ),
     )
     with (
-        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+        ),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
         patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,
@@ -9128,7 +9302,9 @@ async def test_team_member_budget_check_adds_temp_increase_to_live_team_default(
         return fallback_spend
 
     with (
-        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+        ),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
         patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,
@@ -9269,3 +9445,14 @@ async def test_agent_key_without_an_echoed_caller_keeps_its_own_models():
     await _check_caller_models(agent_key, "claude-sonnet", load_team, load_user)
 
     assert asked == []
+
+
+def test_can_object_call_model_allows_listed_model_for_key():
+    result: Final = _can_object_call_model(
+        model="allowed-model",
+        llm_router=None,
+        models=["allowed-model"],
+        object_type="key",
+    )
+
+    assert result is True

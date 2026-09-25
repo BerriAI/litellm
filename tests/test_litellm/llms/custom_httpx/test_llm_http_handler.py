@@ -26,6 +26,8 @@ from litellm.llms.base_llm.search.transformation import BaseSearchConfig, Search
 from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
 from litellm.llms.brave.search.transformation import BraveSearchConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig
+from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
@@ -38,10 +40,9 @@ from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
-from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
 from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
@@ -136,70 +137,6 @@ async def test_get_search_preserves_tinyfish_http_error_formatting(is_async: boo
             )
             assert error.value.headers is not None
             assert error.value.headers["retry-after"] == "7"
-
-
-OCR_RESPONSE = {
-    "pages": [{"index": 0, "markdown": "OCR output", "images": []}],
-    "model": "mistral-ocr-latest",
-    "usage_info": {"pages_processed": 1},
-}
-
-
-def _ocr_sync_client() -> HTTPHandler:
-    client = HTTPHandler()
-    client.client = httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=OCR_RESPONSE)))
-    return client
-
-
-def _ocr_async_client() -> AsyncHTTPHandler:
-    client = AsyncHTTPHandler()
-    client.client = httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=OCR_RESPONSE))
-    )
-    return client
-
-
-def test_ocr_calls_post_call_with_raw_provider_response():
-    logging_obj = Mock()
-
-    response = BaseLLMHTTPHandler().ocr(
-        model="mistral-ocr-latest",
-        document={"type": "document_url", "document_url": "https://example.com/document.pdf"},
-        optional_params={},
-        timeout=5,
-        logging_obj=logging_obj,
-        api_key="test-key",
-        api_base="https://api.mistral.ai/v1/ocr",
-        custom_llm_provider="mistral",
-        client=_ocr_sync_client(),
-        provider_config=MistralOCRConfig(),
-    )
-
-    assert response.pages[0].markdown == "OCR output"
-    logging_obj.post_call.assert_called_once()
-    assert json.loads(logging_obj.post_call.call_args.kwargs["original_response"]) == OCR_RESPONSE
-
-
-@pytest.mark.asyncio
-async def test_async_ocr_calls_post_call_with_raw_provider_response():
-    logging_obj = Mock()
-
-    response = await BaseLLMHTTPHandler().async_ocr(
-        model="mistral-ocr-latest",
-        document={"type": "document_url", "document_url": "https://example.com/document.pdf"},
-        optional_params={},
-        timeout=5,
-        logging_obj=logging_obj,
-        api_key="test-key",
-        api_base="https://api.mistral.ai/v1/ocr",
-        custom_llm_provider="mistral",
-        client=_ocr_async_client(),
-        provider_config=MistralOCRConfig(),
-    )
-
-    assert response.pages[0].markdown == "OCR output"
-    logging_obj.post_call.assert_called_once()
-    assert json.loads(logging_obj.post_call.call_args.kwargs["original_response"]) == OCR_RESPONSE
 
 
 def test_prepare_fake_stream_request():
@@ -407,11 +344,9 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
     config = Mock()
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
-    config.transform_responses_api_request.return_value = {
-        "model": "gpt-5.3-codex",
-        "input": "hi",
-        "stream": True,
-    }
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5.3-codex", "input": "hi", "stream": True}
+    )
     config.sign_request.return_value = ({}, None)
     client = AsyncHTTPHandler()
     client.post = AsyncMock(
@@ -447,7 +382,9 @@ async def test_async_response_api_handler_streaming_passes_logging_obj_to_post()
     config = Mock()
     config.validate_environment.return_value = {}
     config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
-    config.transform_responses_api_request.return_value = {"model": "gpt-5", "input": "hi", "stream": True}
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5", "input": "hi", "stream": True}
+    )
     config.sign_request.return_value = ({}, None)
     client = AsyncHTTPHandler()
     client.post = AsyncMock(
@@ -470,6 +407,41 @@ async def test_async_response_api_handler_streaming_passes_logging_obj_to_post()
     )
 
     assert client.post.call_args.kwargs["logging_obj"] is logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_posts_the_async_transform_hook_result():
+    """A provider whose request transform must await (Bedrock inlines remote image URLs)
+    overrides the async hook; the async handler has to send that result, not the sync one."""
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.async_transform_responses_api_request = AsyncMock(
+        return_value={"model": "gpt-5", "input": "inlined by the async hook", "stream": True}
+    )
+    config.sign_request.return_value = ({}, None)
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    await handler.async_response_api_handler(
+        model="gpt-5",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        client=client,
+    )
+
+    assert client.post.call_args.kwargs["json"]["input"] == "inlined by the async hook"
+    config.transform_responses_api_request.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -4051,3 +4023,282 @@ async def test_responses_agentic_followup_does_not_repeat_request_params_from_pl
     assert followup_calls[0]["prompt_cache_key"] == "thread-1"
     assert followup_calls[0]["metadata"] == {"user": "u1"}
     assert followup_calls[0]["_agentic_loop_depth"] == 1
+
+
+@pytest.mark.asyncio
+async def test_responses_agentic_followup_sends_the_plans_request_param_over_a_stale_kwargs_copy(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+    followup_calls: list[dict[str, object]] = []
+
+    async def fake_aresponses(**kwargs: object) -> str:
+        followup_calls.append(kwargs)
+        return "followup-response"
+
+    monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+
+    await BaseLLMHTTPHandler()._execute_responses_agentic_plan(
+        plan=AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                model="gpt-5",
+                messages=[{"role": "user", "content": "x"}],
+                optional_params={"prompt_cache_key": "from-plan-params"},
+                kwargs={"prompt_cache_key": "stale-copy"},
+            ),
+        ),
+        model="gpt-5",
+        response_api_optional_request_params={"prompt_cache_key": "from-request"},
+        logging_obj=Mock(litellm_call_id="call-1"),
+        kwargs={},
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+        callback=CustomLogger(),
+    )
+
+    assert followup_calls[0]["prompt_cache_key"] == "from-plan-params"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
+    """A plan whose kwargs repeat a request param, or the explicitly passed model, must not crash the chat follow-up with a duplicate keyword"""
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+    followup_calls: list[dict[str, object]] = []
+
+    async def fake_acompletion(**kwargs: object) -> str:
+        followup_calls.append(kwargs)
+        return "followup-response"
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    request_kwargs: Final = {"temperature": 0.2, "api_base": "https://a", "model": "gpt-5"}
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "x"}],
+            optional_params={"temperature": 0.2},
+            kwargs=dict(request_kwargs),
+        ),
+    )
+
+    response: Final = await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
+        plan=plan,
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        optional_params={"temperature": 0.2},
+        kwargs=dict(request_kwargs),
+        custom_llm_provider="openai",
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+    )
+
+    assert response == "followup-response"
+    assert len(followup_calls) == 1
+    assert followup_calls[0]["temperature"] == 0.2
+    assert followup_calls[0]["api_base"] == "https://a"
+    assert followup_calls[0]["model"] == "openai/gpt-5"
+
+
+_UPSTREAM_HEADERS: Final = {"x-request-id": "req_upstream", "x-ratelimit-remaining-requests": "41"}
+
+
+def _assert_upstream_headers_recorded(response) -> None:
+    assert response._hidden_params["headers"]["x-request-id"] == "req_upstream"
+    assert response._hidden_params["additional_headers"]["llm_provider-x-request-id"] == "req_upstream"
+    assert response._hidden_params["additional_headers"]["x-ratelimit-remaining-requests"] == "41"
+
+
+def _json_with_upstream_headers(payload: dict) -> httpx.MockTransport:
+    return httpx.MockTransport(lambda request: httpx.Response(200, json=payload, headers=_UPSTREAM_HEADERS))
+
+
+def _binary_with_upstream_headers() -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, content=b"audio-bytes", headers={**_UPSTREAM_HEADERS, "content-type": "audio/mpeg"}
+        )
+    )
+
+
+def test_audio_transcriptions_records_upstream_response_headers():
+    client = HTTPHandler(client=httpx.Client(transport=_json_with_upstream_headers({"text": "transcribed"})))
+
+    response = BaseLLMHTTPHandler().audio_transcriptions(
+        client=client,
+        atranscription=False,
+        **_json_transcription_call_kwargs(_JSONBodyAudioTranscriptionConfig()),
+    )
+
+    _assert_upstream_headers_recorded(response)
+
+
+@pytest.mark.asyncio
+async def test_async_audio_transcriptions_records_upstream_response_headers():
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_json_with_upstream_headers({"text": "transcribed"}))
+
+    response = await BaseLLMHTTPHandler().async_audio_transcriptions(
+        client=client,
+        **_json_transcription_call_kwargs(_JSONBodyAudioTranscriptionConfig()),
+    )
+
+    _assert_upstream_headers_recorded(response)
+
+
+def _image_edit_call_kwargs() -> dict:
+    return {
+        "model": "edit-model",
+        "image": b"raw-image",
+        "prompt": "add a hat",
+        "image_edit_provider_config": _ImageEditRecordingConfig(),
+        "image_edit_optional_request_params": {},
+        "custom_llm_provider": "openai",
+        "litellm_params": GenericLiteLLMParams(),
+        "logging_obj": Mock(),
+        "timeout": 10.0,
+    }
+
+
+def test_image_edit_handler_records_upstream_response_headers():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_json_with_upstream_headers({"transformed_by": "sync"}))
+
+    response = BaseLLMHTTPHandler().image_edit_handler(client=client, **_image_edit_call_kwargs())
+
+    _assert_upstream_headers_recorded(response)
+
+
+@pytest.mark.asyncio
+async def test_async_image_edit_handler_records_upstream_response_headers():
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_json_with_upstream_headers({"transformed_by": "async"}))
+
+    response = await BaseLLMHTTPHandler().async_image_edit_handler(client=client, **_image_edit_call_kwargs())
+
+    _assert_upstream_headers_recorded(response)
+
+
+class _HeaderImageGenerationConfig(BaseImageGenerationConfig):
+    def get_supported_openai_params(self, model):
+        return []
+
+    def map_openai_params(self, non_default_params, optional_params, model, drop_params):
+        return optional_params
+
+    def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
+        return "https://images.example/v1/generations"
+
+    def transform_image_generation_request(self, model, prompt, optional_params, litellm_params, headers):
+        return {"prompt": prompt}
+
+    def transform_image_generation_response(
+        self,
+        model,
+        raw_response,
+        model_response,
+        logging_obj,
+        request_data,
+        optional_params,
+        litellm_params,
+        encoding,
+        api_key=None,
+        json_mode=None,
+    ):
+        return ImageResponse(data=[ImageObject(b64_json=raw_response.json()["b64_json"])])
+
+
+def _image_generation_call_kwargs() -> dict:
+    return {
+        "model": "image-model",
+        "prompt": "a cat",
+        "image_generation_provider_config": _HeaderImageGenerationConfig(),
+        "image_generation_optional_request_params": {},
+        "custom_llm_provider": "openai",
+        "litellm_params": {},
+        "logging_obj": Mock(),
+        "timeout": 10.0,
+    }
+
+
+def test_image_generation_handler_records_upstream_response_headers():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_json_with_upstream_headers({"b64_json": "abc"}))
+
+    response = BaseLLMHTTPHandler().image_generation_handler(client=client, **_image_generation_call_kwargs())
+
+    assert response.data[0].b64_json == "abc"
+    _assert_upstream_headers_recorded(response)
+
+
+@pytest.mark.asyncio
+async def test_async_image_generation_handler_records_upstream_response_headers():
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_json_with_upstream_headers({"b64_json": "abc"}))
+
+    response = await BaseLLMHTTPHandler().async_image_generation_handler(
+        client=client, **_image_generation_call_kwargs()
+    )
+
+    assert response.data[0].b64_json == "abc"
+    _assert_upstream_headers_recorded(response)
+
+
+class _HeaderTextToSpeechConfig(BaseTextToSpeechConfig):
+    def get_supported_openai_params(self, model):
+        return []
+
+    def map_openai_params(self, model, optional_params, voice=None, drop_params=False, kwargs=None):
+        return voice, optional_params
+
+    def validate_environment(self, headers, model, api_key=None, api_base=None):
+        return {}
+
+    def get_complete_url(self, model, api_base, litellm_params):
+        return "https://tts.example/v1/speech"
+
+    def transform_text_to_speech_request(self, model, input, voice, optional_params, litellm_params, headers):
+        return {"dict_body": {"input": input}}
+
+    def transform_text_to_speech_response(self, model, raw_response, logging_obj):
+        return HttpxBinaryResponseContent(response=raw_response)
+
+
+def _text_to_speech_call_kwargs() -> dict:
+    return {
+        "model": "tts-model",
+        "input": "hello",
+        "voice": "alloy",
+        "text_to_speech_provider_config": _HeaderTextToSpeechConfig(),
+        "text_to_speech_optional_params": {},
+        "custom_llm_provider": "openai",
+        "litellm_params": {},
+        "logging_obj": Mock(),
+        "timeout": 10.0,
+    }
+
+
+def test_text_to_speech_handler_records_upstream_response_headers():
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_binary_with_upstream_headers())
+
+    response = BaseLLMHTTPHandler().text_to_speech_handler(client=client, **_text_to_speech_call_kwargs())
+
+    assert response.content == b"audio-bytes"
+    _assert_upstream_headers_recorded(response)
+
+
+@pytest.mark.asyncio
+async def test_async_text_to_speech_handler_records_upstream_response_headers():
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_binary_with_upstream_headers())
+
+    response = await BaseLLMHTTPHandler().async_text_to_speech_handler(client=client, **_text_to_speech_call_kwargs())
+
+    assert response.content == b"audio-bytes"
+    _assert_upstream_headers_recorded(response)

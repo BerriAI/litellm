@@ -2,6 +2,7 @@
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
 import json
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
@@ -283,20 +284,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _is_gemini_3_or_newer(model: str) -> bool:
         """
-        Check if the model is Gemini 3 Pro or newer.
-
-        Gemini 3 models include:
-        - gemini-3-pro-preview
-        - gemini-3-flash
-        - gemini-3-flash-preview (Gemini 3 Flash)
-        - gemini-3.1-pro-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview
-        - gemini-3.5-flash
-        - Any future Gemini 3.x models
+        Check if the model is Gemini 3 or newer.
         """
-        # Check for Gemini 3 models
-        if "gemini-3" in model:
-            return True
-        return False
+        model_name: Final = model.split("/")[-1].lower()
+        is_vertex_fine_tuned_model: Final = model_name.isdigit() or (
+            model.startswith("gemini/") and not model_name.startswith("gemini-")
+        )
+        if not model_name or is_vertex_fine_tuned_model or model_name.startswith("gemma-"):
+            return False
+        # Pre-Gemini 3 models: gemini-1.x, gemini-2.x, gemini-pro, gemini-flash, gemini-exp
+        if re.match(r"^gemini-(?:[12](?:\.\d+)?|exp|(?:pro|flash)(?!-(?:lite-)?latest$))(?:-|$)", model_name):
+            return False
+        return True
 
     @staticmethod
     def _forward_gemini_function_call_id(model: str) -> bool:
@@ -347,9 +346,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if self._supports_penalty_parameters(model):
             supported_params.extend(["frequency_penalty", "presence_penalty"])
 
-        if supports_reasoning(model):
+        if supports_reasoning(model) or self._is_gemini_3_or_newer(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
+
         return supported_params
 
     def map_tool_choice_values(self, model: str, tool_choice: str | dict) -> ToolConfig | None:
@@ -871,8 +871,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _supports_minimal_thinking_level(model: str) -> bool:
         lowered: Final = model.lower()
-        is_gemini3flash: Final = "gemini-3" in lowered and "flash" in lowered
-        return is_gemini3flash and not is_explicitly_disabled_factory(
+        is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in lowered
+        return is_gemini3_or_newer_flash and not is_explicitly_disabled_factory(
             model=model, custom_llm_provider=None, key="supports_minimal_reasoning_effort"
         )
 
@@ -890,9 +890,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
-        is_gemini3flash: Final = model and ("flash" in model.lower() and "gemini-3" in model.lower())
         supports_minimal: Final = bool(model) and VertexGeminiConfig._supports_minimal_thinking_level(model)
-        is_gemini31pro: Final = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
             if supports_minimal:
                 return {"thinkingLevel": "minimal", "includeThoughts": True}
@@ -901,10 +899,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
-            if is_gemini31pro or is_gemini3flash:
-                return {"thinkingLevel": "medium", "includeThoughts": True}
-            else:
-                return {"thinkingLevel": "high", "includeThoughts": True}
+            return {"thinkingLevel": "medium", "includeThoughts": True}
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort in ("disable", "none"):

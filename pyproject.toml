@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.103.0"
+version = "1.104.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -19,11 +19,13 @@ dependencies = [
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0",
+    "pyyaml>=6.0.3,<7.0",
+    "packaging>=24.0",
+    "importlib-metadata>=8.0.0,<9.0",
     "tiktoken>=0.8.0,<1.0; python_version < '3.14'",
     "tiktoken>=0.12.0,<1.0; python_version >= '3.14'",
-    "importlib-metadata>=8.0.0,<9.0",
-    "packaging>=24.0",
     "tokenizers>=0.21.0,<1.0",
+    "huggingface-hub>=0.34.0,<2.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.14.2,<4.0",
@@ -73,8 +75,8 @@ proxy = [
     "mcp>=2.2.0,<3",
     "httpx2>=2.5.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.100",
-    "litellm-enterprise==0.1.69",
+    "litellm-proxy-extras==0.4.101",
+    "litellm-enterprise==0.1.70",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -191,6 +193,7 @@ litellm-proxy = "litellm.proxy.client.cli:litellm_proxy_cli"
 
 [dependency-groups]
 dev = [
+    "numpy>=1.26.0,<3.0",
     "diff-cover==9.7.2",
     "hypothesis==6.165.10",
     "reportlab==5.0.1",
@@ -290,6 +293,12 @@ healthcheck = [
     "httpx==0.28.1",
     "pyyaml==6.0.3",
 ]
+benchmarks = [
+    "pytest==9.0.3",
+    "pytest-codspeed==4.3.0",
+    "mcp>=2.2.0,<3",
+    "a2a-sdk==1.1.0",
+]
 
 [build-system]
 requires = ["maturin==1.15.0"]
@@ -346,7 +355,7 @@ litellm-enterprise = { workspace = true }
 members = ["enterprise", "litellm-proxy-extras"]
 
 [tool.commitizen]
-version = "1.103.0"
+version = "1.104.0"
 version_files = [
     "pyproject.toml:^version",
 ]

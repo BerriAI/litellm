@@ -208,7 +208,7 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     for _ in range(_IMAGE_SCAN_MAX_DEPTH):
         if any(isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_PART_TYPES for part in frontier):
             return True
-        frontier = tuple(  # rebind-ok: depth-bounded frontier walk
+        frontier = tuple(
             nested
             for part in frontier
             if isinstance(part, Mapping)
@@ -1657,7 +1657,7 @@ def get_file_ids_from_messages(messages: list[AllMessageValues]) -> list[str]:
                 if isinstance(content, str):
                     continue
                 for c in content:
-                    if c["type"] == "file":
+                    if isinstance(c, dict) and c["type"] == "file":
                         file_object = cast(ChatCompletionFileObject, c)
                         file_object_file_field = file_object.get("file")
                         if not isinstance(file_object_file_field, dict):
@@ -2003,11 +2003,11 @@ def strip_encrypted_reasoning_from_messages(messages: object) -> None:
     """
     if not isinstance(messages, list):
         return
-    for content in _anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
+    for content in anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
         _strip_encrypted_reasoning_from_blocks(content)
 
 
-def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
+def anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
     return (
         cast(list[object], content)  # cast-ok: narrowed by isinstance
         for message in messages
@@ -2020,7 +2020,7 @@ def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
 def _strip_encrypted_reasoning_from_blocks(content: object) -> None:
     blocks: Final = cast(list[object], content)  # cast-ok: narrowed by the caller's isinstance
     kept: Final = tuple(block for block in blocks if not is_encrypted_reasoning_block(block))
-    blocks[:] = kept  # rebind-ok: shared with fallback snapshot
+    blocks[:] = kept
 
 
 def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
@@ -2258,6 +2258,37 @@ def system_messages_first(
     return [  # mutable-ok: pipelines mutate message lists
         *(message for message in messages if _is_instruction_message(message)),
         *(message for message in messages if not _is_instruction_message(message)),
+    ]
+
+
+def _system_content_as_text_parts(content: object) -> tuple[object, ...]:
+    if isinstance(content, str):
+        return (ChatCompletionTextObject(type="text", text=content),)
+    return tuple(cast(Sequence[object], content))  # cast-ok: non-str system content is a list of content parts
+
+
+def _merge_system_message_run(run: Sequence[AllMessageValues]) -> AllMessageValues:
+    if len(run) == 1:
+        return run[0]
+    contents: Final = tuple(content for content in (message.get("content") for message in run) if content is not None)
+    if not contents:
+        return run[0]
+    if all(isinstance(content, str) for content in contents):
+        joined_text: Final = "\n\n".join(cast(tuple[str, ...], contents))  # cast-ok: every content is a str
+        return cast(AllMessageValues, {**run[0], "content": joined_text})  # cast-ok: dict spread keeps message shape
+    merged_parts: Final = [  # mutable-ok: chat message content must stay a json list
+        part for content in contents for part in _system_content_as_text_parts(content)
+    ]
+    return cast(AllMessageValues, {**run[0], "content": merged_parts})  # cast-ok: dict spread keeps message shape
+
+
+def merge_consecutive_system_messages(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    return [  # mutable-ok: pipelines mutate message lists
+        merged
+        for is_system_run, run in groupby(messages, key=lambda message: message.get("role") == "system")
+        for merged in ((_merge_system_message_run(tuple(run)),) if is_system_run else run)
     ]
 
 

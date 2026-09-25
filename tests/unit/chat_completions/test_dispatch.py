@@ -10,7 +10,7 @@ from litellm.chat_completions.dispatch import (
 )
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, Rule
+from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
@@ -23,7 +23,7 @@ from litellm.types.utils import ModelResponse
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 PYTHON_RULES: Final = ()
-RUST_RULES: Final = (Rule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),)
+RUST_RULES: Final = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),)
 
 
 def completion_binding(native: NativeCompletion | None) -> NativeBinding[NativeCompletion]:
@@ -117,9 +117,7 @@ def test_native_receives_bound_request_and_original_call_shape() -> None:
         "custom_llm_provider": "anthropic",
         "metadata": metadata,
     }
-    captured: Final[
-        list[tuple[LiteLLMChatCompletionsRequest, tuple[object, ...], Mapping[str, object]]]
-    ] = []
+    captured: Final[list[tuple[LiteLLMChatCompletionsRequest, tuple[object, ...], Mapping[str, object]]]] = []
 
     def python(*call_args: object, **call_kwargs: object) -> ModelResponse:  # kwargs-ok: rejected Rust fallback
         pytest.fail("Required Rust dispatch must not call Python")

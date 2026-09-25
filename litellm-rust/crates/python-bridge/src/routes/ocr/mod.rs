@@ -3,23 +3,35 @@ mod errors;
 mod host;
 mod project;
 
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use host::OcrRouteHost;
 use litellm_auth_gcp::VertexAuth;
 use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
-use litellm_core::ocr::route::ocr_machine;
+use litellm_core::ocr::{provider_config, route::ocr_machine};
 use litellm_core_utils::settings::ProcessEnvironment;
-use litellm_llms::base_llm::ocr::{
-    handler::OcrClient,
-    settings::{OcrSettings, Secrets},
-};
+use litellm_host_python::to_py;
+use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
 };
 
-use crate::{coercion::Field, errors::RustBridgeDeclined, http, python_settings::PythonSettings};
+use crate::{
+    coercion::FieldSpec,
+    http,
+    python_settings::{PythonSettings, Snapshot},
+    secrets,
+};
+
+const VERTEX_PROJECT: FieldSpec<Option<String>> =
+    FieldSpec::new("vertex_project", |field| field.falsy_optional_string());
+const VERTEX_LOCATION: FieldSpec<Option<String>> =
+    FieldSpec::new("vertex_location", |field| field.falsy_optional_string());
+const ENABLE_AZURE_AD_TOKEN_REFRESH: FieldSpec<bool> =
+    FieldSpec::new("enable_azure_ad_token_refresh", |field| {
+        Ok(field.exact_true())
+    });
 
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "ocr",
@@ -41,7 +53,7 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let secrets = process_environment_secrets(&PythonSettings::SecretManager.read(py)?)?;
+    let secrets = secrets::source(py)?;
     let config = http::call_config(py, &kwargs, asynchronous)?;
     let client = OcrClient::new(
         http::pool(),
@@ -56,39 +68,21 @@ fn run_ocr(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
         PublicCall::capture(&request, &args, &kwargs)?,
-        ocr_machine(client),
+        crate::logger::LoggedMachine::new(ocr_machine(client)),
         OcrRouteHost::new(request.unbind()),
         asynchronous,
     )
-}
-
-fn process_environment_secrets(secret_manager: &Bound<'_, PyAny>) -> PyResult<Secrets> {
-    if Field::read(secret_manager, "secret_manager.readable")?.schema_bool()? {
-        return Err(RustBridgeDeclined::new_err(
-            "a readable secret manager is configured and the Rust route only reads the process environment",
-        ));
-    }
-    Ok(Arc::new(ProcessEnvironment))
 }
 
 fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
     project_provider_defaults(&PythonSettings::ProviderDefaults.read(py)?)
 }
 
-fn project_provider_defaults(value: &Bound<'_, PyAny>) -> PyResult<OcrSettings> {
+fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
     Ok(OcrSettings {
-        vertex_project: Field::read(value, "provider_defaults.vertex_project")?
-            .falsy_optional_string()?
-            .0,
-        vertex_location: Field::read(value, "provider_defaults.vertex_location")?
-            .falsy_optional_string()?
-            .0,
-        enable_azure_ad_token_refresh: Field::read(
-            value,
-            "provider_defaults.enable_azure_ad_token_refresh",
-        )?
-        .exact_true()
-        .0,
+        vertex_project: snapshot.read(&VERTEX_PROJECT)?,
+        vertex_location: snapshot.read(&VERTEX_LOCATION)?,
+        enable_azure_ad_token_refresh: snapshot.read(&ENABLE_AZURE_AD_TOKEN_REFRESH)?,
         ..OcrSettings::from_environment(&ProcessEnvironment)
     })
 }
@@ -113,31 +107,43 @@ pub(crate) fn aocr(
     run_ocr(py, request, args, kwargs, true)
 }
 
+#[pyfunction]
+pub(crate) fn ocr_health_check_document(
+    py: Python<'_>,
+    model: &str,
+    custom_llm_provider: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let document = provider_config::get_health_check_document(model, custom_llm_provider)
+        .map_err(errors::to_pyerr)?;
+    to_py(py, &document)
+}
+
+#[pyfunction]
+pub(crate) fn ocr_passthrough_response(
+    py: Python<'_>,
+    model: &str,
+    endpoint: &str,
+    body: &[u8],
+) -> PyResult<Option<Py<PyAny>>> {
+    provider_config::passthrough_response(model, endpoint, body)
+        .map_err(errors::to_pyerr)?
+        .map(|response| to_py(py, &response.into_json()))
+        .transpose()
+}
+
 #[cfg(test)]
 mod tests {
-    use pyo3::{prelude::*, types::PyDict};
+    use pyo3::prelude::*;
 
-    use super::process_environment_secrets;
-    use crate::errors::RustBridgeDeclined;
-
-    fn secret_manager<'py>(py: Python<'py>, readable: bool) -> Bound<'py, PyAny> {
-        let locals = PyDict::new(py);
-        locals.set_item("readable", readable).unwrap();
-        py.run(
-            c"import types\nmanager = types.SimpleNamespace(readable=readable)",
-            Some(&locals),
-            Some(&locals),
-        )
-        .unwrap();
-        locals.get_item("manager").unwrap().unwrap()
-    }
+    use crate::python_settings::PythonSettings;
 
     #[test]
     fn provider_defaults_distinguish_falsey_values_and_exact_true() {
         Python::initialize();
         Python::attach(|py| {
             let value = py.eval(c"__import__('types').SimpleNamespace(vertex_project=[], vertex_location=0, enable_azure_ad_token_refresh=1)", None, None).unwrap();
-            let projected = super::project_provider_defaults(&value).unwrap();
+            let snapshot = PythonSettings::ProviderDefaults.snapshot(value.clone());
+            let projected = super::project_provider_defaults(&snapshot).unwrap();
             assert_eq!(projected.vertex_project, None);
             assert_eq!(projected.vertex_location, None);
             assert!(!projected.enable_azure_ad_token_refresh);
@@ -146,42 +152,18 @@ mod tests {
             value
                 .setattr("enable_azure_ad_token_refresh", true)
                 .unwrap();
-            let next = super::project_provider_defaults(&value).unwrap();
+            let next = super::project_provider_defaults(&snapshot).unwrap();
             assert_eq!(next.vertex_project.as_deref(), Some("project"));
             assert_eq!(next.vertex_location.as_deref(), Some("region"));
             assert!(next.enable_azure_ad_token_refresh);
             value.setattr("vertex_project", 1).unwrap();
-            let error = super::project_provider_defaults(&value).err().unwrap();
+            let error = super::project_provider_defaults(&snapshot).err().unwrap();
             assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
             assert!(
                 error
                     .to_string()
                     .contains("provider_defaults.vertex_project")
             );
-        });
-    }
-
-    #[test]
-    fn a_readable_secret_manager_sends_the_call_back_to_python() {
-        Python::initialize();
-        Python::attach(|py| {
-            let declined = process_environment_secrets(&secret_manager(py, true))
-                .err()
-                .expect("the Rust route declines");
-            assert!(declined.is_instance_of::<RustBridgeDeclined>(py));
-        });
-    }
-
-    #[test]
-    fn without_a_readable_secret_manager_secrets_are_the_process_environment() {
-        Python::initialize();
-        Python::attach(|py| {
-            let secrets = process_environment_secrets(&secret_manager(py, false)).unwrap();
-            assert_eq!(
-                secrets.get("LITELLM_RUST_BRIDGE_UNSET_VARIABLE_FOR_TEST"),
-                None
-            );
-            assert_eq!(secrets.get("PATH"), std::env::var("PATH").ok());
         });
     }
 }

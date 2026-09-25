@@ -18,6 +18,7 @@ litellm-auth-gcp.workspace = true
 litellm-host.workspace = true
 litellm-framing.workspace = true
 litellm-http.workspace = true
+litellm-secrets.workspace = true
 base64.workspace = true
 bytes.workspace = true
 data-url = "0.3.2"

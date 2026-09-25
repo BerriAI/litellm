@@ -139,6 +139,18 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
+def inferred_provider(model: str | None) -> str | None:
+    if not model:
+        return None
+    declared: Final = declared_authenticating_provider(model)
+    if declared is not None:
+        return declared
+    try:
+        return get_llm_provider(model=model)[1]
+    except Exception:  # noqa: BLE001  # get_llm_provider raises for an unknown name, which then has no provider
+        return None
+
+
 def get_llm_provider(
     model: str,
     custom_llm_provider: str | None = None,
@@ -859,6 +871,8 @@ def _get_openai_compatible_provider_info(
     elif custom_llm_provider == "edenai":
         api_base = litellm.EdenAIChatConfig.get_api_base(api_base)  # rebind-ok: chain resolves in place
         dynamic_api_key = litellm.EdenAIChatConfig.get_api_key(api_key)  # rebind-ok: chain resolves in place
+    elif custom_llm_provider == "fal_ai":
+        dynamic_api_key = litellm.FalAIChatConfig.get_api_key(api_key)  # rebind-ok: chain resolves in place
     elif custom_llm_provider == "aiml":
         (
             api_base,

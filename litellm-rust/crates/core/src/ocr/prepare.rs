@@ -3,6 +3,7 @@ use litellm_llms::base_llm::ocr::{
     handler::OcrClient,
     transformation::{OcrConnection, OcrCredentialInputs, PreparedOcrRequest},
 };
+use litellm_secrets::source::Secrets;
 
 use super::provider_config::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
@@ -11,6 +12,7 @@ pub(crate) fn prepare_request(
     request: ResolvedOcrRequest,
     caller_document: bool,
     client: &OcrClient,
+    secrets: Secrets,
 ) -> PreparedOcrRequest {
     let credentials = request.credentials.clone();
     let (preferred_api_key_env, api_base_env) = match request.config.provider() {
@@ -24,7 +26,7 @@ pub(crate) fn prepare_request(
         | OcrProvider::Reducto
         | OcrProvider::VertexAi => (None, None),
     };
-    let secret = |name: &str| client.secrets().truthy(name);
+    let secret = |name: &str| secrets.truthy(name);
     let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {
         credentials.api_key.clone().or_else(|| {
             preferred_api_key_env
@@ -60,12 +62,7 @@ pub(crate) fn prepare_request(
     PreparedOcrRequest {
         model,
         document,
-        connection: OcrConnection::new(
-            resolved,
-            transport,
-            client.settings().clone(),
-            client.secrets().clone(),
-        ),
+        connection: OcrConnection::new(resolved, transport, client.settings().clone(), secrets),
         caller_document,
         optional_params,
         input_sources,
@@ -79,6 +76,7 @@ pub(crate) fn prepare_request_for_test(request: ResolvedOcrRequest) -> PreparedO
         request,
         true,
         &OcrClient::for_test(reqwest::Client::new(), reqwest::Client::new()),
+        std::sync::Arc::new(litellm_core_utils::settings::ProcessEnvironment),
     )
 }
 

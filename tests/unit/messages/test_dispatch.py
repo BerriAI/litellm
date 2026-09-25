@@ -12,7 +12,7 @@ from litellm.messages.dispatch import (
 )
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, Rule, Rules
+from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
@@ -25,7 +25,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMe
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 PYTHON_RULES: Final[Rules] = ()
-RUST_RULES: Final[Rules] = (Rule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
+RUST_RULES: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
 
 
 def messages_binding(native: NativeMessages | None) -> NativeBinding[NativeMessages]:
@@ -216,9 +216,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
     captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
     expected: Final = response()
 
-    def python(
-        *call_args: object, **call_kwargs: object
-    ) -> AnthropicMessagesResponse:  # kwargs-ok: records invalid call
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:
         captured.append((call_args, call_kwargs))
         return expected
 

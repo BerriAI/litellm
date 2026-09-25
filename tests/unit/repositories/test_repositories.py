@@ -2120,6 +2120,7 @@ class TestPrismaTableRepository:
             "litellm_prompttable",
             "litellm_searchtoolstable",
             "litellm_ssoconfig",
+            "litellm_uisettings",
         }
     )
 

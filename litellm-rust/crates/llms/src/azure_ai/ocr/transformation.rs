@@ -1,5 +1,6 @@
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::AzureAuthInputs;
+use litellm_auth_azure::SECRET_NAMES as AZURE_AUTH_SECRET_NAMES;
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde_json::Value;
 
@@ -16,7 +17,7 @@ use crate::{
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
 
-const AZURE_AI_OCR_PATH: &str = "/providers/mistral/azure/ocr";
+pub const AZURE_AI_OCR_PATH: [&str; 4] = ["providers", "mistral", "azure", "ocr"];
 
 const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
@@ -35,6 +36,17 @@ impl BaseOcrConfig for AzureAiOcrConfig {
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         Some(AZURE_AI_API_KEY_ENV)
+    }
+
+    fn secret_names(&self) -> Vec<&'static str> {
+        [
+            [AZURE_AI_API_KEY_ENV, AZURE_AI_API_BASE_ENV].as_slice(),
+            AZURE_AUTH_SECRET_NAMES,
+        ]
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect()
     }
 
     fn map_ocr_params(
@@ -167,9 +179,8 @@ impl AzureAiOcrConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let base = Self::resolve_api_base(api_base, env_lookup)?;
-        let path: Vec<&str> = AZURE_AI_OCR_PATH.trim_matches('/').split('/').collect();
         ApiUrl::parse(&base)
-            .and_then(|url| url.complete_path(&path))
+            .and_then(|url| url.complete_path(&AZURE_AI_OCR_PATH))
             .map(|url| url.into_string())
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),

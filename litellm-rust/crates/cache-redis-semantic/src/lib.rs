@@ -1,5 +1,7 @@
 mod cache;
-mod prompt;
+mod config;
+mod index;
+mod reply;
 
-pub use cache::{Embedder, RedisSemanticCache, RedisSemanticConfig};
-pub use prompt::prompt_from_context;
+pub use cache::RedisSemanticCache;
+pub use config::{DEFAULT_INDEX_NAME, RedisSemanticConfig};

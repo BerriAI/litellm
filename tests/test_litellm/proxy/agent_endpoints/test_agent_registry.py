@@ -1210,8 +1210,159 @@ def _stored_agent_row(values: Mapping[str, object] | SimpleNamespace) -> LiteLLM
             "enabled": True,
             "execution_mode": "autonomous",
             **{
-                key: json.dumps(value) if key in ("litellm_params", "agent_card_params") else value
+                key: json.dumps(value) if key in ("litellm_params", "agent_card_params", "kill_switch") and not isinstance(value, str) else value
                 for key, value in fields.items()
             },
         }
     )
+
+_KILL_SWITCH: Final = {
+    "url": "https://ops.example.com/kill",
+    "method": "POST",
+    "headers": {"X-Env": "prod"},
+    "query_params": {"reason": "manual"},
+    "body": {"action": "stop"},
+    "auth": {"type": "bearer", "token": "tok-real"},
+}
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_db_stores_kill_switch_json_and_a_json_null_when_unset():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_create = AsyncMock(return_value=_agent_row_mock([]))
+    mock_prisma.db.litellm_agentstable.create = mock_create
+
+    await registry.add_agent_to_db(
+        agent={
+            "agent_name": "Test Agent",
+            "agent_card_params": _sample_agent_card_params(),
+            "kill_switch": _KILL_SWITCH,
+        },
+        prisma_client=mock_prisma,
+        created_by="test-user",
+    )
+    assert json.loads(mock_create.call_args.kwargs["data"]["kill_switch"]) == _KILL_SWITCH
+
+    await registry.add_agent_to_db(
+        agent={"agent_name": "Plain Agent", "agent_card_params": _sample_agent_card_params()},
+        prisma_client=mock_prisma,
+        created_by="test-user",
+    )
+    assert mock_create.call_args.kwargs["data"]["kill_switch"] == json.dumps(None)
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_db_rejects_a_kill_switch_with_a_non_http_url():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.create = AsyncMock(return_value=_agent_row_mock([]))
+
+    with pytest.raises(Exception, match="absolute http"):
+        await registry.add_agent_to_db(
+            agent={
+                "agent_name": "Test Agent",
+                "agent_card_params": _sample_agent_card_params(),
+                "kill_switch": {**_KILL_SWITCH, "url": "ops.example.com/kill"},
+            },
+            prisma_client=mock_prisma,
+            created_by="test-user",
+        )
+    mock_prisma.db.litellm_agentstable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_in_db_keeps_kill_switch_when_omitted_and_clears_it_on_null():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=_stored_agent_row({
+            "agent_id": "agent-123",
+            "agent_name": "Old",
+            "litellm_params": {},
+            "object_permission_id": None,
+            "kill_switch": _KILL_SWITCH,
+        })
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock([]))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123", agent={"agent_name": "New"}, prisma_client=mock_prisma, updated_by="u"
+    )
+    assert "kill_switch" not in mock_update.call_args.kwargs["data"]
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123", agent={"kill_switch": None}, prisma_client=mock_prisma, updated_by="u"
+    )
+    assert mock_update.call_args.kwargs["data"]["kill_switch"] == json.dumps(None), (
+        "prisma-client-py silently drops None, so the clear must be written as the JSON literal null"
+    )
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_in_db_restores_the_stored_kill_switch_secret_behind_the_marker():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=_stored_agent_row({
+            "agent_id": "agent-123",
+            "agent_name": "A",
+            "litellm_params": {},
+            "object_permission_id": None,
+            "kill_switch": _KILL_SWITCH,
+        })
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock([]))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123",
+        agent={
+            "kill_switch": {
+                **_KILL_SWITCH,
+                "url": "https://ops.example.com/v2/kill",
+                "auth": {"type": "bearer", "token": REDACTED_BY_LITELM_STRING},
+            }
+        },
+        prisma_client=mock_prisma,
+        updated_by="u",
+    )
+
+    assert json.loads(mock_update.call_args.kwargs["data"]["kill_switch"]) == {
+        **_KILL_SWITCH,
+        "url": "https://ops.example.com/v2/kill",
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_agent_in_db_clears_kill_switch_when_omitted_and_restores_secret_when_echoed():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=_stored_agent_row(SimpleNamespace(litellm_params={}, object_permission_id=None, kill_switch=json.dumps(_KILL_SWITCH)))
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock([]))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+    base: Final = {"agent_name": "Test Agent", "agent_card_params": _sample_agent_card_params(), "litellm_params": {}}
+
+    await registry.update_agent_in_db(agent_id="agent-123", agent=base, prisma_client=mock_prisma, updated_by="u")
+    assert mock_update.call_args.kwargs["data"]["kill_switch"] == json.dumps(None)
+
+    echoed: Final = {**_KILL_SWITCH, "auth": {"type": "bearer", "token": REDACTED_BY_LITELM_STRING}}
+    await registry.update_agent_in_db(
+        agent_id="agent-123", agent={**base, "kill_switch": echoed}, prisma_client=mock_prisma, updated_by="u"
+    )
+    assert json.loads(mock_update.call_args.kwargs["data"]["kill_switch"]) == _KILL_SWITCH
+
+
+def test_load_agents_from_config_exposes_a_typed_kill_switch():
+    registry: Final = AgentRegistry()
+
+    registry.load_agents_from_config(
+        [{"agent_name": "cfg-agent", "agent_card_params": _sample_agent_card_params(), "kill_switch": _KILL_SWITCH}]
+    )
+
+    (agent,) = registry.get_agent_list()
+    assert agent.kill_switch is not None
+    assert agent.kill_switch.model_dump() == _KILL_SWITCH

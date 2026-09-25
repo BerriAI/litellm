@@ -418,6 +418,25 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
         )
 
 
+class TestGpt6SolAndLunaAdvertiseNoneThroughMax:
+    @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6-luna"])
+    def test_the_entry_advertises_none_through_max(self, local_model_cost_map, model):
+        """OpenAI documents none, low, medium (default), high, xhigh and max for both. Unlike
+        gpt-6-astra they take none."""
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider="openai"))
+
+        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        )
+
+
 class TestNearestDeclaredReasoningEffort:
     def test_a_declared_level_is_kept(self):
         assert nearest_declared_reasoning_effort("high", ("none", "high")) == "high"
@@ -439,3 +458,30 @@ class TestNearestDeclaredReasoningEffort:
     def test_a_level_outside_the_strength_order_is_left_for_upstream(self):
         assert nearest_declared_reasoning_effort("turbo", ("none", "high")) == "turbo"
         assert nearest_declared_reasoning_effort("medium", ()) == "medium"
+
+
+class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:
+    @pytest.mark.parametrize(
+        "model,custom_llm_provider",
+        [
+            ("azure/gpt-6-sol", "azure"),
+            ("azure/gpt-6-luna", "azure"),
+            ("azure/eu/gpt-6-sol", "azure"),
+            ("azure/eu/gpt-6-luna", "azure"),
+            ("azure_ai/gpt-6-sol", "azure_ai"),
+            ("azure_ai/gpt-6-luna", "azure_ai"),
+        ],
+    )
+    def test_the_azure_entry_advertises_the_same_levels_as_openai(
+        self, local_model_cost_map, model, custom_llm_provider
+    ):
+        """The Foundry deployments of sol and luna take the same effort set OpenAI documents for
+        the direct API, so the resolved levels must match the OpenAI-direct entry."""
+        from litellm.utils import _get_model_info_helper
+
+        azure_info = dict(_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
+        openai_info = dict(_get_model_info_helper(model=model.rsplit("/", 1)[1], custom_llm_provider="openai"))
+
+        assert resolve_supported_reasoning_efforts(
+            azure_info, deployment_is_mapped=True
+        ) == resolve_supported_reasoning_efforts(openai_info, deployment_is_mapped=True)

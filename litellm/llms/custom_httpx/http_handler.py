@@ -614,11 +614,15 @@ class AsyncHTTPHandler:
         client_alias: str | None = None,  # name for client in logs
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+        follow_redirects: bool = True,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.ssl_verify = ssl_verify
         self.shared_session = shared_session
+        self.transport = transport
+        self.follow_redirects = follow_redirects
         self._owns_client = True
         self._client = self.create_client(
             timeout=timeout,
@@ -651,6 +655,16 @@ class AsyncHTTPHandler:
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient:
+        if self.transport is not None:
+            return httpx.AsyncClient(
+                transport=self.transport,
+                event_hooks=event_hooks,
+                timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT,
+                headers=get_default_headers(),
+                cookies=blocked_cookie_jar(),
+                follow_redirects=self.follow_redirects,
+                trust_env=False,
+            )
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration(ssl_verify)
 
@@ -680,7 +694,7 @@ class AsyncHTTPHandler:
             cert=cert,
             headers=default_headers,
             cookies=blocked_cookie_jar(),
-            follow_redirects=True,
+            follow_redirects=self.follow_redirects,
             http2=http2_enabled(),
         )
 
@@ -831,6 +845,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
@@ -971,6 +986,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
@@ -1037,6 +1053,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
             finally:
                 await new_client.aclose()
@@ -1694,7 +1711,7 @@ class HTTPHandler:
 
 
 def get_async_httpx_client(
-    llm_provider: LlmProviders | httpxSpecialProvider,
+    llm_provider: LlmProviders | httpxSpecialProvider | str,
     params: dict | None = None,
     shared_session: Optional["ClientSession"] = None,
 ) -> AsyncHTTPHandler:

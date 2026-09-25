@@ -9,13 +9,14 @@ import time
 import uuid
 import wave
 import zlib
+from collections.abc import Mapping
 from hashlib import sha256
 from itertools import islice
 from typing import Final, cast
 
 import httpx
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway
+from integration._support.client import JSON_OBJECT, Gateway, string_value
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.assertions import assert_exact, assert_recount
 from integration.cost_calculation.conftest import (
@@ -112,6 +113,19 @@ def _replace_model(value: JsonValue, model_name: str) -> JsonValue:
     return value
 
 
+def _prime_prior_response(
+    gateway: Gateway, request_path: str, request_values: Mapping[str, JsonValue], key: str
+) -> str:
+    primed: Final = gateway.request(
+        "POST",
+        request_path,
+        {field: value for field, value in request_values.items() if field != "previous_response_id"},
+        key=key,
+    )
+    assert primed.is_success, f"priming response failed: {primed.status_code}: {primed.text[:400]}"
+    return string_value(JSON_OBJECT.validate_json(primed.content)["id"])
+
+
 @pytest.mark.parametrize("case", _CASES)
 def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) -> None:
     marker: Final = sha256(case.name.encode()).hexdigest()[:12]
@@ -175,21 +189,6 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             if isinstance(expected, ExactExpected) and expected.rollups
             else None
         )
-        request_body: Final = JSON_OBJECT.validate_python(
-            {
-                **base_request_values,
-                **(
-                    {"model": fallback_deployment.model_name, "fallbacks": [model_name]}
-                    if fallback_deployment is not None
-                    else {}
-                ),
-                **(
-                    {"user": end_user_id, "cache": {"no-cache": True}}
-                    if end_user_id is not None
-                    else {}
-                ),
-            }
-        )
         request_headers: Final = (
             {
                 "x-pass-x-scripted-scenario": scenario_id,
@@ -206,6 +205,27 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             case.endpoint.replace("$MODEL", request_model)
             if passthrough_provider is not None
             else case.endpoint
+        )
+        prior_response_id: Final = (
+            _prime_prior_response(gateway, request_path, base_request_values, key)
+            if case.chains_prior_response
+            else None
+        )
+        request_body: Final = JSON_OBJECT.validate_python(
+            {
+                **base_request_values,
+                **(
+                    {"model": fallback_deployment.model_name, "fallbacks": [model_name]}
+                    if fallback_deployment is not None
+                    else {}
+                ),
+                **(
+                    {"user": end_user_id, "cache": {"no-cache": True}}
+                    if end_user_id is not None
+                    else {}
+                ),
+                **({"previous_response_id": prior_response_id} if prior_response_id is not None else {}),
+            }
         )
         if case.disconnect_after_frames is not None:
             with gateway.client.stream(
@@ -250,7 +270,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
         if case.response.content_type == "text/event-stream":
             _assert_stream_has_no_error(response.text)
-        rows: Final = poll_rows(key, len(responses))
+        rows: Final = poll_rows(key, len(responses) + (prior_response_id is not None))
         if isinstance(expected, RecountExpected):
             row: Final = rows[0]
             assert_recount(case.name, expected, row)

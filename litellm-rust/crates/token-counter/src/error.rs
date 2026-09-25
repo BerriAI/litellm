@@ -32,6 +32,8 @@ pub enum Error {
     JsonUtf8(#[source] FromUtf8Error),
     #[error("tokenization failed: {0}")]
     Encode(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("token decoding failed: {0}")]
+    Decode(String),
     #[error("token counting task failed: {0}")]
     Task(String),
 }

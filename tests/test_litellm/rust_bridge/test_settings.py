@@ -1,46 +1,16 @@
-import dataclasses
-import logging
-from pathlib import Path
 from typing import Final
 
 import httpx
 import pytest
-from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.custom_httpx.http_handler import default_user_agent
-from litellm.rust_bridge import settings
+from litellm.rust_bridge import catalog, settings
+from litellm.rust_bridge.catalog import SecretManagerRule
+from litellm.rust_bridge.configuration import Rollout
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
-
-CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/python-bridge/python_settings.json"
-
-
-class SettingSpec(TypedDict):
-    adapter: ReadOnly[str]
-    required: ReadOnly[bool]
-    precedence: ReadOnly[str]
-    sensitive: ReadOnly[bool]
-    shapes: ReadOnly[list[str]]
-    unsupported_live: ReadOnly[str | None]
-
-
-class SettingsGroup(TypedDict):
-    version: ReadOnly[int]
-    fields: ReadOnly[dict[str, SettingSpec]]
-
-
-def test_the_rust_contract_matches_the_returned_fields() -> None:
-    contract: Final = TypeAdapter(dict[str, SettingsGroup]).validate_json(CONTRACT_PATH.read_text())
-
-    assert {name: tuple(group["fields"]) for name, group in contract.items()} == {
-        "http_settings": tuple(field.name for field in dataclasses.fields(settings.http_settings())),
-        "url_policy": tuple(field.name for field in dataclasses.fields(settings.url_policy())),
-        "provider_defaults": tuple(field.name for field in dataclasses.fields(settings.provider_defaults())),
-        "secret_manager": tuple(field.name for field in dataclasses.fields(settings.secret_manager())),
-    }
 
 
 def test_url_policy_reads_the_litellm_globals(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,13 +59,6 @@ def test_http_settings_ignores_environment_overrides(monkeypatch: pytest.MonkeyP
     assert result.ssl_verify is True
 
 
-def test_warn_reaches_the_litellm_logger(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        settings.warn("ssl_ecdh_curve 'secp521r1' is not supported")
-
-    assert [record.getMessage() for record in caplog.records] == ["ssl_ecdh_curve 'secp521r1' is not supported"]
-
-
 class _VaultSecrets(CustomSecretManager):
     def __init__(self, secrets: dict[str, str]) -> None:
         super().__init__(secret_manager_name="rust_bridge_settings_test")
@@ -118,6 +81,11 @@ class _VaultSecrets(CustomSecretManager):
         return self.secrets.get(secret_name)
 
 
+_RUST_FOR_CUSTOM: Final = (
+    SecretManagerRule(Rollout.RUST_REQUIRED, systems=frozenset({KeyManagementSystem.CUSTOM.value})),
+)
+
+
 @pytest.mark.parametrize(
     ("access_mode", "readable"),
     [("read_only", True), ("read_and_write", True), ("write_only", False)],
@@ -130,14 +98,115 @@ def test_secret_manager_is_readable_only_when_litellm_would_read_secrets_from_it
     monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
     monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode=access_mode))
 
-    assert settings.secret_manager() == settings.SecretManager(readable=readable)
+    assert settings.secret_manager(rules=()) == settings.SecretManager(readable=readable, native=False)
     assert (get_secret_str("MISTRAL_API_KEY") == "vault-key") is readable
+
+
+@pytest.mark.parametrize(
+    ("system", "access_mode", "rules", "native"),
+    [
+        (KeyManagementSystem.CUSTOM, "read_only", _RUST_FOR_CUSTOM, True),
+        (KeyManagementSystem.CUSTOM, "read_only", (), False),
+        (
+            KeyManagementSystem.CUSTOM,
+            "read_only",
+            (SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.CUSTOM.value})),),
+            False,
+        ),
+        (KeyManagementSystem.CUSTOM, "write_only", _RUST_FOR_CUSTOM, False),
+        (None, "read_only", _RUST_FOR_CUSTOM, False),
+        (KeyManagementSystem.AWS_SECRET_MANAGER, "read_only", _RUST_FOR_CUSTOM, False),
+    ],
+)
+def test_secret_manager_is_native_only_when_the_rules_select_rust_for_its_system(
+    monkeypatch: pytest.MonkeyPatch,
+    system: KeyManagementSystem | None,
+    access_mode: str,
+    rules: catalog.Rules,
+    native: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "secret_manager_client", _VaultSecrets({}))
+    monkeypatch.setattr(litellm, "_key_management_system", system)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode=access_mode))
+
+    assert settings.secret_manager(rules=rules) == settings.SecretManager(
+        readable=access_mode != "write_only", native=native
+    )
 
 
 def test_secret_manager_is_not_readable_without_a_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "secret_manager_client", None)
 
-    assert settings.secret_manager() == settings.SecretManager(readable=False)
+    assert settings.secret_manager(rules=_RUST_FOR_CUSTOM) == settings.SecretManager(readable=False, native=False)
+
+
+def test_secret_manager_projects_custom_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager_settings: Final = KeyManagementSettings(
+        access_mode="read_and_write",
+        hosted_keys=["MISTRAL_API_KEY"],
+        primary_secret_name="primary",
+        aws_region_name="us-east-1",
+    )
+    client: Final = _VaultSecrets({"MISTRAL_API_KEY": "vault-key"})
+    monkeypatch.setattr(litellm, "secret_manager_client", client)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", manager_settings)
+
+    assert settings.secret_manager_binding() == settings.SecretManagerBinding(
+        system="custom",
+        access_mode="read_and_write",
+        hosted_keys=["MISTRAL_API_KEY"],
+        primary_secret_name="primary",
+        store_virtual_keys=manager_settings.store_virtual_keys,
+        prefix_for_stored_virtual_keys=manager_settings.prefix_for_stored_virtual_keys,
+        kms_key_id=manager_settings.kms_key_id,
+        custom_secret_manager=manager_settings.custom_secret_manager,
+        aws_region_name="us-east-1",
+        aws_role_name=manager_settings.aws_role_name,
+        aws_session_name=manager_settings.aws_session_name,
+        aws_external_id=manager_settings.aws_external_id,
+        aws_profile_name=manager_settings.aws_profile_name,
+        aws_web_identity_token=manager_settings.aws_web_identity_token,
+        aws_sts_endpoint=manager_settings.aws_sts_endpoint,
+        replica_regions=manager_settings.replica_regions,
+        client=client,
+        settings_object=manager_settings,
+    )
+
+
+def test_secret_manager_without_a_client_has_no_system(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+
+    assert settings.secret_manager_binding().system is None
+
+
+def test_secret_manager_uses_key_management_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_settings", None)
+
+    defaults: Final = KeyManagementSettings()
+    result: Final = settings.secret_manager_binding()
+
+    assert result == settings.SecretManagerBinding(
+        system=None,
+        access_mode=defaults.access_mode,
+        hosted_keys=defaults.hosted_keys,
+        primary_secret_name=defaults.primary_secret_name,
+        store_virtual_keys=defaults.store_virtual_keys,
+        prefix_for_stored_virtual_keys=defaults.prefix_for_stored_virtual_keys,
+        kms_key_id=defaults.kms_key_id,
+        custom_secret_manager=defaults.custom_secret_manager,
+        aws_region_name=defaults.aws_region_name,
+        aws_role_name=defaults.aws_role_name,
+        aws_session_name=defaults.aws_session_name,
+        aws_external_id=defaults.aws_external_id,
+        aws_profile_name=defaults.aws_profile_name,
+        aws_web_identity_token=defaults.aws_web_identity_token,
+        aws_sts_endpoint=defaults.aws_sts_endpoint,
+        replica_regions=defaults.replica_regions,
+        client=None,
+        settings_object=None,
+    )
 
 
 def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPatch) -> None:

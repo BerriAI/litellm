@@ -27733,7 +27733,7 @@
       "request": {
         "model": "$MODEL",
         "input": "continue this text",
-        "previous_response_id": "resp_scripted_prior"
+        "previous_response_id": "$PRIOR_RESPONSE_ID"
       },
       "response": {
         "content_type": "application/json",

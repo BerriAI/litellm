@@ -11,6 +11,7 @@ use serde_json::Value;
 use super::{
     config::{CacheConfigProjection, NativeCacheConfig},
     handle::CacheTestHandle,
+    identity::BackendIdentity,
     native::NativeResponseCache,
 };
 
@@ -78,6 +79,10 @@ const CLUSTER_POOL: RedisPoolAttributes = RedisPoolAttributes {
 };
 
 const VALKEY_POOL: RedisPoolAttributes = STANDALONE_POOL;
+
+/// Class-level defaults an instance overwrites with its own state rather than behavior:
+/// `Cache._native_cache` holds the runtime `Cache.__init__` resolved.
+const INSTANCE_STATE: &[&str] = &["_native_cache"];
 
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
@@ -165,7 +170,9 @@ impl ObjectGuard {
                 return Ok(false);
             }
             for (name, value) in &expected.attributes {
-                if (instance.contains(name)? && !self.config_names.contains(&name.as_str()))
+                if (instance.contains(name)?
+                    && !self.config_names.contains(&name.as_str())
+                    && !INSTANCE_STATE.contains(&name.as_str()))
                     || !attributes.get_item(name)?.is(value.bind(py))
                 {
                     return Ok(false);
@@ -352,47 +359,41 @@ impl FacadeGuard {
         facade: &Bound<'_, PyAny>,
         service: &NativeResponseCache,
     ) -> PyResult<Self> {
-        let kind = service.kind();
+        let identity = service.identity();
+        let kind = identity.kind();
         let cache_type = py.import("litellm.caching.caching")?.getattr("Cache")?;
         if !facade.get_type().is(&cache_type) {
             return Err(PyTypeError::new_err(
                 "only exact built-in Cache facades can be registered",
             ));
         }
-        let cluster = matches!(service.topology(), Some(RedisTopology::Cluster { .. }));
-        let (module, name, cache_kind) = match (kind, cluster) {
-            ("memory", _) => ("litellm.caching.in_memory_cache", "InMemoryCache", "local"),
-            ("redis", false) => ("litellm.caching.redis_cache", "RedisCache", "redis"),
-            ("redis_semantic", _) => (
-                "litellm.caching.redis_semantic_cache",
-                "RedisSemanticCache",
-                "redis-semantic",
-            ),
+        let cluster = matches!(
+            identity,
+            BackendIdentity::Redis {
+                topology: RedisTopology::Cluster { .. },
+                ..
+            }
+        );
+        let (module, name) = match (kind, cluster) {
+            ("memory", _) => ("litellm.caching.in_memory_cache", "InMemoryCache"),
+            ("redis", false) => ("litellm.caching.redis_cache", "RedisCache"),
+            ("redis", true) => ("litellm.caching.redis_cluster_cache", "RedisClusterCache"),
+            ("redis_semantic", _) => ("litellm.caching.redis_semantic_cache", "RedisSemanticCache"),
             ("qdrant_semantic", _) => (
                 "litellm.caching.qdrant_semantic_cache",
                 "QdrantSemanticCache",
-                "qdrant-semantic",
             ),
-            ("redis", true) => (
-                "litellm.caching.redis_cluster_cache",
-                "RedisClusterCache",
-                "redis",
-            ),
-            ("gcs", _) => ("litellm.caching.gcs_cache", "GCSCache", "gcs"),
-            ("valkey-semantic", false) => (
+            ("gcs", _) => ("litellm.caching.gcs_cache", "GCSCache"),
+            ("valkey-semantic", _) => (
                 "litellm.caching.valkey_semantic_cache",
                 "ValkeySemanticCache",
-                "valkey-semantic",
             ),
-            ("disk", _) => ("litellm.caching.disk_cache", "DiskCache", "disk"),
-            ("azure-blob", _) => (
-                "litellm.caching.azure_blob_cache",
-                "AzureBlobCache",
-                "azure-blob",
-            ),
-            ("s3", _) => ("litellm.caching.s3_cache", "S3Cache", "s3"),
+            ("disk", _) => ("litellm.caching.disk_cache", "DiskCache"),
+            ("azure-blob", _) => ("litellm.caching.azure_blob_cache", "AzureBlobCache"),
+            ("s3", _) => ("litellm.caching.s3_cache", "S3Cache"),
             _ => unreachable!(),
         };
+        let cache_kind = identity.cache_type();
         let backend = facade.getattr("cache")?;
         if facade.getattr("type")?.extract::<String>()? != cache_kind
             || !backend.get_type().is(&py.import(module)?.getattr(name)?)
@@ -471,7 +472,7 @@ impl FacadeGuard {
         })
     }
 
-    fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
+    pub(super) fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
         if !self.outer.matches(py, facade)? {
             return Ok(false);
         }

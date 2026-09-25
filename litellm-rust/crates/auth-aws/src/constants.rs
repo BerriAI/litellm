@@ -14,6 +14,19 @@ pub const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 pub const AWS_STS_ENDPOINT: &str = "AWS_STS_ENDPOINT";
 pub const AWS_EXTERNAL_ID: &str = "AWS_EXTERNAL_ID";
 pub const AWS_BEARER_TOKEN_BEDROCK: &str = "AWS_BEARER_TOKEN_BEDROCK";
+pub const SECRET_NAMES: &[&str] = &[
+    AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY,
+    AWS_SESSION_TOKEN,
+    AWS_REGION_NAME,
+    AWS_REGION,
+    AWS_SESSION_NAME,
+    AWS_PROFILE_NAME,
+    AWS_ROLE_NAME,
+    AWS_WEB_IDENTITY_TOKEN,
+    AWS_STS_ENDPOINT,
+    AWS_EXTERNAL_ID,
+];
 
 /// Headers SigV4 covers, beyond the `x-amz-` / `x-amzn-` prefixes. Mirrors
 /// Python's `_filter_headers_for_aws_signature` allowlist.

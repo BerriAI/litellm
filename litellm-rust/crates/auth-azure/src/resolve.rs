@@ -19,6 +19,17 @@ const AZURE_AUTHORITY_HOST_ENV: &str = "AZURE_AUTHORITY_HOST";
 const AZURE_CREDENTIAL_ENV: &str = "AZURE_CREDENTIAL";
 const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
 
+pub const SECRET_NAMES: &[&str] = &[
+    AZURE_AD_TOKEN_ENV,
+    AZURE_TENANT_ID_ENV,
+    AZURE_CLIENT_ID_ENV,
+    AZURE_CLIENT_SECRET_ENV,
+    AZURE_SCOPE_ENV,
+    AZURE_AUTHORITY_HOST_ENV,
+    AZURE_CREDENTIAL_ENV,
+    AZURE_FEDERATED_TOKEN_FILE_ENV,
+];
+
 #[derive(Clone, Debug)]
 pub(crate) enum AzureCredentialPlan {
     Supplied(Sourced<ResolvedCredential>),
@@ -440,13 +451,14 @@ fn non_empty_reference(value: &str, kind: &str) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::future::Future;
     use std::sync::{Arc, Mutex};
 
     use serde_json::json;
 
     use super::{
-        AzureAuthService, AzureCredentialPlan, AzureTokenAcquirer, oidc_reference,
+        AzureAuthService, AzureCredentialPlan, AzureTokenAcquirer, SECRET_NAMES, oidc_reference,
         resolve_reference, select_auth_plan,
     };
     use crate::native::ValidatedAzureRequest;
@@ -515,6 +527,24 @@ mod tests {
         .unwrap();
 
         assert!(matches!(plan, AzureCredentialPlan::Native(_)));
+    }
+
+    #[test]
+    fn secret_names_cover_environment_reads() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(BTreeSet::<String>::new()));
+        let recorded = seen.clone();
+        let inputs = AzureAuthInputs::default();
+        select_auth_plan(&inputs, &|name| {
+            recorded.lock().unwrap().insert(name.to_string());
+            None
+        })
+        .unwrap();
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .all(|name| SECRET_NAMES.contains(&name.as_str()))
+        );
     }
 
     #[test]

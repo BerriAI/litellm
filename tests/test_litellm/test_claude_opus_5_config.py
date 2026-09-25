@@ -1,6 +1,8 @@
 """
 Validate Claude Opus 5 model configuration entries.
 
+Opus 5.5 (``claude-opus-5-5``) is covered here too.
+
 Opus 5 carries Opus 4.8's pricing ($5 / $25 per MTok) and the gen-5 adaptive
 thinking profile, but differs from 4.8 in two ways that are behavior-bearing in
 LiteLLM: the cacheable-prefix minimum drops to 512 tokens, and Bedrock's Opus 5
@@ -12,13 +14,22 @@ validator accepts the full effort ladder, so the entries must not carry the
 ``anthropic/*`` wildcard deployment).
 """
 
+import json
 import os
 
 import pytest
 
 from litellm.constants import BEDROCK_CONVERSE_MODELS
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "../..")
+
+
+def _load_root_cost_map() -> dict:
+    json_path = os.path.join(REPO_ROOT, "model_prices_and_context_window.json")
+    with open(json_path) as f:
+        return json.load(f)
+
 
 ALL_OPUS_5_VARIANTS = (
     "claude-opus-5",
@@ -30,7 +41,10 @@ ALL_OPUS_5_VARIANTS = (
     "jp.anthropic.claude-opus-5",
     "vertex_ai/claude-opus-5",
     "vertex_ai/claude-opus-5@default",
+    "vertex_ai/claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5@default",
     "azure_ai/claude-opus-5",
+    "azure_ai/claude-opus-5-5",
 )
 
 BEDROCK_OPUS_5_VARIANTS = (
@@ -58,3 +72,37 @@ def test_opus_5_registered_for_bedrock_converse():
     assert "anthropic.claude-opus-5" in BEDROCK_CONVERSE_MODELS
 
 
+OPUS_5_5_VARIANTS = (
+    "claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5",
+    "vertex_ai/claude-opus-5-5@default",
+    "azure_ai/claude-opus-5-5",
+)
+
+
+@pytest.mark.parametrize("model_name", OPUS_5_5_VARIANTS)
+def test_opus_5_5_present_in_bundled_backup(model_name):
+    backup = GetModelCostMap.load_local_model_cost_map()
+    root = _load_root_cost_map()
+    assert model_name in backup
+    assert model_name in root
+    assert backup[model_name] == root[model_name]
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        ("claude-opus-5-5", "anthropic"),
+        ("anthropic/claude-opus-5-5", "anthropic"),
+        ("vertex_ai/claude-opus-5-5", "vertex_ai"),
+        ("azure_ai/claude-opus-5-5", "azure_ai"),
+    ],
+)
+def test_opus_5_5_thinking_profile(local_model_cost_map, model, provider):
+    """Opus 5.5 has thinking always on with the adaptive thinking surface, and
+    no forced tool use, same as Fable 5.1."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    assert AnthropicModelInfo._is_adaptive_thinking_model(model, provider) is True
+    assert AnthropicModelInfo._is_always_on_thinking_model(model, provider) is True
+    assert AnthropicModelInfo.forced_tool_use_unsupported(model.removeprefix("anthropic/")) is True

@@ -27,6 +27,7 @@ from litellm.llms.anthropic.experimental_pass_through.utils import (
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
@@ -384,6 +385,49 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
+    def _plain_effort_for_chat_target(
+        completion_kwargs: _CompletionKwargs,
+        *,
+        thinking: Mapping[str, object] | None,
+    ) -> str | None:
+        reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
+        if not thinking or not isinstance(reasoning_effort, dict) or "summary" not in reasoning_effort:
+            return None
+        effort: Final = reasoning_effort.get("effort")
+        model: Final = completion_kwargs.get("model")
+        if not isinstance(effort, str) or not isinstance(model, str) or not model:
+            return None
+        custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
+        api_base: Final = completion_kwargs.get("api_base")
+        api_key: Final = completion_kwargs.get("api_key")
+        try:
+            local_model, resolved_provider, _, resolved_api_base = litellm.utils.get_llm_provider(
+                model=model,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                api_base=api_base if isinstance(api_base, str) else None,
+                api_key=api_key if isinstance(api_key, str) else None,
+            )
+        except Exception:
+            return None
+        if resolved_provider == "litellm_proxy":
+            return None
+        from litellm.main import responses_api_bridge_check
+
+        web_search_options: Final = completion_kwargs.get("web_search_options")
+        tools: Final = completion_kwargs.get("tools")
+        model_info, _ = responses_api_bridge_check(
+            model=local_model,
+            custom_llm_provider=resolved_provider,
+            web_search_options=(
+                cast(OpenAIWebSearchOptions, web_search_options) if isinstance(web_search_options, dict) else None
+            ),
+            tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
+            reasoning_effort=reasoning_effort,
+            api_base=resolved_api_base,
+        )
+        return None if model_info.get("mode") == "responses" else effort
+
+    @staticmethod
     def _normalize_reasoning_effort(
         completion_kwargs: _CompletionKwargs,
     ) -> None:
@@ -546,6 +590,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             completion_kwargs,
             thinking=thinking,
         )
+
+        plain_effort: Final = LiteLLMMessagesToCompletionTransformationHandler._plain_effort_for_chat_target(
+            completion_kwargs,
+            thinking=thinking,
+        )
+        if plain_effort is not None:
+            completion_kwargs["reasoning_effort"] = plain_effort
 
         return completion_kwargs, tool_name_mapping
 

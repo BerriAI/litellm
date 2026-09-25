@@ -1,3 +1,4 @@
+import sys
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -85,6 +86,17 @@ class TestFalAIVideoTransformation:
         assert isinstance(mapped["duration"], int)
         assert mapped["reference_image_urls"] == [url]
         assert "image_url" not in mapped
+
+    def test_map_openai_params_h3_omits_auto_duration(self):
+        assert self.config.map_openai_params({"seconds": "auto"}, H3_TEXT_MODEL, False) == {}
+        assert self.config.map_openai_params({"seconds": "auto"}, MODEL, False) == {"duration": "auto"}
+
+    def test_map_openai_params_h3_size_beyond_tiers_uses_top_resolution(self):
+        side = str(sys.maxsize + 1)
+        assert self.config.map_openai_params({"size": f"{side}x{side}"}, H3_TEXT_MODEL, False) == {
+            "resolution": "4K",
+            "aspect_ratio": "1:1",
+        }
 
     def test_transform_video_create_request(self):
         body, files, url = self.config.transform_video_create_request(
@@ -377,6 +389,117 @@ class TestFalAIVideoTransformation:
         assert "input.reference_image_urls: Failed to download the file" in video.error["message"]
         client.get.assert_awaited_once_with(url=result_url, headers=auth_headers)
 
+    def test_status_completed_result_probe_reuses_status_client_and_extra_headers(self):
+        status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
+        status_headers: Final = {
+            "Authorization": "Key synthetic-fal-key",
+            "Content-Type": "application/json",
+            "X-Routing": "canary-7",
+        }
+        response: Final = httpx.Response(
+            200,
+            json={"request_id": "abc", "status": "COMPLETED"},
+            request=httpx.Request("GET", status_url, headers=status_headers),
+        )
+        result_url: Final = status_url.removesuffix("/status")
+        status_client: Final = Mock()
+        status_client.get.return_value = httpx.Response(
+            403, text="missing X-Routing", request=httpx.Request("GET", result_url)
+        )
+        factory_client: Final = Mock()
+        config = FalAIVideoConfig(sync_client_factory=lambda: factory_client)
+
+        video = config.transform_video_status_retrieve_response(
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+            client=status_client,
+        )
+
+        assert video.status == "failed"
+        assert video.error == {"code": "fal_error", "message": "missing X-Routing"}
+        factory_client.get.assert_not_called()
+        status_client.get.assert_called_once()
+        assert status_client.get.call_args.kwargs["url"] == result_url
+        assert status_client.get.call_args.kwargs["headers"].items() >= status_headers.items()
+
+    def test_status_completed_result_probe_transport_error_keeps_completed(self):
+        status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
+        response: Final = httpx.Response(
+            200,
+            json={"request_id": "abc", "status": "COMPLETED"},
+            request=httpx.Request("GET", status_url),
+        )
+        client: Final = Mock()
+        client.get.side_effect = httpx.ReadError("connection reset by fal.ai")
+
+        video = FalAIVideoConfig().transform_video_status_retrieve_response(
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+            client=client,
+        )
+
+        assert video.status == "completed"
+        assert video.error is None
+
+    @pytest.mark.asyncio
+    async def test_async_status_completed_result_probe_reuses_status_client_and_extra_headers(self):
+        status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
+        status_headers: Final = {
+            "Authorization": "Key synthetic-fal-key",
+            "Content-Type": "application/json",
+            "X-Routing": "canary-7",
+        }
+        response: Final = httpx.Response(
+            200,
+            json={"request_id": "abc", "status": "COMPLETED"},
+            request=httpx.Request("GET", status_url, headers=status_headers),
+        )
+        result_url: Final = status_url.removesuffix("/status")
+        status_client: Final = Mock()
+        status_client.get = AsyncMock(
+            return_value=httpx.Response(403, text="missing X-Routing", request=httpx.Request("GET", result_url))
+        )
+        factory_client: Final = Mock()
+        factory_client.get = AsyncMock()
+        config = FalAIVideoConfig(async_client_factory=lambda: factory_client)
+
+        video = await config.async_transform_video_status_retrieve_response(
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+            client=status_client,
+        )
+
+        assert video.status == "failed"
+        assert video.error == {"code": "fal_error", "message": "missing X-Routing"}
+        factory_client.get.assert_not_awaited()
+        status_client.get.assert_awaited_once()
+        assert status_client.get.await_args.kwargs["url"] == result_url
+        assert status_client.get.await_args.kwargs["headers"].items() >= status_headers.items()
+
+    @pytest.mark.asyncio
+    async def test_async_status_completed_result_probe_transport_error_keeps_completed(self):
+        status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
+        response: Final = httpx.Response(
+            200,
+            json={"request_id": "abc", "status": "COMPLETED"},
+            request=httpx.Request("GET", status_url),
+        )
+        client: Final = Mock()
+        client.get = AsyncMock(side_effect=httpx.ConnectError("tls handshake failed"))
+
+        video = await FalAIVideoConfig().async_transform_video_status_retrieve_response(
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+            client=client,
+        )
+
+        assert video.status == "completed"
+        assert video.error is None
+
     def test_status_in_progress_does_not_fetch_result(self):
         status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
         response = httpx.Response(
@@ -552,17 +675,23 @@ class TestFalAIVideoTransformation:
         row = litellm.model_cost[f"fal_ai/{H3_TEXT_MODEL}"]
         model_info = litellm.get_model_info(model=H3_TEXT_MODEL, custom_llm_provider="fal_ai")
 
-        assert video_generation_cost(
-            model=H3_TEXT_MODEL,
-            duration_seconds=5,
-            custom_llm_provider="fal_ai",
-            model_info=model_info,
-            video_resolution="2K",
-        ) == 5 * row["output_cost_per_second_2k"]
-        assert video_generation_cost(
-            model=H3_TEXT_MODEL,
-            duration_seconds=5,
-            custom_llm_provider="fal_ai",
-            model_info=model_info,
-            video_resolution="768p",
-        ) == 5 * row["output_cost_per_second_768p"]
+        assert (
+            video_generation_cost(
+                model=H3_TEXT_MODEL,
+                duration_seconds=5,
+                custom_llm_provider="fal_ai",
+                model_info=model_info,
+                video_resolution="2K",
+            )
+            == 5 * row["output_cost_per_second_2k"]
+        )
+        assert (
+            video_generation_cost(
+                model=H3_TEXT_MODEL,
+                duration_seconds=5,
+                custom_llm_provider="fal_ai",
+                model_info=model_info,
+                video_resolution="768p",
+            )
+            == 5 * row["output_cost_per_second_768p"]
+        )

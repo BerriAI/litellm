@@ -1,5 +1,7 @@
 #[derive(thiserror::Error, veil::Redact)]
 pub enum Error {
+    #[error("CyberArk Conjur operation timed out")]
+    Timeout,
     #[error("CyberArk Conjur HTTP request failed")]
     Http(
         #[from]
