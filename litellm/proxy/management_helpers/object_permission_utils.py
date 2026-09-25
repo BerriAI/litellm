@@ -80,14 +80,25 @@ class ObjectPermissionUpsert:
     record: dict[str, object]
 
 
+_MCP_GRANT_FIELDS: Final = frozenset(
+    {"mcp_tool_permissions", "mcp_tool_overrides", "mcp_servers", "mcp_access_groups", "mcp_toolsets"}
+)
+
+
 async def _convert_unversioned_object_permission(
     existing_object_permission: "LiteLLM_ObjectPermissionTable | None",
+    new_object_permission: Mapping[str, object],
 ) -> Mapping[str, object]:
-    """Manual conversion path: a save over a stored v0 row first converts its
-    residual grants against discovered inventory, then applies the update on
-    top. Servers whose catalog cannot be discovered reject the save with 503
-    rather than silently dropping the tools admins had granted."""
+    """Manual conversion path: a save over a stored v0 row that edits MCP
+    grant fields first converts its residual grants against discovered
+    inventory, then applies the update on top. Servers whose catalog cannot
+    be discovered reject the save with 503 rather than silently dropping the
+    tools admins had granted. A save that touches no MCP field leaves the row
+    v0, and a server the update revokes needs no inventory: only the grants
+    that remain afterwards are resolved."""
     if existing_object_permission is None or existing_object_permission.mcp_permission_version:
+        return MappingProxyType({})
+    if not _MCP_GRANT_FIELDS & frozenset(new_object_permission):
         return MappingProxyType({})
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
@@ -100,11 +111,14 @@ async def _convert_unversioned_object_permission(
         resolve_granted_server_ids,
     )
 
-    granted: Final = await resolve_granted_server_ids(existing_object_permission, global_mcp_server_manager)
-    if not granted:
+    post_update_row: Final = existing_object_permission.model_copy(
+        update={field: new_object_permission[field] for field in _MCP_GRANT_FIELDS if field in new_object_permission}
+    )
+    remaining_grants: Final = await resolve_granted_server_ids(post_update_row, global_mcp_server_manager)
+    if not remaining_grants:
         return MappingProxyType({})
     conversion: Final = convert_row(
-        existing_object_permission, await gather_inventories(granted, global_mcp_server_manager)
+        existing_object_permission, await gather_inventories(remaining_grants, global_mcp_server_manager)
     )
     if isinstance(conversion, Unavailable):
         raise HTTPException(
@@ -146,10 +160,13 @@ async def prepare_object_permission_upsert(
         if existing_object_permission is not None
         else MappingProxyType({})
     )
+    converted_fields: Final = await _convert_unversioned_object_permission(
+        existing_object_permission, new_object_permission
+    )
     existing_fields: Final = MappingProxyType(
         {
             **existing_fields_raw,
-            **await _convert_unversioned_object_permission(existing_object_permission),
+            **converted_fields,
         }
     )
     await reject_ambiguous_mcp_tool_permission_keys(
@@ -167,7 +184,13 @@ async def prepare_object_permission_upsert(
             **existing_fields,
             **new_object_permission,
             "object_permission_id": object_permission_id,
-            "mcp_permission_version": 1,
+            "mcp_permission_version": (
+                0
+                if existing_object_permission is not None
+                and not existing_object_permission.mcp_permission_version
+                and not converted_fields
+                else 1
+            ),
         }
     )
     json_fields: Final = MappingProxyType(

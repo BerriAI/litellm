@@ -236,3 +236,18 @@ async def test_resolve_granted_server_ids_excludes_toolset_only_servers():
     ):
         granted = await resolve_granted_server_ids(row, manager)
     assert granted == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_resolve_granted_server_ids_ignores_tool_overrides():
+    row = _row(
+        mcp_servers=[],
+        mcp_tool_overrides={"server-a": {"allow": ["list_items"], "deny": []}},
+    )
+    manager = _manager()
+    with patch(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+        AsyncMock(return_value=[]),
+    ):
+        granted = await resolve_granted_server_ids(row, manager)
+    assert granted == frozenset()

@@ -7,6 +7,7 @@ single exported function is all callers need.
 
 import re
 from collections.abc import Iterable
+from itertools import chain
 from typing import Final, Literal, TypeAlias
 
 ToolOperation: TypeAlias = Literal["read", "create", "update", "delete", "unknown"]
@@ -93,7 +94,9 @@ _CAMEL_BOUNDARY_RE: Final = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-
 
 
 def _name_tokens(name: str) -> tuple[str, ...]:
-    return tuple(token.lower() for chunk in _SPLIT_RE.split(name) for token in _CAMEL_BOUNDARY_RE.split(chunk) if token)
+    return tuple(
+        token.lower() for token in chain.from_iterable(map(_CAMEL_BOUNDARY_RE.split, _SPLIT_RE.split(name))) if token
+    )
 
 
 def _description_tokens(description: str) -> tuple[str, ...]:
@@ -114,7 +117,10 @@ def _token_variants(token: str) -> frozenset[str]:
 
 
 def _classify_tokens(tokens: Iterable[str]) -> ToolOperation:
-    token_set: Final = frozenset(variant for token in tokens for variant in _token_variants(token))
+    token_tuple: Final = tuple(tokens)
+    if frozenset(token_tuple) & _DELETE_TOKENS:
+        return "delete"
+    token_set: Final = frozenset(chain.from_iterable(map(_token_variants, token_tuple)))
     if token_set & _READ_TOKENS:
         return "read"
     if token_set & _DELETE_TOKENS:
@@ -130,8 +136,10 @@ def classify_tool_op(name: str, description: str | None = None) -> ToolOperation
     """Classify a tool by exact token match on its name, falling back to the
     description's words only when the name yields no recognized token.
 
-    Precedence is read > delete > update > create, so ``get_removed_entries``
-    is read and a misleading description cannot override a recognized name."""
+    A bare destructive verb outranks read tokens, so ``get_and_delete_item``
+    is delete while inflected forms only match through variants: precedence
+    is then read > delete > update > create, keeping ``get_removed_entries``
+    read. A misleading description cannot override a recognized name."""
     by_name: Final = _classify_tokens(_name_tokens(name))
     if by_name != "unknown":
         return by_name

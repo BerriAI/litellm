@@ -1554,14 +1554,14 @@ async def test_upsert_converts_stored_v0_row_before_applying_update():
         ),
     ):
         upsert = await prepare_object_permission_upsert(
-            new_object_permission={},
+            new_object_permission={"mcp_tool_permissions": {"server-a": ["list_items"]}},
             existing_object_permission_id="perm-id",
             prisma_client=mock_prisma,
         )
 
     assert upsert.record["mcp_permission_version"] == 1
     assert json.loads(upsert.record["mcp_tool_overrides"]) == {"server-a": {"allow": [], "deny": ["search_notes"]}}
-    assert json.loads(upsert.record["mcp_tool_permissions"]) == {}
+    assert json.loads(upsert.record["mcp_tool_permissions"]) == {"server-a": ["list_items"]}
     assert json.loads(upsert.record["mcp_tool_permissions_archive"]) == {"server-a": ["list_items"]}
 
 
@@ -1598,10 +1598,94 @@ async def test_upsert_rejects_503_when_inventory_unavailable():
     ):
         with pytest.raises(HTTPException) as exc_info:
             await prepare_object_permission_upsert(
-                new_object_permission={},
+                new_object_permission={"mcp_servers": ["server-a"]},
                 existing_object_permission_id="perm-id",
                 prisma_client=mock_prisma,
             )
 
     assert exc_info.value.status_code == 503
     assert "server-a" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_upsert_non_mcp_update_leaves_v0_row_unconverted():
+    """A save touching no MCP grant field performs no conversion and keeps
+    the stored version, so a later MCP edit still converts the residual."""
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+
+    existing_row = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-id",
+        mcp_servers=["server-a"],
+        mcp_tool_permissions={"server-a": ["list_items"]},
+        mcp_permission_version=0,
+        agents=["agent-1"],
+    )
+    mock_prisma = _make_ambiguity_prisma()
+    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_row)
+
+    manager = MagicMock()
+    manager.fetch_unfiltered_inventory = AsyncMock(return_value=None)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    ):
+        upsert = await prepare_object_permission_upsert(
+            new_object_permission={"vector_stores": ["vs-1"]},
+            existing_object_permission_id="perm-id",
+            prisma_client=mock_prisma,
+        )
+
+    manager.fetch_unfiltered_inventory.assert_not_awaited()
+    assert upsert.record["mcp_permission_version"] == 0
+    assert "mcp_tool_overrides" not in upsert.record
+    assert json.loads(upsert.record["mcp_tool_permissions"]) == {"server-a": ["list_items"]}
+
+
+@pytest.mark.asyncio
+async def test_upsert_revoked_server_needs_no_inventory():
+    """Removing a server from a v0 row's grants converts only the servers
+    that remain, so an unreachable revoked server cannot 503 the save."""
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+
+    existing_row = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-id",
+        mcp_servers=["server-a", "server-b"],
+        mcp_permission_version=0,
+    )
+    mock_prisma = _make_ambiguity_prisma()
+    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_row)
+
+    manager = MagicMock()
+    manager.expand_permission_list = MagicMock(side_effect=lambda servers: servers)
+    manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+    manager.expand_tool_overrides = MagicMock(side_effect=lambda overrides: overrides or {})
+    manager.get_registry = MagicMock(return_value={})
+
+    async def _inventory(server_id):
+        return {"list_items": "list", "delete_item": "remove one"} if server_id == "server-a" else None
+
+    manager.fetch_unfiltered_inventory = AsyncMock(side_effect=_inventory)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        upsert = await prepare_object_permission_upsert(
+            new_object_permission={"mcp_servers": ["server-a"]},
+            existing_object_permission_id="perm-id",
+            prisma_client=mock_prisma,
+        )
+
+    manager.fetch_unfiltered_inventory.assert_awaited_once_with("server-a")
+    assert upsert.record["mcp_permission_version"] == 1
+    assert json.loads(upsert.record["mcp_tool_overrides"]) == {
+        "server-a": {"allow": ["delete_item"], "deny": []}
+    }
+    assert upsert.record["mcp_servers"] == ["server-a"]

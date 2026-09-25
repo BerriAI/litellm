@@ -6887,22 +6887,27 @@ class MCPServerManager:
         if not tool_overrides:
             return MappingProxyType({})
         expanded: Final[tuple[tuple[str, MCPToolOverrideEntry], ...]] = tuple(
-            (server_id, entry)
-            for key, entry in tool_overrides.items()
-            for server_id in self.expand_permission_list((key,))
-            if entry is not None
+            chain.from_iterable(
+                ((server_id, entry) for server_id in self.expand_permission_list((key,)))
+                for key, entry in tool_overrides.items()
+                if entry is not None
+            )
         )
         return MappingProxyType(
             {
                 server_id: MCPToolOverrideEntry(
                     allow=sorted(
                         frozenset(
-                            tool for sid, entry in expanded if sid == server_id for tool in (entry.get("allow") or ())
+                            chain.from_iterable(
+                                (entry.get("allow") or ()) for sid, entry in expanded if sid == server_id
+                            )
                         )
                     ),
                     deny=sorted(
                         frozenset(
-                            tool for sid, entry in expanded if sid == server_id for tool in (entry.get("deny") or ())
+                            chain.from_iterable(
+                                (entry.get("deny") or ()) for sid, entry in expanded if sid == server_id
+                            )
                         )
                     ),
                 )

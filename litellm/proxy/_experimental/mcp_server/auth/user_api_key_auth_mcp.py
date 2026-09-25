@@ -2182,6 +2182,26 @@ class MCPRequestHandler:
         return resolved
 
     @staticmethod
+    async def _toolset_tools_for_server(
+        object_permission: LiteLLM_ObjectPermissionTable | None,
+        server_id: str,
+    ) -> Sequence[str] | None:
+        """Tool names this row's toolsets grant on ``server_id``, ``None`` when its toolsets place
+        no restriction on that server (it declares no toolsets, or none of them name it)."""
+        return (await MCPRequestHandler._toolset_tool_permissions(object_permission)).get(server_id)
+
+    @staticmethod
+    def _union_tool_grants(
+        direct: Sequence[str] | None,
+        via_toolsets: Sequence[str] | None,
+    ) -> Sequence[str] | None:
+        """Union of one level's direct tool grants and its toolset-granted tools on one server,
+        ``None`` when neither source restricts (allow-all from this level)."""
+        if direct is None and via_toolsets is None:
+            return None
+        return tuple({*(direct or ()), *(via_toolsets or ())})
+
+    @staticmethod
     async def _key_object_permission_hydrated(
         user_api_key_auth: UserAPIKeyAuth,
     ) -> LiteLLM_ObjectPermissionTable | None:
@@ -2260,7 +2280,6 @@ class MCPRequestHandler:
                 *global_mcp_server_manager.expand_permission_list(sorted(row.mcp_servers or ())),
                 *access_group_servers,
                 *global_mcp_server_manager.expand_tool_permissions(row.mcp_tool_permissions).keys(),
-                *global_mcp_server_manager.expand_tool_overrides(row.mcp_tool_overrides).keys(),
                 *toolset_perms.keys(),
             }
         )
@@ -2629,12 +2648,9 @@ class MCPRequestHandler:
                 key_object_permission.mcp_access_groups or []
             )
 
-            # servers referenced in tool permissions or tool overrides should also be accessible
+            # servers referenced in tool permissions should also be accessible
             tool_perm_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_permissions(key_object_permission.mcp_tool_permissions).keys()
-            )
-            override_servers: Final = sorted(
-                global_mcp_server_manager.expand_tool_overrides(key_object_permission.mcp_tool_overrides).keys()
             )
 
             # servers referenced by the key's toolset grants are part of the key's
@@ -2648,9 +2664,7 @@ class MCPRequestHandler:
             )
 
             # Combine all lists
-            all_servers: Final = (
-                direct_mcp_servers + access_group_servers + tool_perm_servers + override_servers + toolset_servers
-            )
+            all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers + toolset_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning("Failed to get allowed MCP servers for key: %s", e)
@@ -2741,7 +2755,6 @@ class MCPRequestHandler:
             | frozenset(
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
-            | frozenset(global_mcp_server_manager.expand_tool_overrides(object_permissions.mcp_tool_overrides).keys())
             | frozenset((await MCPRequestHandler._toolset_tool_permissions(object_permissions)).keys())
             | frozenset(team_access_group_servers)
         )
@@ -2933,16 +2946,13 @@ class MCPRequestHandler:
             tool_perm_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
-            override_servers: Final = sorted(
-                global_mcp_server_manager.expand_tool_overrides(object_permissions.mcp_tool_overrides).keys()
-            )
 
             # servers referenced by the org's toolset grants are part of the org ceiling,
             # exactly as servers referenced by its inline tool permissions are
             toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(object_permissions)
 
             all_servers: Final = tuple(
-                {*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *override_servers, *toolset_grants}
+                {*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants}
             )
             return list(set(all_servers))
         except Exception as e:
@@ -3034,16 +3044,13 @@ class MCPRequestHandler:
                 object_permission.mcp_access_groups or []
             )
 
-            # servers referenced in tool permissions or overrides should also be accessible
+            # servers referenced in tool permissions should also be accessible
             tool_perm_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_permissions(object_permission.mcp_tool_permissions).keys()
             )
-            override_servers: Final = sorted(
-                global_mcp_server_manager.expand_tool_overrides(object_permission.mcp_tool_overrides).keys()
-            )
 
             # Combine all lists
-            all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers + override_servers
+            all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning("Failed to get allowed MCP servers for end_user: %s", e)
@@ -3159,13 +3166,8 @@ class MCPRequestHandler:
             tool_perm_servers: Final = sorted(
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
-            override_servers: Final = sorted(
-                global_mcp_server_manager.expand_tool_overrides(object_permissions.mcp_tool_overrides).keys()
-            )
             toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(object_permissions)
-            return tuple(
-                {*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *override_servers, *toolset_grants}
-            )
+            return tuple({*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants})
         except Exception as e:  # noqa: BLE001  # any resolution fault is an unresolved ceiling, never "no ceiling"
             verbose_logger.warning("Failed to get allowed MCP servers for user: %s", e)
             return None

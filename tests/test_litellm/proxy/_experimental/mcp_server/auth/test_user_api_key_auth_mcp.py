@@ -366,6 +366,29 @@ class TestMCPRequestHandler:
         assert result == ["server-a"]
         mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
 
+    async def test_get_allowed_mcp_servers_for_key_ignores_tool_overrides(self):
+        """Override entries modify a grant, they are not one: a key whose only
+        reference to a server is an mcp_tool_overrides entry cannot list or
+        call that server."""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission(None)
+        key_object_permission.mcp_tool_overrides = {"server-a": {"allow": ["list_items"], "deny": []}}
+        key_object_permission.mcp_permission_version = 1
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
+
+        assert "server-a" not in result
+        assert MCPRequestHandler.is_tool_allowed(result, "server-a") is False
+
     async def test_get_allowed_mcp_servers_for_key_skips_toolset_resolution_when_none_granted(self):
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
         key_object_permission = self._toolset_only_object_permission([])
@@ -4350,7 +4373,7 @@ class TestAgentMCPPermissions:
         agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
 
         with self._caller_tool_levels(team_grants={}, user_grants={}):
-            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) is None
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == []
 
     async def test_agent_key_acting_for_a_team_is_capped_at_that_teams_tools_on_the_server(self):
         agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
@@ -4359,7 +4382,7 @@ class TestAgentMCPPermissions:
             team_grants={"callers": {"server-a": ["ask_wiki_question"], "server-b": ["other"]}}, user_grants={}
         ):
             assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == ["ask_wiki_question"]
-            assert await MCPRequestHandler.get_allowed_tools_for_server("server-c", agent_key) is None
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-c", agent_key) == []
 
     async def test_agent_key_not_acting_for_anyone_ignores_the_caller_tool_ceiling(self):
         agent_key = UserAPIKeyAuth(api_key="agent-key", user_id="agent-owner", team_id="agent-team", agent_id="agent-1")
@@ -4368,7 +4391,7 @@ class TestAgentMCPPermissions:
             team_grants={"callers": {"server-a": ["ask_wiki_question"]}},
             user_grants={"alice": {"server-a": ["read_wiki_structure"]}},
         ):
-            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) is None
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == []
 
     async def test_agent_key_acting_for_a_caller_whose_team_is_unreadable_gets_no_tools(self):
         agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")

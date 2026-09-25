@@ -13,6 +13,7 @@ than clobbered.
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
@@ -122,14 +123,15 @@ def convert_row(
     remaining_permissions: Final[Mapping[str, Sequence[str]]] = MappingProxyType(
         {server_id: stored for server_id, stored in legacy.items() if server_id not in inventories or not stored}
     )
-    overrides: Final[Mapping[str, MCPToolOverrideEntry]] = MappingProxyType(
+    override_entries: Final = MappingProxyType(
         {
-            server_id: entry
+            server_id: _server_override_entry(legacy.get(server_id), inventory or MappingProxyType({}))
             for server_id, inventory in inventories.items()
             if server_id not in legacy or legacy[server_id]
-            for entry in (_server_override_entry(legacy.get(server_id), inventory or MappingProxyType({})),)
-            if entry is not None
         }
+    )
+    overrides: Final[Mapping[str, MCPToolOverrideEntry]] = MappingProxyType(
+        {server_id: entry for server_id, entry in override_entries.items() if entry is not None}
     )
     return ConvertedRow(
         mcp_tool_overrides=overrides,
@@ -148,12 +150,13 @@ async def resolve_granted_server_ids(
     )
 
     direct: Final = frozenset(
-        server_id
-        for identifier in manager.expand_permission_list(sorted(row.mcp_servers or ()))
-        for server_id in (
-            manager.get_registry().keys()
-            if identifier == SpecialMCPServerName.all_proxy_servers.value
-            else (identifier,)
+        chain.from_iterable(
+            (
+                manager.get_registry().keys()
+                if identifier == SpecialMCPServerName.all_proxy_servers.value
+                else (identifier,)
+            )
+            for identifier in manager.expand_permission_list(sorted(row.mcp_servers or ()))
         )
     )
     access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(  # pyright: ignore[reportPrivateUsage]  # shared access-group resolution owned by MCPRequestHandler
@@ -163,7 +166,6 @@ async def resolve_granted_server_ids(
         direct
         | frozenset(access_group_servers)
         | frozenset(manager.expand_tool_permissions(row.mcp_tool_permissions).keys())
-        | frozenset(manager.expand_tool_overrides(row.mcp_tool_overrides).keys())
     )
 
 
@@ -295,12 +297,10 @@ async def _convert_one_row(
 
 def _merge_reports(reports: Sequence[BackfillReport]) -> BackfillReport:
     return BackfillReport(
-        converted=frozenset(row_id for report in reports for row_id in report.converted),
-        cas_missed=frozenset(row_id for report in reports for row_id in report.cas_missed),
-        unavailable=MappingProxyType(
-            {row_id: server_ids for report in reports for row_id, server_ids in report.unavailable.items()}
-        ),
-        skipped_no_grants=frozenset(row_id for report in reports for row_id in report.skipped_no_grants),
+        converted=frozenset(chain.from_iterable(report.converted for report in reports)),
+        cas_missed=frozenset(chain.from_iterable(report.cas_missed for report in reports)),
+        unavailable=MappingProxyType(dict(chain.from_iterable(report.unavailable.items() for report in reports))),
+        skipped_no_grants=frozenset(chain.from_iterable(report.skipped_no_grants for report in reports)),
     )
 
 
