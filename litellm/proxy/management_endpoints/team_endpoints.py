@@ -128,6 +128,10 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     resolve_model_budget,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    _EXPORT_CSV_METRIC_HEADERS,
+    _aggregated_date_range_error,
+    _csv_safe,
+    _daily_activity_error,
     get_daily_activity_aggregated,
     get_daily_activity_export_rows,
 )
@@ -6549,12 +6553,6 @@ async def _append_permissions_to_all_teams(prisma_client: PrismaClient, permissi
     return teams_updated
 
 
-def _daily_activity_error(*, status_code: int, message: str) -> HTTPException:
-    """Single construction site for the `{"error": ...}` detail shape the
-    /team/daily/activity endpoints have always returned."""
-    return HTTPException(status_code=status_code, detail={"error": message})  # mutable-ok: FastAPI JSON detail
-
-
 class _TeamDailyActivityScope(NamedTuple):
     team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
     exclude_team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
@@ -6726,26 +6724,6 @@ async def get_team_daily_activity(
     )
 
 
-_MAX_AGGREGATED_RANGE_DAYS: Final = 400
-
-
-def _aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
-    """The aggregated endpoint has no pagination to bound its work, so malformed
-    dates and ranges wider than the UI ever requests are rejected before querying."""
-    if start_date is None or end_date is None:
-        return "Please provide start_date and end_date"
-    try:
-        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return "start_date and end_date must be valid YYYY-MM-DD dates"
-    if parsed_end < parsed_start:
-        return "end_date must be on or after start_date"
-    if (parsed_end - parsed_start).days > _MAX_AGGREGATED_RANGE_DAYS:
-        return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
-    return None
-
-
 @router.get(
     "/team/daily/activity/aggregated",
     response_model=SpendAnalyticsPaginatedResponse,
@@ -6818,19 +6796,6 @@ async def get_team_daily_activity_aggregated(
     )
 
 
-_EXPORT_CSV_METRIC_HEADERS: Final = (
-    "Spend ($)",
-    "Requests",
-    "Successful Requests",
-    "Failed Requests",
-    "Total Tokens",
-    "Prompt Tokens",
-    "Completion Tokens",
-    "Cache Read Input Tokens",
-    "Cache Creation Input Tokens",
-)
-
-
 def _export_csv_headers(export_type: TeamDailyActivityExportType) -> tuple[str, ...]:
     base: Final = ("Date", "Team", "Team ID")
     if export_type == "daily_with_keys":
@@ -6852,10 +6817,6 @@ def _export_csv_headers(export_type: TeamDailyActivityExportType) -> tuple[str, 
             "Cache Creation Input Tokens",
         )
     return (*base, *_EXPORT_CSV_METRIC_HEADERS)
-
-
-def _csv_safe(value: str) -> str:
-    return "'" + value if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
 
 
 def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:

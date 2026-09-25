@@ -311,6 +311,7 @@ class KeyManagementRoutes(str, enum.Enum):
     TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
     TEAM_DAILY_ACTIVITY_EXPORT = "/team/daily/activity/export"
     TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH = "/team/daily/activity/aggregated/search"
+    USER_DAILY_ACTIVITY_EXPORT = "/user/daily/activity/export"
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
@@ -705,6 +706,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/list",
             "/user/daily/activity",
             "/user/daily/activity/aggregated",
+            "/user/daily/activity/export",
             "/user/daily/activity/aggregated/search",
             # team
             "/team/new",
@@ -913,6 +915,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
+        "/user/daily/activity/export",
         "/user/daily/activity/aggregated/search",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.

@@ -13,15 +13,18 @@ These are members of a Team on LiteLLM
 """
 
 import asyncio
+import csv
+import io
 import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, cast, overload
+from typing import Annotated, Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -53,9 +56,14 @@ from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHoo
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    _EXPORT_CSV_METRIC_HEADERS,
     DailySpendRecord,
+    _aggregated_date_range_error,
+    _csv_safe,
+    _daily_activity_error,
     get_daily_activity,
     get_daily_activity_aggregated,
+    get_daily_activity_export_rows,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
@@ -95,6 +103,10 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
     KeyActivitySearchWhere,
+    UserDailyActivityExportMetadata,
+    UserDailyActivityExportResponse,
+    UserDailyActivityExportRow,
+    UserDailyActivityExportType,
     UserListResponse,
     UserSearchWhere,
     UserUpdateResult,
@@ -103,6 +115,10 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_METADATA_KEY,
     SCIM_ENTITLEMENTS_METADATA_KEY,
     SCIM_ROLES_METADATA_KEY,
+)
+from litellm.types.proxy.management_endpoints.team_endpoints import (
+    TeamDailyActivityExportFormat,
+    TeamDailyActivityExportRow,
 )
 from litellm.types.utils import BudgetConfig
 
@@ -3105,6 +3121,178 @@ async def get_user_daily_activity_aggregated(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},
         )
+
+
+def _user_export_row(row: TeamDailyActivityExportRow) -> UserDailyActivityExportRow:
+    return UserDailyActivityExportRow(
+        date=row.date,
+        user_id=row.team_id,
+        user_email=row.user_email,
+        api_key=row.api_key,
+        key_alias=row.key_alias,
+        model=row.model,
+        spend=row.spend,
+        flat_cost=row.flat_cost,
+        api_requests=row.api_requests,
+        successful_requests=row.successful_requests,
+        failed_requests=row.failed_requests,
+        total_tokens=row.total_tokens,
+        prompt_tokens=row.prompt_tokens,
+        completion_tokens=row.completion_tokens,
+        cache_read_input_tokens=row.cache_read_input_tokens,
+        cache_creation_input_tokens=row.cache_creation_input_tokens,
+    )
+
+
+def _user_export_csv_headers(export_type: UserDailyActivityExportType) -> tuple[str, ...]:
+    base: Final = ("Date", "User ID")
+    if export_type == "daily_with_keys":
+        return (*base, "Key Alias", "Key ID", "User Email", *_EXPORT_CSV_METRIC_HEADERS)
+    if export_type == "daily_with_models":
+        return (
+            *base,
+            "Model",
+            "Spend ($)",
+            "Requests",
+            "Successful",
+            "Failed",
+            "Total Tokens",
+            "Prompt Tokens",
+            "Completion Tokens",
+            "Cache Read Input Tokens",
+            "Cache Creation Input Tokens",
+        )
+    return (*base, *_EXPORT_CSV_METRIC_HEADERS)
+
+
+def _user_export_csv_record(row: UserDailyActivityExportRow) -> dict[str, object]:
+    return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
+        "Date": row.date,
+        "User ID": row.user_id,
+        "Key Alias": _csv_safe(row.key_alias) if row.key_alias else "-",
+        "Key ID": row.api_key or "-",
+        "User Email": _csv_safe(row.user_email) if row.user_email else "-",
+        "Model": _csv_safe(row.model) if row.model else "-",
+        "Spend ($)": f"{row.spend:.4f}",
+        "Flat Cost ($)": f"{row.flat_cost:.4f}",
+        "Total Cost ($)": f"{row.spend + row.flat_cost:.4f}",
+        "Requests": row.api_requests,
+        "Successful Requests": row.successful_requests,
+        "Failed Requests": row.failed_requests,
+        "Successful": row.successful_requests,
+        "Failed": row.failed_requests,
+        "Total Tokens": row.total_tokens,
+        "Prompt Tokens": row.prompt_tokens,
+        "Completion Tokens": row.completion_tokens,
+        "Cache Read Input Tokens": row.cache_read_input_tokens,
+        "Cache Creation Input Tokens": row.cache_creation_input_tokens,
+    }
+
+
+def _user_export_csv(export_type: UserDailyActivityExportType, rows: Sequence[UserDailyActivityExportRow]) -> str:
+    base_headers: Final = _user_export_csv_headers(export_type)
+    spend_index: Final = base_headers.index("Spend ($)") + 1
+    headers: Final = (
+        (*base_headers[:spend_index], "Flat Cost ($)", "Total Cost ($)", *base_headers[spend_index:])
+        if sum(row.flat_cost for row in rows) > 0
+        else base_headers
+    )
+    buffer: Final = io.StringIO()
+    writer: Final = csv.DictWriter(buffer, fieldnames=headers, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(_user_export_csv_record(row) for row in rows)
+    return buffer.getvalue()
+
+
+@router.get(
+    "/user/daily/activity/export",
+    response_model=UserDailyActivityExportResponse,
+    responses={200: {"content": {"text/csv": {}, "application/json": {}}}},  # mutable-ok: OpenAPI content map
+    tags=[
+        "Budget & Spend Tracking",
+        "Internal User management",
+    ],  # mutable-ok: fastapi's decorator signature types tags as a list
+)
+async def get_user_daily_activity_export(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    start_date: str | None = None,
+    end_date: str | None = None,
+    export_type: UserDailyActivityExportType = "daily",
+    format: TeamDailyActivityExportFormat = "csv",
+    user_id: str | None = None,
+    api_key: str | None = None,
+    timezone_offset: Annotated[int | None, Query(alias="timezone")] = None,
+) -> Response:
+    """
+    Server-side Usage export for the user table, not subject to USAGE_TOP_API_KEYS_LIMIT.
+
+    Same scoping as /user/daily/activity/aggregated, answered by one unbounded
+    rollup query, returned as CSV or JSON. For daily_with_keys and
+    daily_with_models the PTU sentinel flat-cost rows are excluded, so metadata
+    totals under those export types cover request spend only; the plain daily
+    export includes them.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None or start_date is None or end_date is None:
+        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+
+    try:
+        entity_id: Final = _resolve_user_daily_activity_entity_id(user_api_key_dict, user_id)
+
+        rows: Final = await get_daily_activity_export_rows(
+            prisma_client=prisma_client,
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=entity_id,
+            entity_metadata_field=None,
+            start_date=start_date,
+            end_date=end_date,
+            api_key=api_key,
+            exclude_entity_ids=None,
+            timezone_offset_minutes=timezone_offset,
+            export_type=export_type,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("/user/daily/activity/export: Exception occured - %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to fetch analytics: {e}"},
+        )
+
+    user_rows: Final = tuple(_user_export_row(row) for row in rows)
+    now: Final = datetime.now(timezone.utc)
+    metadata: Final = UserDailyActivityExportMetadata(
+        export_date=now.isoformat(),
+        export_type=export_type,
+        start_date=start_date,
+        end_date=end_date,
+        user_id=entity_id,
+        total_spend=sum(row.spend for row in user_rows),
+        total_flat_cost=sum(row.flat_cost for row in user_rows),
+        total_api_requests=sum(row.api_requests for row in user_rows),
+        total_successful_requests=sum(row.successful_requests for row in user_rows),
+        total_failed_requests=sum(row.failed_requests for row in user_rows),
+        total_tokens=sum(row.total_tokens for row in user_rows),
+    )
+
+    if format == "json":
+        return JSONResponse(
+            content=UserDailyActivityExportResponse(metadata=metadata, data=list(user_rows)).model_dump(mode="json")
+        )
+    return Response(
+        content=_user_export_csv(export_type, user_rows),
+        media_type="text/csv; charset=utf-8",
+        headers={  # mutable-ok: starlette Response headers is a dict
+            "Content-Disposition": f'attachment; filename="user_usage_{export_type}_{now.date().isoformat()}.csv"'
+        },
+    )
 
 
 @router.get(
