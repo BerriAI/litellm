@@ -1353,6 +1353,18 @@ class Logging(LiteLLMLoggingBaseClass):
                 _litellm_params: Final = self.model_call_details.get("litellm_params", {})
                 _metadata: Final = _litellm_params.get("metadata", {}) or {}
                 try:
+                    # split up, so it's easier to parse in the UI
+                    self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
+                        raw_request_api_base=self._get_masked_api_base(str(additional_args.get("api_base") or "")),
+                        raw_request_body=self._get_raw_request_body(additional_args.get("complete_input_dict", {})),
+                        # NOTE: setting ignore_sensitive_headers to True will cause
+                        # the Authorization header to be leaked when calls to the health
+                        # endpoint are made and fail.
+                        raw_request_headers=self._get_masked_headers(
+                            additional_args.get("headers", {}) or {},
+                        ),
+                        error=None,
+                    )
                     if should_redact_message_logging(self.model_call_details):
                         _metadata["raw_request"] = REDACTED_BY_LITELLM
                     else:
@@ -1362,20 +1374,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             additional_args=additional_args,
                             data=additional_args.get("complete_input_dict", {}),
                         )
-
                         _metadata["raw_request"] = _redact_string(str(curl_command))
-                        # split up, so it's easier to parse in the UI
-                        self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
-                            raw_request_api_base=self._get_masked_api_base(str(additional_args.get("api_base") or "")),
-                            raw_request_body=self._get_raw_request_body(additional_args.get("complete_input_dict", {})),
-                            # NOTE: setting ignore_sensitive_headers to True will cause
-                            # the Authorization header to be leaked when calls to the health
-                            # endpoint are made and fail.
-                            raw_request_headers=self._get_masked_headers(
-                                additional_args.get("headers", {}) or {},
-                            ),
-                            error=None,
-                        )
                 except Exception as e:
                     self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
                         error=str(e),
@@ -1469,7 +1468,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _print_llm_call_debugging_log(
         self,
         api_base: str,
-        headers: dict,
+        headers: dict | None,
         additional_args: dict,
     ):
         """
@@ -1479,7 +1478,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if _is_debugging_on() or self.litellm_request_debug:
             if litellm.json_logs:
-                masked_headers: Final = self._get_masked_headers(headers)
+                masked_headers: Final = self._get_masked_headers(headers or {})
                 masked_api_base: Final = self._get_masked_api_base(str(api_base or ""))
                 if self.litellm_request_debug:
                     verbose_logger.warning(  # .warning ensures this shows up in all environments

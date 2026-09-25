@@ -6705,13 +6705,19 @@ def _pre_call_with_raw_request_logging(logging_obj) -> dict:
     return metadata
 
 
+def _assert_raw_request_redacted_for_callbacks_only(logging_obj, metadata: dict) -> None:
+    assert metadata["raw_request"] == REDACTED_BY_LITELLM
+    typed_dict: Final = logging_obj.model_call_details["raw_request_typed_dict"]
+    assert typed_dict["raw_request_body"] == _PRIVATE_RAW_REQUEST_ARGS["complete_input_dict"]
+    assert typed_dict["error"] is None
+
+
 def test_pre_call_raw_request_honors_turn_off_message_logging_set_after_import(logging_obj, monkeypatch):
     monkeypatch.setattr(litellm, "turn_off_message_logging", True)
 
     metadata = _pre_call_with_raw_request_logging(logging_obj)
 
-    assert metadata["raw_request"] == REDACTED_BY_LITELLM
-    assert "raw_request_typed_dict" not in logging_obj.model_call_details
+    _assert_raw_request_redacted_for_callbacks_only(logging_obj, metadata)
 
 
 def test_pre_call_raw_request_honors_per_request_turn_off_message_logging(logging_obj, monkeypatch):
@@ -6720,8 +6726,7 @@ def test_pre_call_raw_request_honors_per_request_turn_off_message_logging(loggin
 
     metadata = _pre_call_with_raw_request_logging(logging_obj)
 
-    assert metadata["raw_request"] == REDACTED_BY_LITELLM
-    assert "raw_request_typed_dict" not in logging_obj.model_call_details
+    _assert_raw_request_redacted_for_callbacks_only(logging_obj, metadata)
 
 
 def test_debugging_log_honors_json_logs_set_after_import(logging_obj, monkeypatch):
@@ -6730,6 +6735,16 @@ def test_debugging_log_honors_json_logs_set_after_import(logging_obj, monkeypatc
 
     with patch("litellm.litellm_core_utils.litellm_logging.verbose_logger.warning") as warning:
         logging_obj._print_llm_call_debugging_log(api_base="https://api.openai.com/v1", headers={}, additional_args={})
+
+    assert "https://api.openai.com/v1" in warning.call_args.kwargs["extra"]["api_base"]
+
+
+def test_debugging_log_with_json_logs_tolerates_missing_headers(logging_obj, monkeypatch):
+    monkeypatch.setattr(litellm, "json_logs", True)
+    logging_obj.litellm_request_debug = True
+
+    with patch("litellm.litellm_core_utils.litellm_logging.verbose_logger.warning") as warning:
+        logging_obj._print_llm_call_debugging_log(api_base="https://api.openai.com/v1", headers=None, additional_args={})
 
     assert "https://api.openai.com/v1" in warning.call_args.kwargs["extra"]["api_base"]
 
