@@ -5137,3 +5137,68 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
 
     revoke_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cache_leakage_non_admin_scoped_to_caller(monkeypatch):
+    """Same scoping contract as the aggregated route: a non-admin with no user_id
+    is scoped to their own rows, and any other user_id is a 403."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity_cache_leakage,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    non_admin_key_dict = UserAPIKeyAuth(
+        user_id="user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    mock_response = MagicMock()
+    mock_cache_leakage = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_cache_leakage",
+        mock_cache_leakage,
+    )
+
+    result = await get_user_daily_activity_cache_leakage(
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        user_id=None,
+        timezone=None,
+        include_current_utc_day=False,
+        limit=10,
+        user_api_key_dict=non_admin_key_dict,
+    )
+
+    assert result is mock_response
+    mock_cache_leakage.assert_called_once_with(
+        prisma_client=mock_prisma_client,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id="user-1",
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        timezone_offset_minutes=None,
+        include_current_utc_day=False,
+        limit=10,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_user_daily_activity_cache_leakage(
+            start_date="2025-02-01",
+            end_date="2025-02-28",
+            user_id="user-2",
+            timezone=None,
+            include_current_utc_day=False,
+            limit=10,
+            user_api_key_dict=non_admin_key_dict,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Non-admin users can only view their own spend data" in str(exc_info.value.detail)

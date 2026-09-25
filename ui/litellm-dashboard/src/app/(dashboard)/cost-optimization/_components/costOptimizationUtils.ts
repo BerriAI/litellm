@@ -1,5 +1,6 @@
 import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
+import type { paths } from "@/lib/http/schema";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export const usd = (value: number): string => {
@@ -144,6 +145,36 @@ export const computeCacheLeakage = (
   );
 
   return { rows: sorted.slice(0, limit), netSavingsPerCachedToken };
+};
+
+type CacheLeakageKeysResponse =
+  paths["/user/daily/activity/cache_leakage"]["get"]["responses"][200]["content"]["application/json"];
+
+/**
+ * Server-ranked counterpart to computeCacheLeakage for the key dimension. The rows
+ * arrive already ordered by uncached prompt tokens over every key in the range, and
+ * the metadata totals cover the whole ranked set, so the realized rate prices
+ * leakage against keys the limit never returned. Server order is kept.
+ */
+export const cacheLeakageRowsFromServer = (response: CacheLeakageKeysResponse, limit = 10): CacheLeakageResult => {
+  const { total_cached_tokens, total_prompt_caching_savings_spend } = response.metadata;
+  const netSavingsPerCachedToken =
+    total_cached_tokens > 0 ? total_prompt_caching_savings_spend / total_cached_tokens : null;
+  const rate = netSavingsPerCachedToken != null && netSavingsPerCachedToken > 0 ? netSavingsPerCachedToken : null;
+
+  const rows: CacheLeakageRow[] = response.results
+    .map((row) => ({
+      id: row.api_key,
+      label: row.key_alias ?? `${row.api_key.slice(0, 8)}...`,
+      sublabel: row.team_id ?? null,
+      uncachedPromptTokens: row.uncached_prompt_tokens,
+      cacheHitRatio: row.cache_hit_ratio,
+      potentialSavings: rate != null ? row.uncached_prompt_tokens * rate : null,
+    }))
+    .filter((row) => row.uncachedPromptTokens > 0)
+    .slice(0, limit);
+
+  return { rows, netSavingsPerCachedToken };
 };
 
 export interface DailyToolSpendPoint {

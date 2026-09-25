@@ -53,7 +53,7 @@ describe("PromptCachingTab", () => {
       failed: false,
       cancel: vi.fn(),
     };
-    render(<PromptCachingTab accessToken="test-token" activity={activity} />);
+    render(<PromptCachingTab accessToken="test-token" activity={activity} scopeUserId={null} />);
 
     expect(screen.getByTestId("caching-settings")).toBeInTheDocument();
     expect(screen.getByTestId("cache-leakage-card")).toBeInTheDocument();

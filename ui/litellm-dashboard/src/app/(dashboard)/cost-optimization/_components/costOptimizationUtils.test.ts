@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import type { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
+import type { paths } from "@/lib/http/schema";
 import {
   SAVINGS_COLORS,
   SAVINGS_DRIVERS,
   SAVINGS_SERIES,
   buildDailyToolSeries,
+  cacheLeakageRowsFromServer,
   classificationRatePer1kTurns,
   computeCacheLeakage,
   formatRangeLabel,
@@ -243,6 +245,78 @@ describe("computeCacheLeakage by model", () => {
     expect(netSavingsPerCachedToken).toBeCloseTo(0.002, 6);
     expect(rows.map((r) => r.id)).toEqual(["gemini-2.5-flash"]);
     expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
+  });
+});
+
+describe("cacheLeakageRowsFromServer", () => {
+  type Response = paths["/user/daily/activity/cache_leakage"]["get"]["responses"][200]["content"]["application/json"];
+  type Row = Response["results"][number];
+
+  const serverRow = (apiKey: string, overrides: Partial<Row> = {}): Row => ({
+    api_key: apiKey,
+    key_alias: null,
+    team_id: null,
+    prompt_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    uncached_prompt_tokens: 0,
+    cache_hit_ratio: 0,
+    prompt_caching_savings_spend: 0,
+    ...overrides,
+  });
+
+  const response = (results: Row[], metadata: Partial<Response["metadata"]> = {}): Response => ({
+    results,
+    metadata: {
+      total_api_keys: results.length,
+      limit: 10,
+      total_cached_tokens: 0,
+      total_prompt_caching_savings_spend: 0,
+      ...metadata,
+    },
+  });
+
+  it("prices uncached input at the realized savings rate over every ranked key, not only the returned rows", () => {
+    const { rows, netSavingsPerCachedToken } = cacheLeakageRowsFromServer(
+      response([serverRow("hash-leaky", { key_alias: "leaky", uncached_prompt_tokens: 500 })], {
+        total_cached_tokens: 1000,
+        total_prompt_caching_savings_spend: 2.0,
+      }),
+    );
+
+    expect(netSavingsPerCachedToken).toBeCloseTo(0.002, 6);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
+  });
+
+  it("declines to price leakage when the whole key set has no cached tokens", () => {
+    const { rows, netSavingsPerCachedToken } = cacheLeakageRowsFromServer(
+      response([serverRow("hash-leaky", { key_alias: "leaky", uncached_prompt_tokens: 500 })]),
+    );
+
+    expect(netSavingsPerCachedToken).toBeNull();
+    expect(rows[0].potentialSavings).toBeNull();
+  });
+
+  it("drops rows with no uncached input while keeping the server's ranking", () => {
+    const { rows } = cacheLeakageRowsFromServer(
+      response([
+        serverRow("hash-big", { key_alias: "big", uncached_prompt_tokens: 9000 }),
+        serverRow("hash-cached", { key_alias: "cached", uncached_prompt_tokens: 0, cache_hit_ratio: 1 }),
+        serverRow("hash-small", { key_alias: "small", uncached_prompt_tokens: 100 }),
+      ]),
+    );
+
+    expect(rows.map((r) => r.label)).toEqual(["big", "small"]);
+  });
+
+  it("labels a key by its alias, falling back to the truncated hash", () => {
+    const { rows } = cacheLeakageRowsFromServer(
+      response([serverRow("abcdef1234567890", { team_id: "team-1", uncached_prompt_tokens: 5 })]),
+    );
+
+    expect(rows[0].label).toBe("abcdef12...");
+    expect(rows[0].sublabel).toBe("team-1");
   });
 });
 

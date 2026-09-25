@@ -3,16 +3,27 @@
 import React, { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Info } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { CacheLeakageDimension, CacheLeakageRow, computeCacheLeakage, pct, usd } from "./costOptimizationUtils";
+import {
+  CacheLeakageDimension,
+  CacheLeakageRow,
+  cacheLeakageRowsFromServer,
+  computeCacheLeakage,
+  pct,
+  usd,
+} from "./costOptimizationUtils";
+import { useCacheLeakageKeys } from "./useCacheLeakageKeys";
 import { DailyActivityRange } from "./useDailyActivityRange";
 
 interface CacheLeakageCardProps {
   activity: DailyActivityRange;
+  accessToken: string | null;
+  scopeUserId: string | null;
 }
 
 type SortColumn = "uncachedPromptTokens" | "cacheHitRatio" | "potentialSavings";
@@ -79,12 +90,18 @@ const SortableHead = ({
   );
 };
 
-const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
-  const { results, loading, isFetchingMore, apiKeyTruncation } = activity;
+const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity, accessToken, scopeUserId }) => {
+  const { results, loading, isFetchingMore } = activity;
   const [dimension, setDimension] = useState<CacheLeakageDimension>("key");
   const [sort, setSort] = useState<SortState>({ column: "potentialSavings", dir: "desc" });
-  const leakage = useMemo(() => computeCacheLeakage(results, dimension), [results, dimension]);
-  const rows = useMemo(() => [...leakage.rows].sort((a, b) => compareRows(a, b, sort)), [leakage.rows, sort]);
+  const keyQuery = useCacheLeakageKeys(accessToken, activity.dateValue, scopeUserId);
+  const keyLeakage = useMemo(
+    () => (keyQuery.data ? cacheLeakageRowsFromServer(keyQuery.data) : undefined),
+    [keyQuery.data],
+  );
+  const modelLeakage = useMemo(() => computeCacheLeakage(results, "model"), [results]);
+  const leakage = dimension === "key" ? keyLeakage : modelLeakage;
+  const rows = useMemo(() => [...(leakage?.rows ?? [])].sort((a, b) => compareRows(a, b, sort)), [leakage, sort]);
 
   const onSort = (column: SortColumn) =>
     setSort((prev) =>
@@ -119,67 +136,76 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
           </Tabs>
         </CardHeader>
         <CardContent>
-          {dimension === "key" && apiKeyTruncation !== undefined && (
-            <p className="mb-2 text-sm text-muted-foreground" role="note">
-              Only the {apiKeyTruncation.limit.toLocaleString()} highest-spend keys of{" "}
-              {apiKeyTruncation.total.toLocaleString()} are loaded, so a lower-spend key that leaks more is not listed
-              here. Raise USAGE_TOP_API_KEYS_LIMIT on the proxy to load more keys.
-            </p>
-          )}
-          {rows.length > 0 && isFetchingMore && (
+          {dimension === "model" && rows.length > 0 && isFetchingMore && (
             <p className="mb-2 text-sm text-muted-foreground">
               Data is still loading; rows and totals will update as the rest of the range arrives.
             </p>
           )}
-          {rows.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              {loading || isFetchingMore ? "Loading..." : `No ${emptyNoun} usage in this range.`}
+          {dimension === "key" && keyQuery.isPending && (
+            <p role="status" className="py-8 text-center text-sm text-muted-foreground">
+              Loading key ranking...
             </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{firstColumn}</TableHead>
-                  <SortableHead
-                    column="uncachedPromptTokens"
-                    label="Uncached input tokens"
-                    info="Input tokens you sent in this range that weren't served from or written to the cache"
-                    sort={sort}
-                    onSort={onSort}
-                  />
-                  <SortableHead
-                    column="cacheHitRatio"
-                    label="Cache hit rate"
-                    info="Share of your input tokens that were served from the cache"
-                    sort={sort}
-                    onSort={onSort}
-                  />
-                  <SortableHead
-                    column="potentialSavings"
-                    label="Potential savings"
-                    info="About how much you'd save if this uncached input used prompt caching. Estimated as uncached input tokens times what your cached traffic already nets per cached token (realized cache savings, after write premiums, ÷ cache read and write tokens). Blank when caching is not currently saving anything overall."
-                    sort={sort}
-                    onSort={onSort}
-                  />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="font-medium">
-                      {row.label}
-                      {row.sublabel && <span className="ml-1 text-xs text-muted-foreground">({row.sublabel})</span>}
-                    </TableCell>
-                    <TableCell className="text-right">{formatNumberWithCommas(row.uncachedPromptTokens)}</TableCell>
-                    <TableCell className="text-right">{pct(row.cacheHitRatio)}</TableCell>
-                    <TableCell className="text-right">
-                      {row.potentialSavings == null ? "—" : usd(row.potentialSavings)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
           )}
+          {dimension === "key" && keyQuery.isError && (
+            <div role="alert" className="flex items-center justify-center gap-3 py-8">
+              <p className="text-sm text-muted-foreground">Could not load the key ranking</p>
+              <Button variant="outline" onClick={() => void keyQuery.refetch()} disabled={keyQuery.isFetching}>
+                Retry
+              </Button>
+            </div>
+          )}
+          {(dimension === "model" || (!keyQuery.isPending && !keyQuery.isError)) &&
+            (rows.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                {dimension === "model" && (loading || isFetchingMore)
+                  ? "Loading..."
+                  : `No ${emptyNoun} usage in this range.`}
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{firstColumn}</TableHead>
+                    <SortableHead
+                      column="uncachedPromptTokens"
+                      label="Uncached input tokens"
+                      info="Input tokens you sent in this range that weren't served from or written to the cache"
+                      sort={sort}
+                      onSort={onSort}
+                    />
+                    <SortableHead
+                      column="cacheHitRatio"
+                      label="Cache hit rate"
+                      info="Share of your input tokens that were served from the cache"
+                      sort={sort}
+                      onSort={onSort}
+                    />
+                    <SortableHead
+                      column="potentialSavings"
+                      label="Potential savings"
+                      info="About how much you'd save if this uncached input used prompt caching. Estimated as uncached input tokens times what your cached traffic already nets per cached token (realized cache savings, after write premiums, ÷ cache read and write tokens). Blank when caching is not currently saving anything overall."
+                      sort={sort}
+                      onSort={onSort}
+                    />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="font-medium">
+                        {row.label}
+                        {row.sublabel && <span className="ml-1 text-xs text-muted-foreground">({row.sublabel})</span>}
+                      </TableCell>
+                      <TableCell className="text-right">{formatNumberWithCommas(row.uncachedPromptTokens)}</TableCell>
+                      <TableCell className="text-right">{pct(row.cacheHitRatio)}</TableCell>
+                      <TableCell className="text-right">
+                        {row.potentialSavings == null ? "—" : usd(row.potentialSavings)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ))}
         </CardContent>
       </Card>
     </TooltipProvider>
