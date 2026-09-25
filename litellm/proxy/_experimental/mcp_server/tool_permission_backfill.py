@@ -150,7 +150,6 @@ def convert_row(
             for server_id, inventory in inventories.items()
             if (server_id not in legacy or legacy[server_id])
             and server_id not in wildcard_servers
-            and MCP_ALL_TOOLS_WILDCARD not in (legacy.get(server_id) or ())
         }
     )
     overrides: Final[Mapping[str, MCPToolOverrideEntry]] = MappingProxyType(
