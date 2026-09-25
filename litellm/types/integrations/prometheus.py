@@ -223,6 +223,7 @@ class UserAPIKeyLabelNames(Enum):
     MCP_SERVER_NAME = "mcp_server_name"
     SERVICE_TIER = "service_tier"
     INPUT_SEQUENCE_LENGTH = "input_sequence_length"
+    CALL_TYPE = "call_type"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -421,6 +422,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.SERVICE_TIER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_llm_api_time_to_first_token_metric = [
@@ -435,6 +437,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.SERVICE_TIER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_request_total_latency_metric = [
@@ -449,6 +452,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.SERVICE_TIER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_request_queue_time_seconds = [
@@ -462,6 +466,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     # Guardrail metrics - these use custom labels (guardrail_name, status, error_type, hook_type)
@@ -485,6 +490,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_AGENT.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -507,6 +513,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_AGENT.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_deployment_latency_per_output_token = [
@@ -518,6 +525,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_overhead_latency_metric = [
@@ -528,6 +536,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_overhead_with_guardrails_latency_metric = [
@@ -538,6 +547,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_remaining_requests_metric = [
@@ -574,6 +584,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_spend_metric = [
@@ -591,6 +602,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.SERVICE_TIER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_zero_cost_requests_total = (
@@ -615,6 +627,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_total_tokens_metric = [
@@ -629,6 +642,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_output_tokens_metric = [
@@ -643,6 +657,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     # Token-type detail metrics — reuse the same label set as
@@ -788,6 +803,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_deployment_total_requests = [
@@ -803,6 +819,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.CALL_TYPE.value,
     ]
 
     litellm_deployment_success_responses = litellm_deployment_total_requests
@@ -1058,6 +1075,7 @@ class UserAPIKeyLabelValues:
     model_id: str | None = None
     api_base: str | None = None
     api_provider: str | None = None
+    call_type: str | None = None
     exception_status: str | None = None
     exception_class: str | None = None
     rate_limit_category: str | None = None
