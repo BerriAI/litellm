@@ -139,9 +139,7 @@ class CacheLeakageMetadata(BaseModel):
         description="cache_read_input_tokens + cache_creation_input_tokens over every ranked key, "
         "not only the returned rows"
     )
-    total_prompt_caching_savings_spend: float = Field(
-        description="Realized caching savings over every ranked key"
-    )
+    total_prompt_caching_savings_spend: float = Field(description="Realized caching savings over every ranked key")
 
 
 class CacheLeakageResponse(BaseModel):

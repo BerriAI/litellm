@@ -3256,7 +3256,7 @@ async def get_user_daily_activity_cache_leakage(
         "never extended.",
     ),
     limit: int = fastapi.Query(
-        default=USAGE_CACHE_LEAKAGE_KEYS_LIMIT,
+        default=min(USAGE_CACHE_LEAKAGE_KEYS_LIMIT, USAGE_TOP_API_KEYS_LIMIT),
         ge=1,
         le=USAGE_TOP_API_KEYS_LIMIT,
         description="Keys returned, ranked by uncached prompt tokens",

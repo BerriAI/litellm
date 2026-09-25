@@ -150,12 +150,6 @@ export const computeCacheLeakage = (
 type CacheLeakageKeysResponse =
   paths["/user/daily/activity/cache_leakage"]["get"]["responses"][200]["content"]["application/json"];
 
-/**
- * Server-ranked counterpart to computeCacheLeakage for the key dimension. The rows
- * arrive already ordered by uncached prompt tokens over every key in the range, and
- * the metadata totals cover the whole ranked set, so the realized rate prices
- * leakage against keys the limit never returned. Server order is kept.
- */
 export const cacheLeakageRowsFromServer = (response: CacheLeakageKeysResponse, limit = 10): CacheLeakageResult => {
   const { total_cached_tokens, total_prompt_caching_savings_spend } = response.metadata;
   const netSavingsPerCachedToken =
