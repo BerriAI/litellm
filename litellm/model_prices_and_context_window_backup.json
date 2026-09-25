@@ -55919,6 +55919,28 @@
         "mode": "embedding",
         "source": "https://docs.libertai.io/apis/text/"
     },
+    "sarvam/saaras:v3-realtime": {
+        "litellm_provider": "sarvam",
+        "metadata": {
+            "note": "Sarvam prices speech to text in INR per hour, billed per second; this registry is USD only, so sessions log their billed audio duration and no cost"
+        },
+        "mode": "audio_transcription",
+        "source": "https://docs.sarvam.ai/api/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ]
+    },
+    "sarvam/saaras:v4": {
+        "litellm_provider": "sarvam",
+        "metadata": {
+            "note": "Sarvam prices speech to text in INR per hour, billed per second; this registry is USD only, so sessions log their billed audio duration and no cost"
+        },
+        "mode": "audio_transcription",
+        "source": "https://docs.sarvam.ai/api/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ]
+    },
     "sarvam/sarvam-m": {
         "cache_creation_input_token_cost": 0,
         "cache_creation_input_token_cost_above_1hr": 0,

@@ -9670,6 +9670,10 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig()
+        if LlmProviders.SARVAM == provider:
+            from litellm.llms.sarvam.realtime.transformation import SarvamRealtimeConfig
+
+            return SarvamRealtimeConfig()
         return None
 
     @staticmethod

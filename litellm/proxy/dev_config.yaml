@@ -197,6 +197,12 @@ model_list:
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
 
+  # ---------- Sarvam realtime speech to text ----------
+  - model_name: sarvam-stt
+    litellm_params:
+      model: sarvam/saaras:v3-realtime
+      api_key: os.environ/SARVAM_API_KEY
+
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   # Opt-in: let CheckBatchCost track cost for unmanaged batches created with a raw

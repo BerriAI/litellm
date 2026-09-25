@@ -1329,6 +1329,19 @@ def test_get_provider_rerank_config():
     assert isinstance(config, HostedVLLMRerankConfig)
 
 
+def test_get_provider_realtime_config_serves_sarvam_speech_to_text():
+    """Sarvam realtime transcription only reaches /v1/realtime when the provider registry hands back its
+    config; without this the endpoint rejects every sarvam deployment as an unsupported model."""
+    from litellm.llms.sarvam.realtime.transformation import SarvamRealtimeConfig
+    from litellm.utils import LlmProviders
+
+    config = ProviderConfigManager.get_provider_realtime_config(
+        model="saaras:v3-realtime", provider=LlmProviders.SARVAM
+    )
+
+    assert isinstance(config, SarvamRealtimeConfig)
+
+
 def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
     """Regression for LIT-6501: mapping vertex Gemini TTS params through Google Cloud TTS
     dropped response_format before the speech_to_completion bridge could honor it."""
