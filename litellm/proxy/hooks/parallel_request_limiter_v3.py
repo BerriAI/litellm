@@ -3167,13 +3167,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         for status in response["statuses"]:
             if status["code"] == "OVER_LIMIT":
                 descriptor_key = status["descriptor_key"]
-                status_value: Final = status.get("descriptor_value")
                 matching_descriptor = next(
                     (
                         desc
                         for desc in descriptors
                         if desc["key"] == descriptor_key
-                        and (status_value is None or desc["value"] == status_value)
+                        and (
+                            (status_value := status.get("descriptor_value")) is None
+                            or desc["value"] == status_value
+                        )
                     ),
                     None,
                 )
