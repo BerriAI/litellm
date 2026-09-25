@@ -199,6 +199,7 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "stop_sequence": "stop",
     "end_turn": "stop",
     "max_tokens": "length",
+    "model_context_window_exceeded": "length",
     "tool_use": "tool_calls",
     "refusal": "content_filter",
     "compaction": "length",
