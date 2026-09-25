@@ -10,7 +10,7 @@ on:
       - "litellm/_redis_credential_provider.py"
       - "litellm/caching/redis_cache.py"
       - "litellm/caching/evicted_client_closer.py"
-      - "tests/test_litellm/test_redis.py"
+      - "tests/unit/test_redis.py"
       - "tests/local_testing/test_caching.py"
       - "tests/test_litellm/caching/test_redis_connection_pool.py"
       - "tests/test_litellm/caching/test_redis_cluster_cache.py"
@@ -84,7 +84,7 @@ jobs:
         run: |
           redis-server --version
           uv run --no-sync pytest \
-            tests/test_litellm/test_redis.py \
+            tests/unit/test_redis.py \
             tests/test_litellm/caching/test_redis_connection_pool.py \
             tests/test_litellm/caching/test_redis_cluster_cache.py \
             tests/test_litellm/caching/test_evicted_client_closer.py \
