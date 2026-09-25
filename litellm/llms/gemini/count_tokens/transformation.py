@@ -21,7 +21,7 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
-    _transform_system_message,
+    _transform_system_message,  # pyright: ignore[reportPrivateUsage]  # same helper the Gemini chat transformation uses to split system prompts
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
@@ -188,7 +188,7 @@ def _apply_mixed_tool_drop_rule(merged: Sequence[Tools]) -> list[Tools] | None:
     optional_params: Final = {  # mutable-ok: shared Vertex drop-rule mutates the tools list in place
         "tools": list(merged)  # mutable-ok: shared Vertex drop-rule mutates the tools list in place
     }
-    VertexGeminiConfig._drop_search_tools_mixed_with_functions(optional_params)
+    VertexGeminiConfig._drop_search_tools_mixed_with_functions(optional_params)  # pyright: ignore[reportPrivateUsage]  # same drop rule the Vertex chat path applies before counting
     kept: Final = optional_params["tools"]
     return kept or None
 
@@ -198,14 +198,14 @@ def _map_to_gemini_tools(
     web_search_options: object | None,
 ) -> list[Tools] | None:
     merged: Final = (
-        VertexGeminiConfig()._map_function(
+        VertexGeminiConfig()._map_function(  # pyright: ignore[reportPrivateUsage]  # same tool mapper the Gemini chat path uses
             value=[dict(tool) for tool in openai_tools],  # mutable-ok: _map_function takes plain tool dicts
             optional_params={},  # mutable-ok: _map_function signature takes a dict
         )
         if openai_tools
         else []  # mutable-ok: merged with the mapped tools list below
     ) + (
-        [VertexGeminiConfig()._map_web_search_options({})]  # mutable-ok: merged tools list for the drop-rule
+        [VertexGeminiConfig()._map_web_search_options({})]  # pyright: ignore[reportPrivateUsage]  # same web-search mapper the Vertex chat path uses  # mutable-ok: merged tools list for the drop-rule
         if web_search_options is not None
         else []  # mutable-ok: merged with the mapped tools list
     )
