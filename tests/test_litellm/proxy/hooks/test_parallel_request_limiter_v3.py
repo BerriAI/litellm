@@ -5128,15 +5128,13 @@ async def test_resolve_tag_rate_limits_from_db_reads_budget_row(monkeypatch):
     from litellm.models.tag import LiteLLM_TagTable
     from litellm.proxy import proxy_server
     from litellm.proxy.auth import auth_checks
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.hooks.parallel_request_limiter_v3 import resolve_tag_rate_limits_from_db
     from litellm.proxy.utils import PrismaClient
 
     async def fake_batch(
         tag_names: Sequence[str],
         prisma_client: PrismaClient | None,
-        user_api_key_cache: UserApiKeyCache,
-        **kwargs: object,
+        user_api_key_cache: DualCache,
     ) -> dict[str, LiteLLM_TagTable]:
         return {
             "limited": LiteLLM_TagTable(
