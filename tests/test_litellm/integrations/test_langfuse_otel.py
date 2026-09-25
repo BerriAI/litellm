@@ -37,7 +37,7 @@ class TestLangfuseOtelIntegration:
             assert config.exporter == "otlp_http"
             assert "Authorization=Basic" in config.headers
             # Note: We no longer set os.environ explicitly to avoid leakage
-            # assert os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "https://us.cloud.langfuse.com/api/public/otel"
+            # assert os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "https://us.cloud.langfuse.com/api/public/otel/v1/traces"
             # assert "Authorization=Basic" in os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", "")
 
     def test_get_langfuse_otel_config_missing_keys(self):
@@ -522,7 +522,7 @@ class TestLangfuseOtelKeyDynamicConfig:
 
         assert config is not None
         assert config.exporter == "otlp_http"
-        assert config.endpoint == "https://langfuse.example.com/api/public/otel"
+        assert config.endpoint == "https://langfuse.example.com/api/public/otel/v1/traces"
 
         import base64
 
@@ -535,7 +535,7 @@ class TestLangfuseOtelKeyDynamicConfig:
             config = logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_host="langfuse.example.com"))
 
         assert config is not None
-        assert config.endpoint == "https://langfuse.example.com/api/public/otel"
+        assert config.endpoint == "https://langfuse.example.com/api/public/otel/v1/traces"
 
     def test_construct_dynamic_otel_config_defaults_to_us_cloud(self):
         with self._clean_env():
@@ -543,7 +543,7 @@ class TestLangfuseOtelKeyDynamicConfig:
             config = logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_host=None))
 
         assert config is not None
-        assert config.endpoint == "https://us.cloud.langfuse.com/api/public/otel"
+        assert config.endpoint == "https://us.cloud.langfuse.com/api/public/otel/v1/traces"
 
     def test_construct_dynamic_otel_config_falls_back_to_env_host(self):
         with self._clean_env():
@@ -552,7 +552,7 @@ class TestLangfuseOtelKeyDynamicConfig:
                 config = logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_host=None))
 
         assert config is not None
-        assert config.endpoint == "https://env-host.example.com/api/public/otel"
+        assert config.endpoint == "https://env-host.example.com/api/public/otel/v1/traces"
 
     def test_construct_dynamic_otel_config_requires_both_keys(self):
         with self._clean_env():

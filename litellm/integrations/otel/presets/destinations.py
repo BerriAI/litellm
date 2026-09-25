@@ -51,7 +51,7 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
     if not host:
         return (LANGFUSE_CLOUD_US_ENDPOINT, None)
     normalized: Final = host if host.startswith("http") else f"https://{host}"
-    endpoint: Final = f"{normalized.rstrip('/')}/api/public/otel"
+    endpoint: Final = f"{normalized.rstrip('/')}/api/public/otel/v1/traces"
     if tenant_host is None:
         return (endpoint, None)
     if not is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts):

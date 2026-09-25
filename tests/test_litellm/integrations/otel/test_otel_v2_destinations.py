@@ -59,7 +59,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.types.utils import StandardCallbackDynamicParams
 
 LANGFUSE_DEST = OtelDestination(
-    endpoint="http://tenant.local/api/public/otel",
+    endpoint="http://tenant.local/api/public/otel/v1/traces",
     headers={"Authorization": "Basic dGVuYW50"},
     callback_name="langfuse_otel",
 )
@@ -158,7 +158,7 @@ class TestRoutingMode:
     OPERATOR_SINK = ("https://cloud.langfuse.com/api/public/otel/v1/traces", (("authorization", "Basic op"),))
     #: What a tenant destination for that same project looks like before normalizing:
     #: no signal path yet, and the header name cased the way the backend writes it.
-    SAME_ACCOUNT_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
+    SAME_ACCOUNT_ENDPOINT = "https://cloud.langfuse.com/api/public/otel/v1/traces"
 
     @staticmethod
     def _additive(monkeypatch):
@@ -1317,7 +1317,7 @@ class TestDestinationResolution:
 
         destinations = resolve_tenant_otel_destinations(auth)
 
-        assert [d.endpoint for d in destinations] == ["http://team.local/api/public/otel"]
+        assert [d.endpoint for d in destinations] == ["http://team.local/api/public/otel/v1/traces"]
         assert destinations[0].callback_name == "langfuse_otel"
 
     def test_a_keys_service_name_outranks_its_teams_on_the_destination(self, monkeypatch):
@@ -1391,7 +1391,7 @@ class TestDestinationResolution:
             team_metadata={"logging": [entry("http://team.local")]},
         )
 
-        assert [d.endpoint for d in resolve_tenant_otel_destinations(auth)] == ["http://key.local/api/public/otel"]
+        assert [d.endpoint for d in resolve_tenant_otel_destinations(auth)] == ["http://key.local/api/public/otel/v1/traces"]
 
     def test_nothing_resolves_while_otel_v2_is_off(self, monkeypatch):
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
@@ -1428,7 +1428,7 @@ class TestDestinationResolution:
 
 
 LLM_ONLY_DEST = OtelDestination(
-    endpoint="http://tenant.local/api/public/otel",
+    endpoint="http://tenant.local/api/public/otel/v1/traces",
     headers={"Authorization": "Basic dGVuYW50"},
     callback_name="langfuse_otel",
     span_scope="llm_only",
@@ -2147,7 +2147,7 @@ class TestPresetDegradation:
         assert logger is not None
         assert [spec.endpoint for spec in logger.config.exporters] == [
             "http://collector.local:4318",
-            "https://cloud.langfuse.com/api/public/otel",
+            "https://cloud.langfuse.com/api/public/otel/v1/traces",
         ]
         assert all(spec.headers for spec in logger.config.exporters if spec.requires_headers)
 
@@ -2323,7 +2323,7 @@ class TestTenantConfigAgreement:
 
         destinations = resolve_tenant_otel_destinations(auth)
 
-        assert [d.endpoint for d in destinations] == ["http://key.local/api/public/otel"]
+        assert [d.endpoint for d in destinations] == ["http://key.local/api/public/otel/v1/traces"]
 
     def test_a_failure_entry_still_wins_the_merge_next_to_a_success_entry(self):
         entries = [
@@ -2342,7 +2342,7 @@ class TestTenantConfigAgreement:
         destinations = resolve_tenant_otel_destinations(UserAPIKeyAuth(team_metadata={"logging": entries}))
 
         assert runtime.callback_vars["langfuse_host"] == "http://key.local"
-        assert [d.endpoint for d in destinations] == ["http://key.local/api/public/otel"]
+        assert [d.endpoint for d in destinations] == ["http://key.local/api/public/otel/v1/traces"]
         assert destinations[0].headers["Authorization"] == f"Basic {b64encode(b'pk-failure:sk-failure').decode()}"
 
     @pytest.fixture
@@ -3216,7 +3216,7 @@ class TestTenantHostSsrfGuard:
 
         destination = destination_for("langfuse_otel", self._langfuse("http://127.0.0.1:9111"))
 
-        assert destination.endpoint == "http://127.0.0.1:9111/api/public/otel"
+        assert destination.endpoint == "http://127.0.0.1:9111/api/public/otel/v1/traces"
 
     def test_the_operators_own_internal_host_is_never_blocked(self, monkeypatch):
         """The operator configures ``LANGFUSE_HOST`` themselves, so an internal
@@ -3225,7 +3225,7 @@ class TestTenantHostSsrfGuard:
 
         destination = destination_for("langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"})
 
-        assert destination.endpoint == "http://127.0.0.1:9111/api/public/otel"
+        assert destination.endpoint == "http://127.0.0.1:9111/api/public/otel/v1/traces"
 
     def test_an_allowlisted_host_is_taken_without_resolving_it(self, monkeypatch):
         """The check runs on the asyncio auth path, so it must not block on a name the
@@ -3234,7 +3234,7 @@ class TestTenantHostSsrfGuard:
 
         destination = destination_for("langfuse_otel", self._langfuse("https://lf.invalid"))
 
-        assert destination.endpoint == "https://lf.invalid/api/public/otel"
+        assert destination.endpoint == "https://lf.invalid/api/public/otel/v1/traces"
 
     def test_a_rejected_host_is_warned_about_once(self, caplog):
         with caplog.at_level("WARNING", logger="LiteLLM"):
