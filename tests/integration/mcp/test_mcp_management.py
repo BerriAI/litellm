@@ -330,10 +330,11 @@ def test_ui_session_lists_and_fetches_team_granted_config_server(
             token: Final = _dashboard_ui_session_token(user_id)
             headers: Final = {"Authorization": f"Bearer {token}"}
             listed: Final = candidate.client.get("/v1/mcp/server", headers=headers)
+            assert listed.status_code == 200, listed.text
+            assert [server["server_id"] for server in listed.json()] == [server_id], listed.text
+
             detail: Final = candidate.client.get(f"/v1/mcp/server/{server_id}", headers=headers)
 
-        assert listed.status_code == 200, listed.text
         assert detail.status_code == 200, detail.text
-        assert [server["server_id"] for server in listed.json()] == [server_id], listed.text
         assert detail.json()["server_id"] == server_id, detail.text
         assert detail.json()["alias"] == alias, detail.text
