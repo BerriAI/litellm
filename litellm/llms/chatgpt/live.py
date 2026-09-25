@@ -53,10 +53,10 @@ def _validate_session_id(session_id: str) -> None:
             or any(char in ("/", "\\") or category(char) in ("Cc", "Cs") for char in candidate)
         ):
             raise ValueError("Invalid Live session ID")
-        decoded: str = unquote(candidate, errors="strict")  # rebind-ok: validate successive decoding layers iteratively
+        decoded: str = unquote(candidate, errors="strict")
         if decoded == candidate:
             return
-        candidate = decoded  # rebind-ok: each percent-decoding pass reduces the input length
+        candidate = decoded
 
 
 def _validate_path(path: str) -> None:

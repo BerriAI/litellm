@@ -85,18 +85,18 @@ def _json_value(value: object) -> JsonValue:
         source, parent, key, depth = pending.pop()
         if depth > 256:
             raise ValueError("Live JSON nesting exceeds the supported depth")
-        converted: JsonValue  # rebind-ok: each visited input produces a new JSON value
+        converted: JsonValue
         if isinstance(source, Mapping):
             entries: Mapping[str, object] = _MAPPING.validate_python(
                 source
-            )  # rebind-ok: entries belong to the current node
+            )
             converted = {name: None for name in entries}  # mutable-ok: JSON wire objects require dicts
             pending.extend((item, converted, name, depth + 1) for name, item in entries.items())
         elif isinstance(source, (tuple, list)):
             items: tuple[object, ...] = TypeAdapter(tuple[object, ...]).validate_python(
                 source
-            )  # rebind-ok: items belong to the current node
-            array: list[JsonValue] = [None] * len(items)  # mutable-ok: JSON output; # rebind-ok: per-node buffer
+            )
+            array: list[JsonValue] = [None] * len(items)
             pending.extend((item, array, index, depth + 1) for index, item in enumerate(items))
             converted = array
         else:
@@ -583,9 +583,9 @@ def _managed_constraints(auth: UserAPIKeyAuth) -> bool:
         )
         if isinstance(value, (Mapping, list, tuple))
     ]
-    visited: Final[set[int]] = set()  # mutable-ok: cycle guard for hook-provided metadata
+    visited: Final[set[int]] = set()
     while pending:
-        current: object = pending.pop()  # rebind-ok: advance the explicit metadata traversal stack
+        current: object = pending.pop()
         if id(current) in visited:
             continue
         visited.add(id(current))
@@ -594,7 +594,7 @@ def _managed_constraints(auth: UserAPIKeyAuth) -> bool:
         if isinstance(current, Mapping):
             entries: Mapping[str, object] = _MAPPING.validate_python(
                 current
-            )  # rebind-ok: entries belong to the current metadata node
+            )
             for key, item in entries.items():
                 if key in (
                     "rpm_limit",
@@ -1411,7 +1411,7 @@ async def _wait_started(
         while True:
             event: Mapping[str, JsonValue] = _OBJECT.validate_json(
                 await connection.recv()
-            )  # rebind-ok: each received event has a new value
+            )
             if event.get("type") == "session.started":
                 return event
             if startup is not None:

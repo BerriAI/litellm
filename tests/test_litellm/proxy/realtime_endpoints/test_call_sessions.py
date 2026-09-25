@@ -301,7 +301,9 @@ async def test_codex_processing_merges_model_guardrails(monkeypatch, route_type,
     from litellm.proxy.realtime_endpoints.call_sessions import process_codex_request
 
     class PolicyHook:
-        async def pre_call_hook(self, user_api_key_dict, data, call_type, *, internal_realtime_observer=False):
+        async def pre_call_hook(
+            self, user_api_key_dict, data, call_type, *, skip_guardrails=False, internal_realtime_observer=False
+        ):
             assert internal_realtime_observer is observer
             if "model-policy" in data.get("metadata", {}).get("guardrails", []):
                 raise HTTPException(403, "Model policy rejected request")
