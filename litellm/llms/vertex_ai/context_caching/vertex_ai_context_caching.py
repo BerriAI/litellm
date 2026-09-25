@@ -1,6 +1,7 @@
 from typing import Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -14,7 +15,9 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.openai.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
+    VERTEX_AI_CACHED_CONTENT_KEY,
     CachedContentListAllResponseBody,
+    VertexAICachedContentCreation,
     VertexAICachedContentResponseObject,
 )
 from litellm.utils import is_prompt_caching_valid_prompt
@@ -424,9 +427,18 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = response.json()
-        cached_content_response_obj: Final = VertexAICachedContentResponseObject(
-            name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
+        cached_content_response_obj: Final = TypeAdapter(VertexAICachedContentResponseObject).validate_python(
+            raw_response_cached
         )
+        usage_metadata: Final = cached_content_response_obj.get("usageMetadata", {})
+        cached_content_creation: Final = VertexAICachedContentCreation(
+            name=cached_content_response_obj["name"],
+            model=cached_content_response_obj["model"],
+            total_token_count=usage_metadata.get("totalTokenCount", 0),
+            create_time=cached_content_response_obj.get("createTime"),
+            expire_time=cached_content_response_obj.get("expireTime"),
+        )
+        logging_obj.model_call_details[VERTEX_AI_CACHED_CONTENT_KEY] = cached_content_creation
         return (
             non_cached_messages,
             optional_params,
@@ -579,9 +591,18 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = response.json()
-        cached_content_response_obj: Final = VertexAICachedContentResponseObject(
-            name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
+        cached_content_response_obj: Final = TypeAdapter(VertexAICachedContentResponseObject).validate_python(
+            raw_response_cached
         )
+        usage_metadata: Final = cached_content_response_obj.get("usageMetadata", {})
+        cached_content_creation: Final = VertexAICachedContentCreation(
+            name=cached_content_response_obj["name"],
+            model=cached_content_response_obj["model"],
+            total_token_count=usage_metadata.get("totalTokenCount", 0),
+            create_time=cached_content_response_obj.get("createTime"),
+            expire_time=cached_content_response_obj.get("expireTime"),
+        )
+        logging_obj.model_call_details[VERTEX_AI_CACHED_CONTENT_KEY] = cached_content_creation
         return (
             non_cached_messages,
             optional_params,

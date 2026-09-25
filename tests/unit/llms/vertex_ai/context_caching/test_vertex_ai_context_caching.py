@@ -1,4 +1,3 @@
-from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -40,13 +39,14 @@ class TestContextCachingEndpoints:
         """Setup for each test method"""
         self.context_caching = ContextCachingEndpoints()
         self.mock_logging = MagicMock(spec=Logging)
+        self.mock_logging.model_call_details = {}
         self.mock_client = MagicMock(spec=HTTPHandler)
         self.mock_async_client = MagicMock(spec=AsyncHTTPHandler)
 
         # Mock is_prompt_caching_valid_prompt to return True by default.
         # This avoids token counting in unit tests. The min-token guard is
         # tested explicitly in test_check_and_create_cache_skips_when_below_min_tokens.
-        self._token_check_patcher = patch(
+        self._token_check_patcher = patch(  # test-quality-ok: isolate token validation for cache creation tests
             "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.is_prompt_caching_valid_prompt",
             return_value=True,
         )
@@ -2119,6 +2119,28 @@ class TestContextCachingMultiRegionUrls:
 
     def setup_method(self):
         self.caching = ContextCachingEndpoints()
+        self.context_caching = self.caching
+        self.mock_logging = MagicMock(spec=Logging)
+        self.mock_logging.model_call_details = {}
+        self.mock_client = MagicMock(spec=HTTPHandler)
+        self.mock_async_client = MagicMock(spec=AsyncHTTPHandler)
+        self.sample_messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"role": "user", "content": "Hello, how are you?"},
+        ]
+        self.sample_optional_params = {}
+        self._token_check_patcher = patch(
+            "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.is_prompt_caching_valid_prompt",
+            return_value=True,
+        )
+        self._token_check_patcher.start()
+
+    def teardown_method(self):
+        self._token_check_patcher.stop()
 
     @pytest.mark.parametrize("location", ["eu", "us"])
     def test_vertex_ai_multi_region_uses_rep_host(self, location):
@@ -2161,3 +2183,152 @@ class TestContextCachingMultiRegionUrls:
 
         assert url.startswith("https://aiplatform.googleapis.com/")
         assert "/locations/global/cachedContents" in url
+
+    def test_check_and_create_cache_stashes_creation_metadata(self):
+        self.mock_logging.model_call_details = {}
+        cached_messages = [self.sample_messages[0]]
+        non_cached_messages = [self.sample_messages[1]]
+        response = MagicMock()
+        response.json.return_value = {
+            "name": "new_cache_name",
+            "model": "gemini-1.5-pro",
+            "usageMetadata": {"totalTokenCount": 10000},
+            "createTime": "2025-01-01T00:00:00Z",
+            "expireTime": "2025-01-02T00:00:00Z",
+        }
+
+        with (
+            patch(  # test-quality-ok: isolate message splitting for cache creation tests
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages",
+                return_value=(cached_messages, non_cached_messages),
+            ),
+            patch(  # test-quality-ok: isolate cache key generation for cache creation tests
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj.get_cache_key",
+                return_value="test_cache_key",
+            ),
+            patch.object(self.context_caching, "check_cache", return_value=None),
+            patch.object(
+                self.context_caching,
+                "_get_token_and_url_context_caching",
+                return_value=("token", "https://test-url.com"),
+            ),
+            patch(  # test-quality-ok: isolate request transformation for cache creation tests
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.transform_openai_messages_to_gemini_context_caching",
+                return_value={"model": "gemini-1.5-pro", "contents": []},
+            ),
+        ):
+            self.mock_client.post.return_value = response
+            self.context_caching.check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=self.sample_optional_params.copy(),
+                api_key="test_key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=self.mock_client,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider="vertex_ai",
+                vertex_project="test_project",
+                vertex_location="us-central1",
+                vertex_auth_header="token",
+            )
+
+        assert self.mock_logging.model_call_details["vertex_ai_cached_content"] == {
+            "name": "new_cache_name",
+            "model": "gemini-1.5-pro",
+            "total_token_count": 10000,
+            "create_time": "2025-01-01T00:00:00Z",
+            "expire_time": "2025-01-02T00:00:00Z",
+        }
+
+    @pytest.mark.asyncio
+    async def test_async_check_and_create_cache_stashes_creation_metadata(self):
+        self.mock_logging.model_call_details = {}
+        cached_messages = [self.sample_messages[0]]
+        non_cached_messages = [self.sample_messages[1]]
+        response = MagicMock()
+        response.json.return_value = {
+            "name": "new_cache_name",
+            "model": "gemini-1.5-pro",
+            "usageMetadata": {"totalTokenCount": 10000},
+            "createTime": "2025-01-01T00:00:00Z",
+            "expireTime": "2025-01-02T00:00:00Z",
+        }
+
+        with (
+            patch(  # test-quality-ok: isolate message splitting for cache creation tests
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages",
+                return_value=(cached_messages, non_cached_messages),
+            ),
+            patch(  # test-quality-ok: isolate cache key generation for cache creation tests
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj.get_cache_key",
+                return_value="test_cache_key",
+            ),
+            patch.object(self.context_caching, "async_check_cache", return_value=None),
+            patch.object(
+                self.context_caching,
+                "_get_token_and_url_context_caching",
+                return_value=("token", "https://test-url.com"),
+            ),
+            patch(  # test-quality-ok: isolate request transformation for cache creation tests
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.transform_openai_messages_to_gemini_context_caching",
+                return_value={"model": "gemini-1.5-pro", "contents": []},
+            ),
+        ):
+            self.mock_async_client.post = AsyncMock(return_value=response)
+            await self.context_caching.async_check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=self.sample_optional_params.copy(),
+                api_key="test_key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=self.mock_async_client,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider="vertex_ai",
+                vertex_project="test_project",
+                vertex_location="us-central1",
+                vertex_auth_header="token",
+            )
+
+        assert self.mock_logging.model_call_details["vertex_ai_cached_content"] == {
+            "name": "new_cache_name",
+            "model": "gemini-1.5-pro",
+            "total_token_count": 10000,
+            "create_time": "2025-01-01T00:00:00Z",
+            "expire_time": "2025-01-02T00:00:00Z",
+        }
+
+    @pytest.mark.asyncio
+    async def test_async_check_and_create_cache_reuse_does_not_stash_creation_metadata(self):
+        self.mock_logging.model_call_details = {}
+        cached_messages = [self.sample_messages[0]]
+        non_cached_messages = [self.sample_messages[1]]
+
+        with (
+            patch(  # test-quality-ok: isolate message splitting for cache reuse tests
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages",
+                return_value=(cached_messages, non_cached_messages),
+            ),
+            patch(  # test-quality-ok: isolate cache key generation for cache reuse tests
+                "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj.get_cache_key",
+                return_value="test_cache_key",
+            ),
+            patch.object(self.context_caching, "async_check_cache", return_value="existing_cache"),
+        ):
+            await self.context_caching.async_check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=self.sample_optional_params.copy(),
+                api_key="test_key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=self.mock_async_client,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider="vertex_ai",
+                vertex_project="test_project",
+                vertex_location="us-central1",
+                vertex_auth_header="token",
+            )
+
+        assert "vertex_ai_cached_content" not in self.mock_logging.model_call_details

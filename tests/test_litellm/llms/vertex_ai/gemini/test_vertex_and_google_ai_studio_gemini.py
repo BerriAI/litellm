@@ -15,11 +15,12 @@ from litellm.llms.anthropic.experimental_pass_through.messages import handler as
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.gemini import vertex_and_google_ai_studio_gemini as vertex_gemini_module
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
-from litellm.types.utils import ChoiceLogprobs, Usage
+from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata, VertexAICachedContentCreation
+from litellm.types.utils import ChoiceLogprobs, PromptTokensDetailsWrapper, Usage
 from litellm.utils import CustomStreamWrapper
 
 
@@ -6366,3 +6367,132 @@ def test_gemini_multi_candidate_messages_do_not_share_state():
     assert resp.choices[1].message.tool_calls is None
     assert getattr(resp.choices[1].message, "reasoning_content", None) is None
     assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
+
+
+def test_add_cache_creation_usage_preserves_cache_read_and_bills_creation_tokens():
+    base_usage = Usage(
+        prompt_tokens=10010,
+        completion_tokens=1,
+        total_tokens=10011,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=10000),
+    )
+    creation: VertexAICachedContentCreation = {
+        "name": "cached-content",
+        "model": "gemini-3.8-flash",
+        "total_token_count": 10000,
+        "create_time": None,
+        "expire_time": None,
+    }
+
+    merged_usage = vertex_gemini_module._add_cache_creation_usage(base_usage, creation)
+
+    assert merged_usage.prompt_tokens == 20010
+    assert merged_usage.total_tokens == 20011
+    assert merged_usage.cache_creation_input_tokens == 10000
+    assert merged_usage.prompt_tokens_details.cached_tokens == 10000
+    assert merged_usage.prompt_tokens_details.cache_creation_tokens == 10000
+
+    model = "gemini-3.8-flash"
+    base_response = ModelResponse(model=model, usage=base_usage)
+    merged_response = ModelResponse(model=model, usage=merged_usage)
+    base_cost = litellm.completion_cost(
+        completion_response=base_response,
+        model=model,
+        custom_llm_provider="vertex_ai",
+    )
+    merged_cost = litellm.completion_cost(
+        completion_response=merged_response,
+        model=model,
+        custom_llm_provider="vertex_ai",
+    )
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
+    creation_rate = model_info.get("cache_creation_input_token_cost") or model_info["input_cost_per_token"]
+
+    assert merged_cost > base_cost
+    assert merged_cost == pytest.approx(base_cost + 10000 * creation_rate)
+
+
+@pytest.mark.parametrize("include_creation", [True, False])
+def test_transform_response_applies_cache_creation_usage(include_creation):
+    model = "gemini-3.8-flash"
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = (
+        {
+            "vertex_ai_cached_content": {
+                "name": "cached-content",
+                "model": model,
+                "total_token_count": 10000,
+                "create_time": None,
+                "expire_time": None,
+            }
+        }
+        if include_creation
+        else {}
+    )
+    raw_response = MagicMock()
+    raw_response.json.return_value = {
+        "candidates": [{"content": {"parts": [{"text": "Hello"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {
+            "promptTokenCount": 10010,
+            "cachedContentTokenCount": 10000,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 10011,
+        },
+    }
+
+    result = VertexGeminiConfig().transform_response(
+        model=model,
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    if include_creation:
+        assert result.usage.prompt_tokens == 20010
+        assert result.usage.cache_creation_input_tokens == 10000
+        assert result._hidden_params["vertex_ai_cached_content"] == {
+            "name": "cached-content",
+            "model": model,
+            "total_token_count": 10000,
+            "create_time": None,
+            "expire_time": None,
+        }
+    else:
+        assert result.usage.prompt_tokens == 10010
+        assert not hasattr(result.usage, "cache_creation_input_tokens")
+        assert "vertex_ai_cached_content" not in result._hidden_params
+
+
+def test_streaming_chunk_parser_surfaces_cache_creation_usage_and_metadata():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+    model = "gemini-3.8-flash"
+    cached_content = {
+        "name": "cached-content",
+        "model": model,
+        "total_token_count": 10000,
+        "create_time": None,
+        "expire_time": None,
+    }
+    litellm_logging = MagicMock()
+    litellm_logging.model_call_details = {"vertex_ai_cached_content": cached_content}
+    chunk = {
+        "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 11,
+        },
+    }
+
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=litellm_logging)
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    assert streaming_chunk.usage.prompt_tokens == 10010
+    assert streaming_chunk.usage.cache_creation_input_tokens == 10000
+    assert streaming_chunk._hidden_params["vertex_ai_cached_content"] == cached_content

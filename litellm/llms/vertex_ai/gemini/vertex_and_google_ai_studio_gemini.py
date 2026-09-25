@@ -10,6 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -52,6 +53,7 @@ from litellm.types.llms.openai import (
     OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
+    VERTEX_AI_CACHED_CONTENT_KEY,
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
     VERTEX_CREDENTIALS_TYPES,
     Candidates,
@@ -66,6 +68,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
     UsageMetadata,
+    VertexAICachedContentCreation,
     VertexToolName,
 )
 from litellm.types.utils import (
@@ -113,6 +116,7 @@ else:
 
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
+_VERTEX_AI_CACHED_CONTENT_CREATION_ADAPTER: Final = TypeAdapter(VertexAICachedContentCreation)
 
 
 def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
@@ -131,6 +135,32 @@ def _served_model_name(model_version: object) -> str | None:
     if not isinstance(model_version, str) or not model_version:
         return None
     return model_version.split("@", 1)[0]
+
+
+def _add_cache_creation_usage(usage: Usage, creation: VertexAICachedContentCreation) -> Usage:
+    creation_tokens: Final = creation["total_token_count"]
+    if creation_tokens <= 0:
+        return usage
+
+    prompt_tokens_details: Final = (
+        PromptTokensDetailsWrapper(**usage.prompt_tokens_details.model_dump())
+        if usage.prompt_tokens_details is not None
+        else PromptTokensDetailsWrapper()
+    )
+    cache_read_tokens: Final = prompt_tokens_details.cached_tokens or 0
+    server_tool_use: Final = usage.server_tool_use if hasattr(usage, "server_tool_use") else None
+    cost: Final = usage.cost if hasattr(usage, "cost") else None
+    return Usage(
+        prompt_tokens=usage.prompt_tokens + creation_tokens,
+        completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens + creation_tokens,
+        prompt_tokens_details=prompt_tokens_details,
+        completion_tokens_details=usage.completion_tokens_details,
+        server_tool_use=server_tool_use,
+        cost=cost,
+        cache_creation_input_tokens=creation_tokens,
+        **({"cache_read_input_tokens": cache_read_tokens} if cache_read_tokens > 0 else {}),
+    )
 
 
 class VertexAIBaseConfig:
@@ -2462,11 +2492,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     _,  # cumulative_tool_call_index not needed in non-streaming
                 ) = VertexGeminiConfig._process_candidates(_candidates, model_response, logging_obj.optional_params)
 
-            usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
+            base_usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
+            cached_content_creation: Final = logging_obj.model_call_details.get(VERTEX_AI_CACHED_CONTENT_KEY)
+            usage: Final = (
+                _add_cache_creation_usage(
+                    base_usage,
+                    _VERTEX_AI_CACHED_CONTENT_CREATION_ADAPTER.validate_python(cached_content_creation),
+                )
+                if isinstance(cached_content_creation, dict) and "total_token_count" in cached_content_creation
+                else base_usage
+            )
 
             VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
 
             setattr(model_response, "usage", usage)
+            if isinstance(cached_content_creation, dict):
+                model_response._hidden_params[VERTEX_AI_CACHED_CONTENT_KEY] = cached_content_creation
 
             ## ADD METADATA TO RESPONSE ##
 
@@ -3214,11 +3255,23 @@ class ModelResponseIterator:
         if "usageMetadata" not in processed_chunk:
             return None
 
-        usage: Final = VertexGeminiConfig._calculate_usage(
+        base_usage: Final = VertexGeminiConfig._calculate_usage(
             completion_response=processed_chunk,
+        )
+        cached_content_creation: Final = self.logging_obj.model_call_details.get(VERTEX_AI_CACHED_CONTENT_KEY)
+        usage: Final = (
+            _add_cache_creation_usage(
+                base_usage,
+                _VERTEX_AI_CACHED_CONTENT_CREATION_ADAPTER.validate_python(cached_content_creation),
+            )
+            if isinstance(cached_content_creation, dict) and "total_token_count" in cached_content_creation
+            else base_usage
         )
 
         VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
+
+        if isinstance(cached_content_creation, dict):
+            model_response._hidden_params[VERTEX_AI_CACHED_CONTENT_KEY] = cached_content_creation
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
