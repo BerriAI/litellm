@@ -296,14 +296,7 @@ _CLUSTER_ONLY_CONNECTION_KWARGS: Final[frozenset[str]] = frozenset({"response_ca
 def _cluster_node_pubsub_client(  # pyright: ignore[reportUnknownParameterType]  # redis generics
     cluster: async_redis_cluster_client,  # pyright: ignore[reportUnknownParameterType]  # redis generics
 ) -> async_redis_client:
-    """Standalone async client pinned to one cluster node, for classic pub/sub.
-
-    RedisCluster has no multi-node pub/sub fan-out in redis-py, so callers that
-    need ``client.pubsub()`` get a plain client aimed at the cluster's default
-    node (or the first startup node when the cluster has not been initialized).
-    ``response_callbacks`` is a RedisCluster-only connection kwarg and is
-    dropped before it reaches ``Redis``/``ConnectionPool``.
-    """
+    """Plain async client on one cluster node; classic PUBLISH/SUBSCRIBE is broadcast cluster-wide."""
     from redis.asyncio import ConnectionPool, Redis
 
     node: Final = cluster.get_default_node() or next(iter(cluster.nodes_manager.startup_nodes.values()), None)
@@ -767,13 +760,6 @@ class RedisCache(BaseCache):
         return redis_async_client
 
     def init_pubsub_client(self) -> async_redis_client:  # pyright: ignore[reportUnknownParameterType]  # redis generics
-        """Async client that supports classic pub/sub.
-
-        Standalone caches return the shared async client as-is. Cluster caches
-        get a derived per-event-loop client pinned to one node, cached beside
-        the main client so publishes and subscriptions do not build a new
-        connection pool per call.
-        """
         from redis.asyncio import RedisCluster
 
         from litellm import in_memory_llm_clients_cache
