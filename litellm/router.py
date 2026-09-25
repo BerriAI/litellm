@@ -3372,7 +3372,7 @@ class Router:
                     if hasattr(source_iterator, "aclose"):
                         try:
                             await source_iterator.aclose()
-                        except BaseException as exc:
+                        except Exception as exc:
                             verbose_router_logger.debug(
                                 "stream_with_fallbacks(aresponses): error closing source: %s",
                                 exc,
@@ -3468,7 +3468,7 @@ class Router:
                 with anyio.CancelScope(shield=True):
                     try:
                         await fallback_response.aclose()
-                    except BaseException as exc:
+                    except Exception as exc:
                         verbose_router_logger.debug(
                             "stream_with_fallbacks(aresponses): error closing fallback: %s",
                             exc,

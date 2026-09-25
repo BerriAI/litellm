@@ -8,7 +8,7 @@ import os
 import sys
 import threading
 import warnings
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -37,6 +37,7 @@ from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, ProxyException, UserAPIKeyAuth
 from litellm.router import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
+    MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS,
     FallbackAwareAnthropicMessagesStream,
     _anthropic_stream_commits_now,
     _anthropic_stream_error_is_gateway_verdict,
@@ -46,6 +47,7 @@ from litellm.router import (
     _anthropic_stream_should_decline_fallback,
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
+    _responses_stream_holds_event,
 )
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
@@ -4523,6 +4525,14 @@ def _make_native_responses_iterator(*, sse_payloads: tuple[dict[str, str], ...],
 _RESPONSES_LIFECYCLE_PAYLOADS: Final = ({"type": "response.created"}, {"type": "response.in_progress"})
 
 
+async def _events_until_error(stream) -> AsyncIterator[object]:
+    try:
+        async for chunk in stream:
+            yield chunk
+    except Exception as error:
+        yield error
+
+
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_falls_back_on_transport_drop_before_output():
     """A connection lost after response.created but before any output item is re-routed to the
@@ -4585,17 +4595,10 @@ async def test_aresponses_streaming_iterator_surfaces_transport_drop_when_no_fal
                 "original_generic_function": litellm.aresponses,
             },
         )
-        seen: Final = []
+        outcome: Final = [item async for item in _events_until_error(wrapped)]
 
-        async def _drain():
-            async for chunk in wrapped:
-                seen.append(chunk.type)
-
-        with pytest.raises(httpx.ReadError) as exc_info:
-            await _drain()
-
-    assert seen == ["response.created", "response.in_progress"]
-    assert exc_info.value is transport_error
+    assert [item.type for item in outcome[:-1]] == ["response.created", "response.in_progress"]
+    assert outcome[-1] is transport_error
     assert mock_fallback_utils.await_count == 1
     trigger: Final = mock_fallback_utils.await_args.kwargs["e"]
     assert isinstance(trigger, MidStreamFallbackError)
@@ -4640,23 +4643,14 @@ async def test_aresponses_streaming_iterator_forwards_held_lifecycle_events_befo
         response=_make_responses_iterator(chunks=chunks, error=client_error),
         initial_kwargs={"model": "gpt-4", "stream": True, "input": "Hello"},
     )
-    seen: Final = []
+    outcome: Final = [item async for item in _events_until_error(wrapped)]
 
-    async def _drain():
-        async for chunk in wrapped:
-            seen.append(chunk)
-
-    with pytest.raises(litellm.BadRequestError) as exc_info:
-        await _drain()
-
-    assert seen == chunks
-    assert exc_info.value is client_error
+    assert outcome[:-1] == chunks
+    assert outcome[-1] is client_error
 
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_commits_held_lifecycle_events_at_the_hold_cap():
-    from litellm.router import MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS
-
     router: Final = _make_router_with_fallback()
     chunks: Final = [MagicMock(type="response.in_progress") for _ in range(MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS + 1)]
     src: Final = _make_responses_iterator(
@@ -4665,7 +4659,7 @@ async def test_aresponses_streaming_iterator_commits_held_lifecycle_events_at_th
             message="dropped before output", model="gpt-4", llm_provider="openai", is_pre_first_chunk=True
         ),
     )
-    fallback_chunks: Final = [MagicMock(type="response.completed")]
+    fallback_chunks: Final = [MagicMock(type="response.created"), MagicMock(type="response.completed")]
 
     with patch.object(router, "async_function_with_fallbacks_common_utils", return_value=_AsyncList(fallback_chunks)):
         wrapped: Final = await router._aresponses_streaming_iterator(
@@ -4675,6 +4669,53 @@ async def test_aresponses_streaming_iterator_commits_held_lifecycle_events_at_th
         collected: Final = [chunk async for chunk in wrapped]
 
     assert collected == [*chunks, *fallback_chunks]
+
+
+@pytest.mark.parametrize(
+    ("event_type", "held_event_count", "expected"),
+    [
+        ("response.created", 0, True),
+        ("response.in_progress", 1, True),
+        ("response.queued", MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS - 1, True),
+        ("response.in_progress", MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS, False),
+        ("response.output_item.added", 0, False),
+        ("response.output_text.delta", 0, False),
+        ("response.completed", 0, False),
+    ],
+)
+def test_responses_stream_holds_event_holds_only_pre_output_lifecycle_events_under_the_cap(
+    event_type, held_event_count, expected
+):
+    assert _responses_stream_holds_event(MagicMock(type=event_type), held_event_count) is expected
+
+
+@pytest.mark.asyncio
+async def test_aresponses_fallback_attempt_drops_held_lifecycle_events_when_a_fallback_lands():
+    router: Final = _make_router_with_fallback()
+    trigger: Final = MidStreamFallbackError(
+        message="dropped before output", model="gpt-4", llm_provider="openai", is_pre_first_chunk=True
+    )
+    held: Final = (MagicMock(type="response.created"), MagicMock(type="response.in_progress"))
+    fallback_chunks: Final = [MagicMock(type="response.created"), MagicMock(type="response.completed")]
+    adopt_headers: Final = MagicMock(return_value=({}, {}))
+
+    with patch.object(
+        router, "async_function_with_fallbacks_common_utils", return_value=_AsyncList(fallback_chunks)
+    ) as mock_fallback_utils:
+        collected: Final = [
+            chunk
+            async for chunk in router._aresponses_fallback_attempt(
+                trigger,
+                _make_responses_iterator(),
+                {"model": "gpt-4", "stream": True, "input": "Hello"},
+                adopt_headers,
+                held,
+            )
+        ]
+
+    assert collected == fallback_chunks
+    adopt_headers.assert_called_once()
+    assert mock_fallback_utils.await_args.kwargs["e"] is trigger
 
 
 @pytest.mark.asyncio
