@@ -200,3 +200,125 @@ async def test_deepinfra_tool_message_content_transformation_async():
     print(f"✓ Async test passed: {tool_message['content']}")
 
     print("\n✅ DeepInfra async tool message transformation test passed!")
+
+
+SUPPORTED_TOOL_CHOICES = ["auto", "none"]
+UNSUPPORTED_TOOL_CHOICES = [
+    "required",
+    {"type": "function", "function": {"name": "get_weather"}},
+]
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+]
+
+
+def _deepinfra_optional_params(monkeypatch, **kwargs):
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    return get_optional_params(
+        model="deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct",
+        custom_llm_provider="deepinfra",
+        tools=TOOLS,
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize("tool_choice", SUPPORTED_TOOL_CHOICES)
+def test_deepinfra_forwards_supported_tool_choice(monkeypatch, tool_choice):
+    optional_params = _deepinfra_optional_params(monkeypatch, tool_choice=tool_choice)
+
+    assert optional_params["tool_choice"] == tool_choice
+    assert optional_params["tools"] == TOOLS
+
+
+@pytest.mark.parametrize("tool_choice", UNSUPPORTED_TOOL_CHOICES)
+def test_deepinfra_rejects_unsupported_tool_choice(monkeypatch, tool_choice):
+    with pytest.raises(litellm.UnsupportedParamsError, match="tool_choice"):
+        _deepinfra_optional_params(monkeypatch, tool_choice=tool_choice)
+
+
+@pytest.mark.parametrize("tool_choice", UNSUPPORTED_TOOL_CHOICES)
+def test_deepinfra_drops_unsupported_tool_choice_when_asked(monkeypatch, tool_choice):
+    optional_params = _deepinfra_optional_params(
+        monkeypatch, tool_choice=tool_choice, drop_params=True
+    )
+
+    assert "tool_choice" not in optional_params
+    assert optional_params["tools"] == TOOLS
+
+
+@pytest.mark.parametrize("tool_choice", UNSUPPORTED_TOOL_CHOICES)
+def test_deepinfra_drops_unsupported_tool_choice_via_global_flag(
+    monkeypatch, tool_choice
+):
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    optional_params = DeepInfraConfig().map_openai_params(
+        non_default_params={"tool_choice": tool_choice, "tools": TOOLS},
+        optional_params={},
+        model="meta-llama/Meta-Llama-3.1-70B-Instruct",
+        drop_params=False,
+    )
+
+    assert "tool_choice" not in optional_params
+    assert optional_params["tools"] == TOOLS
+
+
+def test_deepinfra_tool_choice_guard_leaves_other_params_alone(monkeypatch):
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    optional_params = DeepInfraConfig().map_openai_params(
+        non_default_params={
+            "tool_choice": "none",
+            "max_completion_tokens": 99,
+            "temperature": 0.7,
+            "top_p": 0.5,
+        },
+        optional_params={},
+        model="meta-llama/Meta-Llama-3.1-70B-Instruct",
+        drop_params=False,
+    )
+
+    assert optional_params == {
+        "tool_choice": "none",
+        "max_tokens": 99,
+        "temperature": 0.7,
+        "top_p": 0.5,
+    }
+
+
+@pytest.mark.parametrize(
+    "model, expected_temperature",
+    [
+        ("mistralai/Mistral-7B-Instruct-v0.1", 0.0001),
+        ("meta-llama/Meta-Llama-3.1-70B-Instruct", 0),
+    ],
+)
+def test_deepinfra_zero_temperature_rewrite_survives(
+    monkeypatch, model, expected_temperature
+):
+    """Mistral-7B's zero-temperature rewrite emits via the generic copy, so the
+    tool_choice guard must not chain onto that branch and swallow it."""
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    optional_params = DeepInfraConfig().map_openai_params(
+        non_default_params={"temperature": 0},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["temperature"] == expected_temperature
