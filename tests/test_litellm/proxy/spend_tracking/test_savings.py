@@ -719,6 +719,73 @@ def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
     assert reported == pytest.approx(baseline_pays_input - actually_paid)
 
 
+def _chat_model_with_free_cache_reads() -> tuple[str, str, str]:
+    """A chat model the bundled map prices per token but serves cache reads for nothing,
+    derived from the map rather than hardcoded for the same reason its sibling above is:
+    a fixed pick goes stale the moment the registry starts pricing that model's reads.
+    Candidates go through the savings module's own resolver, so the pick is one the code
+    under test can actually price."""
+    for key in sorted(litellm.model_cost):
+        entry = litellm.model_cost[key]
+        if entry.get("mode") != "chat" or entry.get("cache_read_input_token_cost") != 0.0:
+            continue
+        if not entry.get("input_cost_per_token") or not entry.get("output_cost_per_token"):
+            continue
+        identity = _resolve_model(key, None)
+        if identity is None:
+            continue
+        return key, identity.model, identity.provider
+    raise AssertionError("the bundled map has no per-token chat model with free cache reads")
+
+
+def test_a_baseline_that_serves_cache_reads_free_is_not_charged_its_input_rate():
+    """A `0.0` read rate is a published price, not a missing one. Reading the two as the
+    same thing moved the baseline's cached tokens onto its input rate, so a turn routed off
+    such a baseline reported a saving inflated by the whole cached prompt.
+    """
+    baseline_key, baseline_name, baseline_provider = _chat_model_with_free_cache_reads()
+    continuing = _usage(fresh=0, cached=20_000, written=0, out=1_000)
+    reported = compute_autorouter_savings(
+        baseline_model=baseline_key,
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=continuing,
+        conversation_continuing=True,
+    )
+
+    baseline = litellm.get_model_info(baseline_name, baseline_provider)
+    assert baseline.get("cache_read_input_token_cost") == 0.0, "pick a baseline that serves cache reads for free"
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    baseline_reads_free = 1_000 * baseline["output_cost_per_token"]
+    actually_paid = 20_000 * haiku["cache_read_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    assert reported == pytest.approx(baseline_reads_free - actually_paid)
+
+
+def test_a_baseline_with_a_zero_cache_write_price_still_pays_its_input_rate():
+    """The write leg must not copy the read leg's literal reading. The two zeros mean
+    opposite things: no provider gives cache writes away, so a zero there is pricing nobody
+    published and those tokens stay ordinary input. Taking it literally would carry the
+    baseline's 20k prompt for free and report a loss on traffic that saved money.
+    """
+    first_turn = _usage(fresh=0, cached=0, written=20_000, out=1_000)
+    reported = compute_autorouter_savings(
+        baseline_model="deepseek/deepseek-chat",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=first_turn,
+        conversation_continuing=False,
+    )
+
+    baseline = litellm.get_model_info("deepseek-chat", "deepseek")
+    assert baseline.get("cache_creation_input_token_cost") == 0.0, (
+        "pick a baseline publishing a literal 0.0 write price"
+    )
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    baseline_pays_input = 20_000 * baseline["input_cost_per_token"] + 1_000 * baseline["output_cost_per_token"]
+    actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
+    assert reported == pytest.approx(baseline_pays_input - actually_paid)
+
+
 def _breakdown(input_cost: float, output_cost: float = 0.0, **extra: object) -> dict:
     """A `cost_breakdown` as the cost calculator records it on the spend log."""
     return {"input_cost": input_cost, "output_cost": output_cost, **extra}
