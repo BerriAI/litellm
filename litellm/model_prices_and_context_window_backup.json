@@ -22852,6 +22852,37 @@
             "/v1/images/generations"
         ]
     },
+    "fal_ai/fal-ai/nano-banana-2": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "priced by the request's resolution field (0.5K, 1K default, 2K, 4K); the web search and high thinking surcharges are not modeled"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "output_cost_per_image_0.5K": 0.06,
+        "output_cost_per_image_1K": 0.08,
+        "output_cost_per_image_2K": 0.12,
+        "output_cost_per_image_4K": 0.16,
+        "source": "https://fal.ai/models/fal-ai/nano-banana-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/nano-banana-pro": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "comment": "priced by the request's resolution field (1K default, 2K, 4K); the web search surcharge is not modeled"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_1K": 0.15,
+        "output_cost_per_image_2K": 0.15,
+        "output_cost_per_image_4K": 0.3,
+        "source": "https://fal.ai/models/fal-ai/nano-banana-pro",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "fal_ai/openai/gpt-image-2": {
         "litellm_provider": "fal_ai",
         "metadata": {
