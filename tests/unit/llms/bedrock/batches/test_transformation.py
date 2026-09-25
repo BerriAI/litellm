@@ -878,7 +878,7 @@ def test_validate_environment_passes_headers_through(config):
 # Shared BaseBatchesConfig contract suite.
 # --------------------------------------------------------------------------- #
 
-from tests.test_litellm.llms.base_llm.batches.base_batches_config_test import (  # noqa: E402
+from tests.unit.llms.base_llm.batches.base_batches_config_test import (  # noqa: E402
     BatchesConfigContractTests,
 )
 

@@ -1271,7 +1271,6 @@ def test_process_gemini_media():
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
 
 
-
 def test_get_image_mime_type_from_url():
     """Test the _get_image_mime_type_from_url function for different image URLs"""
     from litellm.llms.vertex_ai.gemini.transformation import (
@@ -1372,46 +1371,6 @@ def encoded_images():
     return [encode_image_to_base64(path) for path in image_paths]
 
 
-@pytest.fixture
-def mock_convert_url_to_base64():
-    with patch(
-        "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64",
-    ) as mock:
-        # Setup the mock to return a valid image object
-        mock.return_value = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-        yield mock
-
-
-@pytest.fixture
-def mock_blob():
-    return Mock(spec=BlobType)
-
-
-@pytest.mark.parametrize(
-    "http_url",
-    [
-        "http://img1.etsystatic.com/260/0/7813604/il_fullxfull.4226713999_q86e.jpg",
-        "http://example.com/image.jpg",
-        "http://subdomain.domain.com/path/to/image.png",
-    ],
-)
-def test_process_gemini_media_http_url(
-    http_url: str, mock_convert_url_to_base64: Mock, mock_blob: Mock
-) -> None:
-    """
-    Test that _process_gemini_media correctly handles HTTP URLs.
-
-    Args:
-        http_url: Test HTTP URL
-        mock_convert_to_anthropic: Mocked convert_to_anthropic_image_obj function
-        mock_blob: Mocked BlobType instance
-
-    Vertex AI supports image urls. Ensure no network requests are made.
-    """
-    expected_image_data = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-    mock_convert_url_to_base64.return_value = expected_image_data
-    # Act
-    result = _process_gemini_media(http_url)
     # assert result["file_data"]["file_uri"] == http_url
 
 

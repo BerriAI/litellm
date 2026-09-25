@@ -4,7 +4,7 @@ Integration tests for SageMaker Nova provider.
 These tests require a live SageMaker Nova endpoint and AWS credentials.
 They are skipped by default — run manually with:
 
-    pytest tests/test_litellm/llms/sagemaker/test_sagemaker_nova_integration.py -v --no-header -rN
+    pytest tests/unit/llms/sagemaker/test_sagemaker_nova_integration.py -v --no-header -rN
 
 Prerequisites:
     export AWS_PROFILE=<your-profile>      # or set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
@@ -251,7 +251,7 @@ class TestSagemakerNova2LiteIntegration:
 
     Run with:
         export SAGEMAKER_NOVA2_LITE_ENDPOINT=<your-nova-2-lite-endpoint>
-        pytest tests/test_litellm/llms/sagemaker/test_sagemaker_nova_integration.py::TestSagemakerNova2LiteIntegration -v
+        pytest tests/unit/llms/sagemaker/test_sagemaker_nova_integration.py::TestSagemakerNova2LiteIntegration -v
     """
 
     def test_should_accept_reasoning_effort_low(self):

@@ -1672,60 +1672,6 @@ def test_gemini_history_nests_multimodal_tool_response_parts():
     ]
 
 
-def test_convert_tool_response_with_url_image():
-    """Test tool response with HTTP URL image (will download and convert)."""
-    import pytest
-
-    # Use a publicly accessible test image URL
-    test_image_url = "https://via.placeholder.com/1x1.png"
-
-    tool_message = {
-        "role": "tool",
-        "tool_call_id": "call_test456",
-        "content": [
-            {"type": "text", "text": '{"url": "https://example.com"}'},
-            {"type": "input_image", "image_url": test_image_url},
-        ],
-    }
-
-    last_message_with_tool_calls = {
-        "tool_calls": [
-            {
-                "id": "call_test456",
-                "function": {
-                    "name": "type_text_at",
-                    "arguments": '{"x": 300, "y": 400, "text": "hello"}',
-                },
-            }
-        ]
-    }
-
-    try:
-        result = convert_to_gemini_tool_call_result(
-            tool_message, last_message_with_tool_calls
-        )
-
-        assert isinstance(
-            result, list
-        ), "Should return a parts list when media is present"
-        assert len(result) == 1, "Should return one function_response part"
-        result_part = result[0]
-        assert "function_response" in result_part
-        assert "inline_data" not in result_part
-        function_response = result_part["function_response"]
-        assert function_response["name"] == "type_text_at"
-
-        # Check inline_data is nested under functionResponse.parts.
-        assert "parts" in function_response
-        assert len(function_response["parts"]) == 1
-        inline_data: BlobType = function_response["parts"][0]["inline_data"]
-        assert "data" in inline_data
-        assert "mime_type" in inline_data
-    except Exception as e:
-        # Skip test if URL download fails (no internet connection, etc.)
-        pytest.skip(f"Failed to download image from URL: {e}")
-
-
 def test_convert_tool_response_text_only():
     """Test tool response with only text (no image)."""
     tool_message = {

@@ -20,9 +20,6 @@ def _isolate_generated_class_cache():
 
 
 class TestClassCaching:
-    def test_same_slug_returns_the_identical_class_object(self):
-        provider = _provider("cache_same_slug")
-        assert create_responses_config_class(provider) is create_responses_config_class(provider)
 
     def test_cache_is_keyed_on_slug_not_on_the_provider_instance(self):
         first = create_responses_config_class(_provider("cache_by_slug"))

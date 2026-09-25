@@ -28,7 +28,7 @@ from litellm.llms.bedrock.base_aws_llm import (
     run_aws_signing,
     sign_request_off_loop_if_aws,
 )
-from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
+from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 # Global variable for the base_aws_llm.py file path
 

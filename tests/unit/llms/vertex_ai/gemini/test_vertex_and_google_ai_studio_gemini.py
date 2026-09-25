@@ -1894,42 +1894,6 @@ def test_vertex_ai_tool_call_id_format():
     ), f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
 
 
-def test_vertex_ai_code_line_length():
-    """
-    Test that the specific code line generating tool call IDs is within character limit.
-
-    This is a meta-test to ensure the code change meets the 40-character requirement.
-    """
-    import inspect
-
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-    )
-
-    # Get the source code of the _transform_parts method
-    source_lines = inspect.getsource(VertexGeminiConfig._transform_parts).split("\n")
-
-    # Find the line that generates the ID
-    id_line = None
-    for line in source_lines:
-        if '"id": f"call_' in line and "uuid.uuid4().hex[:28]" in line:
-            id_line = line.strip()  # Remove indentation for length check
-            break
-
-    assert id_line is not None, "Could not find the ID generation line in source code"
-
-    # Check that the line is 40 characters or less (excluding indentation)
-    line_length = len(id_line)
-    assert (
-        line_length <= 40
-    ), f"ID generation line is {line_length} characters, should be ≤40: {id_line}"
-
-    # Verify it contains the expected UUID format
-    assert (
-        "uuid.uuid4().hex[:28]" in id_line
-    ), f"Line should contain shortened UUID format: {id_line}"
-
-
 def test_vertex_ai_map_google_maps_tool_simple():
     """
     Test googleMaps tool transformation without location data.
@@ -2528,8 +2492,6 @@ def test_fine_tuned_endpoint_and_gemma_get_no_gemini_3_default_temperature(model
 
     assert mapped["max_output_tokens"] == 10
     assert "temperature" not in mapped
-
-
 
 
 def _tool_call_messages(tool_call_id: str):

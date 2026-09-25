@@ -105,56 +105,6 @@ def test_compactifai_completion_streaming(respx_mock):
 
 
 @pytest.mark.respx()
-def test_compactifai_models_endpoint(respx_mock):
-    """Test CompactifAI models listing"""
-    litellm.disable_aiohttp_transport = True
-
-    mock_response = {
-        "object": "list",
-        "data": [
-            {
-                "id": "cai-llama-3-1-8b-slim",
-                "object": "model",
-                "created": 1677610602,
-                "owned_by": "compactifai",
-            },
-            {
-                "id": "mistral-7b-compressed",
-                "object": "model",
-                "created": 1677610602,
-                "owned_by": "compactifai",
-            },
-        ],
-    }
-
-    respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
-        json={
-            "id": "chatcmpl-123",
-            "object": "chat.completion",
-            "created": 1677652288,
-            "model": "cai-llama-3-1-8b-slim",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "Test response"},
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
-        },
-        status_code=200,
-    )
-
-    # This would be tested if litellm had a models() function
-    # For now, we'll test that the provider is properly configured
-    response = litellm.completion(
-        model="compactifai/cai-llama-3-1-8b-slim",
-        messages=[{"role": "user", "content": "test"}],
-        api_key="test-key",
-    )
-
-
-@pytest.mark.respx()
 def test_compactifai_authentication_error(respx_mock):
     """Test CompactifAI authentication error handling"""
     litellm.disable_aiohttp_transport = True

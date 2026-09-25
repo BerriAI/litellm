@@ -20,7 +20,7 @@ from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
 from litellm.types.utils import ModelResponse
-from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
+from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 RESOLVED_CREDENTIALS = Credentials(
     access_key="AKIARESOLVED",
