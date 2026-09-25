@@ -285,6 +285,117 @@ def test_chunk_parser_string_output_text_delta_produces_text():
     assert choice.finish_reason is None
 
 
+def test_chunk_parser_filters_commentary_phase_from_interleaved_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    events = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "message", "id": "msg_commentary", "phase": "commentary"},
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {"type": "message", "id": "msg_final", "phase": "final_answer"},
+        },
+        {
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_final",
+            "delta": "こんにちは ",
+        },
+        {
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "item_id": "msg_commentary",
+            "delta": "こんにちは caller",
+        },
+        {"type": "response.output_text.delta", "output_index": 1, "delta": "caller"},
+    ]
+
+    chunks = [iterator._handle_string_chunk(f"data: {json.dumps(event)}\n\n") for event in events]
+    content = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if hasattr(chunk, "choices"))
+
+    assert content == "こんにちは caller"
+    assert content.count("こんにちは caller") == 1
+
+
+@pytest.mark.parametrize("phase", [None, "unknown"])
+def test_chunk_parser_preserves_text_when_phase_is_missing_or_unknown(phase):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    item = {"type": "message", "id": "msg_unclassified"}
+    if phase is not None:
+        item["phase"] = phase
+
+    iterator.chunk_parser({"type": "response.output_item.added", "output_index": 0, "item": item})
+    result = iterator.chunk_parser(
+        {
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "item_id": "msg_unclassified",
+            "delta": "legacy text",
+        }
+    )
+
+    assert result.choices[0].delta.content == "legacy text"
+
+
+def test_chunk_parser_keeps_tool_call_streaming_untouched_by_message_phase_filter():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    added = iterator.chunk_parser(
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "lookup",
+                "arguments": "",
+                "phase": "commentary",
+            },
+        }
+    )
+    arguments = iterator.chunk_parser(
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "delta": '{"city":"Tokyo"}',
+        }
+    )
+    iterator.chunk_parser(
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {"type": "message", "id": "msg_final", "phase": "final_answer"},
+        }
+    )
+    final_text = iterator.chunk_parser(
+        {
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_final",
+            "delta": "Done",
+        }
+    )
+
+    assert added.choices[0].delta.tool_calls[0].function.name == "lookup"
+    assert arguments.choices[0].delta.tool_calls[0].function.arguments == '{"city":"Tokyo"}'
+    assert final_text.choices[0].delta.content == "Done"
+
+
 def test_chunk_parser_enum_output_text_delta_produces_text():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
