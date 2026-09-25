@@ -25537,6 +25537,11 @@ export interface components {
              */
             severity_threshold?: string | null;
             /**
+             * Skip Assistant Message In Guardrail
+             * @description When True, skip assistant-role messages in request history when building guardrail evaluation inputs. When False, include them even if the global litellm.skip_assistant_message_in_guardrail setting is True. When None, inherit the global setting. Does not skip checks on newly generated responses.
+             */
+            skip_assistant_message_in_guardrail?: boolean | null;
+            /**
              * Skip System Message In Guardrail
              * @description When True, unified guardrails skip system-role messages when building evaluation inputs (texts and structured_messages). When False, system messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_system_message_in_guardrail setting. For Anthropic /v1/messages, the flag applies only to the trusted top-level system prompt. In-sequence system entries are untrusted client input and remain in texts and structured_messages.
              */
@@ -34732,6 +34737,11 @@ export interface components {
              * @description The Singulr Guardrail ID. Get guardrail ID from Singulr Platform.
              */
             singulr_guardrail_id?: string | null;
+            /**
+             * Skip Assistant Message In Guardrail
+             * @description When True, skip assistant-role messages in request history when building guardrail evaluation inputs. When False, include them even if the global litellm.skip_assistant_message_in_guardrail setting is True. When None, inherit the global setting. Does not skip checks on newly generated responses.
+             */
+            skip_assistant_message_in_guardrail?: boolean | null;
             /**
              * Skip System Message In Guardrail
              * @description When True, unified guardrails skip system-role messages when building evaluation inputs (texts and structured_messages). When False, system messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_system_message_in_guardrail setting. For Anthropic /v1/messages, the flag applies only to the trusted top-level system prompt. In-sequence system entries are untrusted client input and remain in texts and structured_messages.

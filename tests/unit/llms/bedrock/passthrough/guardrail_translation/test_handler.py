@@ -31,6 +31,7 @@ def _make_guardrail(apply_result: dict) -> MagicMock:
     g.apply_guardrail = AsyncMock(return_value=apply_result)
     g.skip_system_message_in_guardrail = False
     g.skip_tool_message_in_guardrail = False
+    g.skip_assistant_message_in_guardrail = False
     return g
 
 

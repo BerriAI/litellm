@@ -940,6 +940,16 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    skip_assistant_message_in_guardrail: bool | None = Field(
+        default=None,
+        description=(
+            "When True, skip assistant-role messages in request history when building "
+            "guardrail evaluation inputs. When False, include them even if the global "
+            "litellm.skip_assistant_message_in_guardrail setting is True. When None, "
+            "inherit the global setting. Does not skip checks on newly generated responses."
+        ),
+    )
+
     scan_only_tool_results: bool | None = Field(
         default=None,
         description=(

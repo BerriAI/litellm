@@ -82,6 +82,7 @@ def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
         on_flagged=litellm_params.on_flagged,
         skip_system_message_in_guardrail=litellm_params.skip_system_message_in_guardrail,
         skip_tool_message_in_guardrail=litellm_params.skip_tool_message_in_guardrail,
+        skip_assistant_message_in_guardrail=litellm_params.skip_assistant_message_in_guardrail,
         advisory_system_message=litellm_params.advisory_system_message,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lakera_v2_callback)
