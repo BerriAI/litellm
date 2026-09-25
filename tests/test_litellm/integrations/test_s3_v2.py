@@ -3223,6 +3223,75 @@ def test_invalid_callback_params_flush_attempts_falls_back_to_constructor_value(
     assert logger.s3_max_flush_attempts == 2
 
 
+def test_callback_params_queue_size_wins_over_constructor() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_queue_size=7,
+        s3_callback_params_override={"s3_max_queue_size": 4},
+    )
+
+    assert logger.s3_max_queue_size == 4
+    assert logger.max_queue_size == 4
+
+
+def test_invalid_callback_params_queue_size_falls_back_to_constructor_value() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_queue_size=7,
+        s3_callback_params_override={"s3_max_queue_size": "abc"},
+    )
+
+    assert logger.s3_max_queue_size == 7
+
+
+def test_invalid_constructor_queue_size_falls_back_to_default() -> None:
+    from litellm.integrations.custom_batch_logger import CustomBatchLogger
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_queue_size="abc",
+    )
+
+    assert logger.s3_max_queue_size == CustomBatchLogger.DEFAULT_MAX_QUEUE_SIZE
+    assert logger.max_queue_size == CustomBatchLogger.DEFAULT_MAX_QUEUE_SIZE
+
+
+@pytest.mark.asyncio
+async def test_configured_queue_size_is_what_enqueue_enforces() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_flush_interval=3600,
+        s3_max_queue_size=2,
+    )
+    assert logger.max_queue_size == 2
+
+    for index in range(4):
+        await logger._async_log_event_base(
+            kwargs={
+                "call_type": "acompletion",
+                "standard_logging_object": {"id": f"event-{index}", "metadata": {}},
+            },
+            response_obj=None,
+            start_time=datetime.utcnow(),
+            end_time=datetime.utcnow(),
+        )
+
+    assert len(logger.log_queue) == 2
+    assert frozenset(element.payload["id"] for element in logger.log_queue) == {"event-0", "event-1"}
+
+
 class _StatusPut:
     def __init__(self, responses: "list[MagicMock | Exception]") -> None:
         self.responses = responses

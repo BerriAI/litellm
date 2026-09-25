@@ -36,6 +36,7 @@ from litellm.integrations.s3 import (
     resolve_s3_log_prompts_only,
     resolve_s3_max_concurrent_uploads,
     resolve_s3_max_flush_attempts,
+    resolve_s3_max_queue_size,
     resolve_sse_params,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -127,6 +128,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_log_prompts_only: bool | None = None,
         s3_max_concurrent_uploads: int = DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
         s3_max_flush_attempts: int | None = None,
+        s3_max_queue_size: int | None = None,
         s3_batch_file_upload: bool = False,
         s3_callback_params_override: dict | None = None,
         **kwargs,
@@ -171,6 +173,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_log_prompts_only=s3_log_prompts_only,
                 s3_max_concurrent_uploads=s3_max_concurrent_uploads,
                 s3_max_flush_attempts=s3_max_flush_attempts,
+                s3_max_queue_size=s3_max_queue_size,
                 s3_batch_file_upload=s3_batch_file_upload,
             )
             self._upload_limiter = AdaptiveConcurrencyLimiter(
@@ -198,6 +201,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 flush_lock=self.flush_lock,
                 flush_interval=s3_flush_interval,
                 batch_size=s3_batch_size,
+                max_queue_size=self.s3_max_queue_size,
             )
             self.log_queue: list[s3BatchLoggingElement] = []
             self._dropped_at_enqueue: int = 0
@@ -236,6 +240,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_log_prompts_only: bool | None = None,
         s3_max_concurrent_uploads: int = DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
         s3_max_flush_attempts: int | None = None,
+        s3_max_queue_size: int | None = None,
         s3_batch_file_upload: bool = False,
         params_source: dict | None = None,
     ):
@@ -306,6 +311,12 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             s3_max_flush_attempts, DEFAULT_S3_MAX_FLUSH_ATTEMPTS
         )
         self.s3_max_flush_attempts = resolve_s3_max_flush_attempts(configured_attempts, constructor_attempts)
+
+        configured_queue_size: Final = params.get("s3_max_queue_size")
+        constructor_queue_size: Final = resolve_s3_max_queue_size(
+            s3_max_queue_size, CustomBatchLogger.DEFAULT_MAX_QUEUE_SIZE
+        )
+        self.s3_max_queue_size = resolve_s3_max_queue_size(configured_queue_size, constructor_queue_size)
 
         self.s3_batch_file_upload = s3_batch_file_upload or resolve_s3_batch_file_upload(
             params.get("s3_batch_file_upload")

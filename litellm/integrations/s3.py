@@ -58,6 +58,10 @@ def resolve_s3_max_flush_attempts(configured: object, fallback: int) -> int:
     return _resolve_positive_int("s3_max_flush_attempts", configured, fallback)
 
 
+def resolve_s3_max_queue_size(configured: object, fallback: int) -> int:
+    return _resolve_positive_int("s3_max_queue_size", configured, fallback)
+
+
 def resolve_s3_batch_file_upload(configured: object) -> bool:
     if configured is None or configured == "":
         return False
