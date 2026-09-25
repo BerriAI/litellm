@@ -2371,6 +2371,20 @@
               ],
               "title": "Access Group Ids"
             },
+            "agent_access_groups": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Access Groups"
+            },
             "agent_card_params": {
               "$ref": "#/components/schemas/AgentCard"
             },
@@ -2935,6 +2949,20 @@
                 }
               ],
               "title": "Access Group Ids"
+            },
+            "agent_access_groups": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Access Groups"
             },
             "agent_card_params": {
               "additionalProperties": true,
@@ -3782,6 +3810,20 @@
                 }
               ],
               "title": "Access Group Ids"
+            },
+            "agent_access_groups": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Access Groups"
             },
             "agent_card_params": {
               "$ref": "#/components/schemas/AgentCard"
