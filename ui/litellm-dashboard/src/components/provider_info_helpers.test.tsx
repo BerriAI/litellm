@@ -73,6 +73,17 @@ describe("provider_info_helpers", () => {
       expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
     });
 
+    it("should map topxai slug and TOPXAI enum key to the TopxAI display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("topxai");
+      expect(fromSlug.displayName).toBe(Providers.TOPXAI);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.TOPXAI]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("TOPXAI");
+      expect(fromEnumKey.displayName).toBe(Providers.TOPXAI);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.TOPXAI]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -225,6 +236,10 @@ describe("provider_info_helpers", () => {
 
     it("should return an edenai model placeholder for EDENAI provider", () => {
       expect(getPlaceholder(Providers.EDENAI)).toBe("edenai/openai/gpt-mini-latest");
+    });
+
+    it("should return a topxai model placeholder for TOPXAI provider", () => {
+      expect(getPlaceholder(Providers.TOPXAI)).toBe("topxai/claude-sonnet-5");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {

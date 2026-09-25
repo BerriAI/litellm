@@ -2100,6 +2100,23 @@
         "a2a": false
       }
     },
+    "topxai": {
+      "display_name": "TopxAI (`topxai`)",
+      "url": "https://docs.litellm.ai/docs/providers/topxai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "snowflake": {
       "display_name": "Snowflake (`snowflake`)",
       "url": "https://docs.litellm.ai/docs/providers/snowflake",
