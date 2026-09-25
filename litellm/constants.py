@@ -948,6 +948,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
+    "http://localhost:8402/v1",  # openzoo: local `npx openzoo` x402 proxy; hosted api.openzoo.fun needs an ozk_live_ key
 ]
 
 
@@ -1020,6 +1021,7 @@ openai_compatible_providers: Final[list] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "scx-ai",
+    "openzoo",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
