@@ -52,8 +52,9 @@ def test_keys_cannot_bypass_lifecycle_or_delegated_only_mode(state: dict[str, ob
     assert isinstance(actor_admission_failure(agent(**state), None), AgentIdentityFailure)
 
 
-def test_keys_remain_valid_for_enabled_autonomous_agents() -> None:
-    assert actor_admission_failure(agent(execution_mode="autonomous"), None) is None
+@pytest.mark.parametrize("mode", ["autonomous", "both", "delegated"])
+def test_keys_cannot_impersonate_an_entra_bound_agent(mode: str) -> None:
+    assert isinstance(actor_admission_failure(agent(execution_mode=mode), None), AgentIdentityFailure)
 
 
 @pytest.mark.parametrize(
@@ -360,14 +361,16 @@ async def test_managed_invocation_requires_database(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_autonomous_app_preserves_persisted_virtual_key_admission() -> None:
+async def test_autonomous_app_rejects_persisted_virtual_key_impersonation() -> None:
     policy: Final = agent(execution_mode="autonomous")
     database: Final = MagicMock()
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
     auth: Final = UserAPIKeyAuth(agent_id="agent", api_key="persisted-key")
-    await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
-    assert auth.managed_agent_policy == policy
-    assert auth.billing_agent_policy == policy
+    with pytest.raises(HTTPException, match="bound identity provider token") as denied:
+        await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
+    assert denied.value.status_code == 403
+    assert auth.managed_agent_policy is None
+    assert auth.billing_agent_policy is None
 
 
 @pytest.mark.asyncio
@@ -457,3 +460,14 @@ def test_managed_inference_ignores_unsupported_query_model():
     assert (
         managed_inference_request("/v1/messages", {"model": "body"}, {}, None, query_model="query")["model"] == "body"
     )
+
+
+@pytest.mark.parametrize("route", ["/realtime", "/v1/realtime", "/openai/v1/realtime"])
+def test_managed_realtime_requires_a_model_and_ignores_completion_defaults(route: str) -> None:
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
+
+    with pytest.raises(HTTPException, match="explicit or configured model"):
+        managed_inference_request(route, {}, {"completion_model": "allowed-default"}, "cli")
+    assert managed_inference_request(
+        route, {"model": "requested"}, {"completion_model": "allowed-default"}, "cli"
+    )["model"] == "requested"

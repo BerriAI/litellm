@@ -5299,3 +5299,21 @@ def test_baseline_estimate_metadata_comes_from_the_logging_stamp() -> None:
     assert result["autorouter_savings_estimate"] == recorded
     absent: Final = _get_spend_logs_metadata({"autorouter_savings_estimate": supplied})  # mutable-ok: legacy metadata helper accepts dicts
     assert absent["autorouter_savings_estimate"] is None
+
+
+@pytest.mark.parametrize("billing_agent", [None, "authenticated-agent"])
+def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_agent: str | None) -> None:
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_params": {"metadata": {
+            "user_api_key": "test-key",
+            "agent_id": "header-selected-agent",
+            "billing_agent_id": billing_agent,
+        }},
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj={"id": "request"},
+        start_time=datetime.datetime.now(timezone.utc), end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["agent_id"] == "header-selected-agent"
+    assert payload["billing_agent_id"] == billing_agent
