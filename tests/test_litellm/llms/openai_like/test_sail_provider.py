@@ -1100,6 +1100,7 @@ class TestProviderListBlastRadius:
             "text-completion-codestral",
             "ollama",
             "gigachat",
+            "nadir",
         }
 
         assert len(openai_compatible_endpoints) == len(set(openai_compatible_endpoints))
