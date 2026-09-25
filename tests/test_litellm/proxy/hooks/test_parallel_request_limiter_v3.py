@@ -29,6 +29,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitedModel,
     RateLimitResponse,
     RequestRateLimiterStash,
+    TagRateLimit,
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
@@ -5004,6 +5005,158 @@ async def test_per_tag_untagged_request_governed_by_key_limit_v3(monkeypatch):
         await call({"tags": ["cell-99"]})
     assert exc_info.value.status_code == 429
     assert "tag_per_key" not in str(exc_info.value.detail)
+
+
+def _static_tag_limits(limits: dict[str, TagRateLimit]):
+    calls: list[tuple[str, ...]] = []
+
+    async def resolver(tag_names: Sequence[str]):
+        calls.append(tuple(tag_names))
+        return {name: limits[name] for name in tag_names if name in limits}
+
+    return resolver, calls
+
+
+@pytest.mark.asyncio
+async def test_tag_object_rpm_limit_enforced_v3(monkeypatch):
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _request_stash.set(None)
+    resolver, calls = _static_tag_limits({"cell-1": TagRateLimit(rpm_limit=2, tpm_limit=None)})
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        tag_rate_limit_resolver=resolver,
+    )
+
+    async def call(api_key: str, tags: list[str]) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token(api_key)),
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "metadata": {"tags": tags}},
+            call_type="",
+        )
+
+    await call("sk-a", ["cell-1"])
+    await call("sk-b", ["cell-1", "cell-2"])
+    with pytest.raises(HTTPException) as exc_info:
+        await call("sk-a", ["cell-1"])
+    assert exc_info.value.status_code == 429
+    assert "tag" in str(exc_info.value.detail)
+
+    for _ in range(3):
+        await call("sk-a", ["cell-2"])
+        await call("sk-a", [])
+    assert calls == [("cell-1",), ("cell-1", "cell-2"), ("cell-1",), ("cell-2",), ("cell-2",), ("cell-2",)]
+
+
+@pytest.mark.asyncio
+async def test_tag_429_names_the_tag_that_is_over_its_limit(monkeypatch):
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _request_stash.set(None)
+    resolver, _ = _static_tag_limits(
+        {
+            "cell-ok": TagRateLimit(rpm_limit=100, tpm_limit=None),
+            "cell-blocked": TagRateLimit(rpm_limit=1, tpm_limit=None),
+        }
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        tag_rate_limit_resolver=resolver,
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-tag-order"))
+
+    async def call(tags: list[str]) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "metadata": {"tags": tags}},
+            call_type="",
+        )
+
+    await call(["cell-blocked"])
+    with pytest.raises(HTTPException) as exc_info:
+        await call(["cell-ok", "cell-blocked"])
+    assert exc_info.value.status_code == 429
+    assert "cell-blocked" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_tag_object_tpm_limit_enforced_v3(monkeypatch):
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    _request_stash.set(None)
+    resolver, _ = _static_tag_limits({"cell-1": TagRateLimit(rpm_limit=None, tpm_limit=100)})
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        tag_rate_limit_resolver=resolver,
+    )
+    monkeypatch.setattr(handler, "get_rate_limit_type", lambda: "total")
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-tag-tpm"))
+
+    async def call(tags: list[str]) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "metadata": {"tags": tags}},
+            call_type="",
+        )
+
+    await call(["cell-1"])
+    tokens_before_success = await local_cache.async_get_cache("{tag:cell-1}:tokens") or 0
+    await handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {"metadata": {"user_api_key_hash": user_api_key_dict.api_key}},
+            "model": "gpt-3.5-turbo",
+        },
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=60, completion_tokens=60, total_tokens=120)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await local_cache.async_get_cache("{tag:cell-1}:tokens") == tokens_before_success + 120
+
+    with pytest.raises(HTTPException) as exc_info:
+        await call(["cell-1"])
+    assert exc_info.value.status_code == 429
+    await call([])
+
+
+@pytest.mark.asyncio
+async def test_resolve_tag_rate_limits_from_db_reads_budget_row(monkeypatch):
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.models.tag import LiteLLM_TagTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import resolve_tag_rate_limits_from_db
+    from litellm.proxy.utils import PrismaClient
+
+    async def fake_batch(
+        tag_names: Sequence[str],
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: DualCache,
+    ) -> dict[str, LiteLLM_TagTable]:
+        return {
+            "limited": LiteLLM_TagTable(
+                tag_name="limited",
+                litellm_budget_table=LiteLLM_BudgetTable(rpm_limit=3, tpm_limit=None),
+            ),
+            "spend-only": LiteLLM_TagTable(
+                tag_name="spend-only",
+                litellm_budget_table=LiteLLM_BudgetTable(max_budget=5.0),
+            ),
+            "bare": LiteLLM_TagTable(tag_name="bare"),
+        }
+
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    monkeypatch.setattr(auth_checks, "get_tag_objects_batch", fake_batch)
+
+    assert dict(await resolve_tag_rate_limits_from_db(["limited", "spend-only", "bare"])) == {
+        "limited": TagRateLimit(rpm_limit=3, tpm_limit=None)
+    }
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    assert dict(await resolve_tag_rate_limits_from_db(["limited"])) == {}
 
 
 # --------------------------------------------------------------------------
