@@ -6242,6 +6242,88 @@ async def test_master_key_auth_substitutes_alias_for_api_key():
 
 
 @pytest.mark.asyncio
+async def test_wrong_master_key_without_db_returns_clear_auth_error():
+    """Regression for https://github.com/BerriAI/litellm/issues/12273.
+
+    Wrong bearer + no DB previously returned ``\"No connected db.\"``, which
+    sends operators chasing Postgres on master-key-only deployments. The
+    message must state the token is invalid / only the master key works.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
+    attrs["prisma_client"] = None
+    _orig = {k: getattr(_proxy_server_mod, k, None) for k in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-not-the-master-key",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        message = str(exc_info.value.message)
+        assert "No connected db" not in message
+        assert "master key" in message.lower()
+    finally:
+        for k, v in _orig.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_wrong_master_key_without_db_preserves_no_db_connection_type():
+    """Pin ``ProxyErrorTypes.no_db_connection`` for the wrong-key / no-DB
+    path. ``allow_requests_on_db_unavailable`` keys off this type; switching
+    it to ``auth_error`` breaks HA fallback (see closed PRs #20837/#28389).
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
+    attrs["prisma_client"] = None
+    _orig = {k: getattr(_proxy_server_mod, k, None) for k in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-not-the-master-key",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        assert exc_info.value.type == ProxyErrorTypes.no_db_connection
+    finally:
+        for k, v in _orig.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_auth_sets_end_user_id_when_builder_skips_it():
     """Defense-in-depth: ``_user_api_key_auth_builder`` has multiple
     early-return paths (master_key=None, /user/auth route, JWT

@@ -2103,8 +2103,17 @@ async def _user_api_key_auth_builder(
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
+            # Keep type=no_db_connection: auth_exception_handler /
+            # allow_requests_on_db_unavailable keys off this type for HA
+            # fallback. Only the operator-facing message is corrected here
+            # (issue #12273 — "No connected db." misled master-key-only setups).
             raise ProxyException(
-                message="No connected db.",
+                message=(
+                    "Authentication Error, Invalid proxy server token passed. "
+                    "Token does not match the configured master key, and no "
+                    "database is connected to look up additional API keys. "
+                    "Set DATABASE_URL to enable virtual keys."
+                ),
                 type=ProxyErrorTypes.no_db_connection,
                 code=400,
                 param=None,
