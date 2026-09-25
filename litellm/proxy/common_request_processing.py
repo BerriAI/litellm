@@ -32,6 +32,7 @@ from starlette.types import Receive, Scope, Send
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -102,8 +103,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
+    SSE_STREAM_START_TAIL,
+    advance_sse_tail,
     coerce_keepalive_interval,
     resolve_ttft_keepalive_interval,
+    seal_open_sse_frame,
     wrap_sse_stream_with_keepalive_pings,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
@@ -998,6 +1002,17 @@ async def create_response(
         # Now get the first chunk from the actual generator
         first_chunk_value = await _buffer_first_chunk_honoring_disconnect(generator, request)
         resolved_headers: Final = await _resolve_stream_headers(headers, refresh_headers)
+
+        if isinstance(first_chunk_value, AnthropicErrorSseFrame):
+            with contextlib.suppress(Exception):
+                await generator.aclose()
+            return JSONResponse(
+                status_code=first_chunk_value.status_code,
+                content=first_chunk_value.json_body(
+                    error_body_call_id(general_settings, resolved_headers.get(LITELLM_CALL_ID_HEADER))
+                ),
+                headers=resolved_headers,
+            )
 
         if first_chunk_value is not None:
             try:
@@ -3852,6 +3867,7 @@ class ProxyBaseLLMRequestProcessing:
         serialize_error: StreamErrorSerializer,
         request: Request | None = None,
         flush_tail: Callable[[], bytes] | None = None,
+        seal_open_frame: Callable[[bytes], str] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
@@ -3861,6 +3877,12 @@ class ProxyBaseLLMRequestProcessing:
         ``flush_tail`` runs once after the upstream iterator completes cleanly and
         its non-empty result is yielded, so a serializer that buffers bytes across
         chunks can emit anything still held at end of stream.
+
+        ``seal_open_frame`` is given the tail of what has been yielded when the
+        error frame goes out, and what it returns is written first. A passthrough
+        relays raw upstream bytes, so an upstream that hangs up mid-frame leaves the
+        client inside an open frame, where an error frame would be swallowed or
+        misparsed instead of raised.
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
@@ -3877,6 +3899,7 @@ class ProxyBaseLLMRequestProcessing:
         stream_completed = False
         client_disconnected = False
         delivered_chunk = False
+        recent_tail = SSE_STREAM_START_TAIL  # rebind-ok: rolling window over the yielded bytes
         try:
             str_so_far = ""
             async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -3922,7 +3945,9 @@ class ProxyBaseLLMRequestProcessing:
                 # False and refunds. A keepalive ping carries no provider output,
                 # so it must not suppress that refund.
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
-                yield serialize_chunk(chunk)
+                serialized = serialize_chunk(chunk)
+                recent_tail = advance_sse_tail(recent_tail, serialized)
+                yield serialized
             held_tail: Final = flush_tail() if flush_tail is not None else b""
             if held_tail:
                 yield serialize_chunk(held_tail)
@@ -3970,7 +3995,9 @@ class ProxyBaseLLMRequestProcessing:
                 code=stream_error_status,
             )
             stream_completed = True
-            yield serialize_error(proxy_exception)
+            error_frame: Final = serialize_error(proxy_exception)
+            seal: Final = "" if seal_open_frame is None else seal_open_frame(recent_tail)
+            yield seal + error_frame if seal else error_frame
         finally:
             await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
                 request=request,
@@ -3992,7 +4019,7 @@ class ProxyBaseLLMRequestProcessing:
         restamp_model: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
-        Anthropic /messages and Google /generateContent streaming data generator require SSE events.
+        Anthropic /messages streaming data generator, which requires SSE events.
 
         Returns the underlying ``async_streaming_data_generator`` configured with
         SSE serializers directly (rather than re-wrapping it in another
@@ -4010,11 +4037,13 @@ class ProxyBaseLLMRequestProcessing:
             request_data=request_data,
             proxy_logging_obj=proxy_logging_obj,
             serialize_chunk=ProxyBaseLLMRequestProcessing._sse_chunk_serializer(restamper),
-            serialize_error=lambda proxy_exc: (
-                f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n"
+            serialize_error=lambda proxy_exc: anthropic_error_sse_frame(
+                status_code=error_status_code(proxy_exc, status.HTTP_500_INTERNAL_SERVER_ERROR),
+                raw_message=proxy_exc.message,
             ),
             request=request,
             flush_tail=None if restamper is None else restamper.flush,
+            seal_open_frame=seal_open_sse_frame,
         )
 
     @overload
