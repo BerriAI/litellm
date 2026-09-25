@@ -112,6 +112,92 @@ tests:
             name: CUSTOM_VAR
             value: "custom_value"
 
+  - it: should hand deployStandalone credentials over as separate env vars, not a built URL
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      db:
+        deployStandalone: true
+        useExisting: false
+    asserts:
+      # Assembling the URL in the template interpolated the password raw, so a
+      # password holding any of : / ? # [ ] @ + reshaped the URL and the Job
+      # connected to the wrong host, or to none. The entrypoint builds the URL
+      # from these four instead, percent-encoding as it goes, which is what the
+      # proxy Deployment already relies on for this same case.
+      # The bug class, pinned independently of how a URL would be spelled: the
+      # Job must carry no connection string at all for this case.
+      - notMatchRegexRaw:
+          pattern: "postgresql://"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-litellm-dbcredentials
+                key: username
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-litellm-dbcredentials
+                key: password
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST
+            value: RELEASE-NAME-postgresql
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_NAME
+            value: litellm
+
+  - it: should keep a password holding URL-special characters out of the rendered Job
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      db:
+        deployStandalone: true
+        useExisting: false
+      postgresql:
+        auth:
+          password: "p@ss/w+rd="
+    asserts:
+      # The password now only ever travels through the dbcredentials Secret, so
+      # it is neither mangled into a URL nor readable in `kubectl get job -o yaml`
+      # and the Helm release secret.
+      - notMatchRegexRaw:
+          pattern: "p@ss/w\\+rd="
+
+  - it: should follow postgresql.auth.database for the standalone database name
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      db:
+        deployStandalone: true
+        useExisting: false
+      postgresql:
+        auth:
+          database: custom-db
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_NAME
+            value: custom-db
+
   - it: should not include DATABASE_URL when deployStandalone is false
     template: migrations-job.yaml
     set:
