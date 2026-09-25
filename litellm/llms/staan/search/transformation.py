@@ -270,10 +270,12 @@ class StaanSearchConfig(BaseSearchConfig):
         min_score: Final = optional_params.get("min_score")
         full_content: Final = optional_params.get("full_content")
 
-        if should_fetch_snippets and max_snippets is not None and not 1 <= max_snippets <= 10:
-            raise ValueError("max_snippets must be between 1 and 10")
-        if should_fetch_snippets and min_score is not None and not 0 <= min_score <= 1:
-            raise ValueError("min_score must be between 0 and 1")
+        if should_fetch_snippets and max_snippets is not None:
+            if isinstance(max_snippets, bool) or not isinstance(max_snippets, int) or not 1 <= max_snippets <= 10:
+                raise ValueError("max_snippets must be between 1 and 10")
+        if should_fetch_snippets and min_score is not None:
+            if isinstance(min_score, bool) or not isinstance(min_score, (int, float)) or not 0 <= min_score <= 1:
+                raise ValueError("min_score must be between 0 and 1")
 
         enrichment_entries: Final = (("extra_snippets", True),) if should_fetch_snippets else ()
         max_snippet_entry: Final = (
