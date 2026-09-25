@@ -963,7 +963,13 @@
         "supports_max_reasoning_effort": {
           "type": "boolean"
         },
+        "supports_mid_conversation_output_config": {
+          "type": "boolean"
+        },
         "supports_mid_conversation_system": {
+          "type": "boolean"
+        },
+        "supports_mid_conversation_tool_changes": {
           "type": "boolean"
         },
         "supports_minimal_reasoning_effort": {
@@ -1018,6 +1024,9 @@
           "type": "boolean"
         },
         "supports_thinking_cache_preservation": {
+          "type": "boolean"
+        },
+        "supports_thinking_display_updates": {
           "type": "boolean"
         },
         "supports_tool_choice": {

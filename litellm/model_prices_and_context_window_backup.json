@@ -812,6 +812,7 @@
         "prompt_cache_min_tokens": 2048
     },
     "anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -840,6 +841,7 @@
         "output_cost_per_token_batches": 2.5e-06
     },
     "anthropic.claude-haiku-4-5@20251001": {
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -1241,6 +1243,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-opus-4-7": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1295,6 +1298,7 @@
         "supports_output_config": true
     },
     "global.anthropic.claude-opus-4-7": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1333,6 +1337,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-opus-4-7": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1371,6 +1376,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-opus-4-7": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1409,6 +1415,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-opus-4-7": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1447,6 +1454,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-fable-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -1485,6 +1494,9 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "anthropic.claude-fable-5-1": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
@@ -1524,6 +1536,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-fable-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -1562,6 +1576,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-fable-5-1": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
@@ -1601,6 +1618,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-fable-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 1.1e-06,
@@ -1639,6 +1658,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-fable-5-1": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 2.75e-07,
@@ -1678,6 +1700,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-fable-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 1.1e-06,
@@ -1716,6 +1740,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-fable-5-1": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 2.75e-07,
@@ -1754,6 +1781,8 @@
         "prompt_cache_min_tokens": 512
     },
     "anthropic.claude-opus-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1792,6 +1821,9 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "anthropic.claude-opus-5-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1832,6 +1864,8 @@
         "supports_forced_tool_use": false
     },
     "global.anthropic.claude-opus-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1870,6 +1904,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-opus-5-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1910,6 +1947,8 @@
         "supports_forced_tool_use": false
     },
     "us.anthropic.claude-opus-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1948,6 +1987,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-opus-5-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1988,6 +2030,8 @@
         "supports_forced_tool_use": false
     },
     "eu.anthropic.claude-opus-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2026,6 +2070,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-opus-5-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2066,6 +2113,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-opus-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2104,6 +2153,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-opus-5-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2144,6 +2196,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-opus-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2182,6 +2236,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-opus-5-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2222,6 +2279,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-opus-4-8": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2261,6 +2320,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-opus-4-8": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2300,6 +2361,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-opus-4-8": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2339,6 +2402,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-opus-4-8": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2378,6 +2443,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-opus-4-8": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2417,6 +2484,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-opus-4-8": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2456,6 +2525,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-opus-4-7": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2493,6 +2563,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-sonnet-5": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -2532,6 +2603,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-sonnet-5": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -2571,6 +2643,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-sonnet-5": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -2610,6 +2683,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-sonnet-5": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -2649,6 +2723,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-sonnet-5": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -2688,6 +2763,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-sonnet-5": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -3191,6 +3267,7 @@
         "supports_tool_choice": true
     },
     "apac.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
@@ -22330,6 +22407,7 @@
         "prompt_cache_min_tokens": 2048
     },
     "eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -31191,6 +31269,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -36295,6 +36374,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -46240,6 +46320,7 @@
         "prompt_cache_min_tokens": 2048
     },
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -46435,6 +46516,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us-gov.anthropic.claude-sonnet-5": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -46469,6 +46551,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "us-gov.anthropic.claude-opus-4-8": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 7.5e-06,
@@ -46503,6 +46587,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "us-gov.anthropic.claude-opus-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 7.5e-06,
         "cache_creation_input_token_cost_above_1hr": 1.2e-05,
@@ -46536,6 +46622,9 @@
         "supports_xhigh_reasoning_effort": true
     },
     "us-gov.anthropic.claude-opus-5-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6e-06,
         "cache_creation_input_token_cost_above_1hr": 9.6e-06,
@@ -46571,6 +46660,9 @@
         "supports_forced_tool_use": false
     },
     "us-gov.anthropic.claude-fable-5-1": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "cache_creation_input_token_cost": 1.5e-05,
         "cache_creation_input_token_cost_above_1hr": 2.4e-05,
         "cache_read_input_token_cost": 3e-07,
@@ -46708,6 +46800,7 @@
         "supports_vision": true
     },
     "au.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -58436,6 +58529,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.5e-06,
         "cache_creation_input_token_cost_above_1hr": 2.4e-06,
         "cache_read_input_token_cost": 1.2e-07,
@@ -58462,6 +58556,7 @@
         "prompt_cache_min_tokens": 4096
     },
     "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_thinking_display_updates": true,
         "cache_creation_input_token_cost": 1.5e-06,
         "cache_creation_input_token_cost_above_1hr": 2.4e-06,
         "cache_read_input_token_cost": 1.2e-07,
@@ -64077,6 +64172,7 @@
         "supports_tool_choice": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-sonnet-5": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -64110,6 +64206,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-opus-4-8": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 7.5e-06,
@@ -64143,6 +64241,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-opus-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 7.5e-06,
         "cache_creation_input_token_cost_above_1hr": 1.2e-05,
@@ -64175,6 +64275,9 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-opus-5-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6e-06,
         "cache_creation_input_token_cost_above_1hr": 9.6e-06,
@@ -64210,6 +64313,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-west-1/anthropic.claude-fable-5-1": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "cache_creation_input_token_cost": 1.5e-05,
         "cache_creation_input_token_cost_above_1hr": 2.4e-05,
         "cache_read_input_token_cost": 3e-07,
@@ -64331,6 +64437,7 @@
         "supports_tool_choice": true
     },
     "bedrock/us-gov-east-1/anthropic.claude-sonnet-5": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -64364,6 +64471,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-east-1/anthropic.claude-opus-4-8": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 7.5e-06,
@@ -64397,6 +64506,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-east-1/anthropic.claude-opus-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 7.5e-06,
         "cache_creation_input_token_cost_above_1hr": 1.2e-05,
@@ -64429,6 +64540,9 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-east-1/anthropic.claude-opus-5-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6e-06,
         "cache_creation_input_token_cost_above_1hr": 9.6e-06,
@@ -64464,6 +64578,9 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-east-1/anthropic.claude-fable-5-1": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "cache_creation_input_token_cost": 1.5e-05,
         "cache_creation_input_token_cost_above_1hr": 2.4e-05,
         "cache_read_input_token_cost": 3e-07,
@@ -76808,6 +76925,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-fable-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -76841,6 +76960,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "au.anthropic.claude-fable-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -76874,6 +76995,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-opus-4-7": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "litellm_provider": "bedrock_converse",
@@ -76907,6 +77029,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-opus-4-8": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -76941,6 +77065,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-opus-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -76974,6 +77100,9 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-opus-5-5": {
+        "supports_mid_conversation_tool_changes": true,
+        "supports_thinking_display_updates": true,
+        "supports_mid_conversation_output_config": true,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -77039,6 +77168,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-sonnet-5": {
+        "supports_thinking_display_updates": true,
         "bedrock_converse_supports_strict_tools": false,
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,

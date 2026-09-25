@@ -3046,6 +3046,24 @@ def supports_mid_conversation_system(model: str, custom_llm_provider: str | None
     )
 
 
+def supports_mid_conversation_tool_changes(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_mid_conversation_tool_changes"
+    )
+
+
+def supports_mid_conversation_output_config(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_mid_conversation_output_config"
+    )
+
+
+def supports_thinking_display_updates(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_thinking_display_updates"
+    )
+
+
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports native structured outputs and return a boolean value.
@@ -6297,6 +6315,11 @@ def _get_model_info_helper(
                 thinking_always_on=_model_info.get("thinking_always_on", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
+                supports_mid_conversation_tool_changes=_model_info.get("supports_mid_conversation_tool_changes", None),
+                supports_mid_conversation_output_config=_model_info.get(
+                    "supports_mid_conversation_output_config", None
+                ),
+                supports_thinking_display_updates=_model_info.get("supports_thinking_display_updates", None),
                 supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
                 supports_anthropic_compaction=_model_info.get("supports_anthropic_compaction", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
