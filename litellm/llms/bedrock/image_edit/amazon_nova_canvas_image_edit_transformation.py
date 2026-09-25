@@ -61,13 +61,16 @@ def _resolve_edit_image_b64(
 ) -> str:
     """Base64 image for the task body: the multipart ``image`` wins; ``conditionImage``
     (already encoded) backs TEXT_IMAGE when no multipart file was sent."""
-    if image is not None:
-        return _file_types_to_b64(image)
     if condition_image_b64 is not None and task_type != "TEXT_IMAGE":
+        # Checked before the multipart-image early return: image + conditionImage
+        # with a non-TEXT_IMAGE taskType must fail loudly instead of silently
+        # discarding the caller's conditionImage.
         raise _invalid_input_error(
             "Amazon Nova Canvas conditionImage is only supported with "
             f"taskType=TEXT_IMAGE (conditioned editing); got taskType={task_type!r}."
         )
+    if image is not None:
+        return _file_types_to_b64(image)
     if task_type != "TEXT_IMAGE" or condition_image_b64 is None:
         raise _invalid_input_error(
             "Nova Canvas image edit requires an image input. Pass the multipart "
@@ -180,7 +183,7 @@ def _nova_canvas_task_body(
     # Explicit taskType must be INPAINTING or omitted from here on; anything else is invalid.
     if task_type is not None and str(task_type).strip() != "":
         if task_type != "INPAINTING":
-            raise ValueError(
+            raise _invalid_input_error(
                 f"Unsupported Amazon Nova Canvas taskType: {task_type!r}. "
                 "Use BACKGROUND_REMOVAL, OUTPAINTING, IMAGE_VARIATION, INPAINTING, "
                 "TEXT_IMAGE (conditioned editing via conditionImage/controlMode), "
@@ -195,7 +198,7 @@ def _nova_canvas_task_body(
         if negative_text is not None:
             in_params["negativeText"] = negative_text
         if "maskPrompt" not in in_params and "maskImage" not in in_params:
-            raise ValueError(
+            raise _invalid_input_error(
                 "Amazon Nova Canvas INPAINTING requires either maskPrompt or maskImage "
                 "(use OpenAI mask= for maskImage, or pass maskPrompt in optional params). "
                 "See https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html"

@@ -362,10 +362,10 @@ def test_transform_request_outpainting_without_mask_raises():
 
 
 def test_transform_request_inpainting_explicit_task_without_mask_raises():
-    """INPAINTING taskType without mask or maskPrompt must fail fast."""
+    """INPAINTING taskType without mask or maskPrompt must fail fast with a 400-class error."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
     img = io.BytesIO(b"img")
-    with pytest.raises(ValueError, match="INPAINTING requires either maskPrompt or maskImage"):
+    with pytest.raises(BedrockError, match="INPAINTING requires either maskPrompt or maskImage") as excinfo:
         config.transform_image_edit_request(
             model="amazon.nova-canvas-v1:0",
             prompt="fix it",
@@ -374,13 +374,14 @@ def test_transform_request_inpainting_explicit_task_without_mask_raises():
             litellm_params={},  # type: ignore[arg-type]
             headers={},
         )
+    assert excinfo.value.status_code == 400
 
 
 def test_transform_request_unknown_task_type_raises():
     """Unknown taskType must not silently map to IMAGE_VARIATION or INPAINTING."""
     config = BedrockAmazonNovaCanvasImageEditConfig()
     img = io.BytesIO(b"img")
-    with pytest.raises(ValueError, match="Unsupported Amazon Nova Canvas taskType"):
+    with pytest.raises(BedrockError, match="Unsupported Amazon Nova Canvas taskType") as excinfo:
         config.transform_image_edit_request(
             model="amazon.nova-canvas-v1:0",
             prompt="x",
@@ -389,6 +390,7 @@ def test_transform_request_unknown_task_type_raises():
             litellm_params={},  # type: ignore[arg-type]
             headers={},
         )
+    assert excinfo.value.status_code == 400
 
 
 def test_transform_request_background_removal():

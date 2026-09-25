@@ -223,6 +223,59 @@ def test_transform_request_condition_image_with_other_task_type_raises():
     assert "conditionImage is only supported" in str(excinfo.value.message)
 
 
+def test_transform_request_multipart_image_with_condition_image_non_text_image_raises():
+    """image + conditionImage + a non-TEXT_IMAGE taskType must raise 400 instead of
+    silently discarding the conditionImage (the multipart image no longer short-circuits
+    the conflict check)."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_image_edit_request(
+            model=TEST_MODEL,
+            prompt="restyle",
+            image=io.BytesIO(b"img-bytes"),
+            image_edit_optional_request_params={
+                "taskType": "IMAGE_VARIATION",
+                "conditionImage": base64.b64encode(b"cond").decode("utf-8"),
+            },
+            litellm_params={},
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+    assert "conditionImage is only supported" in str(excinfo.value.message)
+
+
+def test_transform_request_inpainting_without_mask_maps_to_400():
+    """INPAINTING without maskPrompt or maskImage must surface as a 400-class
+    BedrockError, not a plain ValueError (500-class through the proxy)."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_image_edit_request(
+            model=TEST_MODEL,
+            prompt="fix it",
+            image=io.BytesIO(b"img-bytes"),
+            image_edit_optional_request_params={"taskType": "INPAINTING"},
+            litellm_params={},
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+    assert "INPAINTING requires either maskPrompt or maskImage" in str(excinfo.value.message)
+
+
+def test_transform_request_unsupported_task_type_maps_to_400():
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    with pytest.raises(BedrockError) as excinfo:
+        config.transform_image_edit_request(
+            model=TEST_MODEL,
+            prompt="x",
+            image=io.BytesIO(b"img-bytes"),
+            image_edit_optional_request_params={"taskType": "NOT_A_REAL_TASK_TYPE"},
+            litellm_params={},
+            headers={},
+        )
+    assert excinfo.value.status_code == 400
+    assert "Unsupported Amazon Nova Canvas taskType" in str(excinfo.value.message)
+
+
 #################################################
 # controlStrength coercion and range
 #################################################
@@ -466,6 +519,21 @@ async def test_aimage_edit_mask_with_text_image_maps_to_bad_request(monkeypatch)
         )
     assert excinfo.value.status_code == 400
     assert "does not support a mask" in str(excinfo.value)
+
+
+async def test_aimage_edit_unsupported_task_type_maps_to_bad_request(monkeypatch):
+    """Through the litellm image-edit layer, an unsupported taskType must surface as
+    litellm.BadRequestError (400-class), never APIConnectionError/500."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await litellm.aimage_edit(
+            model=f"bedrock/{TEST_MODEL}",
+            prompt="restyle",
+            image=io.BytesIO(b"img-bytes"),
+            taskType="NOT_A_REAL_TASK_TYPE",
+        )
+    assert excinfo.value.status_code == 400
+    assert "Unsupported Amazon Nova Canvas taskType" in str(excinfo.value)
 
 
 async def test_aimage_edit_forwards_style_to_nova_canvas_transform(monkeypatch):
