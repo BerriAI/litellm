@@ -80,7 +80,7 @@ jobs:
 
           - shard: integrations
             artifact-name: integrations
-            test-path: ""
+            test-path: tests/test_litellm/integrations
             unit-flag: integrations
             workers: 2
             reruns: 3
