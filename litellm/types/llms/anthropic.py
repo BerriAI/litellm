@@ -762,6 +762,9 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
     PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
     DANGEROUS_TOOL_USE_2026_09_03 = "dangerous-tool-use-2026-09-03"
+    MID_CONVERSATION_OUTPUT_CONFIG_2026_07_01 = "mid-conversation-output-config-2026-07-01"
+    MID_CONVERSATION_TOOL_CHANGES_2026_07_01 = "mid-conversation-tool-changes-2026-07-01"
+    THINKING_DISPLAY_UPDATES_2026_08_18 = "thinking-display-updates-2026-08-18"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
