@@ -192,25 +192,26 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self._cached_deployment_url = cached
         return cached
 
-    def _as_orchestration_candidate(self, dep: dict[str, Any]) -> tuple[str, str, str] | None:
-        if dep.get("scenarioId") != "orchestration":
-            return None
-        cfg: Final = litellm.module_level_client.get(
-            f"{self.base_url}/lm/configurations/{dep['configurationId']}",
-            headers=self.headers,
-        ).json()
-        if cfg.get("executableId") != "orchestration":
-            return None
-        return (dep["deploymentUrl"], dep["createdAt"], cfg.get("name", ""))
-
     def _resolve_deployment_url(self) -> str:
         resources: Final = (
-            litellm.module_level_client.get(f"{self.base_url}/lm/deployments", headers=self.headers)
+            litellm.module_level_client.get(
+                f"{self.base_url}/lm/deployments",
+                headers=self.headers,
+                params={
+                    "scenarioId": "orchestration",
+                    "executableIds": ["orchestration"],
+                    "status": "RUNNING",
+                },
+            )
             .json()
             .get("resources", [])
         )
         candidates: Final[list[tuple[str, str, str]]] = sorted(
-            filter(None, (self._as_orchestration_candidate(dep) for dep in resources)),
+            (
+                (dep["deploymentUrl"], dep["createdAt"], dep.get("name", ""))
+                for dep in resources
+                if dep.get("deploymentUrl")
+            ),
             key=lambda c: c[1],
             reverse=True,
         )
