@@ -5350,7 +5350,7 @@ async def _rotate_master_key(
             try:
                 decrypted_cred = proxy_config.decrypt_credentials(cred)
                 encrypted_cred = update_db_credential(
-                    db_credential=cred,
+                    db_credential=decrypted_cred,
                     updated_patch=decrypted_cred,
                     new_encryption_key=new_master_key,
                 )
