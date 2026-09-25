@@ -5,6 +5,7 @@ import os
 import secrets
 from collections.abc import Mapping
 from datetime import datetime
+from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
@@ -143,7 +144,13 @@ def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None
 
 _REALTIME_STREAMING_HOOKS: Final = frozenset({GuardrailEventHooks.realtime_input_transcription})
 _SERVER_STREAMING_CLASSIFICATION_KEY: Final = "is_streaming_request"
-_SERVER_STREAMING_CLASSIFICATION_MARKER: Final = object()
+
+
+class _ServerStreamingClassification(Enum):
+    MARKER = "litellm-server-streaming"
+
+
+_SERVER_STREAMING_CLASSIFICATION_MARKER: Final = _ServerStreamingClassification.MARKER
 
 
 def guardrail_request_data_with_streaming(

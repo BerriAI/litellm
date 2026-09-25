@@ -688,6 +688,29 @@ class TestCustomGuardrailStreamScope:
             is False
         )
 
+    def test_server_streaming_classification_survives_scan_raw_request_snapshot(self):
+        from litellm.litellm_core_utils.core_helpers import independent_snapshot
+
+        generate_content_body: Final = {"contents": [{"parts": [{"text": "hi"}]}]}
+        snapshot: Final = independent_snapshot(
+            guardrail_request_data_with_streaming(generate_content_body, is_streaming=True)
+        )
+        streaming_only = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+            stream_scope="streaming",
+            scan_raw_request=True,
+        )
+        assert streaming_only.should_run_guardrail(snapshot, GuardrailEventHooks.pre_call) is True
+        assert (
+            streaming_only.should_run_guardrail(
+                independent_snapshot({**generate_content_body, "is_streaming_request": True}),
+                GuardrailEventHooks.pre_call,
+            )
+            is False
+        )
+
 
 class TestApplyGuardrailCheck:
     def test_apply_guardrail_check_only_on_direct_implementation(self):
