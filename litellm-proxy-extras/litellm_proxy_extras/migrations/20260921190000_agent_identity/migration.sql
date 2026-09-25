@@ -1,14 +1,14 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_AgentsTable" ADD COLUMN     "budget_id" TEXT,
-ADD COLUMN     "enabled" BOOLEAN NOT NULL DEFAULT true,
-ADD COLUMN     "execution_mode" TEXT NOT NULL DEFAULT 'autonomous',
-ADD COLUMN     "identity_managed" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "LiteLLM_AgentsTable" ADD COLUMN IF NOT EXISTS "budget_id" TEXT,
+ADD COLUMN IF NOT EXISTS "enabled" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN IF NOT EXISTS "execution_mode" TEXT NOT NULL DEFAULT 'autonomous',
+ADD COLUMN IF NOT EXISTS "identity_managed" BOOLEAN NOT NULL DEFAULT false;
 
 -- AlterTable
-ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN     "billing_agent_id" TEXT;
+ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN IF NOT EXISTS "billing_agent_id" TEXT;
 
 -- CreateTable
-CREATE TABLE "LiteLLM_AgentIdentity" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_AgentIdentity" (
     "agent_id" TEXT NOT NULL,
     "active" BOOLEAN NOT NULL DEFAULT true,
     "provider" TEXT NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE "LiteLLM_AgentIdentity" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_RetiredAgentIdentity" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_RetiredAgentIdentity" (
     "binding_id" TEXT NOT NULL,
     "agent_id" TEXT,
     "provider" TEXT NOT NULL,
@@ -38,7 +38,7 @@ CREATE TABLE "LiteLLM_RetiredAgentIdentity" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_RetiredAgent" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_RetiredAgent" (
     "original_agent_id" TEXT NOT NULL,
     "retired_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -46,7 +46,7 @@ CREATE TABLE "LiteLLM_RetiredAgent" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_VerifiedSubject" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_VerifiedSubject" (
     "subject_id" TEXT NOT NULL,
     "issuer" TEXT NOT NULL,
     "tenant_id" TEXT NOT NULL,
@@ -63,7 +63,7 @@ CREATE TABLE "LiteLLM_VerifiedSubject" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_SCIMSource" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_SCIMSource" (
     "source_id" TEXT NOT NULL,
     "display_name" TEXT NOT NULL,
     "tenant_id" TEXT NOT NULL,
@@ -77,7 +77,7 @@ CREATE TABLE "LiteLLM_SCIMSource" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_SCIMResource" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_SCIMResource" (
     "id" TEXT NOT NULL,
     "source_id" TEXT NOT NULL,
     "kind" TEXT NOT NULL,
@@ -98,71 +98,116 @@ CREATE TABLE "LiteLLM_SCIMResource" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_AgentIdentity_provider_tenant_id_client_id_key" ON "LiteLLM_AgentIdentity"("provider", "tenant_id", "client_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_AgentIdentity_provider_tenant_id_client_id_key" ON "LiteLLM_AgentIdentity"("provider", "tenant_id", "client_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_AgentIdentity_issuer_service_principal_id_key" ON "LiteLLM_AgentIdentity"("issuer", "service_principal_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_AgentIdentity_issuer_service_principal_id_key" ON "LiteLLM_AgentIdentity"("issuer", "service_principal_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_RetiredAgentIdentity_provider_tenant_id_client_id_key" ON "LiteLLM_RetiredAgentIdentity"("provider", "tenant_id", "client_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_RetiredAgentIdentity_provider_tenant_id_client_id_key" ON "LiteLLM_RetiredAgentIdentity"("provider", "tenant_id", "client_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_VerifiedSubject_scim_resource_id_key" ON "LiteLLM_VerifiedSubject"("scim_resource_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_VerifiedSubject_scim_resource_id_key" ON "LiteLLM_VerifiedSubject"("scim_resource_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_VerifiedSubject_user_id_idx" ON "LiteLLM_VerifiedSubject"("user_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_VerifiedSubject_user_id_idx" ON "LiteLLM_VerifiedSubject"("user_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_VerifiedSubject_agent_id_idx" ON "LiteLLM_VerifiedSubject"("agent_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_VerifiedSubject_agent_id_idx" ON "LiteLLM_VerifiedSubject"("agent_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_VerifiedSubject_issuer_tenant_id_oid_key" ON "LiteLLM_VerifiedSubject"("issuer", "tenant_id", "oid");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_VerifiedSubject_issuer_tenant_id_oid_key" ON "LiteLLM_VerifiedSubject"("issuer", "tenant_id", "oid");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_SCIMSource_key_hash_key" ON "LiteLLM_SCIMSource"("key_hash");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_SCIMSource_key_hash_key" ON "LiteLLM_SCIMSource"("key_hash");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_SCIMResource_source_id_kind_idx" ON "LiteLLM_SCIMResource"("source_id", "kind");
+CREATE INDEX IF NOT EXISTS "LiteLLM_SCIMResource_source_id_kind_idx" ON "LiteLLM_SCIMResource"("source_id", "kind");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_SCIMResource_source_id_kind_external_id_key" ON "LiteLLM_SCIMResource"("source_id", "kind", "external_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_SCIMResource_source_id_kind_external_id_key" ON "LiteLLM_SCIMResource"("source_id", "kind", "external_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_SCIMResource_source_id_kind_user_name_key" ON "LiteLLM_SCIMResource"("source_id", "kind", "user_name");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_SCIMResource_source_id_kind_user_name_key" ON "LiteLLM_SCIMResource"("source_id", "kind", "user_name");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_AgentsTable_budget_id_key" ON "LiteLLM_AgentsTable"("budget_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_AgentsTable_budget_id_key" ON "LiteLLM_AgentsTable"("budget_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_SCIMResource_local_id_key" ON "LiteLLM_SCIMResource"("local_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_SCIMResource_human_email_key" ON "LiteLLM_SCIMResource"("human_email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_SCIMResource_human_subject_key_key" ON "LiteLLM_SCIMResource"("human_subject_key");
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_AgentsTable" ADD CONSTRAINT "LiteLLM_AgentsTable_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_AgentsTable_budget_id_fkey') THEN
+        ALTER TABLE "LiteLLM_AgentsTable" ADD CONSTRAINT "LiteLLM_AgentsTable_budget_id_fkey" FOREIGN KEY ("budget_id") REFERENCES "LiteLLM_BudgetTable"("budget_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_AgentIdentity" ADD CONSTRAINT "LiteLLM_AgentIdentity_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "LiteLLM_AgentsTable"("agent_id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_AgentIdentity_agent_id_fkey') THEN
+        ALTER TABLE "LiteLLM_AgentIdentity" ADD CONSTRAINT "LiteLLM_AgentIdentity_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "LiteLLM_AgentsTable"("agent_id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_RetiredAgentIdentity" ADD CONSTRAINT "LiteLLM_RetiredAgentIdentity_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "LiteLLM_AgentsTable"("agent_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_RetiredAgentIdentity_agent_id_fkey') THEN
+        ALTER TABLE "LiteLLM_RetiredAgentIdentity" ADD CONSTRAINT "LiteLLM_RetiredAgentIdentity_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "LiteLLM_AgentsTable"("agent_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_VerifiedSubject" ADD CONSTRAINT "LiteLLM_VerifiedSubject_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_VerifiedSubject_user_id_fkey') THEN
+        ALTER TABLE "LiteLLM_VerifiedSubject" ADD CONSTRAINT "LiteLLM_VerifiedSubject_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_VerifiedSubject" ADD CONSTRAINT "LiteLLM_VerifiedSubject_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "LiteLLM_AgentsTable"("agent_id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_VerifiedSubject_agent_id_fkey') THEN
+        ALTER TABLE "LiteLLM_VerifiedSubject" ADD CONSTRAINT "LiteLLM_VerifiedSubject_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "LiteLLM_AgentsTable"("agent_id") ON DELETE SET NULL ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_VerifiedSubject" ADD CONSTRAINT "LiteLLM_VerifiedSubject_scim_resource_id_fkey" FOREIGN KEY ("scim_resource_id") REFERENCES "LiteLLM_SCIMResource"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_VerifiedSubject_scim_resource_id_fkey') THEN
+        ALTER TABLE "LiteLLM_VerifiedSubject" ADD CONSTRAINT "LiteLLM_VerifiedSubject_scim_resource_id_fkey" FOREIGN KEY ("scim_resource_id") REFERENCES "LiteLLM_SCIMResource"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_SCIMResource" ADD CONSTRAINT "LiteLLM_SCIMResource_source_id_fkey" FOREIGN KEY ("source_id") REFERENCES "LiteLLM_SCIMSource"("source_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_SCIMResource_source_id_fkey') THEN
+        ALTER TABLE "LiteLLM_SCIMResource" ADD CONSTRAINT "LiteLLM_SCIMResource_source_id_fkey" FOREIGN KEY ("source_id") REFERENCES "LiteLLM_SCIMSource"("source_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    END IF;
+END $$;
 
-
-ALTER TABLE "LiteLLM_VerifiedSubject" ADD CONSTRAINT "LiteLLM_VerifiedSubject_kind_shape" CHECK (
-    ("kind" = 'human' AND "user_id" IS NOT NULL AND "agent_id" IS NULL
-        AND "parent_client_id" IS NULL AND "scim_resource_id" IS NULL AND "verified_via" = 'sso_interactive')
-    OR
-    ("kind" = 'agent_user' AND "user_id" IS NULL AND "parent_client_id" IS NOT NULL
-        AND "scim_resource_id" IS NOT NULL AND "verified_via" = 'scim')
-);
-
-CREATE UNIQUE INDEX "LiteLLM_SCIMResource_local_id_key" ON "LiteLLM_SCIMResource"("local_id");
-CREATE UNIQUE INDEX "LiteLLM_SCIMResource_human_email_key" ON "LiteLLM_SCIMResource"("human_email");
-CREATE UNIQUE INDEX "LiteLLM_SCIMResource_human_subject_key_key" ON "LiteLLM_SCIMResource"("human_subject_key");
+-- AddCheckConstraint
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_VerifiedSubject_kind_shape') THEN
+        ALTER TABLE "LiteLLM_VerifiedSubject" ADD CONSTRAINT "LiteLLM_VerifiedSubject_kind_shape" CHECK (
+            ("kind" = 'human' AND "user_id" IS NOT NULL AND "agent_id" IS NULL
+                AND "parent_client_id" IS NULL AND "scim_resource_id" IS NULL AND "verified_via" = 'sso_interactive')
+            OR
+            ("kind" = 'agent_user' AND "user_id" IS NULL AND "parent_client_id" IS NOT NULL
+                AND "scim_resource_id" IS NOT NULL AND "verified_via" = 'scim')
+        );
+    END IF;
+END $$;
