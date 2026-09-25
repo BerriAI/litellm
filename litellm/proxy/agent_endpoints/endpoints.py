@@ -1311,6 +1311,13 @@ async def _resolve_agent_daily_activity_scope(
         else:
             agent_ids_list = list(permitted_agent_ids)
 
+    if agent_ids_list is not None and not agent_ids_list:
+        return _AgentDailyActivityScope(
+            agent_ids=[],
+            exclude_agent_ids=exclude_agent_ids_list,
+            agent_metadata={},
+        )
+
     if agent_ids_list:
         where_condition["agent_id"] = {"in": list(agent_ids_list)}
 
