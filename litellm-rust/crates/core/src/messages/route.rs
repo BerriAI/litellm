@@ -6,7 +6,6 @@ use std::{
 
 use bytes::Bytes;
 use litellm_auth::SecretValue;
-use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host::{
     event::{MachineEvent, RawResponse, RequestContext, WireRequest},
     host::{Demand, Host},
@@ -22,7 +21,6 @@ use serde_json::{Map, Value};
 
 use super::{
     Error,
-    common_utils::messages_provider_config,
     handler::{decode_response, network, provider_error, send},
     prepare::{prepare_provider_request, resolve_provider},
     types::{MessagesRequest, MessagesShaping},
@@ -54,6 +52,11 @@ pub enum MessagesOutput {
     Streamed,
 }
 
+/// The upstream response as the caller sees it at stream hand-off, before any chunk.
+pub struct MessagesStreamHead {
+    pub headers: Vec<(String, String)>,
+}
+
 pub struct Messages;
 
 impl Protocol for Messages {
@@ -62,7 +65,7 @@ impl Protocol for Messages {
     type Projection = MessagesCall;
     type Op = Infallible;
     type Chunk = Bytes;
-    type StreamHead = ();
+    type StreamHead = MessagesStreamHead;
 }
 
 impl From<MachineFault> for Error {
@@ -76,19 +79,6 @@ impl From<MachineFault> for Error {
 
 pub type MessagesHost = HostChannel<Messages>;
 pub type MessagesMachine = CallMachine<Messages>;
-
-/// Whether this route serves the request, decided before any callback runs so a host
-/// can still run its own path.
-pub fn supports(model: &str, custom_llm_provider: Option<&str>, stream: bool) -> bool {
-    let provider = get_custom_llm_provider(model, custom_llm_provider)
-        .map(|resolved| resolved.custom_llm_provider)
-        .or(custom_llm_provider);
-    match provider {
-        Some(ANTHROPIC_MESSAGES_PROVIDER) => true,
-        Some(provider) => !stream && messages_provider_config(provider).is_some(),
-        None => false,
-    }
-}
 
 /// The in-process host for a request already in hand. It answers projection once and
 /// observes nothing.
@@ -152,8 +142,11 @@ async fn execute(
         model: request.model.clone(),
         custom_llm_provider: request.provider.clone(),
         optional_params: Value::Object(
-            call.body
-                .iter()
+            request
+                .body
+                .as_object()
+                .into_iter()
+                .flatten()
                 .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect(),
@@ -193,7 +186,14 @@ async fn relay(
     host: &MessagesHost,
     mut response: reqwest::Response,
 ) -> Result<MessagesOutput, Error> {
-    if host.open(()).await? == Demand::Detached {
+    let head = MessagesStreamHead {
+        headers: response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
+            .collect(),
+    };
+    if host.open(head).await? == Demand::Detached {
         return Ok(MessagesOutput::Streamed);
     }
     while let Some(chunk) = response.chunk().await.map_err(network)? {

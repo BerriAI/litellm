@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use bytes::Bytes;
 use litellm_core::messages::{
     Error,
-    route::{Messages, MessagesCall, MessagesOutput},
+    route::{Messages, MessagesCall, MessagesOutput, MessagesStreamHead},
     types::MessagesShaping,
 };
 use litellm_host_python::{InvokeError, ProtocolHost, from_py, lookup, to_py};
@@ -236,6 +236,13 @@ impl ProtocolHost for MessagesPythonHost {
                 .map(Bound::unbind),
             MessagesOutput::Streamed => Ok(py.None()),
         }
+    }
+
+    fn head(&mut self, py: Python<'_>, head: MessagesStreamHead) -> PyResult<Py<PyAny>> {
+        py.import(ROUTE_HOST_MODULE)?
+            .getattr("stream_hidden_params")?
+            .call1((to_py(py, &head.headers)?,))
+            .map(Bound::unbind)
     }
 
     fn chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
