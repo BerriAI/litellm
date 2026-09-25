@@ -20,6 +20,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat import ModelResponseIterator
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
@@ -8735,3 +8736,17 @@ def test_completion_surfaces_response_citations_in_provider_specific_fields(resp
     assert response.choices[0].message.provider_specific_fields["citations"] == [
         [{**citation, "supported_text": "the grass is green"}]
     ]
+
+
+@pytest.mark.parametrize(
+    "url", ["http://example.com/image.png", "https://example.com/image.png"]
+)
+def test_inlines_remote_media_never_inlines_image_urls(url: str):
+    """Regular Anthropic forwards remote image URLs as url sources, so the async
+    request path must not download and inline them.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/43098.
+    """
+    media = RemoteMedia(url=url, fields={}, part_type="image_url")
+
+    assert AnthropicConfig().inlines_remote_media(media) is False
