@@ -1,6 +1,7 @@
 import copy
 import functools
 import json
+import logging
 import os
 import sys
 from typing import Final
@@ -20,6 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
+    parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
@@ -267,6 +269,89 @@ def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
     """
     result = split_concatenated_json_objects('{"a": 1}{"b": 2}{"c":')
     assert result == [{"a": 1}, {"b": 2}]
+
+
+def _tool_argument_object(payload: dict[str, object]) -> str:
+    """Issue #40582 shape: one JSON object whose ``args`` value is itself a JSON string."""
+    return json.dumps({"args": json.dumps(payload)})
+
+
+def test_parse_tool_call_arguments_returns_distinct_concatenated_objects(caplog):
+    """Distinct concatenated objects are returned as a list instead of raising."""
+    raw = _tool_argument_object({"flag": True}) + _tool_argument_object({"box": "A", "limit": 50})
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result = parse_tool_call_arguments(raw, tool_name="move", context="chat completions")
+
+    assert result == [
+        {"args": json.dumps({"flag": True})},
+        {"args": json.dumps({"box": "A", "limit": 50})},
+    ]
+    assert "Recovered 2 concatenated JSON objects" in caplog.text
+    assert "move" in caplog.text
+    assert "chat completions" in caplog.text
+    assert "flag" not in caplog.text
+
+
+def test_parse_tool_call_arguments_collapses_identical_concatenated_objects(caplog):
+    """Identical repeats collapse to the first object so a mutating tool is not fired N times."""
+    blob = _tool_argument_object({"flag": True})
+    raw = blob + blob + blob
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result = parse_tool_call_arguments(raw, tool_name="move", context="responses API")
+
+    assert result == {"args": json.dumps({"flag": True})}
+    assert "Collapsed 3 identical concatenated JSON objects" in caplog.text
+    assert "move" in caplog.text
+    assert "responses API" in caplog.text
+
+
+def test_parse_tool_call_arguments_keeps_partial_duplicates_when_any_object_differs():
+    """Collapse only when every object deep-equals the first."""
+    raw = (
+        _tool_argument_object({"flag": True})
+        + _tool_argument_object({"flag": True})
+        + _tool_argument_object({"box": "A", "limit": 50})
+    )
+
+    result = parse_tool_call_arguments(raw, tool_name="move", context="chat completions")
+
+    assert result == [
+        {"args": json.dumps({"flag": True})},
+        {"args": json.dumps({"flag": True})},
+        {"args": json.dumps({"box": "A", "limit": 50})},
+    ]
+
+
+def test_parse_tool_call_arguments_recovers_one_object_before_trailing_junk(caplog):
+    """A single complete object followed by a non-JSON tail is returned, with a count=1 warning."""
+    raw = _tool_argument_object({"flag": True}) + " trailing"
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result = parse_tool_call_arguments(raw, tool_name="move", context="Anthropic tool invoke")
+
+    assert result == {"args": json.dumps({"flag": True})}
+    assert "Recovered 1 concatenated JSON object" in caplog.text
+    assert "move" in caplog.text
+    assert "Anthropic tool invoke" in caplog.text
+
+
+def test_parse_tool_call_arguments_leaves_single_valid_json_unchanged(caplog):
+    """One valid JSON object stays a dict and does not take the concatenation path."""
+    raw = _tool_argument_object({"flag": True})
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result = parse_tool_call_arguments(raw, tool_name="move", context="chat completions")
+
+    assert result == {"args": json.dumps({"flag": True})}
+    assert "concatenated JSON" not in caplog.text
+
+
+def test_parse_tool_call_arguments_still_rejects_non_concatenated_malformed_json():
+    """Wholly malformed text is not turned into an empty success."""
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments for tool 'Read'"):
+        parse_tool_call_arguments("not-json", tool_name="Read", context="chat completions")
 
 
 # ---------------------------------------------------------------------------

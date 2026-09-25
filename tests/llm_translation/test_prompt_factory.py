@@ -1864,6 +1864,86 @@ def test_parse_tool_call_arguments_malformed_json():
     assert "Unterminated string" in error_msg
 
 
+def test_convert_to_anthropic_tool_invoke_expands_distinct_concatenated_arguments():
+    """Concatenated distinct objects become multiple tool_use blocks; the first keeps the original id."""
+    import json
+
+    raw = json.dumps({"args": json.dumps({"flag": True})}) + json.dumps(
+        {"args": json.dumps({"box": "A", "limit": 50})}
+    )
+    result = convert_to_anthropic_tool_invoke(
+        [
+            {
+                "id": "toolu_01ABC123",
+                "type": "function",
+                "function": {"name": "move", "arguments": raw},
+            }
+        ]
+    )
+
+    assert result == [
+        {
+            "type": "tool_use",
+            "id": "toolu_01ABC123",
+            "name": "move",
+            "input": {"args": json.dumps({"flag": True})},
+        },
+        {
+            "type": "tool_use",
+            "id": "toolu_01ABC123_1",
+            "name": "move",
+            "input": {"args": json.dumps({"box": "A", "limit": 50})},
+        },
+    ]
+
+
+def test_convert_to_anthropic_tool_invoke_xml_expands_distinct_concatenated_arguments():
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_invoke_xml,
+    )
+
+    raw = json.dumps({"args": json.dumps({"flag": True})}) + json.dumps(
+        {"args": json.dumps({"box": "A", "limit": 50})}
+    )
+    xml = convert_to_anthropic_tool_invoke_xml(
+        [
+            {
+                "id": "toolu_01ABC123",
+                "type": "function",
+                "function": {"name": "move", "arguments": raw},
+            }
+        ]
+    )
+
+    assert xml.count("<invoke>") == 2
+    assert xml.count("<tool_name>move</tool_name>") == 2
+    assert "<args>{\"flag\": true}</args>" in xml
+    assert '<args>{"box": "A", "limit": 50}</args>' in xml
+
+
+def test_convert_function_to_anthropic_tool_invoke_expands_distinct_concatenated_arguments():
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_function_to_anthropic_tool_invoke,
+    )
+
+    raw = json.dumps({"args": json.dumps({"flag": True})}) + json.dumps(
+        {"args": json.dumps({"box": "A", "limit": 50})}
+    )
+    result = convert_function_to_anthropic_tool_invoke({"name": "move", "arguments": raw})
+
+    assert [block["input"] for block in result] == [
+        {"args": json.dumps({"flag": True})},
+        {"args": json.dumps({"box": "A", "limit": 50})},
+    ]
+    assert [block["name"] for block in result] == ["move", "move"]
+    assert result[0]["id"] != result[1]["id"]
+    assert all(block["type"] == "tool_use" for block in result)
+
+
 def test_convert_to_anthropic_tool_invoke_malformed_json():
     """
     Test that convert_to_anthropic_tool_invoke raises ValueError with context

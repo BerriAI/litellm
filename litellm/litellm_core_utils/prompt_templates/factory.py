@@ -47,6 +47,7 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
+    concatenated_tool_argument_objects,
     convert_content_list_to_str,
     infer_content_type_from_url_and_content,
     is_non_content_values_set,
@@ -942,11 +943,18 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
         parsed_args = parse_tool_call_arguments(
             tool_arguments, tool_name=tool_name, context="Anthropic XML tool invoke"
         )
-        if isinstance(parsed_args, dict):
-            parameters = "".join(f"<{param}>{val}</{param}>\n" for param, val in parsed_args.items())
-        else:
-            parameters = f"<result>{parsed_args}</result>\n"
-        invokes += f"<invoke>\n<tool_name>{tool_name}</tool_name>\n<parameters>\n{parameters}</parameters>\n</invoke>\n"
+        expanded_args = concatenated_tool_argument_objects(
+            parsed_args, tool_arguments if isinstance(tool_arguments, str) else None
+        )
+        argument_values = expanded_args if expanded_args is not None else (parsed_args,)
+        for args in argument_values:
+            if isinstance(args, dict):
+                parameters = "".join(f"<{param}>{val}</{param}>\n" for param, val in args.items())
+            else:
+                parameters = f"<result>{args}</result>\n"
+            invokes += (
+                f"<invoke>\n<tool_name>{tool_name}</tool_name>\n<parameters>\n{parameters}</parameters>\n</invoke>\n"
+            )
 
     anthropic_tool_invoke: Final = f"<function_calls>\n{invokes}</function_calls>"
 
@@ -1712,16 +1720,20 @@ def convert_function_to_anthropic_tool_invoke(
         tool_input: Final = parse_tool_call_arguments(
             _arguments, tool_name=_name, context="Anthropic function to tool invoke"
         )
+        expanded_inputs: Final = concatenated_tool_argument_objects(
+            tool_input, _arguments if isinstance(_arguments, str) else None
+        )
+        tool_inputs: Final = expanded_inputs if expanded_inputs is not None else (tool_input,)
 
-        anthropic_tool_invoke: Final = [
+        return [
             AnthropicMessagesToolUseParam(
                 type="tool_use",
                 id=str(uuid.uuid4()),
                 name=_name,
-                input=tool_input,
+                input=one_input,
             )
+            for one_input in tool_inputs
         ]
-        return anthropic_tool_invoke
     except Exception as e:
         raise e
 
@@ -1796,45 +1808,54 @@ def convert_to_anthropic_tool_invoke(
             str,
             get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
         )
+        raw_arguments = get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments")
         tool_input = parse_tool_call_arguments(
-            get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments"),
+            raw_arguments,
             tool_name=tool_name,
             context="Anthropic tool invoke",
         )
-
-        server_tool_result = (
-            _find_server_tool_result(tool_id, web_search_results, tool_results)
-            if tool_id.startswith("srvtoolu_")
-            else None
+        expanded_inputs = concatenated_tool_argument_objects(
+            tool_input, raw_arguments if isinstance(raw_arguments, str) else None
         )
-        if server_tool_result is not None:
-            anthropic_tool_invoke.append(
-                {
-                    "type": "server_tool_use",
-                    "id": tool_id,
-                    "name": tool_name,
-                    "input": tool_input,
-                }
-            )
-            anthropic_tool_invoke.append(server_tool_result)
-        else:
-            sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
-            _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
-                type="tool_use",
-                id=sanitized_tool_id,
-                name=tool_name,
-                input=tool_input,
-            )
+        tool_inputs = expanded_inputs if expanded_inputs is not None else (tool_input,)
 
-            _content_element = add_cache_control_to_content(
-                anthropic_content_element=_anthropic_tool_use_param,
-                original_content_element=dict(tool),
+        for obj_idx, obj_input in enumerate(tool_inputs):
+            # Only a non-empty string id grows a suffix; the first block keeps the original id.
+            block_id = tool_id if obj_idx == 0 or not tool_id else f"{tool_id}_{obj_idx}"
+            server_tool_result = (
+                _find_server_tool_result(tool_id, web_search_results, tool_results)
+                if obj_idx == 0 and tool_id.startswith("srvtoolu_")
+                else None
             )
+            if server_tool_result is not None:
+                anthropic_tool_invoke.append(
+                    {
+                        "type": "server_tool_use",
+                        "id": block_id,
+                        "name": tool_name,
+                        "input": obj_input,
+                    }
+                )
+                anthropic_tool_invoke.append(server_tool_result)
+            else:
+                sanitized_tool_id = _sanitize_anthropic_tool_use_id(block_id)
+                _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
+                    type="tool_use",
+                    id=sanitized_tool_id,
+                    name=tool_name,
+                    input=obj_input,
+                )
 
-            if "cache_control" in _content_element:
-                _anthropic_tool_use_param["cache_control"] = _content_element["cache_control"]
+                if obj_idx == 0:
+                    _content_element = add_cache_control_to_content(
+                        anthropic_content_element=_anthropic_tool_use_param,
+                        original_content_element=dict(tool),
+                    )
 
-            anthropic_tool_invoke.append(_anthropic_tool_use_param)
+                    if "cache_control" in _content_element:
+                        _anthropic_tool_use_param["cache_control"] = _content_element["cache_control"]
+
+                anthropic_tool_invoke.append(_anthropic_tool_use_param)
 
     return anthropic_tool_invoke
 
@@ -5381,24 +5402,53 @@ class NormalizedToolCall(TypedDict):
     arguments: dict[str, object]
 
 
-def _parse_tool_call_arguments(raw: object, tool_name: str | None, context: str) -> dict[str, object]:
+def _tool_call_id_at_index(tool_id: object, index: int) -> str | None:
+    """Keep the original id on the first object; later objects use ``{id}_{index}``."""
+    if index == 0:
+        return cast("str | None", tool_id)  # cast-ok: index 0 preserves the id already on the tool call
+    if isinstance(tool_id, str) and tool_id:
+        return f"{tool_id}_{index}"
+    return None
+
+
+def _extend_normalized_tool_calls(
+    result: list[NormalizedToolCall],
+    tool_id: object,
+    name: str | None,
+    arguments: dict[str, object] | list[dict[str, object]],
+) -> None:
+    parsed_arguments = arguments if isinstance(arguments, list) else (arguments,)
+    for index, item in enumerate(parsed_arguments):
+        result.append(
+            NormalizedToolCall(
+                id=_tool_call_id_at_index(tool_id, index),
+                name=name,
+                arguments=item,
+            )
+        )
+
+
+def _parse_tool_call_arguments(
+    raw: object, tool_name: str | None, context: str
+) -> dict[str, object] | list[dict[str, object]]:
     # Anthropic's tool_use blocks already carry a parsed dict in "input";
     # chat completions and the Responses API carry a JSON string that may be
     # truncated by the model, so route those through the repair-aware parser.
+    # A list is distinct concatenated objects and must not be coerced to {}.
     if isinstance(raw, dict):
         return raw
     if not isinstance(raw, str):
         return {}
     normalized_raw: Final = "{}" if raw == REDACTED_BY_LITELLM else raw
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        parse_tool_call_arguments,
-    )
 
     try:
         parsed: Final = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
     except ValueError as e:
         verbose_logger.warning("Failed to parse tool call arguments: %s", e)
         return {}
+    expanded: Final = concatenated_tool_argument_objects(parsed, normalized_raw)
+    if expanded is not None:
+        return expanded
     return parsed if isinstance(parsed, dict) else {}
 
 
@@ -5420,16 +5470,15 @@ def _tool_calls_from_chat_completion_response(
         if fn is None:
             continue
         name = get_attribute_or_key(fn, "name")
-        result.append(
-            NormalizedToolCall(
-                id=get_attribute_or_key(tc, "id"),
-                name=name,
-                arguments=_parse_tool_call_arguments(
-                    get_attribute_or_key(fn, "arguments", "{}"),
-                    tool_name=name,
-                    context="chat completions",
-                ),
-            )
+        _extend_normalized_tool_calls(
+            result,
+            get_attribute_or_key(tc, "id"),
+            name,
+            _parse_tool_call_arguments(
+                get_attribute_or_key(fn, "arguments", "{}"),
+                tool_name=name,
+                context="chat completions",
+            ),
         )
     return result
 
@@ -5443,16 +5492,15 @@ def _tool_calls_from_responses_api_response(response: object) -> list[Normalized
         if get_attribute_or_key(item, "type") != "function_call":
             continue
         name = get_attribute_or_key(item, "name")
-        result.append(
-            NormalizedToolCall(
-                id=get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id"),
-                name=name,
-                arguments=_parse_tool_call_arguments(
-                    get_attribute_or_key(item, "arguments", "{}"),
-                    tool_name=name,
-                    context="responses API",
-                ),
-            )
+        _extend_normalized_tool_calls(
+            result,
+            get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id"),
+            name,
+            _parse_tool_call_arguments(
+                get_attribute_or_key(item, "arguments", "{}"),
+                tool_name=name,
+                context="responses API",
+            ),
         )
     return result
 

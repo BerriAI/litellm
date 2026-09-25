@@ -3527,6 +3527,132 @@ def test_get_tool_calls_from_response_warns_for_malformed_arguments(caplog):
     assert "Failed to parse tool call arguments" in caplog.text
 
 
+def _concatenated_tool_arguments(*payloads: dict[str, object]) -> str:
+    import json
+
+    return "".join(json.dumps({"args": json.dumps(payload)}) for payload in payloads)
+
+
+def test_get_tool_calls_from_response_expands_distinct_concatenated_arguments():
+    """Distinct concatenated argument objects become one normalized tool call each."""
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_keep",
+                            "function": {"name": "look", "arguments": '{"x": 1}'},
+                        },
+                        {
+                            "id": "call_move",
+                            "function": {
+                                "name": "move",
+                                "arguments": _concatenated_tool_arguments({"flag": True}, {"box": "A", "limit": 50}),
+                            },
+                        },
+                    ]
+                }
+            }
+        ]
+    }
+
+    assert get_tool_calls_from_response(response) == [
+        {"id": "call_keep", "name": "look", "arguments": {"x": 1}},
+        {"id": "call_move", "name": "move", "arguments": {"args": json.dumps({"flag": True})}},
+        {
+            "id": "call_move_1",
+            "name": "move",
+            "arguments": {"args": json.dumps({"box": "A", "limit": 50})},
+        },
+    ]
+
+
+def test_get_tool_calls_from_response_collapses_identical_concatenated_arguments():
+    """Identical concatenated repeats stay a single tool call."""
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
+
+    blob = _concatenated_tool_arguments({"flag": True})
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_move",
+                            "function": {"name": "move", "arguments": blob + blob + blob},
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    assert get_tool_calls_from_response(response) == [
+        {"id": "call_move", "name": "move", "arguments": {"args": json.dumps({"flag": True})}},
+    ]
+
+
+def test_get_tool_calls_from_response_expands_responses_api_concatenated_arguments():
+    """Responses API function calls use the same expand-and-derive-id rules."""
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
+
+    response: Final = {
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": "call_resp",
+                "name": "move",
+                "arguments": _concatenated_tool_arguments({"flag": True}, {"box": "A", "limit": 50}),
+            }
+        ]
+    }
+
+    assert get_tool_calls_from_response(response) == [
+        {"id": "call_resp", "name": "move", "arguments": {"args": json.dumps({"flag": True})}},
+        {
+            "id": "call_resp_1",
+            "name": "move",
+            "arguments": {"args": json.dumps({"box": "A", "limit": 50})},
+        },
+    ]
+
+
+def test_get_tool_calls_from_response_does_not_expand_a_valid_json_array():
+    """A single JSON array is one value, not concatenated objects, and still becomes {}."""
+    from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_batch",
+                            "function": {
+                                "name": "batch",
+                                "arguments": '[{"flag": true}, {"flag": false}]',
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    assert get_tool_calls_from_response(response) == [
+        {"id": "call_batch", "name": "batch", "arguments": {}},
+    ]
+
+
 def test_group_tool_exchanges_pairs_assistant_with_its_tool_rows():
     from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
 

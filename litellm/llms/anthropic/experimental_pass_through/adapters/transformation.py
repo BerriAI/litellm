@@ -118,6 +118,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_image_source_to_openai_url,
+    concatenated_tool_argument_objects,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
@@ -1412,20 +1413,30 @@ class LiteLLMAnthropicMessagesAdapter:
                     # Strip Gemini thought-signature suffix and normalize id chars
                     # (e.g. ``functions.Bash:0`` from cross-provider clients).
                     raw_id = tool_call.id or ""
-                    tool_use_block = AnthropicResponseContentBlockToolUse(
-                        type="tool_use",
-                        id=normalize_anthropic_tool_use_id(raw_id),
-                        name=original_name,
-                        input=parse_tool_call_arguments(
-                            tool_call.function.arguments,
-                            tool_name=original_name,
-                            context="Anthropic pass-through adapter",
-                        ),
+                    normalized_id = normalize_anthropic_tool_use_id(raw_id)
+                    raw_arguments = tool_call.function.arguments
+                    parsed_arguments = parse_tool_call_arguments(
+                        raw_arguments,
+                        tool_name=original_name,
+                        context="Anthropic pass-through adapter",
                     )
-                    # Add provider_specific_fields if signature is present
-                    if provider_specific_fields:
-                        tool_use_block.provider_specific_fields = provider_specific_fields
-                    new_content.append(tool_use_block.model_dump(exclude_none=True))
+                    expanded_arguments = concatenated_tool_argument_objects(
+                        parsed_arguments,
+                        raw_arguments if isinstance(raw_arguments, str) else None,
+                    )
+                    argument_inputs = expanded_arguments if expanded_arguments is not None else (parsed_arguments,)
+                    for index, tool_input in enumerate(argument_inputs):
+                        block_id = normalized_id if index == 0 or not raw_id else f"{normalized_id}_{index}"
+                        tool_use_block = AnthropicResponseContentBlockToolUse(
+                            type="tool_use",
+                            id=block_id,
+                            name=original_name,
+                            input=tool_input,
+                        )
+                        # Signature belongs to the original tool call, not synthetic splits.
+                        if provider_specific_fields and index == 0:
+                            tool_use_block.provider_specific_fields = provider_specific_fields
+                        new_content.append(tool_use_block.model_dump(exclude_none=True))
 
         return new_content
 

@@ -2391,10 +2391,13 @@ def parse_tool_call_arguments(
     Returns:
         Parsed arguments (usually a dict, but may be any JSON-deserializable
         type such as list, str, int, float, or None).  Returns empty dict if
-        arguments is None or empty.
+        arguments is None or empty.  Distinct JSON objects concatenated in one
+        string are returned as a list of dicts; identical repeats collapse to
+        the first dict.
 
     Raises:
-        ValueError: If the arguments string is not valid JSON and cannot be repaired.
+        ValueError: If the arguments string is not valid JSON and cannot be repaired
+        or salvaged as concatenated JSON objects.
     """
     import json
 
@@ -2416,6 +2419,10 @@ def parse_tool_call_arguments(
             )
             return repaired
 
+        recovered: Final = split_concatenated_json_objects(arguments)
+        if recovered:
+            return _salvaged_concatenated_tool_arguments(recovered, tool_name=tool_name, context=context)
+
         error_parts: Final = ["Failed to parse tool call arguments"]
 
         if tool_name:
@@ -2426,6 +2433,65 @@ def parse_tool_call_arguments(
         error_message: Final = " ".join(error_parts) + f". Error: {original_error}. Arguments: {arguments}"
 
         raise ValueError(error_message) from original_error
+
+
+def _salvaged_concatenated_tool_arguments(
+    recovered: list[dict[str, object]],
+    tool_name: str | None,
+    context: str | None,
+) -> dict[str, object] | list[dict[str, object]]:
+    """Collapse identical concatenated objects; otherwise return every object."""
+    count: Final = len(recovered)
+    tool_label: Final = tool_name or "<unknown>"
+    context_label: Final = context or "unknown context"
+    if count == 1:
+        verbose_logger.warning(
+            "Recovered 1 concatenated JSON object from tool call arguments for tool '%s' (%s).",
+            tool_label,
+            context_label,
+        )
+        return recovered[0]
+    if all(item == recovered[0] for item in recovered):
+        verbose_logger.warning(
+            "Collapsed %d identical concatenated JSON objects from tool call arguments for tool '%s' (%s).",
+            count,
+            tool_label,
+            context_label,
+        )
+        return recovered[0]
+    verbose_logger.warning(
+        "Recovered %d concatenated JSON objects from tool call arguments for tool '%s' (%s).",
+        count,
+        tool_label,
+        context_label,
+    )
+    return recovered
+
+
+def concatenated_tool_argument_objects(
+    parsed: object,
+    raw_arguments: str | None = None,
+) -> list[dict[str, object]] | None:
+    """Return distinct concatenated argument objects that callers should expand.
+
+    ``parse_tool_call_arguments`` returns a list of dicts for that salvage.
+    A successful ``json.loads`` of one JSON array is also a list; that stays
+    one value so callers do not split it into extra tool calls.
+    """
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    objects: list[dict[str, object]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            return None
+        objects.append(cast("dict[str, object]", item))  # cast-ok: narrowed by isinstance
+    if raw_arguments is not None:
+        try:
+            json.loads(raw_arguments)
+        except json.JSONDecodeError:
+            return objects
+        return None
+    return objects
 
 
 def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
@@ -2446,9 +2512,9 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
     The walk degrades gracefully: if the string is malformed or truncated
     (e.g. a stream that ended mid-tool-call), whatever complete objects were
     parsed before the bad tail are returned and the remainder is discarded
-    with a warning, rather than raising.  The sole caller
-    (``_convert_to_bedrock_tool_call_invoke``) treats an empty result as
-    ``input={}`` so the conversation can continue instead of hard-failing.
+    with a warning, rather than raising.  Callers treat an empty result as
+    nothing salvaged: Bedrock falls back to ``input={}``, and
+    ``parse_tool_call_arguments`` re-raises.
 
     Returns
     -------
