@@ -1,11 +1,12 @@
 import base64
 import hashlib
+import importlib
 import json
 import os
 import re
 from dataclasses import dataclass
 from email.utils import formatdate
-from typing import Final, Protocol
+from typing import Final, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
@@ -176,6 +177,39 @@ def resolve_oci_credentials(optional_params: dict) -> dict:
 
 _OCI_REGION_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,30}[a-z0-9]$")
 _OCI_ACTION_PATH_RE: Final = re.compile(rf"/{OCI_API_VERSION}/actions/[^/?#]+/?$")
+_OCI_DEFAULT_REALM_ENV: Final = "OCI_DEFAULT_REALM"
+_OCI_COMMERCIAL_REALM_DOMAIN: Final = "oraclecloud.com"
+_OCI_INFERENCE_ENDPOINT_TEMPLATE: Final = "https://inference.generativeai.{region}.oci.{secondLevelDomain}"
+
+
+@runtime_checkable
+class _OCIRegionRegistry(Protocol):
+    def endpoint_for(self, service: str, region: str, service_endpoint_template: str) -> str: ...
+
+
+def _load_oci_region_registry() -> _OCIRegionRegistry | None:
+    try:
+        registry: Final = importlib.import_module("oci.regions")
+    except ImportError:
+        return None
+    return registry if isinstance(registry, _OCIRegionRegistry) else None
+
+
+def resolve_oci_inference_endpoint(region: str) -> str:
+    """Return the GenAI inference endpoint for ``region`` in whichever OCI realm hosts it.
+
+    Delegates to the OCI SDK's region registry when the SDK is installed, which also
+    honours ``~/.oci/regions-config.json`` and ``OCI_REGION_METADATA``. Without the SDK,
+    the realm's second-level domain comes from ``OCI_DEFAULT_REALM`` and otherwise
+    defaults to the commercial realm, mirroring the SDK's own fallback.
+    """
+    registry: Final = _load_oci_region_registry()
+    if registry is None:
+        second_level_domain: Final = os.environ.get(_OCI_DEFAULT_REALM_ENV) or _OCI_COMMERCIAL_REALM_DOMAIN
+        return _OCI_INFERENCE_ENDPOINT_TEMPLATE.format(region=region, secondLevelDomain=second_level_domain)
+    return registry.endpoint_for(
+        "generative_ai_inference", region=region, service_endpoint_template=_OCI_INFERENCE_ENDPOINT_TEMPLATE
+    )
 
 
 def get_oci_base_url(optional_params: dict, api_base: str | None = None) -> str:
@@ -196,7 +230,7 @@ def get_oci_base_url(optional_params: dict, api_base: str | None = None) -> str:
                 f"Invalid OCI region {region!r}: must match ^[a-z][a-z0-9-]{{0,30}}[a-z0-9]$ (e.g. 'us-ashburn-1')."
             ),
         )
-    return f"https://inference.generativeai.{region}.oci.oraclecloud.com"
+    return resolve_oci_inference_endpoint(region)
 
 
 # ---------------------------------------------------------------------------
