@@ -6,7 +6,7 @@ from the Usage object that providers report. They are sparse — only
 incremented when the underlying detail is populated and > 0.
 
 Run with:
-    uv run pytest tests/test_litellm/integrations/test_prometheus_token_detail_metrics.py -v
+    uv run pytest tests/unit/integrations/test_prometheus_token_detail_metrics.py -v
 """
 
 from typing import get_args

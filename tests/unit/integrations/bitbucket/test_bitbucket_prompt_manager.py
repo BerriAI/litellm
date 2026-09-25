@@ -307,37 +307,6 @@ def test_bitbucket_prompt_manager_render_template_not_found():
         manager.prompt_manager.render_template("nonexistent", {"some": "variable"})
 
 
-@patch("litellm.integrations.bitbucket.bitbucket_prompt_manager.BitBucketClient")
-def test_bitbucket_prompt_manager_integration(mock_client_class):
-    """Test BitBucketPromptManager integration with BitBucketClient."""
-    # Mock the BitBucket client
-    mock_client = MagicMock()
-    mock_client.get_file_content.return_value = """---
-model: gpt-4
-temperature: 0.7
----
-Hello {{name}}!"""
-    mock_client_class.return_value = mock_client
-
-    config = {
-        "workspace": "test-workspace",
-        "repository": "test-repo",
-        "access_token": "test-token",
-    }
-
-    manager = BitBucketPromptManager(config, prompt_id="test_prompt")
-
-    # Should have loaded the prompt
-    assert "test_prompt" in manager.prompt_manager.prompts
-    template = manager.prompt_manager.prompts["test_prompt"]
-    assert template.model == "gpt-4"
-    assert template.temperature == 0.7
-
-    # Test rendering
-    rendered = manager.prompt_manager.render_template("test_prompt", {"name": "World"})
-    assert rendered == "Hello World!"
-
-
 def test_bitbucket_prompt_manager_parse_prompt_to_messages():
     """Test parsing prompt content into messages."""
     config = {

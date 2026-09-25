@@ -1,6 +1,7 @@
 import functools
 import http.server
 import ipaddress
+import os
 import queue
 import ssl
 import threading
@@ -72,6 +73,14 @@ def write_self_signed_cert(directory: Path, stem: str) -> tuple[Path, Path]:
         )
     )
     return certificate_path, key_path
+
+
+@pytest.fixture(autouse=True)
+def restore_process_environment() -> Iterator[None]:
+    original: Final = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(original)
 
 
 @pytest.fixture

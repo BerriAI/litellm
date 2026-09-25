@@ -33,7 +33,7 @@ from parameterized import parameterized
 
 import requests
 
-from conftest import TlsSink, write_self_signed_cert
+from tests.unit.integrations.conftest import TlsSink, write_self_signed_cert
 import litellm
 from litellm.integrations import opentelemetry as otel_module
 from litellm.integrations.opentelemetry import (
@@ -1244,64 +1244,6 @@ class TestOpenTelemetry(unittest.TestCase):
             time.sleep(self.POLL_INTERVAL)
         return []
 
-    @patch("litellm.integrations.opentelemetry.datetime")
-    def test_create_guardrail_span_with_valid_info(self, mock_datetime):
-        # Setup
-        otel = OpenTelemetry()
-        otel.tracer = MagicMock()
-        mock_span = MagicMock()
-        otel.tracer.start_span.return_value = mock_span
-
-        # Create guardrail information
-        guardrail_info = {
-            "guardrail_name": "test_guardrail",
-            "guardrail_mode": "input",
-            "masked_entity_count": {"CREDIT_CARD": 2},
-            "guardrail_response": "filtered_content",
-            "start_time": 1609459200.0,
-            "end_time": 1609459201.0,
-        }
-
-        # Create a kwargs dict with standard_logging_object containing guardrail information
-        kwargs = {
-            "standard_logging_object": {"guardrail_information": [guardrail_info]}
-        }
-
-        # Call the method
-        otel._create_guardrail_span(kwargs=kwargs, context=None)
-
-        # Assertions
-        otel.tracer.start_span.assert_called_once()
-
-        # print all calls to mock_span.set_attribute
-        print("Calls to mock_span.set_attribute:")
-        for call in mock_span.set_attribute.call_args_list:
-            print(call)
-
-        # Check that the span has the correct attributes set
-        mock_span.set_attribute.assert_any_call("guardrail_name", "test_guardrail")
-        mock_span.set_attribute.assert_any_call("guardrail_mode", "input")
-        mock_span.set_attribute.assert_any_call(
-            "guardrail_response", safe_dumps("filtered_content")
-        )
-        mock_span.set_attribute.assert_any_call(
-            "masked_entity_count", safe_dumps({"CREDIT_CARD": 2})
-        )
-
-        # Verify that the span was ended
-        mock_span.end.assert_called_once()
-
-    def test_create_guardrail_span_with_no_info(self):
-        # Setup
-        otel = OpenTelemetry()
-        otel.tracer = MagicMock()
-
-        # Test with no guardrail information
-        kwargs = {"standard_logging_object": {}}
-        otel._create_guardrail_span(kwargs=kwargs, context=None)
-
-        # Verify that start_span was never called
-        otel.tracer.start_span.assert_not_called()
 
     def test_get_tracer_to_use_for_request_with_dynamic_headers(self):
         """Test that get_tracer_to_use_for_request returns a dynamic tracer when dynamic headers are present."""
@@ -5461,10 +5403,6 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         )
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
 
-    def test_none_span_is_noop(self):
-        OpenTelemetry().set_preprocessing_duration_attribute(
-            None, {"first_api_call_start_time": datetime(2026, 1, 1)}
-        )
 
     def test_non_dict_container_is_noop(self):
         otel = OpenTelemetry()

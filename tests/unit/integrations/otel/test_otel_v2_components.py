@@ -42,7 +42,7 @@ from opentelemetry.trace.propagation.tracecontext import (  # noqa: E402
 )
 
 import litellm  # noqa: E402
-from conftest import TlsSink  # noqa: E402
+from tests.unit.integrations.conftest import TlsSink  # noqa: E402
 from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config  # noqa: E402

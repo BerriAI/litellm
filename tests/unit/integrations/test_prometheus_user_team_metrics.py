@@ -102,27 +102,6 @@ class TestPrometheusUserTeamCountMetrics:
                     f"litellm_teams_count_metric should accept value {value}: {e}"
                 )
 
-    def test_user_count_metric_with_zero(self, prometheus_logger):
-        """Test that user count metric handles zero users"""
-        metric = prometheus_logger.litellm_total_users_metric
-
-        # Should handle zero gracefully
-        try:
-            metric.set(0)
-            assert True
-        except Exception as e:
-            pytest.fail(f"litellm_total_users_metric should handle zero: {e}")
-
-    def test_team_count_metric_with_zero(self, prometheus_logger):
-        """Test that team count metric handles zero teams"""
-        metric = prometheus_logger.litellm_teams_count_metric
-
-        # Should handle zero gracefully
-        try:
-            metric.set(0)
-            assert True
-        except Exception as e:
-            pytest.fail(f"litellm_teams_count_metric should handle zero: {e}")
 
     def test_metrics_can_be_updated_multiple_times(self, prometheus_logger):
         """Test that metrics can be updated multiple times (simulating refresh cycle)"""

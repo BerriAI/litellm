@@ -6,7 +6,7 @@ between the tier a provider served and the tier a caller requested, and the
 end-to-end emit wiring through async_log_success_event.
 
 Run with:
-    uv run pytest tests/test_litellm/integrations/test_prometheus_service_tier_label.py -v
+    uv run pytest tests/unit/integrations/test_prometheus_service_tier_label.py -v
 """
 
 import datetime

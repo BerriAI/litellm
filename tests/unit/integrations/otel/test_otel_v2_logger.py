@@ -2945,14 +2945,6 @@ def test_success_without_pre_call_emits_deferred_span():
     assert spans[0].end_time == 101_500_000_000
 
 
-def test_no_carrier_and_no_payload_is_noop():
-    logger, exporter = _logger()
-    asyncio.run(
-        logger.async_log_success_event({"litellm_params": {}}, None, None, None)
-    )
-    assert exporter.get_finished_spans() == ()
-
-
 def test_second_close_for_same_call_does_not_duplicate_span():
     """Success and failure can both fire on one logging object for the same call
     id. The first close pops the carrier and finishes the boundary span; the

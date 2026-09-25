@@ -19,7 +19,7 @@ from litellm.integrations.rubrik import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 
-from tests.test_litellm.integrations.rubrik_test_helpers import (
+from tests.unit.integrations.rubrik_test_helpers import (
     make_inputs_with_tools,
     make_tool_call_dict,
 )

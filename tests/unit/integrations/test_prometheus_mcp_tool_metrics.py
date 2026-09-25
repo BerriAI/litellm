@@ -5,7 +5,7 @@ These metrics expose ``mcp_tool_call_metadata`` in Prometheus so Grafana
 dashboards can break down MCP usage by server and tool name.
 
 Run with:
-    uv run pytest tests/test_litellm/integrations/test_prometheus_mcp_tool_metrics.py -v
+    uv run pytest tests/unit/integrations/test_prometheus_mcp_tool_metrics.py -v
 """
 
 from typing import get_args
