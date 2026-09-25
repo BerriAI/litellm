@@ -349,7 +349,7 @@ const ModelCollapsible = ({
 }: {
   defaultOpen: boolean;
   header: React.ReactNode;
-  children: React.ReactNode;
+  children: (open: boolean) => React.ReactNode;
 }) => {
   const [open, setOpen] = useState(defaultOpen);
   const [everOpened, setEverOpened] = useState(defaultOpen);
@@ -370,7 +370,7 @@ const ModelCollapsible = ({
         {header}
       </CollapsibleTrigger>
       <CollapsibleContent keepMounted={everOpened} className="px-4 pb-4">
-        {children}
+        {children(open)}
       </CollapsibleContent>
     </Collapsible>
   );
@@ -557,12 +557,14 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
               </div>
             }
           >
-            <ModelSection
-              modelName={modelName || "Unknown Model"}
-              metrics={modelMetrics[modelName]}
-              hidePromptCachingMetrics={hidePromptCachingMetrics}
-              fetchTopApiKeys={fetchTopApiKeys}
-            />
+            {(open) => (
+              <ModelSection
+                modelName={modelName || "Unknown Model"}
+                metrics={modelMetrics[modelName]}
+                hidePromptCachingMetrics={hidePromptCachingMetrics}
+                fetchTopApiKeys={open ? fetchTopApiKeys : undefined}
+              />
+            )}
           </ModelCollapsible>
         ))}
       </div>

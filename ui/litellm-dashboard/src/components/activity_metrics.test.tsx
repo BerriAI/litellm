@@ -1695,4 +1695,18 @@ describe("ActivityMetrics fetchTopApiKeys", () => {
 
     expect(screen.getByText("fallback-key-alias")).toBeInTheDocument();
   });
+
+  it("does not fetch top keys for rows that were never opened", async () => {
+    const twoModels: Record<string, ModelActivityData> = {
+      open: createMockModelActivityData("open", { total_spend: 200 }),
+      closed: createMockModelActivityData("closed", { total_spend: 50 }),
+    };
+    const fetchTopApiKeys = vi.fn().mockResolvedValue([]);
+
+    render(<ActivityMetrics modelMetrics={twoModels} fetchTopApiKeys={fetchTopApiKeys} />);
+
+    await screen.findByText("Top Virtual Keys by Spend");
+    expect(fetchTopApiKeys).toHaveBeenCalledWith("open");
+    expect(fetchTopApiKeys).not.toHaveBeenCalledWith("closed");
+  });
 });
