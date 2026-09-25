@@ -184,6 +184,11 @@ mod tests {
             reqwest::header::AUTHORIZATION,
             reqwest::header::HeaderValue::from_static("Bearer provider-secret"),
         );
+        #[expect(
+            clippy::disallowed_methods,
+            clippy::disallowed_types,
+            reason = "the pool has no default-header setting to stand in for provider credentials"
+        )]
         let provider_http = litellm_http::Client::for_test(
             reqwest::Client::builder()
                 .default_headers(provider_headers)

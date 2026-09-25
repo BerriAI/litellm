@@ -312,7 +312,7 @@ mod tests {
             let _connection = listener.accept().await.unwrap();
             tokio::time::sleep(Duration::from_secs(1)).await;
         });
-        let error = reqwest::Client::new()
+        let error = litellm_http::Client::plain_for_test()
             .get(format!("http://{address}"))
             .timeout(Duration::from_millis(10))
             .send()
