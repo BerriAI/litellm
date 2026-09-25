@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypedD
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+from litellm.constants import USAGE_MODEL_TOP_API_KEYS_LIMIT, USAGE_TOP_API_KEYS_LIMIT
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -30,6 +30,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
     get_daily_activity_aggregated,
+    get_daily_activity_model_top_api_keys,
 )
 from litellm.proxy.management_endpoints.common_daily_activity_routes import (
     DailyActivityExportLabels,
@@ -56,6 +57,8 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailyActivityExportResponse,
     DailyActivityExportType,
     DailySpendMetadata,
+    ModelTopApiKeysGroupBy,
+    ModelTopApiKeysResponse,
 )
 from litellm.types.tag_management import (
     TagConfig,
@@ -941,6 +944,60 @@ async def search_tag_daily_activity_keys(
         exclude_entity_ids=exclude_tags.split(",") if exclude_tags else None,
         timezone_offset_minutes=timezone,
         include_entity_breakdown=True,
+    )
+
+
+@router.get(
+    "/tag/daily/activity/aggregated/model_top_keys",
+    response_model=ModelTopApiKeysResponse,
+    tags=["tag management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+)
+async def get_tag_daily_activity_model_top_keys(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    model: str = Query(
+        ...,
+        min_length=1,
+        description="Model or model group to rank keys by spend for",
+    ),
+    group_by: ModelTopApiKeysGroupBy = "model",
+    tags: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    exclude_tags: str | None = None,
+    timezone: int | None = None,
+) -> ModelTopApiKeysResponse:
+    """Top keys by spend on one model or model group, across every key the caller
+    may see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None or start_date is None or end_date is None:
+        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+
+    scope: Final = await _resolve_tag_daily_activity_scope(
+        prisma_client=prisma_client,
+        tags=tags,
+        api_key=None,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if scope.api_key_filter == []:
+        return ModelTopApiKeysResponse(model=model, group_by=group_by, limit=USAGE_MODEL_TOP_API_KEYS_LIMIT)
+
+    return await get_daily_activity_model_top_api_keys(
+        prisma_client=prisma_client,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=scope.tag_ids,
+        start_date=start_date,
+        end_date=end_date,
+        group_by=group_by,
+        model=model,
+        api_key=scope.api_key_filter,
+        exclude_entity_ids=exclude_tags.split(",") if exclude_tags else None,
+        timezone_offset_minutes=timezone,
     )
 
 

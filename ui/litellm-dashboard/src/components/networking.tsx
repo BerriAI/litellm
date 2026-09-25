@@ -1654,11 +1654,40 @@ const entityDailyActivityExportCall =
     });
   };
 
+const entityDailyActivityModelTopKeysCall =
+  (path: string, idsParam: string) =>
+  async (
+    accessToken: string,
+    startTime: Date,
+    endTime: Date,
+    ...options: [model: string, groupBy: ModelTopApiKeysGroupBy, ids?: string[] | null]
+  ): Promise<ModelTopApiKeysResponse> => {
+    const [model, groupBy, ids = null] = options;
+    try {
+      return await apiClient.get(`/${path}/daily/activity/aggregated/model_top_keys`, {
+        accessToken,
+        query: {
+          start_date: formatDate(startTime),
+          end_date: formatDate(endTime),
+          timezone: new Date().getTimezoneOffset().toString(),
+          model,
+          group_by: groupBy,
+          [idsParam]: ids && ids.length > 0 ? ids.join(",") : undefined,
+        },
+      });
+    } catch (error) {
+      console.error(`Failed to fetch ${path} daily activity model top keys:`, error);
+      throw error;
+    }
+  };
+
 export const tagDailyActivityAggregatedCall = entityDailyActivityAggregatedCall("tag", "tags");
 
 export const tagDailyActivityKeySearchCall = entityDailyActivityKeySearchCall("tag", "tags");
 
 export const tagDailyActivityExportCall = entityDailyActivityExportCall("tag", "tags");
+
+export const tagDailyActivityModelTopKeysCall = entityDailyActivityModelTopKeysCall("tag", "tags");
 
 export const organizationDailyActivityAggregatedCall = entityDailyActivityAggregatedCall(
   "organization",
@@ -1672,17 +1701,26 @@ export const organizationDailyActivityKeySearchCall = entityDailyActivityKeySear
 
 export const organizationDailyActivityExportCall = entityDailyActivityExportCall("organization", "organization_ids");
 
+export const organizationDailyActivityModelTopKeysCall = entityDailyActivityModelTopKeysCall(
+  "organization",
+  "organization_ids",
+);
+
 export const customerDailyActivityAggregatedCall = entityDailyActivityAggregatedCall("customer", "end_user_ids");
 
 export const customerDailyActivityKeySearchCall = entityDailyActivityKeySearchCall("customer", "end_user_ids");
 
 export const customerDailyActivityExportCall = entityDailyActivityExportCall("customer", "end_user_ids");
 
+export const customerDailyActivityModelTopKeysCall = entityDailyActivityModelTopKeysCall("customer", "end_user_ids");
+
 export const agentDailyActivityAggregatedCall = entityDailyActivityAggregatedCall("agent", "agent_ids");
 
 export const agentDailyActivityKeySearchCall = entityDailyActivityKeySearchCall("agent", "agent_ids");
 
 export const agentDailyActivityExportCall = entityDailyActivityExportCall("agent", "agent_ids");
+
+export const agentDailyActivityModelTopKeysCall = entityDailyActivityModelTopKeysCall("agent", "agent_ids");
 
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 

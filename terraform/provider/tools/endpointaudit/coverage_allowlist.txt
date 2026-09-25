@@ -14,10 +14,12 @@
 GET /agent/daily/activity
 GET /agent/daily/activity/aggregated
 GET /agent/daily/activity/aggregated/search
+GET /agent/daily/activity/aggregated/model_top_keys
 GET /agent/daily/activity/export
 GET /customer/daily/activity
 GET /customer/daily/activity/aggregated
 GET /customer/daily/activity/aggregated/search
+GET /customer/daily/activity/aggregated/model_top_keys
 GET /customer/daily/activity/export
 GET /guardrails/usage/detail/{guardrail_id}
 GET /guardrails/usage/logs
@@ -26,11 +28,13 @@ GET /key/spend/report
 GET /organization/daily/activity
 GET /organization/daily/activity/aggregated
 GET /organization/daily/activity/aggregated/search
+GET /organization/daily/activity/aggregated/model_top_keys
 GET /organization/daily/activity/export
 GET /organization/spend/report
 GET /tag/daily/activity
 GET /tag/daily/activity/aggregated
 GET /tag/daily/activity/aggregated/search
+GET /tag/daily/activity/aggregated/model_top_keys
 GET /tag/daily/activity/export
 GET /tag/dau
 GET /tag/distinct

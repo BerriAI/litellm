@@ -1004,12 +1004,15 @@ def _build_entity_rollup_sql_query(
     exclude_entity_ids: list[str] | None = None,  # mutable-ok: filter union shared with the paginated path
     timezone_offset_minutes: int | None = None,
     include_current_utc_day: bool = False,
+    include_api_keys: bool = True,
 ) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
     """Per-entity companion to _build_aggregated_sql_query.
 
     Two rollup levels over the same WHERE clause — (date, entity) and
     (date, entity, api_key) — told apart by GROUPING(api_key): 1 when the
-    api_key column is rolled up, 0 when it is part of the key.
+    api_key column is rolled up, 0 when it is part of the key. With
+    include_api_keys=False the query groups by (date, entity) only, which
+    unbounded entity sets like all-users need so the rollup stays small.
     """
     pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
@@ -1029,7 +1032,8 @@ def _build_entity_rollup_sql_query(
         exclude_entity_ids=exclude_entity_ids,
     )
 
-    sql_query: Final = f"""
+    sql_query: Final = (
+        f"""
         SELECT
             "{entity_id_field}" AS entity_id,
             date,
@@ -1042,6 +1046,18 @@ def _build_entity_rollup_sql_query(
             (date, "{entity_id_field}", api_key)
         )
     """
+        if include_api_keys
+        else f"""
+        SELECT
+            "{entity_id_field}" AS entity_id,
+            date,
+            NULL::text AS api_key,
+            1 AS api_key_rolled,{_rollup_metric_select(table_name)}
+        FROM "{pg_table}"
+        WHERE {where_clause}
+        GROUP BY date, "{entity_id_field}"
+    """
+    )
 
     return sql_query, sql_params
 
@@ -1922,12 +1938,16 @@ async def get_daily_activity_aggregated(
     exclude_entity_ids: list[str] | None = None,
     timezone_offset_minutes: int | None = None,
     include_entity_breakdown: bool = False,
+    entity_breakdown_api_keys: bool = True,
     include_current_utc_day: bool = False,
+    resolve_entity_metadata: Callable[[frozenset[str]], Awaitable[Mapping[str, Mapping[str, object]]]] | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
     include_entity_breakdown runs a small companion rollup query and folds
     `breakdown.entities` onto the response, as entity-scoped views like Team Usage need.
+
+    resolve_entity_metadata maps the entity ids found in that rollup to metadata.
 
     Matches the response model of the paginated endpoint so the UI does not need to transform.
     """
@@ -1960,7 +1980,11 @@ async def get_daily_activity_aggregated(
             **query_kwargs,
             global_rollup_through=await global_rollup_reconciled_through(prisma_client, query_kwargs),
         )
-        entity_query: Final = _build_entity_rollup_sql_query(**query_kwargs) if include_entity_breakdown else None
+        entity_query: Final = (
+            _build_entity_rollup_sql_query(**query_kwargs, include_api_keys=entity_breakdown_api_keys)
+            if include_entity_breakdown
+            else None
+        )
 
         raw_rows, raw_entity_rows = await asyncio.gather(
             prisma_client.db.query_raw(sql_query, *sql_params),
@@ -1989,12 +2013,25 @@ async def get_daily_activity_aggregated(
                 if entity_api_keys
                 else {}  # mutable-ok: matches the helper's dict return
             )
+            merged_entity_metadata: Final[Mapping[str, dict[str, object]] | None] = (
+                {
+                    **(entity_metadata_field or {}),
+                    **{
+                        entity_id: dict(metadata)
+                        for entity_id, metadata in (
+                            await resolve_entity_metadata(frozenset(r.entity_id for r in entity_records if r.entity_id))
+                        ).items()
+                    },
+                }
+                if resolve_entity_metadata is not None
+                else entity_metadata_field
+            )
             await asyncio.to_thread(
                 _fold_entity_rollups_sync,
                 results=aggregated["results"],
                 entity_rows=entity_records,
                 api_key_metadata=entity_key_metadata,
-                entity_metadata_field=entity_metadata_field,
+                entity_metadata_field=merged_entity_metadata,
             )
 
         return SpendAnalyticsPaginatedResponse(

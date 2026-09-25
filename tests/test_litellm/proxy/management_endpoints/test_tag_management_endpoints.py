@@ -1851,3 +1851,111 @@ def test_tag_daily_activity_export_reads_timezone_query_param():
 
         assert response.status_code == 200
         assert mock_rows.call_args[1]["timezone_offset_minutes"] == 480
+
+
+@pytest.mark.asyncio
+async def test_get_tag_daily_activity_model_top_keys_scopes_where_before_take():
+    """The scoped caller's own keys and the selected tags must reach the helper,
+    so the ranking runs only over keys the caller may see."""
+    from litellm.proxy.management_endpoints import tag_management_endpoints
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_model_top_keys,
+    )
+
+    own_key = Mock()
+    own_key.token = "user_key_1"
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch.object(
+            tag_management_endpoints, "get_daily_activity_model_top_api_keys", new_callable=AsyncMock
+        ) as mock_top_keys,
+    ):
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[own_key])
+        expected = Mock()
+        mock_top_keys.return_value = expected
+
+        result = await get_tag_daily_activity_model_top_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER),
+            model="gpt-4o",
+            group_by="model_group",
+            tags="tag-a,tag-b",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_tags="tag-c",
+            timezone=480,
+        )
+
+        mock_top_keys.assert_awaited_once()
+        kwargs = mock_top_keys.call_args[1]
+        assert kwargs["table_name"] == "litellm_dailytagspend"
+        assert kwargs["entity_id_field"] == "tag"
+        assert kwargs["entity_id"] == ["tag-a", "tag-b"]
+        assert kwargs["model"] == "gpt-4o"
+        assert kwargs["group_by"] == "model_group"
+        assert kwargs["api_key"] == ["user_key_1"]
+        assert kwargs["exclude_entity_ids"] == ["tag-c"]
+        assert kwargs["timezone_offset_minutes"] == 480
+        assert result is expected
+
+
+@pytest.mark.asyncio
+async def test_get_tag_daily_activity_model_top_keys_missing_dates_raises_400():
+    from litellm.proxy.management_endpoints import tag_management_endpoints
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_model_top_keys,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch.object(
+            tag_management_endpoints, "get_daily_activity_model_top_api_keys", new_callable=AsyncMock
+        ) as mock_top_keys,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await get_tag_daily_activity_model_top_keys(
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+                model="gpt-4o",
+                group_by="model",
+                tags="tag-a",
+                start_date=None,
+                end_date=None,
+                exclude_tags=None,
+                timezone=None,
+            )
+
+        assert exc.value.status_code == 400
+        mock_top_keys.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_tag_daily_activity_model_top_keys_scoped_empty_keys_returns_empty():
+    """A scoped caller with no keys must get an empty response without querying."""
+    from litellm.proxy.management_endpoints import tag_management_endpoints
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_model_top_keys,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch.object(
+            tag_management_endpoints, "get_daily_activity_model_top_api_keys", new_callable=AsyncMock
+        ) as mock_top_keys,
+    ):
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+        result = await get_tag_daily_activity_model_top_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER),
+            model="gpt-4o",
+            group_by="model",
+            tags=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_tags=None,
+            timezone=None,
+        )
+
+        assert result.api_keys == []
+        assert result.model == "gpt-4o"
+        assert result.group_by == "model"
+        mock_top_keys.assert_not_called()

@@ -854,6 +854,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agent/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Daily Activity Model Top Keys
+         * @description Top keys by spend on one model or model group, across every key rather
+         *     than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
+         */
+        get: operations["get_agent_daily_activity_model_top_keys_agent_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agent/daily/activity/aggregated/search": {
         parameters: {
             query?: never;
@@ -4063,6 +4084,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/customer/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Daily Activity Model Top Keys
+         * @description Top keys by spend on one model or model group, across every key rather
+         *     than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
+         */
+        get: operations["get_customer_daily_activity_model_top_keys_customer_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/customer/daily/activity/aggregated/search": {
         parameters: {
             query?: never;
@@ -4676,6 +4718,27 @@ export interface paths {
          *     per-customer breakdown.
          */
         get: operations["get_customer_daily_activity_aggregated_end_user_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Daily Activity Model Top Keys
+         * @description Top keys by spend on one model or model group, across every key rather
+         *     than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
+         */
+        get: operations["get_customer_daily_activity_model_top_keys_end_user_daily_activity_aggregated_model_top_keys_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10953,6 +11016,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organization/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Organization Daily Activity Model Top Keys
+         * @description Top keys by spend on one model or model group, across every key rather
+         *     than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
+         */
+        get: operations["get_organization_daily_activity_model_top_keys_organization_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organization/daily/activity/aggregated/search": {
         parameters: {
             query?: never;
@@ -15445,6 +15529,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tag/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tag Daily Activity Model Top Keys
+         * @description Top keys by spend on one model or model group, across every key the caller
+         *     may see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
+         */
+        get: operations["get_tag_daily_activity_model_top_keys_tag_daily_activity_aggregated_model_top_keys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tag/daily/activity/aggregated/search": {
         parameters: {
             query?: never;
@@ -15969,6 +16074,27 @@ export interface paths {
          *         SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
          */
         get: operations["get_team_daily_activity_aggregated_team_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Daily Activity Model Top Keys
+         * @description Top keys by spend on one model or model group, across every key the caller may
+         *     see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
+         */
+        get: operations["get_team_daily_activity_model_top_keys_team_daily_activity_aggregated_model_top_keys_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -17697,6 +17823,31 @@ export interface paths {
          *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
          */
         get: operations["get_user_daily_activity_aggregated_user_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/daily/activity/aggregated/model_top_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Daily Activity Model Top Keys
+         * @description Top keys by spend on one model or model group, ranked across every key.
+         *
+         *     The aggregated endpoint's per-model key breakdown only carries the global
+         *     USAGE_TOP_API_KEYS_LIMIT spenders, so a model whose heaviest keys fall
+         *     outside that cap shows an incomplete ranking. This route re-ranks over all
+         *     keys for the requested model only, keeping the same caller scoping.
+         */
+        get: operations["get_user_daily_activity_model_top_keys_user_daily_activity_aggregated_model_top_keys_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -32018,7 +32169,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/export" | "/team/daily/activity/aggregated/search" | "/user/daily/activity/export" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/export" | "/team/daily/activity/aggregated/search" | "/team/daily/activity/aggregated/model_top_keys" | "/user/daily/activity/export" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -36442,6 +36593,44 @@ export interface components {
             system_fingerprint?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /** ModelTopApiKey */
+        ModelTopApiKey: {
+            /** Api Key */
+            api_key: string;
+            /**
+             * Api Requests
+             * @default 0
+             */
+            api_requests: number;
+            /** Key Alias */
+            key_alias?: string | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Team Id */
+            team_id?: string | null;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
+        /** ModelTopApiKeysResponse */
+        ModelTopApiKeysResponse: {
+            /** Api Keys */
+            api_keys?: components["schemas"]["ModelTopApiKey"][];
+            /**
+             * Group By
+             * @enum {string}
+             */
+            group_by: "model" | "model_group";
+            /** Limit */
+            limit: number;
+            /** Model */
+            model: string;
         };
         /**
          * Move
@@ -48489,6 +48678,44 @@ export interface operations {
             };
         };
     };
+    get_agent_daily_activity_model_top_keys_agent_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                /** @description Model or model group to rank keys by spend for */
+                model: string;
+                group_by?: "model" | "model_group";
+                agent_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_agent_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopApiKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     search_agent_daily_activity_keys_agent_daily_activity_aggregated_search_get: {
         parameters: {
             query: {
@@ -53644,6 +53871,44 @@ export interface operations {
             };
         };
     };
+    get_customer_daily_activity_model_top_keys_customer_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                /** @description Model or model group to rank keys by spend for */
+                model: string;
+                group_by?: "model" | "model_group";
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopApiKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     search_customer_daily_activity_keys_customer_daily_activity_aggregated_search_get: {
         parameters: {
             query: {
@@ -54340,6 +54605,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_model_top_keys_end_user_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                /** @description Model or model group to rank keys by spend for */
+                model: string;
+                group_by?: "model" | "model_group";
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopApiKeysResponse"];
                 };
             };
             /** @description Validation Error */
@@ -62537,6 +62840,44 @@ export interface operations {
             };
         };
     };
+    get_organization_daily_activity_model_top_keys_organization_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                /** @description Model or model group to rank keys by spend for */
+                model: string;
+                group_by?: "model" | "model_group";
+                organization_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_organization_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopApiKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     search_organization_daily_activity_keys_organization_daily_activity_aggregated_search_get: {
         parameters: {
             query: {
@@ -67440,6 +67781,44 @@ export interface operations {
             };
         };
     };
+    get_tag_daily_activity_model_top_keys_tag_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                /** @description Model or model group to rank keys by spend for */
+                model: string;
+                group_by?: "model" | "model_group";
+                tags?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_tags?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopApiKeysResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     search_tag_daily_activity_keys_tag_daily_activity_aggregated_search_get: {
         parameters: {
             query: {
@@ -68038,6 +68417,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_daily_activity_model_top_keys_team_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                /** @description Model or model group to rank keys by spend for */
+                model: string;
+                group_by?: "model" | "model_group";
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopApiKeysResponse"];
                 };
             };
             /** @description Validation Error */
@@ -70243,6 +70660,49 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_daily_activity_model_top_keys_user_daily_activity_aggregated_model_top_keys_get: {
+        parameters: {
+            query: {
+                /** @description Model or model group to rank keys by spend for */
+                model: string;
+                group_by?: "model" | "model_group";
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelTopApiKeysResponse"];
                 };
             };
             /** @description Validation Error */

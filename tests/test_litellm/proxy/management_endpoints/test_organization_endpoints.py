@@ -1428,6 +1428,7 @@ _ORGANIZATION_ROUTE_REQUESTS: Final[Mapping[tuple[str, str], Mapping[str, object
         ("DELETE", "/organization/delete"): {"json": {"organization_ids": ["org-under-test"]}},
         ("GET", "/organization/info"): {"params": {"organization_id": "org-under-test"}},
         ("GET", "/organization/daily/activity/aggregated/search"): {"params": {"search": "org-under-test"}},
+        ("GET", "/organization/daily/activity/aggregated/model_top_keys"): {"params": {"model": "gpt-4"}},
         ("POST", "/organization/info"): {"json": {"organizations": ["org-under-test"]}},
         ("POST", "/organization/member_add"): {
             "json": {"organization_id": "org-under-test", "member": {"user_id": "user-1", "role": "internal_user"}}
@@ -1710,3 +1711,118 @@ async def test_get_organization_daily_activity_export_csv_headers(monkeypatch):
     assert body["data"][0]["entity_id"] == "orgA"
     assert body["data"][0]["entity_alias"] == "Org A"
     assert body["metadata"]["entity_ids"] == ["orgA"]
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_model_top_keys_admin_param_passing(monkeypatch):
+    """Parsed params and the org-admin scope must reach the top-keys helper."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity_model_top_keys,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: True,
+    )
+
+    mocked_response = MagicMock(name="ModelTopApiKeysResponse")
+    top_keys_mock = AsyncMock(return_value=mocked_response)
+    monkeypatch.setattr(organization_endpoints, "get_daily_activity_model_top_api_keys", top_keys_mock)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    result = await get_organization_daily_activity_model_top_keys(
+        user_api_key_dict=auth,
+        model="gpt-4",
+        group_by="model_group",
+        organization_ids="org1,org2",
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        exclude_organization_ids="org3",
+        timezone=480,
+    )
+
+    top_keys_mock.assert_awaited_once()
+    kwargs = top_keys_mock.call_args.kwargs
+    assert kwargs["table_name"] == "litellm_dailyorganizationspend"
+    assert kwargs["entity_id_field"] == "organization_id"
+    assert kwargs["entity_id"] == ["org1", "org2"]
+    assert kwargs["model"] == "gpt-4"
+    assert kwargs["group_by"] == "model_group"
+    assert kwargs["api_key"] is None
+    assert kwargs["exclude_entity_ids"] == ["org3"]
+    assert kwargs["timezone_offset_minutes"] == 480
+    assert result is mocked_response
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_model_top_keys_missing_dates_raises_400(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity_model_top_keys,
+    )
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    top_keys_mock = AsyncMock()
+    monkeypatch.setattr(organization_endpoints, "get_daily_activity_model_top_api_keys", top_keys_mock)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    with pytest.raises(HTTPException) as exc:
+        await get_organization_daily_activity_model_top_keys(
+            user_api_key_dict=auth,
+            model="gpt-4",
+            group_by="model",
+            organization_ids="org1",
+            start_date=None,
+            end_date=None,
+            exclude_organization_ids=None,
+            timezone=None,
+        )
+
+    assert exc.value.status_code == 400
+    top_keys_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_model_top_keys_non_admin_foreign_org_raises_403(monkeypatch):
+    """A non-admin asking for an org they do not administer gets 403 before the query runs."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity_model_top_keys,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationmembership.find_many = AsyncMock(
+        return_value=[SimpleNamespace(organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value)]
+    )
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: False,
+    )
+    top_keys_mock = AsyncMock()
+    monkeypatch.setattr(organization_endpoints, "get_daily_activity_model_top_api_keys", top_keys_mock)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user")
+    with pytest.raises(HTTPException) as exc:
+        await get_organization_daily_activity_model_top_keys(
+            user_api_key_dict=auth,
+            model="gpt-4",
+            group_by="model",
+            organization_ids="orgX",
+            start_date="2024-03-01",
+            end_date="2024-03-31",
+            exclude_organization_ids=None,
+            timezone=None,
+        )
+
+    assert exc.value.status_code == 403
+    top_keys_mock.assert_not_called()

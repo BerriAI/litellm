@@ -3858,6 +3858,90 @@
           "title": "MetricWithMetadata",
           "type": "object"
         },
+        "ModelTopApiKey": {
+          "properties": {
+            "api_key": {
+              "title": "Api Key",
+              "type": "string"
+            },
+            "api_requests": {
+              "default": 0,
+              "title": "Api Requests",
+              "type": "integer"
+            },
+            "key_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Alias"
+            },
+            "spend": {
+              "default": 0.0,
+              "title": "Spend",
+              "type": "number"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "total_tokens": {
+              "default": 0,
+              "title": "Total Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "api_key"
+          ],
+          "title": "ModelTopApiKey",
+          "type": "object"
+        },
+        "ModelTopApiKeysResponse": {
+          "properties": {
+            "api_keys": {
+              "items": {
+                "$ref": "#/components/schemas/ModelTopApiKey"
+              },
+              "title": "Api Keys",
+              "type": "array"
+            },
+            "group_by": {
+              "enum": [
+                "model",
+                "model_group"
+              ],
+              "title": "Group By",
+              "type": "string"
+            },
+            "limit": {
+              "title": "Limit",
+              "type": "integer"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "model",
+            "group_by",
+            "limit"
+          ],
+          "title": "ModelTopApiKeysResponse",
+          "type": "object"
+        },
         "MutualTLSSecurityScheme": {
           "description": "Defines a security scheme using mTLS authentication.",
           "properties": {
@@ -4582,6 +4666,151 @@
             }
           ],
           "summary": "Get Agent Daily Activity Aggregated",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/model_top_keys": {
+        "get": {
+          "description": "Top keys by spend on one model or model group, across every key rather\nthan only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.",
+          "operationId": "get_agent_daily_activity_model_top_keys_agent_daily_activity_aggregated_model_top_keys_get",
+          "parameters": [
+            {
+              "description": "Model or model group to rank keys by spend for",
+              "in": "query",
+              "name": "model",
+              "required": true,
+              "schema": {
+                "description": "Model or model group to rank keys by spend for",
+                "minLength": 1,
+                "title": "Model",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "group_by",
+              "required": false,
+              "schema": {
+                "default": "model",
+                "enum": [
+                  "model",
+                  "model_group"
+                ],
+                "title": "Group By",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelTopApiKeysResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Model Top Keys",
           "tags": [
             "agents"
           ]
