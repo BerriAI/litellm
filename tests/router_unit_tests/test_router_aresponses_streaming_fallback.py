@@ -10,14 +10,16 @@ Targets the four helpers introduced on Router:
   - _aresponses_streaming_iterator
 """
 
-from typing import Any, AsyncIterator, List
+from collections.abc import AsyncIterator
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 from litellm import Router
 from litellm.types.llms.openai import (
+    ImageGenerationPartialImageEvent,
     ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
@@ -46,9 +48,7 @@ def _make_router() -> Router:
     )
 
 
-def _make_completed_event(
-    input_tokens: int, output_tokens: int, total_tokens: int
-) -> ResponseCompletedEvent:
+def _make_completed_event(input_tokens: int, output_tokens: int, total_tokens: int) -> ResponseCompletedEvent:
     response = ResponsesAPIResponse.model_construct(
         usage=ResponseAPIUsage(
             input_tokens=input_tokens,
@@ -145,9 +145,7 @@ def test_combine_responses_fallback_usage_passthrough_for_unknown_event():
 
 
 def test_build_responses_continuation_input_from_string():
-    out = Router._build_responses_continuation_input(
-        "Hello world", "partial assistant text"
-    )
+    out = Router._build_responses_continuation_input("Hello world", "partial assistant text")
     assert len(out) == 3
     assert out[0]["role"] == "user"
     assert out[0]["content"][0]["text"] == "Hello world"
@@ -157,7 +155,7 @@ def test_build_responses_continuation_input_from_string():
 
 
 def test_build_responses_continuation_input_from_list_preserves_items():
-    existing: List[Any] = [
+    existing: list[Any] = [
         {
             "type": "message",
             "role": "user",
@@ -227,9 +225,7 @@ async def test_aresponses_streaming_iterator_passthrough():
     router = _make_router()
     source = _FakeSource()
 
-    wrapper = await router._aresponses_streaming_iterator(
-        source, initial_kwargs={"model": "primary"}
-    )
+    wrapper = await router._aresponses_streaming_iterator(source, initial_kwargs={"model": "primary"})
     assert isinstance(wrapper, BaseResponsesAPIStreamingIterator)
 
     collected = [ev async for ev in wrapper]
@@ -276,15 +272,18 @@ async def test_aresponses_with_streaming_fallbacks_wraps_streaming_iterator():
     async def fake_original(**_kwargs):
         return streaming_iter
 
-    with patch.object(
-        router,
-        "_ageneric_api_call_with_fallbacks_helper",
-        new=AsyncMock(return_value=streaming_iter),
-    ), patch.object(
-        router,
-        "_aresponses_streaming_iterator",
-        new=AsyncMock(return_value=wrapped),
-    ) as mock_wrap:
+    with (
+        patch.object(
+            router,
+            "_ageneric_api_call_with_fallbacks_helper",
+            new=AsyncMock(return_value=streaming_iter),
+        ),
+        patch.object(
+            router,
+            "_aresponses_streaming_iterator",
+            new=AsyncMock(return_value=wrapped),
+        ) as mock_wrap,
+    ):
         out = await router._aresponses_with_streaming_fallbacks(
             original_function=fake_original,
             model="primary",
@@ -345,6 +344,92 @@ def _scripted_responses_stream(events: list, error: Exception | None = None):
             return None
 
     return _ScriptedStream()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "delivered_output",
+    [
+        SimpleNamespace(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=SimpleNamespace(type="function_call", status="completed", call_id="call_primary"),
+        ),
+        ImageGenerationPartialImageEvent(
+            type=ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE,
+            partial_image_index=0,
+            b64_json="image-data",
+        ),
+    ],
+    ids=["completed-function-call", "partial-image-without-output-index"],
+)
+async def test_aresponses_delivered_output_does_not_start_fallback(delivered_output):
+    """Delivered tool calls and partial images cannot start a second lifecycle."""
+    import litellm
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = _make_router()
+    primary_error = litellm.InternalServerError(message="primary failed", llm_provider="openai", model="gpt-5")
+    source = _scripted_responses_stream(
+        [delivered_output],
+        MidStreamFallbackError(
+            message="primary failed",
+            model="gpt-5",
+            llm_provider="openai",
+            original_exception=primary_error,
+            generated_content="",
+            is_pre_first_chunk=False,
+        ),
+    )
+    wrapped = await router._aresponses_streaming_iterator(
+        response=source,
+        initial_kwargs={"model": "primary", "input": "run the tool"},
+    )
+
+    with patch.object(router, "async_function_with_fallbacks_common_utils", new=AsyncMock()) as mock_fallback:
+        assert await anext(wrapped) is delivered_output
+        with pytest.raises(litellm.InternalServerError):
+            await anext(wrapped)
+
+    mock_fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_aresponses_failure_before_output_still_uses_fallback():
+    """A response.created event alone does not prevent a fallback."""
+    import litellm
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = _make_router()
+    created = SimpleNamespace(type=ResponsesAPIStreamEvents.RESPONSE_CREATED)
+    fallback_event = _make_completed_event(1, 1, 2)
+    source = _scripted_responses_stream(
+        [created],
+        MidStreamFallbackError(
+            message="primary failed",
+            model="gpt-5",
+            llm_provider="openai",
+            original_exception=litellm.InternalServerError(
+                message="primary failed", llm_provider="openai", model="gpt-5"
+            ),
+            generated_content="",
+            is_pre_first_chunk=False,
+        ),
+    )
+    wrapped = await router._aresponses_streaming_iterator(
+        response=source,
+        initial_kwargs={"model": "primary", "input": "run the tool"},
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_scripted_responses_stream([fallback_event])),
+    ) as mock_fallback:
+        collected = [event async for event in wrapped]
+
+    assert collected == [created, fallback_event]
+    mock_fallback.assert_awaited_once()
 
 
 def _three_tier_original(calls: list, primary_fails_pre_stream: bool):
@@ -545,14 +630,12 @@ async def test_aresponses_fallback_on_in_stream_error_event():
 
 
 @pytest.mark.asyncio
-async def test_aresponses_fallback_uses_continuation_input_after_partial_content():
-    """When output text was already streamed before the error, the fallback re-entry
-    must carry a continuation input with the partial assistant text instead of
-    retrying the original input from scratch (which would duplicate streamed content)."""
+async def test_aresponses_partial_text_does_not_start_fallback():
+    """A streamed text delta cannot be continued in a second response lifecycle."""
     import json
     from unittest.mock import Mock
 
-    from litellm.exceptions import MidStreamFallbackError
+    import litellm
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
     from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
@@ -587,6 +670,7 @@ async def test_aresponses_fallback_uses_continuation_input_after_partial_content
         delta_event = Mock()
         delta_event.type = ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
         delta_event.delta = parsed_chunk["delta"]
+        delta_event.output_index = 0
         return delta_event
 
     mock_config.transform_streaming_response.side_effect = transform
@@ -599,43 +683,22 @@ async def test_aresponses_fallback_uses_continuation_input_after_partial_content
         custom_llm_provider="openai",
     )
 
-    fallback_event = _make_completed_event(1, 1, 2)
-
-    class _FallbackStream:
-        def __init__(self) -> None:
-            self._done = False
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._done:
-                raise StopAsyncIteration
-            self._done = True
-            return fallback_event
-
     with patch.object(
         router,
         "async_function_with_fallbacks_common_utils",
-        new=AsyncMock(return_value=_FallbackStream()),
+        new=AsyncMock(),
     ) as mock_fallback:
         wrapped = await router._aresponses_streaming_iterator(
             response=source,
             initial_kwargs={"model": "primary", "input": "original question"},
         )
-        collected = [ev async for ev in wrapped]
+        delta = await anext(wrapped)
+        assert delta.delta == "partial answer"
+        with pytest.raises(litellm.InternalServerError):
+            await anext(wrapped)
 
-    assert collected[-1] == fallback_event
-    raised = mock_fallback.await_args.kwargs["e"]
-    assert isinstance(raised, MidStreamFallbackError)
-    assert raised.is_pre_first_chunk is False
-    assert raised.generated_content == "partial answer"
-    continuation = mock_fallback.await_args.kwargs["kwargs"]["input"]
-    assert isinstance(continuation, list)
-    assert continuation[0]["content"][0]["text"] == "original question"
-    assert continuation[-2]["role"] == "developer"
-    assert continuation[-1]["role"] == "assistant"
-    assert continuation[-1]["content"][0]["text"] == "partial answer"
+    assert source._generated_content == "partial answer"
+    mock_fallback.assert_not_awaited()
 
 
 @pytest.mark.asyncio
