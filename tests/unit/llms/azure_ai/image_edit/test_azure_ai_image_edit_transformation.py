@@ -5,6 +5,7 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
@@ -213,6 +214,45 @@ def test_flux2_image_edit_bills_the_megapixels_azure_reports(input_mp: float, ou
 
     rate: Final = litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_pixel"]
     assert response._hidden_params["response_cost"] == pytest.approx(rate * 1024 * 1024 * (input_mp + output_mp))
+
+
+@pytest.mark.parametrize("input_cost_per_pixel", (1.5e-07, 0.0))
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.asyncio
+async def test_flux2_image_edit_bills_azure_megapixels_at_the_deployment_rate(
+    input_cost_per_pixel: float,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(  # test-quality-ok: respx needs HTTPX enabled to fake the provider HTTP boundary.
+        litellm, "disable_aiohttp_transport", True
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(url__startswith="https://example.services.ai.azure.com/").respond(
+        json={"data": [{"b64_json": "aW1n"}], "request_meta": {"input_mp": 0.39, "output_mp": 1.0}}
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flux-deployment",
+                "litellm_params": {
+                    "model": "azure_ai/FLUX.2-flex",
+                    "api_key": "test-key",
+                    "api_base": "https://example.services.ai.azure.com",
+                    "input_cost_per_pixel": input_cost_per_pixel,
+                },
+            }
+        ]
+    )
+
+    response: Final = await router.aimage_edit(
+        model="flux-deployment",
+        image=b"reference",
+        prompt="Add a hat",
+        size="1024x1024",
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(input_cost_per_pixel * 1024 * 1024 * 1.39)
 
 
 def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():
