@@ -258,3 +258,50 @@ jobs:
       job-timeout-minutes: ${{ matrix.job-timeout-minutes }}
       artifact-name: ${{ matrix.artifact-name }}
       legacy-mcp-peer: ${{ matrix.shard == 'mcp-integration' }}
+
+  openai-sdk-compat:
+    name: OpenAI ${{ matrix.openai-version }} (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+        openai-version: ["2.20.0", "3.19.2"]
+    env:
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      PYTHONPATH: ${{ github.workspace }}
+      UV_PYTHON: ${{ matrix.python-version }}
+      OPENAI_VERSION: ${{ matrix.openai-version }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install dependencies
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --group dev --group proxy-dev --extra proxy --no-install-workspace
+          uv pip install "openai==${OPENAI_VERSION:?}" --exclude-newer-package openai=2026-09-25T00:00:00Z
+          uv run --no-sync python -c 'import os, openai; assert openai.__version__ == os.environ["OPENAI_VERSION"], openai.__version__'
+
+      - name: Run OpenAI SDK compatibility tests
+        run: |
+          uv run --no-sync pytest \
+            tests/test_litellm/llms/openai/test_openai.py \
+            tests/test_litellm/llms/openai/test_openai_file_content_streaming.py \
+            tests/test_litellm/llms/azure/test_azure_exception_mapping.py \
+            tests/test_litellm/test_exception_header_preservation.py \
+            tests/test_litellm/integrations/otel/test_otel_v2_sources_of_truth.py::test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far \
+            --tb=short -q
+
+      - name: Run workload identity tests with SDK 3
+        if: startsWith(matrix.openai-version, '3.')
+        run: uv run --no-sync pytest tests/test_litellm/llms/openai/test_openai_workload_identity.py --tb=short -q

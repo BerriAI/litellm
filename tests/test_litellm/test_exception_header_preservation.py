@@ -8,6 +8,8 @@ This is important for debugging and observability - headers like x-request-id,
 x-ms-region, rate limit headers, etc. should be available even when errors occur.
 """
 
+from typing import Final
+
 import httpx
 import pytest
 
@@ -25,10 +27,11 @@ from litellm.exceptions import (
 class TestExceptionHeaderPreservation:
     """Test that exception classes preserve headers from provider responses."""
 
-    @pytest.fixture
-    def mock_response_with_headers(self) -> httpx.Response:
+    @pytest.fixture(params=("httpx", "httpx2"))
+    def mock_response_with_headers(self, request: pytest.FixtureRequest) -> httpx.Response:
         """Create a mock response with typical provider headers."""
-        return httpx.Response(
+        transport: Final = pytest.importorskip(request.param)
+        return transport.Response(
             status_code=400,
             headers={
                 "x-request-id": "req-abc123",
@@ -36,7 +39,7 @@ class TestExceptionHeaderPreservation:
                 "x-ratelimit-remaining-requests": "99",
                 "x-ratelimit-remaining-tokens": "9999",
             },
-            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+            request=transport.Request("POST", "https://api.openai.com/v1/chat/completions"),
         )
 
     def test_bad_request_error_preserves_headers(
@@ -50,7 +53,9 @@ class TestExceptionHeaderPreservation:
             response=mock_response_with_headers,
         )
 
-        assert error.response is not None
+        assert error.response is mock_response_with_headers
+        assert error.request is mock_response_with_headers.request
+        assert error.request_id == mock_response_with_headers.headers["x-request-id"]
         assert error.response.headers.get("x-request-id") == "req-abc123"
         assert error.response.headers.get("x-ms-region") == "eastus"
         assert error.response.headers.get("x-ratelimit-remaining-requests") == "99"

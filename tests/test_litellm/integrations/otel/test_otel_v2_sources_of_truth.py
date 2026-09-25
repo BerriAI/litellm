@@ -1204,8 +1204,9 @@ def test_speech_response_without_a_byte_count_produces_no_output() -> None:
     assert data.choices_out == ()
 
 
-def test_speech_binary_response_is_logged_as_its_summary_not_dropped() -> None:
-    import httpx
+@pytest.mark.parametrize("http_module", ("httpx", "httpx2"))
+def test_speech_binary_response_is_logged_as_its_summary_not_dropped(http_module: str) -> None:
+    httpx: Final = pytest.importorskip(http_module)
 
     from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
     from litellm.litellm_core_utils.litellm_logging import _extract_response_obj_and_hidden_params
@@ -1221,8 +1222,9 @@ def test_speech_binary_response_is_logged_as_its_summary_not_dropped() -> None:
     assert hidden_params["headers"]["content-type"] == "audio/mpeg"
 
 
-def test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far() -> None:
-    import httpx
+@pytest.mark.parametrize("http_module", ("httpx", "httpx2"))
+def test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far(http_module: str) -> None:
+    httpx: Final = pytest.importorskip(http_module)
 
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 

@@ -135,7 +135,7 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     def _num_bytes(self) -> int:
         try:
             return len(self.response.content)
-        except httpx.ResponseNotRead:
+        except RuntimeError:
             return self.response.num_bytes_downloaded
 
     def set_response_cost(self, response_cost: float | None) -> None:
