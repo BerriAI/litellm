@@ -2770,7 +2770,7 @@ async def test_cancellation_delivers_termination_over_tcp(
     cancel_mode: str, concurrency: int, termination: str, raise_on_error: bool, protocol_version: str
 ) -> None:
     started: Final = asyncio.Event()
-    cancellation_scope: Final[asyncio.Future[anyio.CancelScope]] = asyncio.get_running_loop().create_future()
+    scope_ready: Final[asyncio.Future[anyio.CancelScope]] = asyncio.get_running_loop().create_future()
     terminations: Final[list[bytes]] = []
     starts: Final[list[bytes]] = []
     stop: Final = asyncio.Event()
@@ -2870,7 +2870,7 @@ async def test_cancellation_delivers_termination_over_tcp(
     async def invoke():
         if cancel_mode == "scope":
             with anyio.fail_after(None) as scope:
-                cancellation_scope.set_result(scope)
+                scope_ready.set_result(scope)
                 return await calls()
         return await calls()
 
@@ -2878,7 +2878,7 @@ async def test_cancellation_delivers_termination_over_tcp(
         task: Final = asyncio.create_task(invoke())
         await asyncio.wait_for(started.wait(), 30)
         if cancel_mode == "scope":
-            cancellation_scope.result().deadline = anyio.current_time() + 0.2
+            (await scope_ready).deadline = anyio.current_time() + 0.2
         if cancel_mode == "task":
             task.cancel()
         expected_error: Final = (
