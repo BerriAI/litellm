@@ -102,7 +102,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     setToolErrors((prev) => ({ ...prev, [serverId]: "" }));
 
     try {
-      const response = await listMCPTools(token, serverId);
+      const response = await listMCPTools(token, serverId, undefined, true);
 
       if (response.error) {
         setToolErrors((prev) => ({ ...prev, [serverId]: response.message || "Failed to fetch tools" }));

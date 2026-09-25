@@ -84,8 +84,9 @@ describe("MCPToolPermissions", () => {
     // Verify API calls
     // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
     expect(networking.fetchMCPServers).toHaveBeenCalledWith("123", undefined);
-    // listMCPTools uses the accessToken prop directly
-    expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, mockServerId);
+    // listMCPTools uses the accessToken prop directly and requests the full
+    // catalog (includeDisabledTools) so delete-classified tools stay editable
+    expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, mockServerId, undefined, true);
   });
 
   it("should select all tools when Select All button is clicked", async () => {
@@ -221,7 +222,7 @@ describe("MCPToolPermissions", () => {
       expect(await screen.findByText("Group Server")).toBeInTheDocument();
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
       expect(screen.getByText("delete_issue")).toBeInTheDocument();
-      expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, groupServer.server_id);
+      expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, groupServer.server_id, undefined, true);
     });
 
     it("shows non-delete tools checked and the delete unchecked in flat view for an unrestricted access-group server", async () => {
@@ -712,7 +713,7 @@ describe("MCPToolPermissions", () => {
       expect(await screen.findByText("github_mcp")).toBeInTheDocument();
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
       expect(screen.getByText("delete_issue")).toBeInTheDocument();
-      expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, namedServer.server_id);
+      expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, namedServer.server_id, undefined, true);
     });
 
     it("writes an edit back to the name key instead of adding a second id-keyed entry", async () => {
