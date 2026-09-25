@@ -5833,7 +5833,7 @@ def test_expand_permission_list_does_not_honor_all_proxy_sentinel():
 
 
 @pytest.mark.asyncio
-async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynamically():
+async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynamically(monkeypatch):
     """The TEAM resolver expands the all-proxy sentinel to every registered server and
     picks up a server registered later, so a team scoped to all-proxy tracks the live
     registry without any change to its stored permission. Reverting the team-side
@@ -5849,6 +5849,9 @@ async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynam
     )
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setattr(global_mcp_server_manager, "registry", {})
+    monkeypatch.setattr(global_mcp_server_manager, "config_mcp_servers", {})
 
     for sid in ("srv-x", "srv-y"):
         global_mcp_server_manager.registry[sid] = MCPServer(

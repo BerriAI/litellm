@@ -316,6 +316,8 @@ async def resolve_managed_agent(
 ) -> ManagedAgentContext | None:
     from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 
+    if client is None:
+        return None
     result: Final = await AgentIdentityStore.from_client(client).resolve_verified_claims(claims)
     if isinstance(result, AgentIdentityFailure):
         raise_identity_failure(result)

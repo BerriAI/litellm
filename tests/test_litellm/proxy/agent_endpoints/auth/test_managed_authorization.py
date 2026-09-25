@@ -354,13 +354,14 @@ async def test_managed_context_or_binding_requires_database(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_managed_invocation_requires_database(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("managed_flag", [False, True])
+async def test_managed_invocation_requires_database(monkeypatch: pytest.MonkeyPatch, managed_flag: bool) -> None:
     from litellm.proxy.agent_endpoints import agent_registry
     from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
     from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
 
     registry: Final = AgentRegistry()
-    registry.register_agent(agent())
+    registry.register_agent(agent(identity_managed=managed_flag))
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
     with pytest.raises(HTTPException) as denied:
         await prepare_agent_invocation(UserAPIKeyAuth(user_id="human"), "agent", None)

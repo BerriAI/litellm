@@ -7827,3 +7827,61 @@ def test_legacy_claim_cannot_select_a_top_level_entra_binding(claim_value: str) 
     with pytest.raises(HTTPException) as denied:
         JWTAuthManager.resolve_agent_id(_entra_agent_jwt_handler("agent"), {"agent": claim_value}, registry)
     assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["human", "config-agent", "managed-agent"])
+async def test_database_free_jwt_admission_with_entra_shaped_claims(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    issuer: Final = "https://login.microsoftonline.com/test-tenant/v2.0"
+    jwks_url: Final = "https://login.microsoftonline.test/config-only-keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.setenv("JWT_ISSUER", issuer)
+    monkeypatch.setenv("JWT_AUDIENCE", "api://gateway")
+    private_key, jwk = _get_rsa_key_and_jwk(kid="config-key")
+    cache: Final = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+    registry: Final = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="configured",
+            agent_name="Configured",
+            agent_card_params={},
+            identity_managed=kind == "managed-agent",
+        )
+    )
+    handler: Final = JWTHandler()
+    handler.update_environment(None, cache, LiteLLM_JWTAuth(agent_id_jwt_field="agent", admin_allowed_routes=["llm_api_routes"]))
+    handler.bind_agent_lookup(registry)
+    token: Final = _encode_rsa_jwt(
+        private_key,
+        issuer=issuer,
+        audience="api://gateway",
+        kid="config-key",
+        extra_claims={
+            "tid": "test-tenant",
+            "azp": "application",
+            "scope": "litellm_proxy_admin",
+            **({"agent": "configured"} if kind != "human" else {}),
+        },
+    )
+    arguments: Final = dict(
+        api_key=token,
+        jwt_handler=handler,
+        request_data={},
+        general_settings={},
+        route="/chat/completions",
+        prisma_client=None,
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+    if kind == "managed-agent":
+        with pytest.raises(HTTPException) as denied:
+            await JWTAuthManager.auth_builder(**arguments)
+        assert denied.value.status_code == 403
+    else:
+        result: Final = await JWTAuthManager.auth_builder(**arguments)
+        auth: Final = JWTAuthManager.user_api_key_auth_from_result(result)
+        assert auth.agent_id == ("configured" if kind == "config-agent" else None)
+        assert auth.managed_agent_context is None
+        assert result["is_proxy_admin"] is True

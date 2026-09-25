@@ -122,14 +122,15 @@ async def prepare_agent_invocation(
     registered: Final = await get_agent_with_read_through(target_name)
     if registered is None:
         return
-    if store is None and registered.identity_managed:
+    registered_managed: Final = registered.identity_managed or registered.identity is not None
+    if store is None and registered_managed:
         raise_identity_failure(
             AgentIdentityFailure(code="policy_unavailable", message="Managed agent policy requires a database")
         )
     target: Final = await store.agent(registered.agent_id) if store is not None else None
     if isinstance(target, AgentIdentityFailure):
         raise_identity_failure(target)
-    if target is None and registered.identity_managed:
+    if target is None and registered_managed:
         raise_identity_failure(AgentIdentityFailure(message="Invoked agent no longer exists"))
     effective: Final = target if target is not None else registered
     if not effective.identity_managed and effective.litellm_budget_table is None and auth.managed_agent_policy is None:

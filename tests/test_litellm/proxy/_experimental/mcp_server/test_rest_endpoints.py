@@ -810,6 +810,12 @@ class TestTestConnection:
         from litellm.proxy._types import LitellmUserRoles
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+        manager = MCPServerManager()
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
         captured = self._capture_execute(monkeypatch)
         saved = MCPServer(
             server_id="saved-server-id",
