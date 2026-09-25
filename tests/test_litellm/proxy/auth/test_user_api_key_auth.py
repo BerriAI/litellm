@@ -9131,6 +9131,8 @@ async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
     )
 
     async def auth_that_reserves(request, api_key):
+        assert request.method == "GET"
+        assert request.query_params.get("model") == "gpt-realtime"
         request.state.budget_reservation = reservation
         return UserAPIKeyAuth(token="hashed", budget_reservation=reservation)
 
@@ -9239,7 +9241,7 @@ async def test_managed_agent_cannot_bypass_grants_with_server_default(
     from litellm.proxy import proxy_server
     from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
     from litellm.types.agents import AgentResponse
-    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding, ManagedAgentContext
 
     policy = AgentResponse(
         agent_id="managed",
@@ -9268,7 +9270,10 @@ async def test_managed_agent_cannot_bypass_grants_with_server_default(
     }.items():
         monkeypatch.setattr(proxy_server, name, value)
     data = {"messages": [{"role": "user", "content": "hi"}], **({"model": requested} if requested else {})}
-    auth = UserAPIKeyAuth(agent_id="managed", api_key="persisted-key")
+    auth = UserAPIKeyAuth(agent_id="managed")
+    auth.managed_agent_context = ManagedAgentContext(
+        agent_id="managed", binding_revision="revision", mode="autonomous"
+    )
     if not grant_default:
         with pytest.raises(ProxyException) as denied:
             await _authorize_authenticated_request(auth, _alias_request(route, data), data, route, "persisted-key")

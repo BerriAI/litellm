@@ -651,6 +651,8 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     # never reaches the fallback.
     synthetic_scope: Final[dict[str, Any]] = {
         "type": "http",
+        "method": "GET",
+        "query_string": ws_scope.get("query_string", b""),
         "headers": scope_headers,
         "path": ws_scope.get("path", ""),
         "state": ws_scope.setdefault("state", {}),  # mutable-ok: Starlette's socket state, shared with the request
