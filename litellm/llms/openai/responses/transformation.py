@@ -256,12 +256,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
             if unsupported_effort:
                 if should_drop_effort:
-                    updated_reasoning: Final = dict(reasoning)  # mutable-ok: local copy
-                    updated_reasoning.pop("effort", None)
-                    if updated_reasoning:
-                        params["reasoning"] = updated_reasoning
-                    else:
-                        params.pop("reasoning", None)
+                    if isinstance(reasoning, dict):
+                        updated_reasoning: Final = reasoning.copy()  # mutable-ok: local copy
+                        updated_reasoning.pop("effort", None)
+                        if updated_reasoning:
+                            params["reasoning"] = updated_reasoning
+                        else:
+                            params.pop("reasoning", None)
                 else:
                     raise litellm.UnsupportedParamsError(
                         message=f"reasoning.effort={effort} is not supported for this model.",
