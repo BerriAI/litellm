@@ -2,22 +2,27 @@
 
 import logging
 
+import httpx
 import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+    RESPONSE_COST_HEADER,
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
     drop_params_env_flag,
     drop_params_flag,
     get_or_create_metadata_bucket,
+    get_provider_response_headers_from_hidden_params,
     map_finish_reason,
     normalize_drop_params,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    set_provider_response_headers_in_hidden_params,
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import ImageResponse, TranscriptionResponse
 
 
 class TestBudgetReservationBinding:
@@ -322,6 +327,28 @@ class TestRedactNestedMatchAndRegexKeys:
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
 
+    def test_redacts_custom_keys_without_changing_default_keys(self):
+        payload = {
+            "keyword": "secret-keyword",
+            "snippet": "secret-snippet",
+            "match": "secret-match",
+            "regex": "secret-regex",
+            "nested": [{"keyword": "nested-keyword", "match": "nested-match"}],
+        }
+
+        custom_keys = redact_nested_match_and_regex_keys(payload, keys=("keyword", "snippet"))
+        default_keys = redact_nested_match_and_regex_keys(payload)
+
+        assert custom_keys["keyword"] == "[REDACTED]"
+        assert custom_keys["snippet"] == "[REDACTED]"
+        assert custom_keys["nested"][0]["keyword"] == "[REDACTED]"
+        assert custom_keys["match"] == "secret-match"
+        assert custom_keys["regex"] == "secret-regex"
+        assert default_keys["match"] == "[REDACTED]"
+        assert default_keys["regex"] == "[REDACTED]"
+        assert default_keys["keyword"] == "secret-keyword"
+        assert default_keys["snippet"] == "secret-snippet"
+
 
 @pytest.mark.parametrize(
     "value, expected",
@@ -467,3 +494,66 @@ class TestIsExpectedClientError:
             category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
         assert is_expected_client_error(vendor_limit) is False
+
+
+class TestProviderResponseHeadersInHiddenParams:
+    def test_records_raw_headers_and_the_processed_additional_headers(self):
+        response = ImageResponse()
+        response._hidden_params = {"additional_headers": {RESPONSE_COST_HEADER: 0.04}}
+
+        set_provider_response_headers_in_hidden_params(
+            response, httpx.Headers({"X-Request-Id": "req_img", "x-ratelimit-remaining-requests": "41"})
+        )
+
+        assert response._hidden_params["headers"] == {
+            "x-request-id": "req_img",
+            "x-ratelimit-remaining-requests": "41",
+        }
+        additional_headers = response._hidden_params["additional_headers"]
+        assert additional_headers["llm_provider-x-request-id"] == "req_img"
+        assert additional_headers["x-ratelimit-remaining-requests"] == "41"
+        assert additional_headers[RESPONSE_COST_HEADER] == 0.04
+
+    def test_litellm_owned_additional_headers_win_over_provider_headers(self):
+        response = TranscriptionResponse(text="hi")
+        response._hidden_params = {"additional_headers": {"llm_provider-x-request-id": "kept"}}
+
+        set_provider_response_headers_in_hidden_params(response, {"x-request-id": "provider"})
+
+        assert response._hidden_params["additional_headers"]["llm_provider-x-request-id"] == "kept"
+        assert response._hidden_params["headers"] == {"x-request-id": "provider"}
+
+    def test_getter_returns_the_recorded_headers(self):
+        response = ImageResponse()
+
+        set_provider_response_headers_in_hidden_params(response, {"x-request-id": "req_img"})
+
+        assert get_provider_response_headers_from_hidden_params(response) == {"x-request-id": "req_img"}
+
+    @pytest.mark.parametrize(
+        "hidden_params",
+        [
+            None,
+            "headers",
+            {"additional_headers": {}},
+            {"headers": "x-request-id: req_img"},
+            {"headers": {"x-request-id": 7}},
+        ],
+    )
+    def test_getter_returns_none_without_a_string_header_mapping(self, hidden_params):
+        response = ImageResponse()
+        response._hidden_params = hidden_params
+
+        assert get_provider_response_headers_from_hidden_params(response) is None
+
+    def test_getter_returns_none_for_an_object_without_hidden_params(self):
+        assert get_provider_response_headers_from_hidden_params(object()) is None
+
+    def test_headers_never_leak_into_a_sibling_response(self):
+        recorded = TranscriptionResponse()
+        sibling = TranscriptionResponse()
+
+        set_provider_response_headers_in_hidden_params(recorded, {"x-request-id": "req_stt"})
+
+        assert get_provider_response_headers_from_hidden_params(sibling) is None
+        assert "additional_headers" not in sibling._hidden_params

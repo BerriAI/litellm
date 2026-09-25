@@ -6,6 +6,8 @@ from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
 
 from litellm.proxy._experimental.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 @pytest.mark.asyncio
@@ -33,6 +35,7 @@ async def test_oauth_prefetch_failure_does_not_log_caller_or_exception_text(capl
 @pytest.mark.asyncio
 async def test_dispatch_uses_explicit_context_when_ambient_caller_differs():
     from mcp.server.auth.middleware.auth_context import auth_context_var
+
     from litellm.proxy._experimental.mcp_server.server import set_auth_context
 
     context = prepare_context(
@@ -62,12 +65,13 @@ async def test_dispatch_uses_explicit_context_when_ambient_caller_differs():
 @pytest.mark.asyncio
 async def test_legacy_adapter_cleans_context_after_cancelled_operation():
     from types import SimpleNamespace
+
     from litellm.proxy._experimental.mcp_server import server
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
-    request = SimpleNamespace(session=object())
+    request = SimpleNamespace(session=object(), protocol_version="2025-06-18")
     auth = (None, None, None, None, None, None, None)
 
     async def cancelled_operation():
@@ -88,6 +92,7 @@ async def test_legacy_adapter_cleans_context_after_cancelled_operation():
 @pytest.mark.asyncio
 async def test_legacy_adapter_cleans_context_when_trace_setup_fails():
     from types import SimpleNamespace
+
     from litellm.proxy._experimental.mcp_server import server
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
 
@@ -109,6 +114,7 @@ async def test_legacy_adapter_cleans_context_when_trace_setup_fails():
 @pytest.mark.asyncio
 async def test_prompt_sampling_receives_explicit_operation_caller_headers_and_ip():
     from unittest.mock import MagicMock
+
     from litellm.proxy._experimental.mcp_server import operations
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -199,9 +205,11 @@ def _catalog_case(method):
 @pytest.mark.parametrize("state", ["success", "denied", "upstream_failure", "scope_failure"])
 async def test_native_catalog_operations_preserve_context_results_and_failure_policy(method, state):
     from types import SimpleNamespace
+
     from fastapi import HTTPException
     from mcp.server.context import ServerRequestContext
     from mcp.types import PaginatedRequestParams
+
     from litellm.proxy._experimental.mcp_server import operations, server
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -258,6 +266,7 @@ async def test_native_catalog_operations_preserve_context_results_and_failure_po
 async def test_explicit_proxy_context_rejects_catalog_operations_before_upstream_access(method):
     from mcp.shared.exceptions import MCPError
     from mcp.types import METHOD_NOT_FOUND
+
     from litellm.proxy._experimental.mcp_server import operations
 
     operation, _, manager_method, _, _ = _catalog_case(method)
@@ -274,6 +283,7 @@ async def test_explicit_proxy_context_rejects_catalog_operations_before_upstream
 @pytest.mark.parametrize("failure", ["missing_env", "pii", "guardrail", "unexpected"])
 async def test_tool_operation_preserves_failure_messages_and_request_trace(failure):
     from mcp.types import CallToolRequest, CallToolRequestParams
+
     from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
     from litellm.proxy._experimental.mcp_server import operations
     from litellm.proxy._experimental.mcp_server.utils import MCPMissingUserEnvVarsError
@@ -331,6 +341,7 @@ async def test_catalog_operation_preserves_empty_result_for_malformed_upstream_i
 @pytest.mark.parametrize("catalog_unavailable", [False, True])
 async def test_tool_listing_returns_empty_result_without_dispatch_for_unavailable_catalog(catalog_unavailable):
     from mcp.types import ListToolsRequest
+
     from litellm.proxy._experimental.mcp_server import operations
 
     allowed = AsyncMock(
@@ -350,6 +361,7 @@ async def test_tool_listing_returns_empty_result_without_dispatch_for_unavailabl
 @pytest.mark.asyncio
 async def test_explicit_proxy_context_lists_builtin_tools_and_blocks_direct_tool_dispatch():
     from mcp.types import CallToolRequest, CallToolRequestParams, ListToolsRequest
+
     from litellm.proxy._experimental.mcp_server import operations
 
     context = prepare_context(mcp_proxy_mode=True)
@@ -363,3 +375,170 @@ async def test_explicit_proxy_context_lists_builtin_tools_and_blocks_direct_tool
     assert denied.is_error is True
     assert "unavailable on /mcp/proxy" in denied.content[0].text
     allowed.assert_not_awaited()
+
+
+def _server(server_id: str, auth_type: MCPAuth) -> MCPServer:
+    return MCPServer(
+        server_id=server_id,
+        name=f"{server_id}-server",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        token_exchange_endpoint="https://idp.example.com/token",
+        client_id="cid",
+        client_secret="csec",
+    )
+
+
+class TestChallengeMissingTokenExchangeSubject:
+    """The REST cold-catalog path must answer a missing OBO subject with the RFC 9728 401 challenge
+    before the best-effort listing swallows the upstream 401 and tool resolution turns it into a 500."""
+
+    @staticmethod
+    def _challenge(
+        server: MCPServer | None,
+        allowed: list[MCPServer],
+        *,
+        user: UserAPIKeyAuth | None = None,
+        oauth2_headers: dict[str, str] | None = None,
+        raw_headers: dict[str, str] | None = None,
+        requested_server: MCPServer | None = None,
+    ) -> None:
+        from litellm.proxy._experimental.mcp_server.operations import _challenge_missing_token_exchange_subject
+
+        return _challenge_missing_token_exchange_subject(
+            server=server,
+            requested_server=requested_server,
+            allowed_mcp_servers=allowed,
+            user_api_key_auth=user,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
+
+    def test_missing_subject_raises_401_challenge(self):
+        from fastapi import HTTPException
+
+        server = _server("te-cold", MCPAuth.oauth2_token_exchange)
+        with pytest.raises(HTTPException) as exc_info:
+            self._challenge(
+                server,
+                [server],
+                user=UserAPIKeyAuth(api_key="sk-admission"),
+                raw_headers={"x-litellm-api-key": "sk-admission"},
+            )
+        assert exc_info.value.status_code == 401
+        challenge = (exc_info.value.headers or {}).get("WWW-Authenticate", "")
+        assert challenge.startswith("Bearer ") and 'error="invalid_token"' in challenge, challenge
+        assert "resource_metadata" in challenge, challenge
+
+    @pytest.mark.parametrize(
+        "authorization",
+        ["Bearer sk-admission", "Bearer sk-some-other-virtual-key"],
+        ids=["repeated-admission-key", "another-virtual-key"],
+    )
+    def test_litellm_key_in_authorization_is_not_a_subject(self, authorization: str):
+        from fastapi import HTTPException
+
+        server = _server("te-vk", MCPAuth.oauth2_token_exchange)
+        with pytest.raises(HTTPException) as exc_info:
+            self._challenge(
+                server,
+                [server],
+                user=UserAPIKeyAuth(api_key="sk-admission"),
+                oauth2_headers={"Authorization": authorization},
+                raw_headers={"x-litellm-api-key": "sk-admission", "authorization": authorization},
+            )
+        assert exc_info.value.status_code == 401
+
+    def test_subject_present_does_not_challenge(self):
+
+        server = _server("te-ok", MCPAuth.oauth2_token_exchange)
+        assert (
+            self._challenge(
+                server,
+                [server],
+                user=UserAPIKeyAuth(api_key="sk-admission"),
+                oauth2_headers={"Authorization": "Bearer idp-subject"},
+                raw_headers={"x-litellm-api-key": "sk-admission", "authorization": "Bearer idp-subject"},
+            )
+            is None
+        )
+
+    def test_server_outside_allowlist_is_not_challenged(self):
+
+        server = _server("te-hidden", MCPAuth.oauth2_token_exchange)
+        other = _server("te-visible", MCPAuth.oauth2_token_exchange)
+        assert self._challenge(server, [other], user=UserAPIKeyAuth(api_key="sk-admission")) is None
+        assert self._challenge(None, [other], user=UserAPIKeyAuth(api_key="sk-admission")) is None
+
+    def test_prefix_owner_differing_from_server_id_is_not_challenged(self):
+        """An explicit server_id that disagrees with the tool prefix keeps the existing mismatch answer."""
+        from fastapi import HTTPException
+
+        prefix_owner = _server("te-prefix", MCPAuth.oauth2_token_exchange)
+        requested = _server("te-requested", MCPAuth.oauth2_token_exchange)
+        user = UserAPIKeyAuth(api_key="sk-admission")
+        allowed = [prefix_owner, requested]
+        assert self._challenge(prefix_owner, allowed, user=user, requested_server=requested) is None
+        with pytest.raises(HTTPException):
+            self._challenge(prefix_owner, allowed, user=user, requested_server=prefix_owner)
+
+    @pytest.mark.parametrize(
+        "auth_type",
+        ["oauth2", "oauth_delegate", "oauth2_id_jag", "bearer_token", "api_key", "none"],
+    )
+    def test_other_auth_types_are_untouched(self, auth_type: str):
+
+        server = _server("na", MCPAuth(auth_type))
+        assert self._challenge(server, [server], user=UserAPIKeyAuth(api_key="sk-admission")) is None
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_challenges_missing_subject_before_cold_listing():
+    """On a cold catalog the challenge fires before any listing or tool resolution is attempted."""
+    from datetime import datetime, timezone
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server import operations
+
+    server = _server("te-exec", MCPAuth.oauth2_token_exchange)
+    listing = AsyncMock()
+    with (
+        patch.object(operations.global_mcp_server_manager, "get_mcp_server_by_id", return_value=server),
+        patch.object(operations.global_mcp_server_manager, "server_exposes_tool", return_value=False),
+        patch.object(operations, "_get_tools_from_mcp_servers", listing),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await operations.execute_mcp_tool(
+            name="add",
+            arguments={"a": 2, "b": 3},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(timezone.utc),
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-admission"),
+            raw_headers={"x-litellm-api-key": "sk-admission"},
+            requested_server_id=server.server_id,
+        )
+    assert exc_info.value.status_code == 401
+    listing.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compat", ["legacy", "modern"])
+async def test_local_tool_json_array_is_converted_once_for_the_caller_revision(compat: str) -> None:
+    """The local-registry arm used to convert at MODERN and let the legacy downgrade append a second
+    text block; converting at the caller's revision keeps the upstream body exactly once."""
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat, parse_http_body
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    body = '["a","b"]'
+    tool = MagicMock()
+    tool.handler = AsyncMock(return_value=parse_http_body(body))
+    with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
+        result = await operations._handle_local_mcp_tool("reports-list_tags", {}, WireCompat(compat))
+
+    assert [block.text for block in result.content] == [body]
+    assert result.structured_content == (["a", "b"] if compat == "modern" else None)

@@ -1,105 +1,36 @@
 use std::{
-    future::Future,
-    sync::{Arc, OnceLock},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use litellm_cache::{
-    BaseCache, CacheCodec, CacheConnectionResult, CacheConnectionStatus, Error,
-    SemanticCacheContext,
+    BaseCache, CacheCodec, Error, SemanticCacheContext,
+    semantic::{Embedder, SemanticCache, SemanticLookup, prompt_from_context},
 };
 use litellm_cache_redis::{
     RedisTopology,
     connection::{ConnectionRef, Connections},
 };
-use litellm_cache_response::{CacheEntry, ResponseCacheCodec};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::prompt::prompt_from_context;
-
-const CACHE_KEY_FIELD: &str = "litellm_cache_key";
-const VECTOR_FIELD: &str = "prompt_vector";
-
-pub trait Embedder: Send + Sync + 'static {
-    fn embed(&self, prompt: &str, metadata: Option<&Value>) -> Result<Vec<f32>, Error>;
-
-    fn async_embed(
-        &self,
-        prompt: &str,
-        metadata: Option<&Value>,
-    ) -> impl Future<Output = Result<Vec<f32>, Error>> + Send;
-}
-
-#[derive(Clone, Debug)]
-pub struct RedisSemanticConfig {
-    pub index_name: String,
-    pub similarity_threshold: f32,
-}
+use crate::{
+    RedisSemanticConfig,
+    index::{CACHE_KEY_FIELD, Index, VECTOR_FIELD},
+    reply::{bytes_field, first_document, number_field, string_field},
+};
 
 struct Inner {
-    index_name: String,
+    index: Index,
     distance_threshold: f64,
-    resolved_index: OnceLock<String>,
-    codec: ResponseCacheCodec,
     clock: fn() -> f64,
 }
 
 impl Inner {
-    fn new(config: RedisSemanticConfig) -> Self {
+    fn new(config: RedisSemanticConfig, clock: fn() -> f64) -> Self {
         Self {
-            index_name: config.index_name,
+            index: Index::new(config.index_name),
             distance_threshold: 1.0 - f64::from(config.similarity_threshold),
-            resolved_index: OnceLock::new(),
-            codec: ResponseCacheCodec,
-            clock: timestamp,
-        }
-    }
-
-    fn ensure_index(
-        &self,
-        connection: &mut ConnectionRef<'_>,
-        dims: usize,
-    ) -> Result<String, Error> {
-        if let Some(name) = self.resolved_index.get() {
-            return Ok(name.clone());
-        }
-        let name = match index_compatible(connection, &self.index_name, dims)? {
-            Some(true) => self.index_name.clone(),
-            Some(false) => self.isolated_index(connection, dims)?,
-            None => match create_index(connection, &self.index_name, dims) {
-                Ok(()) => self.index_name.clone(),
-                Err(_) => match index_compatible(connection, &self.index_name, dims)? {
-                    Some(true) => self.index_name.clone(),
-                    Some(false) => self.isolated_index(connection, dims)?,
-                    None => return Err(Error::Unavailable),
-                },
-            },
-        };
-        let _ = self.resolved_index.set(name.clone());
-        Ok(name)
-    }
-
-    fn isolated_index(
-        &self,
-        connection: &mut ConnectionRef<'_>,
-        dims: usize,
-    ) -> Result<String, Error> {
-        let name = format!("{}_isolated", self.index_name);
-        match index_compatible(connection, &name, dims)? {
-            Some(true) => Ok(name),
-            Some(false) => {
-                redis::cmd("FT.DROPINDEX")
-                    .arg(&name)
-                    .query::<()>(connection)
-                    .map_err(|_| Error::Unavailable)?;
-                create_index(connection, &name, dims)?;
-                Ok(name)
-            }
-            None => {
-                create_index(connection, &name, dims)?;
-                Ok(name)
-            }
+            clock,
         }
     }
 
@@ -107,15 +38,14 @@ impl Inner {
         &self,
         connection: &mut ConnectionRef<'_>,
         tag: &str,
-        value: &CacheEntry,
+        response: Vec<u8>,
         prompt: &str,
         vector: &[f32],
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
-        let index = self.ensure_index(connection, vector.len())?;
+        let index = self.index.ensure(connection, vector.len())?;
         let entry_id = entry_id(prompt, tag);
         let hash_key = format!("{index}:{entry_id}");
-        let response = self.codec.encode(value)?;
         redis::cmd("HSET")
             .arg(&hash_key)
             .arg("entry_id")
@@ -149,8 +79,8 @@ impl Inner {
         connection: &mut ConnectionRef<'_>,
         tag: &str,
         vector: &[f32],
-    ) -> Result<Option<CacheEntry>, Error> {
-        let index = self.ensure_index(connection, vector.len())?;
+    ) -> Result<SemanticLookup<Vec<u8>>, Error> {
+        let index = self.index.ensure(connection, vector.len())?;
         let query = format!(
             "(@{CACHE_KEY_FIELD}:{{{}}})=>[KNN 1 @{VECTOR_FIELD} $vector AS vector_distance]",
             escape_tag(tag)
@@ -183,57 +113,80 @@ impl Inner {
             .query::<redis::Value>(connection)
             .map_err(|_| Error::Unavailable)?;
         let Some(fields) = first_document(&result) else {
-            return Ok(None);
+            return Ok(SemanticLookup::miss(Some(0.0)));
         };
         if string_field(fields, CACHE_KEY_FIELD).as_deref() != Some(tag) {
-            return Ok(None);
+            return Ok(SemanticLookup::miss(Some(0.0)));
         }
-        if number_field(fields, "vector_distance")
-            .is_none_or(|distance| distance > self.distance_threshold)
-        {
-            return Ok(None);
-        }
-        let Some(response) = bytes_field(fields, "response") else {
-            return Ok(None);
+        // redisvl's range query only returns entries within the distance threshold, so a
+        // farther hit reads as no result.
+        let Some(distance) = number_field(fields, "vector_distance")
+            .filter(|distance| *distance <= self.distance_threshold)
+        else {
+            return Ok(SemanticLookup::miss(Some(0.0)));
         };
-        self.codec.decode(&response).map(Some)
-    }
-}
-
-pub struct RedisSemanticCache<E: Embedder, C = redis::Connection> {
-    connections: Arc<Connections<C>>,
-    embedder: E,
-    inner: Arc<Inner>,
-}
-
-impl<E: Embedder> RedisSemanticCache<E> {
-    pub fn new(url: &str, embedder: E, config: RedisSemanticConfig) -> Result<Self, Error> {
-        Ok(Self {
-            connections: Arc::new(Connections::open(url, &RedisTopology::Standalone)?),
-            embedder,
-            inner: Arc::new(Inner::new(config)),
+        let Some(response) = bytes_field(fields, "response") else {
+            return Ok(SemanticLookup::miss(Some(0.0)));
+        };
+        Ok(SemanticLookup {
+            value: Some(response),
+            similarity: Some(1.0 - distance),
         })
     }
 }
 
-impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> RedisSemanticCache<E, C> {
-    pub fn with_connection(connection: C, embedder: E, config: RedisSemanticConfig) -> Self {
+/// `RedisSemanticCache`: a redisvl-compatible semantic index on Redis Stack. Values go through
+/// the injected codec, so the response layer decides what a cached entry is.
+pub struct RedisSemanticCache<E, S, C = redis::Connection> {
+    connections: Arc<Connections<C>>,
+    embedder: E,
+    codec: S,
+    inner: Arc<Inner>,
+}
+
+impl<E: Embedder, S: CacheCodec> RedisSemanticCache<E, S> {
+    pub fn new(
+        url: &str,
+        embedder: E,
+        codec: S,
+        config: RedisSemanticConfig,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            connections: Arc::new(Connections::open(url, &RedisTopology::Standalone)?),
+            embedder,
+            codec,
+            inner: Arc::new(Inner::new(config, timestamp)),
+        })
+    }
+}
+
+impl<E, S, C> RedisSemanticCache<E, S, C>
+where
+    E: Embedder,
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    pub fn with_connection(
+        connection: C,
+        embedder: E,
+        codec: S,
+        config: RedisSemanticConfig,
+    ) -> Self {
         Self {
             connections: Arc::new(Connections::fixed(connection)),
             embedder,
-            inner: Arc::new(Inner::new(config)),
+            codec,
+            inner: Arc::new(Inner::new(config, timestamp)),
         }
     }
 
     pub fn with_clock(self, clock: fn() -> f64) -> Self {
+        let config = RedisSemanticConfig {
+            index_name: self.index_name().to_owned(),
+            similarity_threshold: self.similarity_threshold(),
+        };
         Self {
-            inner: Arc::new(Inner {
-                index_name: self.inner.index_name.clone(),
-                distance_threshold: self.inner.distance_threshold,
-                resolved_index: OnceLock::new(),
-                codec: self.inner.codec,
-                clock,
-            }),
+            inner: Arc::new(Inner::new(config, clock)),
             ..self
         }
     }
@@ -243,7 +196,7 @@ impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> RedisSemanticCache<
     }
 
     pub fn index_name(&self) -> &str {
-        &self.inner.index_name
+        self.inner.index.name()
     }
 
     pub fn similarity_threshold(&self) -> f32 {
@@ -253,12 +206,25 @@ impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> RedisSemanticCache<
     fn tag<'a>(key: &'a str, context: &'a SemanticCacheContext) -> &'a str {
         context.scope.as_deref().unwrap_or(key)
     }
+
+    fn decode(&self, lookup: SemanticLookup<Vec<u8>>) -> Result<SemanticLookup<S::Value>, Error> {
+        Ok(SemanticLookup {
+            value: lookup
+                .value
+                .map(|bytes| self.codec.decode(&bytes))
+                .transpose()?,
+            similarity: lookup.similarity,
+        })
+    }
 }
 
-impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> BaseCache
-    for RedisSemanticCache<E, C>
+impl<E, S, C> BaseCache for RedisSemanticCache<E, S, C>
+where
+    E: Embedder,
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
 {
-    type Value = CacheEntry;
+    type Value = S::Value;
     type Context = SemanticCacheContext;
 
     fn get_ttl(&self, context: &Self::Context) -> Option<Duration> {
@@ -274,22 +240,18 @@ impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> BaseCache
         let Some(prompt) = prompt_from_context(context) else {
             return Ok(());
         };
+        let response = self.codec.encode(&value)?;
         let vector = self.embedder.embed(&prompt, context.metadata.as_ref())?;
-        let tag = Self::tag(key, context).to_string();
+        let tag = Self::tag(key, context);
         self.connections.execute(|connection| {
             self.inner
-                .store(connection, &tag, &value, &prompt, &vector, context.ttl)
+                .store(connection, tag, response, &prompt, &vector, context.ttl)
         })
     }
 
     fn get_cache(&self, key: &str, context: &Self::Context) -> Result<Option<Self::Value>, Error> {
-        let Some(prompt) = prompt_from_context(context) else {
-            return Ok(None);
-        };
-        let vector = self.embedder.embed(&prompt, context.metadata.as_ref())?;
-        let tag = Self::tag(key, context).to_string();
-        self.connections
-            .execute(|connection| self.inner.lookup(connection, &tag, &vector))
+        self.get_cache_with_similarity(key, context)
+            .map(|lookup| lookup.value)
     }
 
     async fn async_set_cache(
@@ -301,14 +263,15 @@ impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> BaseCache
         let Some(prompt) = prompt_from_context(&context) else {
             return Ok(());
         };
+        let response = self.codec.encode(&value)?;
         let vector = self
             .embedder
             .async_embed(&prompt, context.metadata.as_ref())
             .await?;
-        let tag = Self::tag(key, &context).to_string();
+        let tag = Self::tag(key, &context).to_owned();
         let inner = Arc::clone(&self.inner);
         Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
-            inner.store(connection, &tag, &value, &prompt, &vector, context.ttl)
+            inner.store(connection, &tag, response, &prompt, &vector, context.ttl)
         })
         .await
     }
@@ -318,49 +281,54 @@ impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> BaseCache
         key: &str,
         context: &Self::Context,
     ) -> Result<Option<Self::Value>, Error> {
+        self.async_get_cache_with_similarity(key, context)
+            .await
+            .map(|lookup| lookup.value)
+    }
+}
+
+/// Python stamps a similarity of `0.0` when there is no prompt or no hit in the key's scope.
+impl<E, S, C> SemanticCache for RedisSemanticCache<E, S, C>
+where
+    E: Embedder,
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    fn get_cache_with_similarity(
+        &self,
+        key: &str,
+        context: &Self::Context,
+    ) -> Result<SemanticLookup<Self::Value>, Error> {
         let Some(prompt) = prompt_from_context(context) else {
-            return Ok(None);
+            return Ok(SemanticLookup::miss(Some(0.0)));
+        };
+        let vector = self.embedder.embed(&prompt, context.metadata.as_ref())?;
+        let tag = Self::tag(key, context);
+        let lookup = self
+            .connections
+            .execute(|connection| self.inner.lookup(connection, tag, &vector))?;
+        self.decode(lookup)
+    }
+
+    async fn async_get_cache_with_similarity(
+        &self,
+        key: &str,
+        context: &Self::Context,
+    ) -> Result<SemanticLookup<Self::Value>, Error> {
+        let Some(prompt) = prompt_from_context(context) else {
+            return Ok(SemanticLookup::miss(Some(0.0)));
         };
         let vector = self
             .embedder
             .async_embed(&prompt, context.metadata.as_ref())
             .await?;
-        let tag = Self::tag(key, context).to_string();
+        let tag = Self::tag(key, context).to_owned();
         let inner = Arc::clone(&self.inner);
-        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
+        let lookup = Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             inner.lookup(connection, &tag, &vector)
         })
-        .await
-    }
-
-    async fn disconnect(&self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
-        match Connections::run_blocking(Arc::clone(&self.connections), |connection| {
-            Ok(match redis::cmd("PING").query::<String>(connection) {
-                Ok(_) => CacheConnectionResult {
-                    status: CacheConnectionStatus::Success,
-                    message: "Redis cache connection test successful".into(),
-                    error: None,
-                },
-                Err(error) => CacheConnectionResult {
-                    status: CacheConnectionStatus::Failed,
-                    message: format!("Redis connection failed: {error}"),
-                    error: Some(error.to_string()),
-                },
-            })
-        })
-        .await
-        {
-            Ok(result) => Ok(result),
-            Err(error) => Ok(CacheConnectionResult {
-                status: CacheConnectionStatus::Failed,
-                message: format!("Redis connection failed: {error}"),
-                error: Some(error.to_string()),
-            }),
-        }
+        .await?;
+        self.decode(lookup)
     }
 }
 
@@ -387,228 +355,46 @@ fn vector_buffer(vector: &[f32]) -> Vec<u8> {
 }
 
 fn escape_tag(value: &str) -> String {
-    value
-        .chars()
-        .flat_map(|ch| {
-            if matches!(
-                ch,
-                ',' | '.'
-                    | '<'
-                    | '>'
-                    | '{'
-                    | '}'
-                    | '['
-                    | ']'
-                    | '\\'
-                    | '"'
-                    | '\''
-                    | ':'
-                    | ';'
-                    | '!'
-                    | '@'
-                    | '#'
-                    | '$'
-                    | '%'
-                    | '^'
-                    | '&'
-                    | '*'
-                    | '('
-                    | ')'
-                    | '-'
-                    | '+'
-                    | '='
-                    | '~'
-                    | '|'
-                    | '/'
-                    | ' '
-                    | '?'
-            ) {
-                vec!['\\', ch]
-            } else {
-                vec![ch]
-            }
-        })
-        .collect()
-}
-
-fn create_index(connection: &mut ConnectionRef<'_>, name: &str, dims: usize) -> Result<(), Error> {
-    redis::cmd("FT.CREATE")
-        .arg(name)
-        .arg("ON")
-        .arg("HASH")
-        .arg("PREFIX")
-        .arg(1)
-        .arg(name)
-        .arg("SCORE")
-        .arg(1.0)
-        .arg("SCHEMA")
-        .arg("prompt")
-        .arg("TEXT")
-        .arg("WEIGHT")
-        .arg(1)
-        .arg("response")
-        .arg("TEXT")
-        .arg("WEIGHT")
-        .arg(1)
-        .arg("inserted_at")
-        .arg("NUMERIC")
-        .arg("updated_at")
-        .arg("NUMERIC")
-        .arg(VECTOR_FIELD)
-        .arg("VECTOR")
-        .arg("FLAT")
-        .arg(6)
-        .arg("TYPE")
-        .arg("FLOAT32")
-        .arg("DIM")
-        .arg(dims)
-        .arg("DISTANCE_METRIC")
-        .arg("COSINE")
-        .arg(CACHE_KEY_FIELD)
-        .arg("TAG")
-        .arg("SEPARATOR")
-        .arg(",")
-        .query::<()>(connection)
-        .map_err(|_| Error::Unavailable)
-}
-
-fn index_compatible(
-    connection: &mut ConnectionRef<'_>,
-    name: &str,
-    dims: usize,
-) -> Result<Option<bool>, Error> {
-    let info = match redis::cmd("FT.INFO")
-        .arg(name)
-        .query::<redis::Value>(connection)
-    {
-        Ok(info) => info,
-        Err(error) if unknown_index(&error) => return Ok(None),
-        Err(_) => return Err(Error::Unavailable),
-    };
-    Ok(Some(schema_compatible(&info, dims)))
-}
-
-fn unknown_index(error: &redis::RedisError) -> bool {
-    let message = error.to_string().to_lowercase();
-    message.contains("unknown") && message.contains("index")
-}
-
-fn schema_compatible(info: &redis::Value, dims: usize) -> bool {
-    let redis::Value::Array(entries) = info else {
-        return false;
-    };
-    let attributes = entries
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .find(|pair| string_value(&pair[0]).as_deref() == Some("attributes"))
-        .map(|pair| &pair[1]);
-    let Some(redis::Value::Array(attributes)) = attributes else {
-        return false;
-    };
-    let fields = attributes
-        .iter()
-        .map(|attribute| {
-            let redis::Value::Array(attribute) = attribute else {
-                return (None, None, None, None, None);
-            };
-            let mut name = None;
-            let mut field_type = None;
-            let mut dim = None;
-            let mut data_type = None;
-            let mut distance_metric = None;
-            for pair in attribute.as_chunks::<2>().0 {
-                match string_value(&pair[0]).as_deref() {
-                    Some("identifier") => name = string_value(&pair[1]),
-                    Some("type") => field_type = string_value(&pair[1]),
-                    Some("dim") => dim = number_value(&pair[1]),
-                    Some("data_type") => data_type = string_value(&pair[1]),
-                    Some("distance_metric") => distance_metric = string_value(&pair[1]),
-                    _ => {}
-                }
-            }
-            (name, field_type, dim, data_type, distance_metric)
-        })
-        .collect::<Vec<_>>();
-    let has_field = |name: &str, field_type: &str| {
-        fields
-            .iter()
-            .any(|(n, t, ..)| n.as_deref() == Some(name) && t.as_deref() == Some(field_type))
-    };
-    has_field("prompt", "TEXT")
-        && has_field("response", "TEXT")
-        && has_field("inserted_at", "NUMERIC")
-        && has_field("updated_at", "NUMERIC")
-        && has_field(CACHE_KEY_FIELD, "TAG")
-        && fields.iter().any(|(n, t, d, data, metric)| {
-            n.as_deref() == Some(VECTOR_FIELD)
-                && t.as_deref() == Some("VECTOR")
-                && *d == Some(dims as f64)
-                && data
-                    .as_deref()
-                    .is_some_and(|data| data.eq_ignore_ascii_case("float32"))
-                && metric
-                    .as_deref()
-                    .is_some_and(|metric| metric.eq_ignore_ascii_case("cosine"))
-        })
-}
-
-fn string_value(value: &redis::Value) -> Option<String> {
-    match value {
-        redis::Value::BulkString(bytes) => String::from_utf8(bytes.clone()).ok(),
-        redis::Value::SimpleString(text) => Some(text.clone()),
-        redis::Value::VerbatimString { text, .. } => Some(text.clone()),
-        _ => None,
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(
+            ch,
+            ',' | '.'
+                | '<'
+                | '>'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '\\'
+                | '"'
+                | '\''
+                | ':'
+                | ';'
+                | '!'
+                | '@'
+                | '#'
+                | '$'
+                | '%'
+                | '^'
+                | '&'
+                | '*'
+                | '('
+                | ')'
+                | '-'
+                | '+'
+                | '='
+                | '~'
+                | '|'
+                | '/'
+                | ' '
+                | '?'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
     }
-}
-
-fn number_value(value: &redis::Value) -> Option<f64> {
-    match value {
-        redis::Value::Int(number) => Some(*number as f64),
-        redis::Value::Double(number) => Some(*number),
-        _ => string_value(value).and_then(|text| text.parse().ok()),
-    }
-}
-
-fn first_document(result: &redis::Value) -> Option<&[redis::Value]> {
-    let redis::Value::Array(items) = result else {
-        return None;
-    };
-    let [count, _document_id, fields, ..] = items.as_slice() else {
-        return None;
-    };
-    if !matches!(count, redis::Value::Int(count) if *count > 0) {
-        return None;
-    }
-    match fields {
-        redis::Value::Array(fields) => Some(fields.as_slice()),
-        _ => None,
-    }
-}
-
-fn field_value<'a>(fields: &'a [redis::Value], name: &str) -> Option<&'a redis::Value> {
-    fields
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .find(|pair| string_value(&pair[0]).as_deref() == Some(name))
-        .map(|pair| &pair[1])
-}
-
-fn string_field(fields: &[redis::Value], name: &str) -> Option<String> {
-    field_value(fields, name).and_then(string_value)
-}
-
-fn number_field(fields: &[redis::Value], name: &str) -> Option<f64> {
-    field_value(fields, name).and_then(number_value)
-}
-
-fn bytes_field(fields: &[redis::Value], name: &str) -> Option<Vec<u8>> {
-    match field_value(fields, name)? {
-        redis::Value::BulkString(bytes) => Some(bytes.clone()),
-        redis::Value::SimpleString(text) => Some(text.clone().into_bytes()),
-        _ => None,
-    }
+    escaped
 }
 
 fn ttl_seconds(ttl: Duration) -> u64 {

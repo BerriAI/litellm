@@ -14,9 +14,14 @@ async-trait = "0.1"
 azure_core = "1.1.0"
 azure_storage_blob = "1.1.0"
 futures-util.workspace = true
+reqwest.workspace = true
 tokio.workspace = true
 url.workspace = true
 
 [dev-dependencies]
 litellm-cache-response.workspace = true
+litellm-cache-testing.workspace = true
+rstest.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6.5"

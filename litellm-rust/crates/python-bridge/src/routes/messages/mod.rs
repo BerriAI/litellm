@@ -1,6 +1,6 @@
 mod host;
 
-use host::MessagesRouteHost;
+use host::MessagesPythonHost;
 use litellm_callbacks_legacy_python::{
     LegacySurface, PassThroughStream, PublicCall, run_legacy_call,
 };
@@ -39,12 +39,13 @@ fn run_messages(
             "the Rust Messages route does not serve this provider",
         ));
     }
+    let secrets = crate::secrets::source(py)?;
     run_legacy_call(
         py,
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,
-        messages_machine(),
-        MessagesRouteHost::new(request.unbind()),
+        crate::logger::LoggedMachine::new(messages_machine(secrets)),
+        MessagesPythonHost::new(request.unbind()),
         asynchronous,
     )
 }

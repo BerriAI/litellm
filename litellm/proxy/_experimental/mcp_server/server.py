@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.types import Message, Receive, Scope, Send
 
 from litellm._logging import verbose_logger
@@ -110,6 +111,13 @@ _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
 _MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
 
 
+def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
+    from litellm.proxy.proxy_server import origins  # noqa: PLC0415  # proxy imports this module during startup
+
+    if "*" not in origins and any(origin not in origins for origin in request.headers.getlist("origin")):
+        raise HTTPException(status_code=403, detail="Invalid Origin header")
+
+
 def unsupported_protocol_version(scope: Scope) -> str | None:
     """Return the unsupported ``MCP-Protocol-Version`` header value, if any.
 
@@ -137,6 +145,7 @@ try:
 
     from mcp import ReadResourceResult, Resource
     from mcp.server import Server
+    from mcp.server.runner import serve_loop
     from mcp.server.session import ServerSession as _McpServerSession
     from mcp.types import (
         BlobResourceContents,
@@ -474,6 +483,8 @@ if MCP_AVAILABLE:
         AuthContextMiddleware,
         auth_context_var,
     )
+    from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+    from mcp.server.auth.provider import AccessToken
     from mcp.server.context import ServerRequestContext
     from mcp.server.lowlevel.server import NotificationOptions
     from mcp.server.models import InitializationOptions
@@ -494,6 +505,7 @@ if MCP_AVAILABLE:
         _invalidate_byok_cred_cache,
         _mcp_session_id_from_headers,
     )
+    from litellm.proxy._experimental.mcp_server.result_conversion import wire_compat_for
 
     try:
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -506,6 +518,7 @@ if MCP_AVAILABLE:
         GetPromptRequestParams,
         Implementation,
         InitializeRequest,
+        InputRequiredResult,
         ListPromptsResult,
         ListResourcesResult,
         ListResourceTemplatesResult,
@@ -573,7 +586,7 @@ if MCP_AVAILABLE:
         version=LITELLM_MCP_SERVER_VERSION,
     )
     server.create_initialization_options = types.MethodType(_gateway_create_initialization_options, server)
-    sse: Final[SseServerTransport] = SseServerTransport("/mcp/sse/messages")
+    sse: Final[SseServerTransport] = SseServerTransport("/sse/messages")
 
     # Create session managers
     session_manager_stateless: Final = StreamableHTTPSessionManager(
@@ -629,18 +642,9 @@ if MCP_AVAILABLE:
     # Keep this alias so existing references to session_manager still work
     session_manager: Final = session_manager_stateless
 
-    # Create SSE session manager
-    sse_session_manager: Final = StreamableHTTPSessionManager(
-        app=server,
-        event_store=None,
-        json_response=False,  # Use SSE responses for this endpoint
-        stateless=True,
-    )
-
     # Context managers for proper lifecycle management
     _session_manager_cm = None
     _session_manager_stateful_cm = None
-    _sse_session_manager_cm = None
     _stateful_auth_context_cleanup_task: asyncio.Task | None = None
 
     async def _purge_expired_stateful_session_auth_contexts(
@@ -732,7 +736,6 @@ if MCP_AVAILABLE:
             _SESSION_MANAGERS_INITIALIZED, \
             _session_manager_cm, \
             _session_manager_stateful_cm, \
-            _sse_session_manager_cm, \
             _stateful_auth_context_cleanup_task
 
         # Use async lock to prevent concurrent initialization
@@ -745,12 +748,10 @@ if MCP_AVAILABLE:
             # Start the session managers with context managers
             _session_manager_cm = session_manager_stateless.run()
             _session_manager_stateful_cm = session_manager_stateful.run()
-            _sse_session_manager_cm = sse_session_manager.run()
 
             # Enter the context managers
             await _session_manager_cm.__aenter__()
             await _session_manager_stateful_cm.__aenter__()
-            await _sse_session_manager_cm.__aenter__()
             _stateful_auth_context_cleanup_task = asyncio.create_task(_cleanup_expired_stateful_session_auth_contexts())
 
             _SESSION_MANAGERS_INITIALIZED = True
@@ -762,7 +763,6 @@ if MCP_AVAILABLE:
             _SESSION_MANAGERS_INITIALIZED, \
             _session_manager_cm, \
             _session_manager_stateful_cm, \
-            _sse_session_manager_cm, \
             _stateful_auth_context_cleanup_task
 
         if _SESSION_MANAGERS_INITIALIZED:
@@ -773,8 +773,6 @@ if MCP_AVAILABLE:
                     _stateful_auth_context_cleanup_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await _stateful_auth_context_cleanup_task
-                if _sse_session_manager_cm:
-                    await _sse_session_manager_cm.__aexit__(None, None, None)
                 if _session_manager_stateful_cm:
                     await _session_manager_stateful_cm.__aexit__(None, None, None)
                 if _session_manager_cm:
@@ -784,7 +782,6 @@ if MCP_AVAILABLE:
 
             _session_manager_cm = None
             _session_manager_stateful_cm = None
-            _sse_session_manager_cm = None
             _stateful_auth_context_cleanup_task = None
             _SESSION_MANAGERS_INITIALIZED = False
 
@@ -824,7 +821,15 @@ if MCP_AVAILABLE:
                 client_ip,
             ) = await get_or_extract_auth_context()
             yield operations.prepare_context(
-                auth, token, servers, server_headers, oauth_headers, headers, client_ip, _mcp_proxy_mode.get()
+                auth,
+                token,
+                servers,
+                server_headers,
+                oauth_headers,
+                headers,
+                client_ip,
+                _mcp_proxy_mode.get(),
+                wire_compat_for(ctx.protocol_version),
             )
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:
@@ -881,7 +886,9 @@ if MCP_AVAILABLE:
         _dispatch_virtual_mcp_tool,
     )
 
-    async def mcp_server_tool_call(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    async def mcp_server_tool_call(
+        ctx: ServerRequestContext, params: CallToolRequestParams
+    ) -> CallToolResult | InputRequiredResult:
         async with _legacy_operation_context(ctx, trace=True) as context:
             return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
                 CallToolRequest(params=params), context
@@ -1054,6 +1061,8 @@ if MCP_AVAILABLE:
         """
         import re
 
+        if path.rstrip("/") in ("/mcp/sse", "/mcp/sse/messages"):
+            return None
         mcp_servers_from_path: list[str] | None = None
         segments: Final = [s for s in path.split("/") if s]
         if len(segments) >= 2 and segments[1] == "mcp" and segments[0] != "mcp":
@@ -1942,6 +1951,7 @@ if MCP_AVAILABLE:
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
+            reject_disallowed_mcp_origin(StarletteRequest(scope))
             bad_version: Final = unsupported_protocol_version(scope)
             if bad_version is not None:
                 supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
@@ -2286,7 +2296,25 @@ if MCP_AVAILABLE:
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
         try:
-            path: Final[str] = scope.get("path", "")
+            reject_disallowed_mcp_origin(StarletteRequest(scope))
+            bad_version: Final = unsupported_protocol_version(scope)
+            if bad_version is not None:
+                supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
+                await JSONResponse(
+                    status_code=400,
+                    content={  # mutable-ok: JSON-RPC error payload
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": INVALID_REQUEST,
+                            "message": f"Unsupported MCP-Protocol-Version {bad_version}; supported: {supported}",
+                        },
+                    },
+                )(scope, receive, send)
+                return
+            from litellm.proxy.auth.auth_utils import get_request_route
+
+            path: Final = get_request_route(StarletteRequest(scope))
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -2353,9 +2381,14 @@ if MCP_AVAILABLE:
                 client_ip=_sse_client_ip,
             )
 
-            if not _SESSION_MANAGERS_INITIALIZED:
-                await initialize_session_managers()
-                await asyncio.sleep(0.1)
+            owner: Final = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _sse_client_ip)
+            transport_scope: Final[Scope] = {
+                **scope,
+                "user": AuthenticatedUser(AccessToken(token=owner, client_id=owner, scopes=[])),
+            }
+            if scope["method"] == "POST":
+                await sse.handle_post_message(transport_scope, receive, send)
+                return
 
             async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth,
@@ -2364,7 +2397,17 @@ if MCP_AVAILABLE:
                 scoped_server_endpoint=scoped_server_endpoint,
                 is_initialize=scope.get("method") == "GET",
             ):
-                await sse_session_manager.handle_request(scope, receive, send)
+                async with (
+                    sse.connect_sse(transport_scope, receive, send) as (read_stream, write_stream),
+                    server.lifespan(server) as lifespan_state,
+                ):
+                    await serve_loop(
+                        server,
+                        read_stream,
+                        write_stream,
+                        lifespan_state=lifespan_state,
+                        init_options=server.create_initialization_options(),
+                    )
         except MCPUpstreamAuthError as e:
             # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
@@ -2387,7 +2430,6 @@ if MCP_AVAILABLE:
             # Try to send a graceful error response for non-HTTP exceptions
             try:
                 # Send a proper HTTP error response instead of letting the exception bubble up
-                from starlette.responses import JSONResponse
                 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 
                 error_response: Final = JSONResponse(
@@ -2418,11 +2460,22 @@ if MCP_AVAILABLE:
         """
         return {"enabled": MCP_AVAILABLE}
 
+    class _LegacySseEndpoint:
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            await handle_sse_mcp(scope, receive, send)
+
+    for sse_path, sse_method in (
+        ("/sse", "GET"),
+        ("/sse/", "GET"),
+        ("/sse/messages", "POST"),
+        ("/sse/messages/", "POST"),
+    ):
+        app.router.routes.append(Route(sse_path, endpoint=_LegacySseEndpoint(), methods=[sse_method]))
+
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)
     app.mount("/mcp", handle_streamable_http_mcp)
     app.mount("/{mcp_server_name}/mcp", handle_streamable_http_mcp)
-    app.mount("/sse", handle_sse_mcp)
     app.add_middleware(AuthContextMiddleware)
 
     ########################################################

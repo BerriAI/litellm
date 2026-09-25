@@ -11,7 +11,14 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.bug_report import KNOWN_PROVIDERS, BugReport, allowlisted, build_bug_report
+from litellm.litellm_core_utils.bug_report import (
+    KNOWN_PROVIDERS,
+    BugReport,
+    EnvironmentReport,
+    allowlisted,
+    build_bug_report,
+    build_environment_report,
+)
 from litellm.proxy._types import ConfigGeneralSettings
 from litellm.router_utils.routing_groups import VALID_ROUTING_STRATEGIES
 from litellm.types.caching import LiteLLMCacheType
@@ -21,6 +28,30 @@ from litellm.types.secret_managers.main import KeyManagementSystem
 _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _OBJECT_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+CREDENTIAL_KEY_PARTS: Final = frozenset(
+    {
+        "key",
+        "keys",
+        "secret",
+        "secrets",
+        "token",
+        "password",
+        "passwd",
+        "credential",
+        "credentials",
+        "url",
+        "uri",
+        "dsn",
+        "host",
+        "hosts",
+        "base",
+        "endpoint",
+        "cert",
+        "pem",
+        "salt",
+    }
+)
+ENUM_KEYS_WITH_CREDENTIAL_PARTS: Final = frozenset({"key_management_system"})
 
 
 def _object_map(value: object) -> Mapping[str, object]:
@@ -87,22 +118,26 @@ def _cache_params_keys() -> frozenset[str]:
     return frozenset(name for name in inspect.signature(Cache.__init__).parameters if name != "self")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped params, only names are read
 
 
-def _render_json(value: JsonValue) -> str | None:
+def _is_credential_key(key: str) -> bool:
+    return key not in ENUM_KEYS_WITH_CREDENTIAL_PARTS and not CREDENTIAL_KEY_PARTS.isdisjoint(key.lower().split("_"))
+
+
+def _render_json(key: str, value: JsonValue) -> str | None:
     match value:
         case bool():
             return str(value).lower()
         case str():
-            return value if value in _known_values() else None
+            return value if value in _known_values() and not _is_credential_key(key) else None
         case list():
-            known_items: Final = tuple(rendered for item in value if (rendered := _render_json(item)) is not None)
+            known_items: Final = tuple(rendered for item in value if (rendered := _render_json(key, item)) is not None)
             return f"[{', '.join(known_items)}]" if known_items else None
         case _:
             return None
 
 
-def _render(value: object) -> str | None:
+def _render(key: str, value: object) -> str | None:
     try:
-        return _render_json(_JSON.validate_python(value))
+        return _render_json(key, _JSON.validate_python(value))
     except ValidationError:
         return None
 
@@ -111,7 +146,7 @@ def _section_lines(section: str, values: Mapping[str, object], known_keys: froze
     return tuple(
         f"{section}.{key} = {rendered}"
         for key, value in values.items()
-        if key in known_keys and (rendered := _render(value)) is not None
+        if key in known_keys and (rendered := _render(key, value)) is not None
     )
 
 
@@ -163,6 +198,19 @@ def safe_config_lines(config: Mapping[str, object], general_settings: Mapping[st
     )
 
 
+def _proxy_config_lines() -> tuple[str, ...]:
+    from litellm.proxy import proxy_server
+
+    return safe_config_lines(
+        proxy_server.proxy_config.config,
+        _object_map(proxy_server.general_settings),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # bare dict global, validated by _object_map
+    )
+
+
+def build_proxy_environment_report() -> EnvironmentReport:
+    return build_environment_report(surface="proxy", config_lines=_proxy_config_lines())
+
+
 def build_proxy_bug_report(
     exc: BaseException,
     *,
@@ -170,16 +218,11 @@ def build_proxy_bug_report(
     custom_llm_provider: object = None,
     stream: object = None,
 ) -> BugReport:
-    from litellm.proxy import proxy_server
-
     return build_bug_report(
         exc,
         surface="proxy",
         call_type=call_type,
         custom_llm_provider=custom_llm_provider,
         stream=stream,
-        config_lines=safe_config_lines(
-            proxy_server.proxy_config.config,
-            _object_map(proxy_server.general_settings),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # bare dict global, validated by _object_map
-        ),
+        config_lines=_proxy_config_lines(),
     )

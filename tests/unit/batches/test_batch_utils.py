@@ -26,7 +26,7 @@ from openai.types.batch import BatchRequestCounts
 
 import litellm
 import litellm.batches.batch_utils as bu
-from litellm.types.utils import LiteLLMBatch, Usage
+from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
 
 # --------------------------------------------------------------------------- #
 # Builders for batch OUTPUT file rows.
@@ -437,6 +437,33 @@ def test_total_usage_and_cost_normalize_mixed_responses_and_chat():
     assert result.cost == pytest.approx((30 * 0.00125) + (12 * 0.005))
 
 
+def test_total_cost_applies_the_long_context_batch_tier_per_line():
+    long_row = _success_row(usage=_usage(300_000, 10))
+    short_row = _success_row(usage=_usage(100, 10))
+
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[long_row, short_row],
+        custom_llm_provider="openai",
+        model_info=ModelInfo(
+            key="lit-batch-tier",
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            input_cost_per_token=2e-6,
+            output_cost_per_token=8e-6,
+            litellm_provider="openai",
+            mode="chat",
+            supported_openai_params=None,
+            input_cost_per_token_batches=1e-6,
+            output_cost_per_token_batches=4e-6,
+            input_cost_per_token_above_272k_tokens_batches=2e-6,
+            output_cost_per_token_above_272k_tokens_batches=6e-6,
+        ),
+    )
+
+    assert result.cost == pytest.approx((300_000 * 2e-6) + (10 * 6e-6) + (100 * 1e-6) + (10 * 4e-6))
+
+
 def test_total_usage_empty_is_zero():
     result = bu._aggregate_batch_cost_usage_models(entries=[], custom_llm_provider="openai")
     assert result.cost == 0.0
@@ -613,7 +640,7 @@ async def test_calculate_vertex_disable_transform_path(monkeypatch):
     monkeypatch.setattr(
         bu,
         "calculate_vertex_ai_batch_cost_and_usage",
-        lambda content, model: bu.BatchCostUsageResult(
+        lambda content, model, model_info=None: bu.BatchCostUsageResult(
             cost=9.9,
             usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
             models=["gemini-2.0-flash-001"],
@@ -644,7 +671,7 @@ async def test_calculate_vertex_disable_transform_needs_model_name(monkeypatch):
     monkeypatch.setattr(
         bu,
         "calculate_vertex_ai_batch_cost_and_usage",
-        lambda content, model: pytest.fail("raw vertex path should not run"),
+        lambda content, model, model_info=None: pytest.fail("raw vertex path should not run"),
     )
 
     result = await bu.calculate_batch_cost_and_usage(file_content_dictionary=[], custom_llm_provider="vertex_ai")
@@ -708,7 +735,11 @@ def test_vertex_batch_usage_preserves_modality_token_details(monkeypatch):
     )
     responses = [
         {
+            "key": "id_1",
+            "status": "",
+            "request": {"content": {"parts": [{"text": "hello"}, {"fileData": {"mimeType": "audio/wav"}}]}},
             "response": {
+                "embedding": {"values": [0.1, 0.2]},
                 "usageMetadata": {
                     "promptTokenCount": 84,
                     "candidatesTokenCount": 0,
@@ -717,13 +748,14 @@ def test_vertex_batch_usage_preserves_modality_token_details(monkeypatch):
                         {"modality": "AUDIO", "tokenCount": 64},
                         {"modality": "TEXT", "tokenCount": 20},
                     ],
-                }
-            }
+                },
+            },
         }
     ]
 
     result = bu.calculate_vertex_ai_batch_cost_and_usage(responses, "gemini-embedding-2")
 
+    assert (result.successful_requests, result.usage.prompt_tokens) == (1, 84)
     assert result.prompt_cost == pytest.approx(64 * 3.25e-6 + 20 * 1e-7)
 
 
@@ -1309,7 +1341,7 @@ async def test_handle_completed_batch_vertex_disable_transform_path(monkeypatch)
     monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", True, raising=False)
     seen: dict = {}
 
-    def fake_vertex_calc(content, model):
+    def fake_vertex_calc(content, model, model_info=None):
         seen["content"] = content
         seen["model"] = model
         return bu.BatchCostUsageResult(
@@ -1331,7 +1363,7 @@ async def test_handle_completed_batch_vertex_disable_transform_path(monkeypatch)
     assert result.cost == 7.7
     assert result.usage.total_tokens == 3
     assert result.models == ["gemini-x"]
-    assert seen["content"] == raw_rows
+    assert list(seen["content"]) == raw_rows
     assert seen["model"] == "gemini-x"
 
 
@@ -1822,6 +1854,45 @@ def test_unparsable_bedrock_batch_usage_warns(caplog):
     assert usage.total_tokens == 0
     assert "does not understand" in caplog.text
     assert "inputTextTokenCount" in caplog.text
+
+
+def test_total_cost_bills_cached_tokens_per_line_at_the_batch_cached_rate():
+    responses_row = _success_row(
+        usage={
+            "input_tokens": 300_000,
+            "output_tokens": 10,
+            "total_tokens": 300_010,
+            "input_tokens_details": {"cached_tokens": 299_000},
+        }
+    )
+    chat_row = _success_row(usage={**_usage(100, 10), "prompt_tokens_details": {"cached_tokens": 60}})
+
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[responses_row, chat_row],
+        custom_llm_provider="openai",
+        model_info=ModelInfo(
+            key="lit-batch-cached-tier",
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            input_cost_per_token=2e-6,
+            output_cost_per_token=8e-6,
+            cache_read_input_token_cost=1e-6,
+            litellm_provider="openai",
+            mode="chat",
+            supported_openai_params=None,
+            input_cost_per_token_batches=1e-6,
+            output_cost_per_token_batches=4e-6,
+            cache_read_input_token_cost_batches=5e-7,
+            input_cost_per_token_above_272k_tokens_batches=2e-6,
+            output_cost_per_token_above_272k_tokens_batches=6e-6,
+            cache_read_input_token_cost_above_272k_tokens_batches=1e-6,
+        ),
+    )
+
+    long_line = 1_000 * 2e-6 + 299_000 * 1e-6 + 10 * 6e-6
+    short_line = 40 * 1e-6 + 60 * 5e-7 + 10 * 4e-6
+    assert result.cost == pytest.approx(long_line + short_line)
 
 
 # --------------------------------------------------------------------------- #

@@ -98,6 +98,8 @@ _supported_callback_params: Final[tuple[str, ...]] = (
     "arize_api_key",
     "arize_space_key",
     "arize_space_id",
+    "arize_success_sampling_rate",
+    "arize_error_sampling_rate",
     "posthog_api_key",
     "posthog_host",
     "braintrust_api_key",

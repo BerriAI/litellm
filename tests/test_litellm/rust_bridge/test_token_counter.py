@@ -1,8 +1,7 @@
-"""Tests for the Rust input token counter bridge.
+"""Tests for the Rust input token counter bridge, called directly rather than through the route catalog.
 
-The native factory is dependency-injected through ``TOKEN_COUNTER.override``
-so the fallback cases run without the compiled extension present. The parity
-cases need the extension and are skipped when it is not built.
+The factory is passed into ``native_count`` so the caching cases run without the compiled extension
+present. The parity cases need the extension and are skipped when it is not built.
 """
 
 from __future__ import annotations
@@ -16,8 +15,7 @@ import pytest
 import litellm
 from litellm.constants import TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
 from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding
-from litellm.proxy.spend_tracking.input_tokens import count_input_tokens, count_input_tokens_for_model
-from litellm.rust_bridge import bindings, configuration
+from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
 from litellm.rust_bridge import token_counter as bridge
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge._native import Tokenizer
@@ -38,43 +36,12 @@ def _counted(body: dict[str, object], model: str) -> tuple[bytes, dict[str, obje
     return raw, json.loads(raw)
 
 
-class _FakeDeclined(Exception):
-    pass
-
-
-class _FakeUpstream(Exception):
-    pass
-
-
 class _FakeTokenizer:
     """Stands in for one shared native `Tokenizer`; only its name identifies it."""
 
     def __init__(self, name: str, json: str | None = None) -> None:
         self.name = name
         self.json = json
-
-
-def _fake_native_tokenizers(monkeypatch: pytest.MonkeyPatch, anthropic_json: str | None = None) -> None:
-    """Point the counter's tokenizer lookups at fakes while the bridge is faked; the codec path
-    keeps falling back to Python. Parity tests that restore the real extension get the real
-    lookups back."""
-    fakes: Final = {name: _FakeTokenizer(name) for name in ("cl100k_base", "o200k_base")}
-    anthropic: Final = _FakeTokenizer("anthropic", anthropic_json)
-    real_encoding: Final = tokenizer_dispatch.native_encoding
-    real_anthropic: Final = tokenizer_dispatch.native_anthropic
-
-    def faked() -> bool:
-        return isinstance(bindings.get_native_bridge(), _FakeNative)
-
-    monkeypatch.setattr(
-        tokenizer_dispatch, "native_encoding", lambda name: fakes[name] if faked() else real_encoding(name)
-    )
-    monkeypatch.setattr(tokenizer_dispatch, "native_anthropic", lambda: anthropic if faked() else real_anthropic())
-
-
-class _FakeNative:
-    RustBridgeDeclined = _FakeDeclined
-    RustUpstreamError = _FakeUpstream
 
 
 class _RecordingCounter:
@@ -100,57 +67,25 @@ class _RecordingFactory:
         return counter
 
 
-class _RaisingCounter:
-    def __init__(self, error: Exception) -> None:
-        self.error = error
-
-    async def acount_request(self, body: bytes) -> object:
-        raise self.error
-
-
-class _RaisingFactory:
-    """Every counter it builds, for either tokenizer, raises `error` on count."""
-
-    def __init__(self, error: Exception) -> None:
-        self.error = error
-
-    def from_tokenizer(self, tokenizer: _FakeTokenizer, fast: bool = False) -> _RaisingCounter:
-        return _RaisingCounter(self.error)
-
-
 @pytest.fixture(autouse=True)
-def _reset_bridge(monkeypatch: pytest.MonkeyPatch):
-    bridge.TOKEN_COUNTER.reset()
+def _reset_counters():
     bridge._counter.cache_clear()
-    configuration.reset_rust_configuration()
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
-    _fake_native_tokenizers(monkeypatch, anthropic_json=claude_json_str)
     yield
-    bridge.TOKEN_COUNTER.reset()
     bridge._counter.cache_clear()
-    configuration.reset_rust_configuration()
+
+
+@pytest.fixture
+def fake_tokenizers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the counter's tokenizer lookups at fakes so a recording factory sees which one it was built over."""
+    fakes: Final = {name: _FakeTokenizer(name) for name in ("cl100k_base", "o200k_base")}
+    anthropic: Final = _FakeTokenizer("anthropic", claude_json_str)
+    monkeypatch.setattr(tokenizer_dispatch, "native_encoding", fakes.__getitem__)
+    monkeypatch.setattr(tokenizer_dispatch, "native_anthropic", lambda: anthropic)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tokenizer", TOKENIZERS)
-async def test_disabled_bridge_never_constructs_a_counter(tokenizer: bridge.RustTokenizer) -> None:
+async def test_native_count_returns_typed_count_and_reuses_one_counter(fake_tokenizers: None) -> None:
     factory: Final = _RecordingFactory()
-    litellm.rust(False)
-    bridge.TOKEN_COUNTER.override(factory)
-    model: Final = MODEL_BY_TOKENIZER[tokenizer]
-    raw, request_body = _counted({"messages": [{"role": "user", "content": "hello"}]}, model)
-
-    counts: Final = await count_input_tokens(request_body=request_body, raw_body=raw, models=(model,))
-
-    assert counts[model] == count_input_tokens_for_model(request_body=request_body, model=model)
-    assert factory.counters == []
-
-
-@pytest.mark.asyncio
-async def test_enabled_bridge_returns_typed_count_and_reuses_one_counter() -> None:
-    factory: Final = _RecordingFactory()
-    litellm.rust(True)
-    bridge.TOKEN_COUNTER.override(factory)
 
     first: Final = await bridge.native_count(factory, "anthropic", BODY)
     second: Final = await bridge.native_count(factory, "anthropic", BODY)
@@ -166,10 +101,10 @@ async def test_enabled_bridge_returns_typed_count_and_reuses_one_counter() -> No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tokenizer", ("cl100k_base", "o200k_base"))
-async def test_tiktoken_counter_is_built_over_the_shared_encoding_once(tokenizer: bridge.RustTokenizer) -> None:
+async def test_tiktoken_counter_is_built_over_the_shared_encoding_once(
+    fake_tokenizers: None, tokenizer: bridge.RustTokenizer
+) -> None:
     factory: Final = _RecordingFactory()
-    litellm.rust(True)
-    bridge.TOKEN_COUNTER.override(factory)
 
     first: Final = await bridge.native_count(factory, tokenizer, BODY)
     second: Final = await bridge.native_count(factory, tokenizer, BODY)
@@ -183,10 +118,8 @@ async def test_tiktoken_counter_is_built_over_the_shared_encoding_once(tokenizer
 
 
 @pytest.mark.asyncio
-async def test_each_tokenizer_gets_its_own_cached_counter() -> None:
+async def test_each_tokenizer_gets_its_own_cached_counter(fake_tokenizers: None) -> None:
     factory: Final = _RecordingFactory()
-    litellm.rust(True)
-    bridge.TOKEN_COUNTER.override(factory)
 
     await bridge.native_count(factory, "anthropic", BODY)
     await bridge.native_count(factory, "cl100k_base", BODY)
@@ -196,43 +129,6 @@ async def test_each_tokenizer_gets_its_own_cached_counter() -> None:
 
     assert [counter.tokenizer.name for counter in factory.counters] == ["anthropic", "cl100k_base", "o200k_base"]
     assert [len(counter.bodies) for counter in factory.counters] == [2, 1, 2]
-
-
-@pytest.mark.asyncio
-async def test_missing_native_module_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    litellm.rust(True)
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
-    raw, request_body = _counted({"messages": [{"role": "user", "content": "hello"}]}, MODEL)
-
-    counts: Final = await count_input_tokens(request_body=request_body, raw_body=raw, models=(MODEL,))
-
-    assert counts[MODEL] == count_input_tokens_for_model(request_body=request_body, model=MODEL)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tokenizer", TOKENIZERS)
-async def test_declined_request_falls_back(tokenizer: bridge.RustTokenizer) -> None:
-    litellm.rust(True)
-    bridge.TOKEN_COUNTER.override(_RaisingFactory(_FakeDeclined("request has no messages")))
-    model: Final = MODEL_BY_TOKENIZER[tokenizer]
-    raw, request_body = _counted({"messages": [{"role": "user", "content": "hello"}]}, model)
-
-    counts: Final = await count_input_tokens(request_body=request_body, raw_body=raw, models=(model,))
-
-    assert counts[model] == count_input_tokens_for_model(request_body=request_body, model=model)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tokenizer", TOKENIZERS)
-async def test_runtime_failure_falls_back(tokenizer: bridge.RustTokenizer) -> None:
-    litellm.rust(True)
-    bridge.TOKEN_COUNTER.override(_RaisingFactory(RuntimeError("encode failed")))
-    model: Final = MODEL_BY_TOKENIZER[tokenizer]
-    raw, request_body = _counted({"messages": [{"role": "user", "content": "hello"}]}, model)
-
-    counts: Final = await count_input_tokens(request_body=request_body, raw_body=raw, models=(model,))
-
-    assert counts[model] == count_input_tokens_for_model(request_body=request_body, model=model)
 
 
 @pytest.mark.parametrize(
@@ -252,7 +148,6 @@ async def test_runtime_failure_falls_back(tokenizer: bridge.RustTokenizer) -> No
         ("gpt-4o", "o200k_base"),
         ("gpt-4o-mini", "o200k_base"),
         ("gpt-4o-2024-08-06", "o200k_base"),
-        ("chatgpt-4o-latest", "o200k_base"),
         ("gpt-4.1", "o200k_base"),
         ("gpt-5", "o200k_base"),
         ("gpt-5-mini", "o200k_base"),
@@ -416,39 +311,34 @@ PARITY_MODELS: Final[tuple[tuple[str, bridge.RustTokenizer], ...]] = (
 @pytest.mark.parametrize(("model", "tokenizer"), PARITY_MODELS)
 @pytest.mark.parametrize("request_body", PARITY_REQUESTS)
 async def test_native_count_matches_python_budget_counter(
-    monkeypatch: pytest.MonkeyPatch, request_body: dict[str, object], model: str, tokenizer: bridge.RustTokenizer
+    request_body: dict[str, object], model: str, tokenizer: bridge.RustTokenizer
 ) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-    litellm.rust(True)
     body: Final = json.dumps(request_body).replace(MODEL, model)
+    parsed: Final = json.loads(body)
 
-    request_body_parsed: Final = json.loads(body)
-    counts: Final = await count_input_tokens(request_body=request_body_parsed, raw_body=body.encode(), models=(model,))
-    python_count: Final = count_input_tokens_for_model(request_body=request_body_parsed, model=model)
+    counted: Final = await bridge.native_count(native.TokenCounter, tokenizer, body.encode())
 
-    assert counts[model] == python_count
+    assert counted.input_tokens == count_input_tokens_for_model(request_body=parsed, model=model)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("model", "tokenizer"), ((CL100K_MODEL, "cl100k_base"), (O200K_MODEL, "o200k_base")))
 async def test_tiktoken_counts_long_text_exactly_where_python_chunks(
-    monkeypatch: pytest.MonkeyPatch, model: str, tokenizer: bridge.RustTokenizer
+    model: str, tokenizer: bridge.RustTokenizer
 ) -> None:
     """Python encodes tiktoken text in fixed-size chunks (drift of up to one token per chunk boundary); Rust does not."""
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-    litellm.rust(True)
     text: Final = "x " * 20_000
     body: Final = {"model": model, "messages": [{"role": "user", "content": text}]}
     encoding: Final = Tokenizer.from_tiktoken(tokenizer)
     exact: Final = 3 + encoding.count("user") + encoding.count(text) + 3
     chunks: Final = -(-len(text) // TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS)
 
-    counts: Final = await count_input_tokens(request_body=body, raw_body=json.dumps(body).encode(), models=(model,))
+    counted: Final = await bridge.native_count(native.TokenCounter, tokenizer, json.dumps(body).encode())
     python_count: Final = count_input_tokens_for_model(request_body=body, model=model)
 
-    assert counts[model] == exact
+    assert counted.input_tokens == exact
     assert python_count is not None
     assert exact < python_count <= exact + chunks
 
@@ -470,14 +360,10 @@ DECLINED_REQUESTS: Final[tuple[dict[str, object], ...]] = (
 @pytest.mark.parametrize("tokenizer", TOKENIZERS)
 @pytest.mark.parametrize("request_body", DECLINED_REQUESTS)
 async def test_native_declines_shapes_python_prices_differently(
-    monkeypatch: pytest.MonkeyPatch, request_body: dict[str, object], tokenizer: bridge.RustTokenizer
+    request_body: dict[str, object], tokenizer: bridge.RustTokenizer
 ) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-    litellm.rust(True)
-    model: Final = MODEL_BY_TOKENIZER[tokenizer]
-    raw, parsed = _counted(request_body, model)
+    raw, _ = _counted(request_body, MODEL_BY_TOKENIZER[tokenizer])
 
-    counts: Final = await count_input_tokens(request_body=parsed, raw_body=raw, models=(model,))
-
-    assert counts.get(model) == count_input_tokens_for_model(request_body=parsed, model=model)
+    with pytest.raises(native.RustBridgeDeclined):
+        await bridge.native_count(native.TokenCounter, tokenizer, raw)

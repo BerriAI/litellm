@@ -18,6 +18,7 @@ from litellm.types.secret_managers.main import KeyManagementSystem
 
 class Route(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
+    EMBEDDINGS = "embeddings"
     MESSAGES = "messages"
     RESPONSES = "responses"
     TRANSCRIPTION = "transcription"
@@ -86,16 +87,32 @@ class SecretManagerRule:
         return isinstance(context, SecretManagerContext) and (self.systems is None or context.system in self.systems)
 
 
-Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext
-Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule
+@dataclass(frozen=True, slots=True)
+class LoggerContext:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class LoggerRule:
+    rollout: Rollout
+
+    def matches(self, context: Context) -> bool:
+        return isinstance(context, LoggerContext)
+
+
+Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext | LoggerContext
+Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule | LoggerRule
 Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
-    RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
-    RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),
-    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN),
-    RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_OPT_IN),
-    RouteRule(Route.TOKENIZER, Rollout.RUST_OPT_IN),
+    LoggerRule(Rollout.RUST_OPT_IN),
+    RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
+    RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
+    RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
+    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
+    RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
     CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.LOCAL})),
     CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.REDIS})),

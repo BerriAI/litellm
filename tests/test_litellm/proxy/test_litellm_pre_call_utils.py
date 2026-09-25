@@ -5,6 +5,7 @@ import os
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,6 +35,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_provider_specific_headers_to_request,
     check_if_token_is_service_account,
     clean_headers,
+    move_guardrails_to_metadata,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
@@ -806,6 +808,9 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "hello"}],
         "api_key": "request-key",
+        "proxy_server_request": {
+            "body": {"messages": [{"role": "user", "content": "forged"}]},
+        },
     }
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -835,6 +840,77 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
     )
     assert "api_key" not in snapshot_body
     assert updated["proxy_server_request"]["credential_fields"] == ("api_key",)
+    assert snapshot_body["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:
+    from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    logging_obj: Final = Logging(
+        model="test-model", messages=[], stream=False, call_type="acompletion",
+        start_time=datetime.now(), litellm_call_id="new-request", function_id="new-request",
+    )
+    logging_obj.shadow_eval_request_snapshot = GuardrailRequestSnapshot.capture(
+        {"messages": [{"role": "user", "content": "previous request"}]},
+        {"standard_logging_guardrail_information": [{"guardrail_mode": "pre_call"}]},
+    )
+    assert logging_obj.shadow_eval_request_snapshot is not None
+    proxy_request: Final = {"body": {}}
+    data: Final = {
+        "messages": [{"role": "user", "content": "new request"}],
+        "proxy_server_request": proxy_request,
+        "litellm_logging_obj": logging_obj,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert logging_obj.shadow_eval_request_snapshot is None
+    assert proxy_request == {"body": {"messages": [{"role": "user", "content": "new request"}]}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pre_call_ran", [False, True])
+async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_logs(
+    monkeypatch: pytest.MonkeyPatch, pre_call_ran: bool
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    messages: Final = [{"role": "user", "content": "email probe@example.invalid"}]
+    metadata: Final = {
+        "standard_logging_guardrail_information": [{"guardrail_mode": "pre_call"}] if pre_call_ran else []
+    }
+    data: Final = {"messages": messages, "metadata": metadata, "proxy_server_request": {}}
+    logging_obj: Final = Logging(
+        model="test-model", messages=messages, stream=False, call_type="acompletion",
+        start_time=datetime.now(), litellm_call_id="mask-spend", function_id="mask-spend", kwargs=data,
+    )
+    data["litellm_logging_obj"] = logging_obj
+    refresh_proxy_server_request_body_snapshot(data, guardrails_applied=True)
+    logging_obj.update_messages(messages)
+    snapshot: Final = logging_obj.shadow_eval_request_snapshot
+    assert (snapshot is not None) is pre_call_ran
+    guardrail: Final = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, logging_only=True, mock_redacted_text={"text": "email [EMAIL]", "items": []}
+    )
+
+    kwargs, _ = await guardrail.async_logging_hook(
+        kwargs=logging_obj.model_call_details, result=None, call_type="acompletion"
+    )
+    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params=kwargs["litellm_params"], kwargs=kwargs,
+    ))
+
+    assert kwargs["messages"] == [{"role": "user", "content": "email [EMAIL]"}]
+    assert stored["messages"] == kwargs["messages"]
+    if snapshot is not None:
+        assert snapshot.body["messages"] == [{"role": "user", "content": "email probe@example.invalid"}]
+    assert "probe@example.invalid" not in json.dumps(stored)
 
 
 def test_refresh_proxy_server_request_body_snapshot_picks_up_guardrail_masking():
@@ -2849,7 +2925,7 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
         litellm.model_group_settings = original_model_group_settings
 
 
-from typing import Final, Optional
+from typing import Optional
 
 from fastapi.responses import Response
 
@@ -4376,6 +4452,45 @@ def test_match_and_track_policies_preserves_attachment_and_request_body_order():
     assert applied_policy_names == policy_names
 
 
+def test_match_and_track_policies_keeps_condition_missing_child_alongside_unconditional_sibling():
+    from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
+    from litellm.types.proxy.policy_engine import (
+        Policy,
+        PolicyCondition,
+        PolicyGuardrails,
+        PolicyMatchContext,
+    )
+
+    policies = {
+        "baseline": Policy(guardrails=PolicyGuardrails(add=["baseline_guardrail"])),
+        "parent": Policy(guardrails=PolicyGuardrails(add=["pii_blocker"])),
+        "child": Policy(
+            inherit="parent",
+            guardrails=PolicyGuardrails(add=["child_guard"]),
+            condition=PolicyCondition(model="claude.*"),
+        ),
+    }
+    attachment_registry = AttachmentRegistry()
+    attachment_registry.load_attachments(
+        [
+            {"policy": "baseline", "scope": "*"},
+            {"policy": "child", "scope": "*"},
+        ]
+    )
+    data = {"metadata": {}}
+
+    applied_policy_names, _ = _match_and_track_policies(
+        data=data,
+        context=PolicyMatchContext(model="gpt-5.5"),
+        request_body_policies=[],
+        policies_override=policies,
+        attachment_registry_override=attachment_registry,
+    )
+
+    assert applied_policy_names == ["baseline", "child"]
+    assert data["metadata"]["applied_policies"] == ["baseline", "child"]
+
+
 @pytest.mark.asyncio
 async def test_add_guardrails_from_policy_engine_keeps_a_policy_added_guardrail_its_pipeline_also_steps():
     from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
@@ -4416,6 +4531,48 @@ async def test_add_guardrails_from_policy_engine_keeps_a_policy_added_guardrail_
     assert data["metadata"]["guardrails"] == ["pii_blocker"]
     assert data["metadata"]["_pipeline_managed_guardrails"] == {"pii_blocker"}
     assert [pipeline.mode for _policy_name, pipeline in data["metadata"]["_guardrail_pipelines"]] == ["post_call"]
+
+
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_applies_inherited_parent_guardrail_when_child_condition_misses():
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import (
+        Policy,
+        PolicyAttachment,
+        PolicyCondition,
+        PolicyGuardrails,
+    )
+
+    data = {"model": "gpt-5.5", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "parent": Policy(guardrails=PolicyGuardrails(add=["pii_blocker"])),
+        "child": Policy(
+            inherit="parent",
+            guardrails=PolicyGuardrails(add=["child_guard"]),
+            condition=PolicyCondition(model="claude.*"),
+        ),
+    }
+    policy_registry._initialized = True
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [PolicyAttachment(policy="child", scope="*")]
+    attachment_registry._initialized = True
+
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+
+    assert "pii_blocker" in data["metadata"]["guardrails"]
+    assert "child_guard" not in data["metadata"]["guardrails"]
 
 
 @pytest.mark.asyncio
@@ -5185,6 +5342,45 @@ def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth
 # ---------------------------------------------------------------------------
 # Team guardrail + global policy regression tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_move_guardrails_to_metadata_moves_include_guardrail_response_before_the_no_guardrail_early_out():
+    policy_registry = MagicMock()
+    policy_registry.is_initialized.return_value = False
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    true_data = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "include_guardrail_response": True,
+    }
+    with patch("litellm.proxy.policy_engine.policy_registry.get_policy_registry", return_value=policy_registry):
+        await move_guardrails_to_metadata(
+            data=true_data,
+            _metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert "include_guardrail_response" not in true_data
+    assert true_data["metadata"]["include_guardrail_response"] is True
+
+    string_data = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "include_guardrail_response": "true",
+    }
+    with patch("litellm.proxy.policy_engine.policy_registry.get_policy_registry", return_value=policy_registry):
+        await move_guardrails_to_metadata(
+            data=string_data,
+            _metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert "include_guardrail_response" not in string_data
+    assert string_data["metadata"]["include_guardrail_response"] is False
 
 
 @pytest.mark.asyncio
@@ -8198,3 +8394,79 @@ def test_default_team_settings_bool_turn_off_message_logging_redacts():
         )
         is True
     )
+
+
+def test_add_user_api_key_auth_to_request_metadata_attributes_a_cli_session_to_its_alias():
+    data = {"model": "gpt-5.4-nano", "messages": [{"role": "user", "content": "hi"}], "litellm_metadata": {}}
+    session = UserAPIKeyAuth(
+        api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+        key_alias="cli-session-alice",
+        user_id="alice",
+        is_session_token=True,
+    )
+
+    metadata = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data, user_api_key_dict=session, _metadata_variable_name="litellm_metadata"
+    )["litellm_metadata"]
+
+    assert metadata["user_api_key"] == "cli-session-alice"
+    assert metadata["user_api_key_hash"] == "cli-session-alice"
+    assert metadata["user_api_key_alias"] == "cli-session-alice"
+    assert "Qm7xJ2kP9sLw4vT1nR8yAa" not in (metadata["user_api_key"], metadata["user_api_key_hash"])
+
+
+def test_add_user_api_key_auth_to_request_metadata_keeps_the_hashed_token_for_virtual_keys():
+    from litellm.proxy._types import hash_token
+
+    data = {"model": "gpt-5.4-nano", "messages": [], "litellm_metadata": {}}
+    hashed = hash_token("sk-virtual-key")
+    virtual_key = UserAPIKeyAuth(api_key=hashed, key_alias="cli-session-alice", user_id="alice")
+
+    metadata = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data, user_api_key_dict=virtual_key, _metadata_variable_name="litellm_metadata"
+    )["litellm_metadata"]
+
+    assert metadata["user_api_key"] == hashed
+    assert metadata["user_api_key_hash"] == hashed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/mcp-rest/tools/call", "/v1/responses", "/v1/chat/completions"])
+@pytest.mark.parametrize("custom_auth", ["x-mcp-auth", "x-private-mcp-token"])
+async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custom_auth: str):
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    metadata_name: Final = "litellm_metadata" if path == "/v1/responses" else "metadata"
+    secrets: Final = {
+        "X-MCP-Deepwiki-Authorization": "upstream-sentinel",
+        custom_auth: "client-auth-sentinel",
+        "x-service-token": "configured-secret-sentinel",
+    }
+    attribution: Final = {"x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a"}
+    request: Final = _make_request_mock(path, {"Content-Type": "application/json", **secrets, **attribution})
+    request.headers = Headers(request.headers)
+    settings: Final = {"mcp_client_side_auth_header_name": custom_auth, "user_header_name": "x-user-id"}
+    server: Final = MCPServer(
+        server_id="header-test", name="header-test", transport="http", url="https://example.com/mcp",
+        extra_headers=["x-service-token", "x-user-id"],
+    )
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", settings),
+        patch.dict(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
+            {"header-test": server}, clear=True,
+        ),
+    ):
+        updated: Final = await add_litellm_data_to_request(
+            data={"model": "test-model", "messages": [{"role": "user", "content": "hello"}]},
+            request=request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(), general_settings=settings, version="test",
+        )
+    for header_dict in _all_header_dicts(updated, metadata_name):
+        assert not any(value in json.dumps(header_dict) for value in secrets.values())
+    assert updated[metadata_name]["headers"] == updated["proxy_server_request"]["headers"]
+    for name, value in attribution.items():
+        assert updated[metadata_name]["headers"][name] == value
+    for name, value in secrets.items():
+        assert updated["secret_fields"]["raw_headers"][name.lower()] == value
+        assert request.headers[name] == value

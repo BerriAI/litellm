@@ -427,7 +427,7 @@ async def test_async_inline_remote_media_cancels_the_other_fetches_when_one_fail
 _SSRF_VERDICTS = (
     SSRFError(
         "URL targets a blocked address (10.0.0.8). If this is a legitimate internal service, "
-        "add the host to `user_url_allowed_hosts` in general_settings."
+        "add the host to `user_url_allowed_hosts` in litellm_settings."
     ),
     SSRFError("DNS resolution failed for 'internal.example': [Errno 8] nodename nor servname provided, or not known"),
     SSRFError("No addresses found for 'internal.example'"),

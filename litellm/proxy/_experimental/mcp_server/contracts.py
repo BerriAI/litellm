@@ -5,6 +5,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Protocol
 
+from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -26,6 +27,7 @@ class OperationContext:
     raw_headers: Mapping[str, str] | None = field(default=None, repr=False)
     client_ip: str | None = None
     mcp_proxy_mode: bool = False
+    wire_compat: WireCompat = WireCompat.LEGACY
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_caller", copy_caller(self._caller))
@@ -57,24 +59,20 @@ class OperationContext:
     ) -> tuple[
         UserAPIKeyAuth | None,
         str | None,
-        list[str] | None,  # mutable-ok: detached legacy server-list payload
-        dict[str, dict[str, str]] | None,  # mutable-ok: legacy auth dispatch requires concrete dict headers
-        dict[str, str] | None,  # mutable-ok: detached legacy header payload
-        dict[str, str] | None,  # mutable-ok: detached legacy header payload
+        list[str] | None,
+        dict[str, dict[str, str]] | None,
+        dict[str, str] | None,
+        dict[str, str] | None,
         str | None,
     ]:
         return (
             self.user_api_key_auth,
             self.mcp_auth_header,
             list(self.mcp_servers) if self.mcp_servers is not None else None,  # mutable-ok: legacy policy list input
-            {
-                key: dict(value) for key, value in self.mcp_server_auth_headers.items()
-            }  # mutable-ok: legacy auth dispatch checks concrete dict headers
+            {key: dict(value) for key, value in self.mcp_server_auth_headers.items()}
             if self.mcp_server_auth_headers is not None
             else None,
-            dict(self.oauth2_headers)
-            if self.oauth2_headers is not None
-            else None,  # mutable-ok: legacy OAuth header input
+            dict(self.oauth2_headers) if self.oauth2_headers is not None else None,
             dict(self.raw_headers) if self.raw_headers is not None else None,  # mutable-ok: legacy request header input
             self.client_ip,
         )

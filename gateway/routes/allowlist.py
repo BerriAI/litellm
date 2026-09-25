@@ -131,6 +131,7 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/redoc",
         "/test",
         "/debug/memory/summary",
+        "/api/event_logging/batch",
     }
 )
 
