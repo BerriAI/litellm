@@ -1,6 +1,6 @@
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, TypeAlias
 
 import pytest
 
@@ -9,6 +9,7 @@ from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import CacheRule, Delivery, Route, RouteContext, RouteRule, Rules, SecretManagerRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.runtime import NO_PYTHON, NoPythonImplementationError
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,3 +234,84 @@ async def test_async_bypass_forwards_to_python_without_native() -> None:
         rules=rules,
     )
     assert result is expected
+
+
+NativeRoute: TypeAlias = Callable[[Request, tuple[object, ...], Mapping[str, object]], object]
+
+
+def native_route(result: object) -> NativeBinding[NativeRoute]:
+    bound: Final[NativeBinding[NativeRoute]] = NativeBinding("no_python", validate=lambda _: None)
+    bound.override(lambda request, args, kwargs: (result, request, args, dict(kwargs)))
+    return bound
+
+
+async def dispatch_without_python(
+    dispatch: PublicDispatch[Request], bound: NativeBinding[NativeRoute], rules: Rules, *, asynchronous: bool
+) -> object:
+    if not asynchronous:
+        return dispatch.run(
+            ("model",),
+            {"page": 1},
+            python=NO_PYTHON,
+            binding=bound,
+            native=lambda hook, value, args, kwargs: hook(value, args, kwargs),
+            rules=rules,
+        )
+
+    async def native(
+        hook: NativeRoute, value: Request, args: tuple[object, ...], kwargs: Mapping[str, object]
+    ) -> object:
+        return hook(value, args, kwargs)
+
+    return await dispatch.arun(("model",), {"page": 1}, python=NO_PYTHON, binding=bound, native=native, rules=rules)
+
+
+def ocr_dispatch(request: Request | None, *, bypass: bool = False) -> PublicDispatch[Request]:
+    return PublicDispatch(
+        route=Route.OCR,
+        request=lambda args, kwargs: request,
+        context=lambda value: RouteContext(Route.OCR, model=value.model),
+        bypass=lambda _: bypass,
+    )
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("switch", (None, False))
+async def test_dispatch_without_python_hands_every_call_to_native(asynchronous: bool, switch: bool | None) -> None:
+    request: Final = Request(model="model")
+    result: Final = object()
+    configuration.rust(switch)
+    try:
+        dispatched: Final = await dispatch_without_python(
+            ocr_dispatch(request),
+            native_route(result),
+            (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),),
+            asynchronous=asynchronous,
+        )
+    finally:
+        configuration.rust(None)
+
+    assert dispatched == (result, request, ("model",), {"page": 1})
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize(
+    ("request_value", "bypass", "rules", "reason"),
+    (
+        (Request(model="model"), False, (), "must resolve to RUST_REQUIRED"),
+        (Request(model="model"), False, (RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),), "must resolve to RUST_REQUIRED"),
+        (None, False, (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),), "must project to a native request"),
+        (Request(model="model"), True, (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),), "bypass predicate matches"),
+    ),
+    ids=("no-rule", "opt-out-rule", "unprojectable-call", "bypassed-call"),
+)
+async def test_dispatch_without_python_never_falls_back(
+    asynchronous: bool, request_value: Request | None, bypass: bool, rules: Rules, reason: str
+) -> None:
+    bound: Final[NativeBinding[NativeRoute]] = NativeBinding("no_python", validate=lambda _: None)
+    bound.override(lambda request, args, kwargs: pytest.fail("a misdeclared route must not reach native"))
+
+    with pytest.raises(NoPythonImplementationError, match=f"ocr has no Python implementation, so .*{reason}"):
+        await dispatch_without_python(
+            ocr_dispatch(request_value, bypass=bypass), bound, rules, asynchronous=asynchronous
+        )

@@ -5,6 +5,8 @@ use litellm_secrets_types::{AccessMode, KeyManagementSettings, KeyManagementSyst
 use pyo3::prelude::*;
 use serde_json::Value;
 
+use litellm_host_python::PythonContext;
+
 use super::callback::PythonSecretManager;
 use crate::{
     coercion::{Field, FieldSpec, ProjectionError},
@@ -87,7 +89,7 @@ pub(crate) struct SecretManagerSnapshot {
 }
 
 impl SecretManagerSnapshot {
-    pub(crate) fn into_state(self) -> Arc<SecretManagerState> {
+    pub(crate) fn into_state(self, context: PythonContext) -> Arc<SecretManagerState> {
         match self.client {
             SecretManagerClient::Native(backend) => {
                 Arc::new(SecretManagerState::new(*backend, self.settings))
@@ -98,6 +100,7 @@ impl SecretManagerSnapshot {
                     client,
                     self.system,
                     self.settings_object,
+                    context,
                 ))),
                 self.settings,
             )),

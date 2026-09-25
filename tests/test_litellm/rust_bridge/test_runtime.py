@@ -427,3 +427,80 @@ async def test_arun_upstream_error_maps_to_api_error_without_fallback() -> None:
 
     assert caught.value.status_code == 503
     assert calls.calls == (RUST,)
+
+
+async def run_without_python(
+    rollout: Rollout,
+    calls: Recorder,
+    *,
+    asynchronous: bool,
+    native_missing: bool = False,
+    context: RouteContext = CONTEXT,
+) -> str:
+    bound: Final = binding(None if native_missing else calls.rust)
+    if not asynchronous:
+        return runtime.run(
+            context, binding=bound, native=lambda fn: fn(), python=runtime.NO_PYTHON, rules=rules(rollout)
+        )
+
+    async def native(fn: NativeFn) -> str:
+        return fn()
+
+    return await runtime.arun(context, binding=bound, native=native, python=runtime.NO_PYTHON, rules=rules(rollout))
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("switch", (None, False, True))
+async def test_route_without_python_runs_native_whatever_the_rust_switch(
+    asynchronous: bool, switch: bool | None
+) -> None:
+    calls: Final = recorder()
+    if switch is not None:
+        configuration.rust(switch)
+
+    assert await run_without_python(Rollout.RUST_REQUIRED, calls, asynchronous=asynchronous) == RUST
+    assert calls.calls == (RUST,)
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize(
+    ("native_missing", "effect", "message"),
+    (
+        (True, None, "Rust messages bridge is unavailable"),
+        (False, RustBridgeDeclined("unsupported"), "Rust messages bridge declined the request: unsupported"),
+    ),
+)
+async def test_route_without_python_raises_when_native_cannot_serve_the_call(
+    asynchronous: bool, native_missing: bool, effect: BaseException | None, message: str
+) -> None:
+    calls: Final = recorder(effect)
+
+    with pytest.raises(RuntimeError, match=message) as raised:
+        await run_without_python(Rollout.RUST_REQUIRED, calls, asynchronous=asynchronous, native_missing=native_missing)
+
+    assert not isinstance(raised.value, runtime.NoPythonImplementationError)
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("switch", (None, False, True))
+@pytest.mark.parametrize(
+    ("rollout", "context"),
+    (
+        (Rollout.PYTHON_ONLY, CONTEXT),
+        (Rollout.RUST_OPT_IN, CONTEXT),
+        (Rollout.RUST_OPT_OUT, CONTEXT),
+        (Rollout.RUST_REQUIRED, RouteContext(Route.MESSAGES, provider="unmatched", model="model")),
+    ),
+    ids=("python-only", "opt-in", "opt-out", "no-matching-rule"),
+)
+async def test_route_without_python_rejects_rules_that_could_select_python(
+    asynchronous: bool, switch: bool | None, rollout: Rollout, context: RouteContext
+) -> None:
+    calls: Final = recorder()
+    if switch is not None:
+        configuration.rust(switch)
+
+    with pytest.raises(runtime.NoPythonImplementationError, match="messages has no Python implementation"):
+        await run_without_python(rollout, calls, asynchronous=asynchronous, context=context)
+
+    assert calls.calls == ()

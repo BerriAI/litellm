@@ -225,29 +225,12 @@ mod tests {
     use pyo3::exceptions::PyLookupError;
     use pyo3::panic::PanicException;
     use pyo3::types::{PyDict, PyModule};
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
     use serde::Serializer;
     use tokio::runtime::Builder;
 
     use super::*;
-
-    struct InitializedPython;
-
-    impl InitializedPython {
-        fn attach<F, R>(&self, f: F) -> R
-        where
-            F: for<'py> FnOnce(Python<'py>) -> R,
-        {
-            Python::attach(f)
-        }
-    }
-
-    #[fixture]
-    #[once]
-    fn initialized_python() -> InitializedPython {
-        crate::initialize_python();
-        InitializedPython
-    }
+    use crate::{InitializedPython, initialized_python};
 
     #[derive(Debug)]
     struct Error(String);
