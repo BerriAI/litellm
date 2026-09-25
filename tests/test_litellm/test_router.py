@@ -49,6 +49,7 @@ from litellm.router import (
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+from litellm.router_utils.fallback_event_handlers import DISABLE_FALLBACKS_METADATA_KEY
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
@@ -14390,6 +14391,154 @@ async def test_anthropic_messages_fallback_also_catches_raised_midstream_error()
     assert collected == [_anthropic_messages_content_chunk("fallback answer")]
     mock_fallback.assert_awaited_once()
     assert mock_fallback.await_args.kwargs["e"] is raised_error
+
+
+_MID_STREAM_OPT_OUT_SHAPES: Final = (
+    pytest.param({"disable_fallbacks": True}, id="raw-kwarg"),
+    pytest.param({"metadata": {DISABLE_FALLBACKS_METADATA_KEY: True}}, id="metadata-stamp"),
+    pytest.param({"litellm_metadata": {DISABLE_FALLBACKS_METADATA_KEY: True}}, id="litellm_metadata-stamp"),
+)
+
+
+def _mid_stream_opt_out_router() -> Router:
+    return Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-5.4", "api_key": "k1"}},
+            {"model_name": "fallback", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "k2"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+    )
+
+
+def _mid_stream_opt_out_primary_error() -> litellm.InternalServerError:
+    return litellm.InternalServerError(message="primary failed at stream start", llm_provider="openai", model="primary")
+
+
+def _mid_stream_opt_out_trigger(primary_error: Exception) -> MidStreamFallbackError:
+    return MidStreamFallbackError(
+        message=str(primary_error),
+        model="primary",
+        llm_provider="openai",
+        original_exception=primary_error,
+        is_pre_first_chunk=True,
+    )
+
+
+class _MidStreamOptOutChatStream:
+    def __init__(self, error: Exception) -> None:
+        self._error: Final = error
+        self.model = "primary"
+        self.custom_llm_provider = "openai"
+        self.logging_obj = MagicMock()
+        self.chunks = []
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> object:
+        raise self._error
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> object:
+        raise self._error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opt_out", _MID_STREAM_OPT_OUT_SHAPES)
+async def test_acompletion_streaming_iterator_honors_disable_fallbacks(opt_out):
+    """A chat stream that fails before its first chunk on a request that opted out of fallbacks
+    surfaces the primary's own error and never tries the fallback deployment."""
+    router = _mid_stream_opt_out_router()
+    primary_error = _mid_stream_opt_out_primary_error()
+    source = _MidStreamOptOutChatStream(_mid_stream_opt_out_trigger(primary_error))
+
+    with patch.object(router, "_acompletion", new=AsyncMock(return_value=_AsyncList([]))) as fallback_attempt:
+        wrapped = await router._acompletion_streaming_iterator(
+            model_response=source,
+            messages=[{"role": "user", "content": "Hi"}],
+            initial_kwargs={"model": "primary", "stream": True, **copy.deepcopy(opt_out)},
+        )
+        with pytest.raises(litellm.InternalServerError) as raised:
+            [chunk async for chunk in wrapped]
+
+    assert raised.value is primary_error
+    fallback_attempt.assert_not_awaited()
+
+
+@pytest.mark.parametrize("opt_out", _MID_STREAM_OPT_OUT_SHAPES)
+def test_completion_streaming_iterator_honors_disable_fallbacks(opt_out):
+    """Sync counterpart of test_acompletion_streaming_iterator_honors_disable_fallbacks."""
+    router = _mid_stream_opt_out_router()
+    primary_error = _mid_stream_opt_out_primary_error()
+    source = _MidStreamOptOutChatStream(_mid_stream_opt_out_trigger(primary_error))
+
+    with patch.object(router, "_completion", new=MagicMock(return_value=iter([]))) as fallback_attempt:
+        wrapped = router._completion_streaming_iterator(
+            model_response=source,
+            messages=[{"role": "user", "content": "Hi"}],
+            initial_kwargs={"model": "primary", "stream": True, **copy.deepcopy(opt_out)},
+        )
+        with pytest.raises(litellm.InternalServerError) as raised:
+            list(wrapped)
+
+    assert raised.value is primary_error
+    fallback_attempt.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opt_out", _MID_STREAM_OPT_OUT_SHAPES)
+async def test_aresponses_streaming_iterator_honors_disable_fallbacks(opt_out):
+    """Same opt-out contract on the Responses API mid-stream fallback path."""
+    router = _mid_stream_opt_out_router()
+    primary_error = _mid_stream_opt_out_primary_error()
+    source = _make_responses_iterator(error=_mid_stream_opt_out_trigger(primary_error), model="primary")
+
+    with patch.object(
+        router,
+        "_ageneric_api_call_with_fallbacks_responses_attempt",
+        new=AsyncMock(return_value=_AsyncList([])),
+    ) as fallback_attempt:
+        wrapped = await router._aresponses_streaming_iterator(
+            response=source,
+            initial_kwargs={
+                "model": "primary",
+                "stream": True,
+                "input": "Hi",
+                "original_generic_function": litellm.aresponses,
+                **copy.deepcopy(opt_out),
+            },
+        )
+        with pytest.raises(litellm.InternalServerError) as raised:
+            [chunk async for chunk in wrapped]
+
+    assert raised.value is primary_error
+    fallback_attempt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opt_out", _MID_STREAM_OPT_OUT_SHAPES)
+async def test_anthropic_messages_streaming_iterator_honors_disable_fallbacks(opt_out):
+    """Same opt-out contract on the Anthropic Messages mid-stream fallback path."""
+    router = _mid_stream_opt_out_router()
+    primary_error = _mid_stream_opt_out_primary_error()
+    source = _AnthropicMessagesRaisingByteStream([], _mid_stream_opt_out_trigger(primary_error))
+
+    with patch.object(
+        router,
+        "_ageneric_api_call_with_fallbacks_anthropic_messages_attempt",
+        new=AsyncMock(return_value=_AnthropicMessagesFallbackByteStream([])),
+    ) as fallback_attempt:
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary", "stream": True, **copy.deepcopy(opt_out)},
+        )
+        with pytest.raises(litellm.InternalServerError) as raised:
+            [chunk async for chunk in wrapped]
+
+    assert raised.value is primary_error
+    fallback_attempt.assert_not_awaited()
 
 
 @pytest.mark.asyncio
