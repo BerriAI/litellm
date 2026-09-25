@@ -7768,4 +7768,3 @@ async def test_during_call_hook_responses_tool_output_input_image_member_refused
 
     assert exc_info.value.status_code == 400
     mock_post.assert_not_called()
-    mock_post.assert_not_called()
