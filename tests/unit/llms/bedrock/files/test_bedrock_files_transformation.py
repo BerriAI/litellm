@@ -16,6 +16,7 @@ from botocore.auth import S3SigV4Auth, SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
+from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
 from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
 
 
@@ -1916,10 +1917,10 @@ class TestBedrockBatchAnthropicRowParams:
     MODEL = "bedrock/us.anthropic.claude-sonnet-4-6"
     PARAMETERS = {"type": "object", "properties": {"city": {"type": "string"}}}
 
-    def _transform(self, url: str, body: dict) -> dict:
+    def _transform(self, url: str, body: dict, model: str = MODEL) -> dict:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        record = {"custom_id": "row-1", "method": "POST", "url": url, "body": {"model": self.MODEL, **body}}
+        record = {"custom_id": "row-1", "method": "POST", "url": url, "body": {"model": model, **body}}
         result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content([record])
         assert len(result) == 1
         return result[0]["modelInput"]
@@ -1960,11 +1961,34 @@ class TestBedrockBatchAnthropicRowParams:
         ],
         ids=["chat", "responses"],
     )
-    def test_reasoning_effort_becomes_thinking(self, url, body):
-        model_input = self._transform(url, body)
+    @pytest.mark.parametrize(
+        ("model", "expected_tier"),
+        [
+            (
+                "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                {"thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}},
+            ),
+            ("bedrock/us.anthropic.claude-sonnet-4-6", {"output_config": {"effort": "low"}}),
+        ],
+        ids=["budget", "adaptive"],
+    )
+    def test_reasoning_effort_becomes_thinking(self, model, expected_tier, url, body):
+        from litellm.utils import get_optional_params
+
+        model_input = self._transform(url, body, model=model)
+        real_time = get_optional_params(
+            model=model.removeprefix("bedrock/"),
+            custom_llm_provider="bedrock",
+            messages=[{"role": "user", "content": "17 * 23?"}],
+            reasoning_effort="low",
+        )
 
         assert "reasoning_effort" not in model_input
-        assert "thinking" in model_input
+        assert {k: model_input[k] for k in expected_tier} == expected_tier
+        assert (model_input["thinking"], model_input.get("output_config")) == (
+            real_time["thinking"],
+            real_time.get("output_config"),
+        )
 
     def test_provider_native_params_still_pass_through(self):
         model_input = self._transform(
