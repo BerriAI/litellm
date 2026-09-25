@@ -15127,7 +15127,7 @@ async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached
         def __init__(self, client: object) -> None:
             self._client = client
 
-        def init_async_client(self) -> object:
+        def init_pubsub_client(self) -> object:
             return self._client
 
     byok_credential_cache.flush_cache()
