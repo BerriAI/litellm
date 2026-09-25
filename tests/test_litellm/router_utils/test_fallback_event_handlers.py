@@ -21,6 +21,62 @@ from litellm.router_utils.fallback_event_handlers import (
 )
 
 
+@pytest.mark.asyncio
+async def test_router_preserves_response_after_fallback_timeout():
+    from litellm import ModelResponse, Router
+
+    calls = []
+    successful_response = ModelResponse(
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "fallback-ok"},
+                "finish_reason": "stop",
+            }
+        ]
+    )
+
+    async def mock_acompletion(**kwargs):
+        model = kwargs["model"]
+        calls.append(model)
+        if model == "openai/test-wall":
+            raise litellm.RateLimitError(
+                message="primary 429", model=model, llm_provider="openai"
+            )
+        if model == "openai/cavoti-grok":
+            raise litellm.Timeout(
+                message="fallback timeout", model=model, llm_provider="openai"
+            )
+        return successful_response
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": f"openai/{name}",
+                    "api_key": "local-test",
+                    "api_base": "http://127.0.0.1:1",
+                },
+            }
+            for name in ("test-wall", "cavoti-grok", "xclis-sonnet5")
+        ],
+        fallbacks=[{"test-wall": ["cavoti-grok", "xclis-sonnet5"]}],
+        num_retries=0,
+    )
+
+    with patch.object(litellm, "acompletion", new=mock_acompletion):
+        response = await router.acompletion(
+            model="test-wall",
+            messages=[{"role": "user", "content": "test"}],
+            num_retries=0,
+        )
+
+    assert calls == ["openai/test-wall", "openai/cavoti-grok", "openai/xclis-sonnet5"]
+    assert response is successful_response
+    assert response.choices[0].message.content == "fallback-ok"
+
+
 class StreamingWrapper:
     def __init__(self):
         self._hidden_params = {"additional_headers": {}}
