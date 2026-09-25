@@ -18,6 +18,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         default_on=litellm_params.default_on,
         additional_provider_specific_params=litellm_params.additional_provider_specific_params,
         extra_headers=getattr(litellm_params, "extra_headers", None),
+        timeout=litellm_params.timeout,
     )
 
     litellm.logging_callback_manager.add_litellm_callback(_instance)

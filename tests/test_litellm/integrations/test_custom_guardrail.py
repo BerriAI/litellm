@@ -1960,7 +1960,7 @@ class TestOnlyScanNewMessages:
     def _guardrail(self, **overrides):
         params = dict(guardrail_name="test-guard", only_scan_new_messages=True)
         params.update(overrides)
-        return CustomGuardrail(**params)
+        return CustomGuardrail(**params)  # pyright: ignore[reportArgumentType]  # params values mix str/bool
 
     def _cache(self):
         from litellm.caching import DualCache
@@ -2936,9 +2936,7 @@ async def test_native_lifecycle_guardrail_logging_only_scans_assembled_response(
     from litellm.types.utils import Choices, Message, ModelResponse
 
     guardrail = _NativeLifecycleLoggingGuardrail()
-    assembled = ModelResponse(
-        choices=[Choices(message=Message(role="assistant", content="assembled stream text"))]
-    )
+    assembled = ModelResponse(choices=[Choices(message=Message(role="assistant", content="assembled stream text"))])
     sentinel_result = object()
     kwargs = {
         "model": "gpt-5.4-mini",
@@ -3163,3 +3161,26 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "allow"
+
+
+class TestCustomGuardrailTimeout:
+    def test_timeout_constructor_exposes_it(self):
+        guardrail = CustomGuardrail(guardrail_name="g1", timeout=2.5)
+
+        assert guardrail.timeout == 2.5
+
+    def test_timeout_unset_stays_none(self):
+        guardrail = CustomGuardrail(guardrail_name="g1")
+
+        assert guardrail.timeout is None
+
+    def test_update_in_memory_litellm_params_refreshes_timeout(self):
+        from litellm.types.guardrails import LitellmParams
+
+        guardrail = CustomGuardrail(guardrail_name="g1", timeout=2.5)
+
+        guardrail.update_in_memory_litellm_params(
+            LitellmParams(guardrail="generic_guardrail_api", mode="pre_call", timeout=7)
+        )
+
+        assert guardrail.timeout == 7.0

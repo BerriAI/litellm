@@ -428,6 +428,7 @@ class TestHiddenlayerGuardrail:
                     "hl-runtime-edge-provider": "litellm",
                     "hl-runtime-edge-provider-version": "1",
                 },
+                timeout=None,
             )
 
     @pytest.mark.asyncio

@@ -49,7 +49,7 @@ async def test_aim_inspects_multimodal_list_content(user_api_key, monkeypatch):
     guard = AimGuardrail()
     sent_payload: Dict[str, Any] = {}
 
-    async def capture(url, headers, json):
+    async def capture(url, headers, json, **_kwargs):
         sent_payload.update(json)
         return _aim_no_action_response()
 
@@ -83,7 +83,7 @@ async def test_aim_inspects_responses_api_input(user_api_key, monkeypatch):
     guard = AimGuardrail()
     sent_payload: Dict[str, Any] = {}
 
-    async def capture(url, headers, json):
+    async def capture(url, headers, json, **_kwargs):
         sent_payload.update(json)
         return _aim_no_action_response()
 
@@ -219,7 +219,7 @@ async def test_aim_responses_api_input_anonymize_writeback(user_api_key, monkeyp
         },
     }
 
-    async def capture(url, headers, json):
+    async def capture(url, headers, json, **_kwargs):
         return Response(
             status_code=200,
             json=aim_response_body,

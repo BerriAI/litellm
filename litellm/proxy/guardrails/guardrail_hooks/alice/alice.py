@@ -227,6 +227,7 @@ class AliceGuardrail(CustomGuardrail):
                 "Content-Type": "application/json",
                 "af-api-key": self.alice_api_key,
             },
+            timeout=self.timeout,
         )
         response.raise_for_status()
         body = response.json()

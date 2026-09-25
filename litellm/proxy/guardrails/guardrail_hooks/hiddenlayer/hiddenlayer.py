@@ -252,6 +252,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
+                timeout=self.timeout if isinstance(self.timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS,
             )
 
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -382,6 +383,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 f"{self.api_base}/detection/v1/interactions",
                 json=data,
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             result: _HiddenlayerResponse = _interaction_body(response)
@@ -403,6 +405,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                     f"{self.api_base}/detection/v1/interactions",
                     json=data,
                     headers=headers,
+                    timeout=self.timeout,
                 )
             else:
                 raise e
@@ -456,6 +459,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
+                timeout=self.timeout if isinstance(self.timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS,
             )
 
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -584,6 +588,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 f"{self.api_base}/{path}",
                 json=payload,
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
 
@@ -604,6 +609,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                     f"{self.api_base}/{path}",
                     json=payload,
                     headers=headers,
+                    timeout=self.timeout,
                 )
             else:
                 raise e
