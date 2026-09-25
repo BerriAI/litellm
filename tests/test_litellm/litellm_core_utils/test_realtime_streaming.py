@@ -902,10 +902,11 @@ async def test_transcription_session_captures_usage_and_skips_response_create():
 
 
 @pytest.mark.asyncio
-async def test_non_transcription_completed_event_still_triggers_response_create():
+async def test_non_transcription_completed_event_without_guardrails_skips_response_create():
     """
-    Regression guard: a normal (non-transcription) session with no guardrails must
-    keep triggering response.create on a completed transcription event.
+    Regression guard: without realtime_input_transcription guardrails, the proxy
+    must not inject response.create on transcription completion because the
+    backend's own server-VAD auto-response is still responsible for the turn.
     """
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -931,7 +932,55 @@ async def test_non_transcription_completed_event_still_triggers_response_create(
 
     assert streaming._is_transcription_session is False
     sent_to_backend = [json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args]
-    assert any(e.get("type") == "response.create" for e in sent_to_backend)
+    assert all(e.get("type") != "response.create" for e in sent_to_backend), (
+        f"proxy must not inject response.create without transcription guardrails, got: {sent_to_backend}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_path_completed_event_without_guardrails_skips_response_create():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": [
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": "hi",
+                    "item_id": "item_1",
+                }
+            ],
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+
+    await streaming._handle_provider_config_message("{}")
+
+    assert backend_ws.send.await_count == 0
 
 
 def test_client_session_update_marks_transcription_session():
