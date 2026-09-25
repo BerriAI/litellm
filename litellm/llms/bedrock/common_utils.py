@@ -10,6 +10,8 @@ import json
 import os
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 
 if TYPE_CHECKING:
@@ -912,13 +914,31 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
-_BEDROCK_OPENAI_MODEL_RE: Final = re.compile(r"^openai\.(.+)$")
+@dataclass(frozen=True, slots=True)
+class BedrockVendorAlias:
+    litellm_provider: str
+    candidate_keys: tuple[str, ...]
 
 
-def get_bedrock_openai_alias_model(model: str) -> str | None:
-    """Return the bare OpenAI model name for a Bedrock ``openai.<model>`` id, else None."""
-    match: Final = _BEDROCK_OPENAI_MODEL_RE.match(get_bedrock_base_model(model))
-    return match.group(1) if match is not None else None
+_BEDROCK_VENDOR_ALIAS_PROVIDERS: Final = MappingProxyType({"openai": "openai", "anthropic": "anthropic"})
+_BEDROCK_VENDOR_MODEL_RE: Final = re.compile(r"^(?P<vendor>[a-z0-9]+)\.(?P<model>.+)$")
+_BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(:\d+)?$")
+
+
+def get_bedrock_vendor_alias(model: str) -> BedrockVendorAlias | None:
+    """Map a Bedrock ``<vendor>.<model>[-vN:M]`` id to the vendor's own catalog keys to try, in order."""
+    match: Final = _BEDROCK_VENDOR_MODEL_RE.match(get_bedrock_base_model(model))
+    if match is None:
+        return None
+    litellm_provider: Final = _BEDROCK_VENDOR_ALIAS_PROVIDERS.get(match.group("vendor"))
+    if litellm_provider is None:
+        return None
+    bare: Final = match.group("model")
+    stripped: Final = _BEDROCK_VERSION_SUFFIX_RE.sub("", bare)
+    return BedrockVendorAlias(
+        litellm_provider=litellm_provider,
+        candidate_keys=(bare,) if stripped == bare else (bare, stripped),
+    )
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:

@@ -240,7 +240,7 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
 
 
 @pytest.fixture
-def bedrock_openai_alias_cost_map(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def bedrock_vendor_alias_cost_map(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setitem(
         litellm.model_cost,
         "fake-openai-bedrock-model",
@@ -256,6 +256,16 @@ def bedrock_openai_alias_cost_map(local_model_cost_map: None, monkeypatch: pytes
             "supported_endpoints": ["/v1/responses"],
         },
     )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fake-anthropic-bedrock-model-20260101",
+        {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 6e-6,
+        },
+    )
     litellm.utils._invalidate_model_cost_lowercase_map()
     try:
         yield
@@ -264,27 +274,56 @@ def bedrock_openai_alias_cost_map(local_model_cost_map: None, monkeypatch: pytes
 
 
 @pytest.mark.parametrize(
-    ("model", "custom_llm_provider", "expected_provider"),
+    ("model", "custom_llm_provider", "expected_key", "expected_provider", "input_cost", "output_cost"),
     [
-        ("bedrock/us.openai.fake-openai-bedrock-model", None, "bedrock"),
-        ("bedrock/global.openai.fake-openai-bedrock-model", None, "bedrock"),
-        ("openai.fake-openai-bedrock-model", "bedrock_mantle", "bedrock_mantle"),
+        ("bedrock/us.openai.fake-openai-bedrock-model", None, "fake-openai-bedrock-model", "bedrock", 3e-6, 9e-6),
+        ("bedrock/global.openai.fake-openai-bedrock-model", None, "fake-openai-bedrock-model", "bedrock", 3e-6, 9e-6),
+        (
+            "openai.fake-openai-bedrock-model",
+            "bedrock_mantle",
+            "fake-openai-bedrock-model",
+            "bedrock_mantle",
+            3e-6,
+            9e-6,
+        ),
+        (
+            "bedrock/us.anthropic.fake-anthropic-bedrock-model-20260101-v1:0",
+            None,
+            "fake-anthropic-bedrock-model-20260101",
+            "bedrock",
+            2e-6,
+            6e-6,
+        ),
+        (
+            "bedrock/global.anthropic.fake-anthropic-bedrock-model-20260101",
+            None,
+            "fake-anthropic-bedrock-model-20260101",
+            "bedrock",
+            2e-6,
+            6e-6,
+        ),
     ],
 )
-def test_get_model_info_bedrock_openai_alias_falls_back_to_openai_row(
-    bedrock_openai_alias_cost_map: None, model: str, custom_llm_provider: str | None, expected_provider: str
+def test_get_model_info_bedrock_vendor_alias_falls_back_to_vendor_row(
+    bedrock_vendor_alias_cost_map: None,
+    model: str,
+    custom_llm_provider: str | None,
+    expected_key: str,
+    expected_provider: str,
+    input_cost: float,
+    output_cost: float,
 ) -> None:
     info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    assert info["key"] == "fake-openai-bedrock-model"
-    assert info["input_cost_per_token"] == 3e-6
-    assert info["output_cost_per_token"] == 9e-6
+    assert info["key"] == expected_key
+    assert info["input_cost_per_token"] == input_cost
+    assert info["output_cost_per_token"] == output_cost
     assert info["litellm_provider"] == expected_provider
     assert info.get("supports_web_search") is not True
     assert info.get("supported_endpoints") is None
 
 
-def test_get_model_info_bedrock_openai_alias_exact_row_wins(
-    bedrock_openai_alias_cost_map: None, monkeypatch: pytest.MonkeyPatch
+def test_get_model_info_bedrock_vendor_alias_exact_row_wins(
+    bedrock_vendor_alias_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
@@ -302,13 +341,31 @@ def test_get_model_info_bedrock_openai_alias_exact_row_wins(
     assert info["input_cost_per_token"] == 4e-6
 
 
-def test_get_model_info_bedrock_non_openai_alias_still_unmapped(bedrock_openai_alias_cost_map: None) -> None:
+def test_get_model_info_bedrock_unmapped_vendor_model_still_unmapped(bedrock_vendor_alias_cost_map: None) -> None:
     with pytest.raises(litellm.ModelNotMappedError):
-        litellm.get_model_info("bedrock/us.anthropic.fake-nonexistent-model")
+        litellm.get_model_info("bedrock/us.cohere.fake-nonexistent-model")
 
 
-def test_get_model_info_bedrock_openai_alias_skips_non_openai_row(
-    bedrock_openai_alias_cost_map: None, monkeypatch: pytest.MonkeyPatch
+def test_get_model_info_bedrock_vendor_alias_skips_unknown_vendor(
+    bedrock_vendor_alias_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fake-nonexistent-model",
+        {
+            "litellm_provider": "meta_llama",
+            "mode": "chat",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+        },
+    )
+    litellm.utils._invalidate_model_cost_lowercase_map()
+    with pytest.raises(litellm.ModelNotMappedError):
+        litellm.get_model_info("bedrock/us.meta.fake-nonexistent-model-v1:0")
+
+
+def test_get_model_info_bedrock_vendor_alias_skips_non_vendor_row(
+    bedrock_vendor_alias_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
@@ -320,7 +377,7 @@ def test_get_model_info_bedrock_openai_alias_skips_non_openai_row(
         litellm.get_model_info("bedrock/us.openai.fake-other-model")
 
 
-def test_cost_per_token_bedrock_openai_alias_prices_off_openai_row(bedrock_openai_alias_cost_map: None) -> None:
+def test_cost_per_token_bedrock_vendor_alias_prices_off_vendor_row(bedrock_vendor_alias_cost_map: None) -> None:
     prompt_cost, completion_cost = litellm.cost_per_token(
         model="bedrock/us.openai.fake-openai-bedrock-model", prompt_tokens=10, completion_tokens=5
     )
@@ -328,8 +385,8 @@ def test_cost_per_token_bedrock_openai_alias_prices_off_openai_row(bedrock_opena
     assert completion_cost == pytest.approx(4.5e-5)
 
 
-def test_completion_cost_bedrock_openai_alias_prices_response_model(
-    bedrock_openai_alias_cost_map: None,
+def test_completion_cost_bedrock_vendor_alias_prices_response_model(
+    bedrock_vendor_alias_cost_map: None,
 ) -> None:
     response: Final = ModelResponse(
         model="us.openai.fake-openai-bedrock-model",

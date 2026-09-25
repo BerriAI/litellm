@@ -30,7 +30,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from functools import lru_cache, wraps
+from functools import lru_cache, partial, wraps
 from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
@@ -5756,34 +5756,52 @@ def _get_model_info_from_generalization(
 
 
 _BEDROCK_PROVIDERS: Final = frozenset({"bedrock", "bedrock_converse", "bedrock_mantle"})
-_BEDROCK_OPENAI_ALIAS_FIELDS: Final = frozenset({"mode", "max_tokens", "max_input_tokens", "max_output_tokens"})
+_BEDROCK_VENDOR_ALIAS_FIELDS: Final = frozenset({"mode", "max_tokens", "max_input_tokens", "max_output_tokens"})
 
 
-def _get_model_info_from_bedrock_openai_alias(
+def _resolve_vendor_alias_key(candidate: str, litellm_provider: str) -> tuple[str, dict] | None:
+    cost_key: Final = _get_model_cost_key(candidate)
+    if cost_key is None:
+        return None
+    info: Final = _get_model_info_from_model_cost(key=cost_key)
+    if info.get("litellm_provider") != litellm_provider:
+        return None
+    return cost_key, info
+
+
+def _get_model_info_from_bedrock_vendor_alias(
     split_model: str, custom_llm_provider: str | None
 ) -> tuple[str, dict] | None:
-    """Price an unmapped Bedrock ``openai.<model>`` id off the OpenAI catalog row for ``<model>``."""
+    """Price an unmapped Bedrock ``<vendor>.<model>`` id off the vendor's own catalog row for ``<model>``."""
     if custom_llm_provider not in _BEDROCK_PROVIDERS:
         return None
-    from litellm.llms.bedrock.common_utils import get_bedrock_openai_alias_model
+    from litellm.llms.bedrock.common_utils import get_bedrock_vendor_alias
 
-    openai_model: Final = get_bedrock_openai_alias_model(split_model)
-    if openai_model is None:
+    alias: Final = get_bedrock_vendor_alias(split_model)
+    if alias is None:
         return None
-    openai_key: Final = _get_model_cost_key(openai_model)
-    if openai_key is None:
+    resolved: Final = next(
+        (
+            r
+            for r in map(
+                partial(_resolve_vendor_alias_key, litellm_provider=alias.litellm_provider), alias.candidate_keys
+            )
+            if r is not None
+        ),
+        None,
+    )
+    if resolved is None:
         return None
-    openai_info: Final = _get_model_info_from_model_cost(key=openai_key)
-    if openai_info.get("litellm_provider") != "openai":
-        return None
+    vendor_key, vendor_info = resolved
     verbose_logger.debug(
-        "bedrock openai alias: pricing model=%s provider=%s off openai cost-map key=%s",
+        "bedrock vendor alias: pricing model=%s provider=%s off %s cost-map key=%s",
         split_model,
         custom_llm_provider,
-        openai_key,
+        alias.litellm_provider,
+        vendor_key,
     )
-    return openai_key, {
-        **{k: v for k, v in openai_info.items() if k in _BEDROCK_OPENAI_ALIAS_FIELDS or "cost" in k},
+    return vendor_key, {
+        **{k: v for k, v in vendor_info.items() if k in _BEDROCK_VENDOR_ALIAS_FIELDS or "cost" in k},
         "litellm_provider": custom_llm_provider,
     }
 
@@ -6109,11 +6127,11 @@ def _get_model_info_helper(
                     }
 
             if _model_info is None:
-                alias: Final = _get_model_info_from_bedrock_openai_alias(
+                vendor_alias: Final = _get_model_info_from_bedrock_vendor_alias(
                     split_model=split_model, custom_llm_provider=custom_llm_provider
                 )
-                if alias is not None:
-                    key, _model_info = alias
+                if vendor_alias is not None:
+                    key, _model_info = vendor_alias
 
             if _model_info is None:
                 generalization: Final = _get_model_info_from_generalization(
