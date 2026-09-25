@@ -68,25 +68,3 @@ def _build_constant_env_var_map() -> dict[str, str]:
             env_var_map[constant_name] = env_var_name
 
     return env_var_map
-
-
-@pytest.mark.parametrize(
-    "env_value, expected",
-    [
-        (None, None),
-        ("2.5", 2.5),
-        ("-1", 0.0),
-    ],
-)
-def test_passthrough_error_report_drain_seconds_env_parsing(monkeypatch, env_value, expected):
-    """Unset waits for every report; a value clamps to >= 0 seconds."""
-    if env_value is None:
-        monkeypatch.delenv("PASSTHROUGH_UPSTREAM_ERROR_REPORT_DRAIN_SECONDS", raising=False)
-    else:
-        monkeypatch.setenv("PASSTHROUGH_UPSTREAM_ERROR_REPORT_DRAIN_SECONDS", env_value)
-    try:
-        reloaded = importlib.reload(constants)
-        assert reloaded.PASSTHROUGH_UPSTREAM_ERROR_REPORT_DRAIN_SECONDS == expected
-    finally:
-        monkeypatch.undo()
-        importlib.reload(constants)

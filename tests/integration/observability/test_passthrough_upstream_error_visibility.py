@@ -1133,3 +1133,117 @@ def test_llm_endpoint_upstream_quota_429_normalized_error_unchanged(
             assert error_information["normalized_error"] == _LLM_429_NORMALIZED, error_information
     finally:
         delete_scenario(handle)
+
+
+_TWO_SECOND_FAILURE_HOOK: Final = """
+import asyncio
+
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class TwoSecondFailureHook(CustomLogger):
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
+        await asyncio.sleep(2)
+
+
+instance = TwoSecondFailureHook()
+"""
+
+
+async def test_passthrough_keepalive_pings_never_follow_the_upstream_error_body(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """Keepalive pings fill idle time while the relay is still producing; once the
+    upstream error body is fully relayed the response ends. If the failure
+    report sat on the response path, pings emitted during the slow hook would
+    land after the body's last frame."""
+    frames: Final = (b'data: {"error":"one"}\n\n', b'data: {"error":"two"}\n\n')
+
+    def respond(request: Request) -> Reply:
+        return Reply(status=500, content_type="text/event-stream", chunks=frames)
+
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["litellm_settings"].update(
+        {"callbacks": ["two_sec_hook.instance"], "sse_keepalive_ping_interval_seconds": 0.2}
+    )
+    (tmp_path / "two_sec_hook.py").write_text(_TWO_SECOND_FAILURE_HOOK)
+    path: Final = tmp_path / "gemini-keepalive-error.yaml"
+    with wire_server(respond) as wire:
+        config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
+            candidate: Final = owned.gateway
+            with candidate.client.stream(
+                "POST",
+                _GEMINI_STREAM_PATH,
+                params={"alt": "sse"},
+                json=_GENERATE_CONTENT,
+                headers=_gemini_headers(candidate),
+            ) as response:
+                assert response.status_code == 500, response.text
+                call_id: Final = response.headers["x-litellm-call-id"]
+                streamed: Final = response.read()
+            assert streamed == b"".join(frames), streamed
+            _spend_error_information(call_id)
+
+
+_HEADER_STATE_HOOK: Final = """
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class HeaderStateHook(CustomLogger):
+    def __init__(self):
+        self.last_status = None
+
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
+        self.last_status = getattr(original_exception, "status_code", None)
+
+    async def async_post_call_response_headers_hook(
+        self, data, user_api_key_dict, response, request_headers=None, litellm_call_info=None
+    ):
+        return {"x-failure-for-this-request": str(self.last_status or "none")}
+
+
+instance = HeaderStateHook()
+"""
+
+
+async def test_passthrough_streamed_error_headers_do_not_carry_failure_hook_state(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """The streamed error report runs after response headers are sent, so a
+    callback-derived header sees pre-request state; the failure hook still
+    records the upstream status in the spend row."""
+    frames: Final = (b'data: {"error":"quota"}\n\n',)
+
+    def respond(request: Request) -> Reply:
+        return Reply(status=500, content_type="text/event-stream", chunks=frames)
+
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["litellm_settings"].update({"callbacks": ["header_state_hook.instance"]})
+    (tmp_path / "header_state_hook.py").write_text(_HEADER_STATE_HOOK)
+    path: Final = tmp_path / "gemini-header-state.yaml"
+    with wire_server(respond) as wire:
+        config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
+            candidate: Final = owned.gateway
+            with candidate.client.stream(
+                "POST",
+                _GEMINI_STREAM_PATH,
+                params={"alt": "sse"},
+                json=_GENERATE_CONTENT,
+                headers=_gemini_headers(candidate),
+            ) as response:
+                assert response.status_code == 500, response.text
+                call_id: Final = response.headers["x-litellm-call-id"]
+                header_value: Final = response.headers["x-failure-for-this-request"]
+                streamed: Final = response.read()
+            assert streamed == b"".join(frames), streamed
+            assert header_value == "none", header_value
+            error_information: Final = _spend_error_information(call_id)
+            assert error_information["error_code"] == "500", error_information

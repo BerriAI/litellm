@@ -1,11 +1,9 @@
 import asyncio
-import gc
 import gzip
 import json
 import logging
 import os
 import sys
-import time
 import zlib
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
@@ -20,6 +18,7 @@ import pytest
 from fastapi import HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import TypeAdapter, ValidationError
+from starlette.background import BackgroundTask
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -29,19 +28,17 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-    _REPORT_TASKS,
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     _PreviewReportingStream,
     _registered_pass_through_routes,
-    _spawn_report_task,
     _truncate_upstream_error_body,
     _with_trace_context,
     chat_completion_pass_through_endpoint,
     create_pass_through_route,
-    drain_passthrough_upstream_error_reports,
+    _log_passthrough_upstream_failure,
     initialize_pass_through_endpoints,
     pass_through_request,
     resolve_llm_passthrough_timeout,
@@ -4266,7 +4263,7 @@ async def test_pass_through_request_streaming_upstream_error_body_reaches_client
     )
     assert streamed_bytes == upstream_content
 
-    await _poll(lambda: mock_proxy_logging.post_call_failure_hook.called)
+    await response.background()
     mock_proxy_logging.post_call_failure_hook.assert_called_once()
     original_exception: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"]
     assert "was not found or your project" in original_exception.detail
@@ -4462,42 +4459,30 @@ async def test_pass_through_request_streaming_upstream_error_reads_only_preview_
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[asyncio.Future[None]] = []
-    served_at_dispatch: list[int] = []
-
-    def _recording_spawn(coro):
-        served_at_dispatch.append(body_stream.served)
-        enqueued.append(asyncio.ensure_future(coro))
-        return enqueued[-1]
-
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
-        side_effect=_recording_spawn,
-    ):
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
             with patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
-            ) as mock_get_client:
-                with patch(
-                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
-                ) as mock_success_handler:
-                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
-                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
-                    mock_success_handler.return_value = None
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+            ) as mock_success_handler:
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                mock_success_handler.return_value = None
 
-                    async_client: Final = MagicMock()
-                    async_client.build_request = MagicMock(return_value=MagicMock())
-                    async_client.send = AsyncMock(return_value=upstream_response)
-                    mock_get_client.return_value = MagicMock(client=async_client)
+                async_client: Final = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
 
-                    response: Final = await pass_through_request(
-                        request=_upstream_error_request(),
-                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
-                        custom_headers={},
-                        user_api_key_dict=MagicMock(),
-                        stream=True,
-                    )
+                response: Final = await pass_through_request(
+                    request=_upstream_error_request(),
+                    target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
 
     assert isinstance(response, StreamingResponse)
     assert response.status_code == 500
@@ -4506,12 +4491,12 @@ async def test_pass_through_request_streaming_upstream_error_reads_only_preview_
         chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in streamed_chunks
     )
     assert streamed_bytes == upstream_content
+    assert body_stream.served == 10
+    mock_proxy_logging.post_call_failure_hook.assert_not_called()
 
-    assert served_at_dispatch == [5], (
-        "the report is dispatched after the fifth 1024-byte chunk, the first point the preview budget is exceeded"
-    )
-    assert len(enqueued) == 1, enqueued
-    await enqueued[0]
+    assert response.background is not None
+    await response.background()
+    mock_proxy_logging.post_call_failure_hook.assert_called_once()
     expected_body: Final = f"{'x' * 4096}... (truncated at 4096 chars)"
     assert (
         mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
@@ -4532,42 +4517,30 @@ async def test_pass_through_request_streaming_upstream_error_single_large_chunk_
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[asyncio.Future[None]] = []
-    served_at_dispatch: list[int] = []
-
-    def _recording_spawn(coro):
-        served_at_dispatch.append(body_stream.served)
-        enqueued.append(asyncio.ensure_future(coro))
-        return enqueued[-1]
-
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
-        side_effect=_recording_spawn,
-    ):
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
             with patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
-            ) as mock_get_client:
-                with patch(
-                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
-                ) as mock_success_handler:
-                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
-                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
-                    mock_success_handler.return_value = None
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+            ) as mock_success_handler:
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                mock_success_handler.return_value = None
 
-                    async_client: Final = MagicMock()
-                    async_client.build_request = MagicMock(return_value=MagicMock())
-                    async_client.send = AsyncMock(return_value=upstream_response)
-                    mock_get_client.return_value = MagicMock(client=async_client)
+                async_client: Final = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
 
-                    response: Final = await pass_through_request(
-                        request=_upstream_error_request(),
-                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
-                        custom_headers={},
-                        user_api_key_dict=MagicMock(),
-                        stream=True,
-                    )
+                response: Final = await pass_through_request(
+                    request=_upstream_error_request(),
+                    target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
 
     assert isinstance(response, StreamingResponse)
     assert response.status_code == 500
@@ -4576,24 +4549,16 @@ async def test_pass_through_request_streaming_upstream_error_single_large_chunk_
         chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in streamed_chunks
     )
     assert streamed_bytes == upstream_content
+    mock_proxy_logging.post_call_failure_hook.assert_not_called()
 
-    assert served_at_dispatch == [1], (
-        "the report is dispatched after the first raw chunk crosses the preview budget; the second is not pulled first"
-    )
-    assert len(enqueued) == 1, enqueued
-    await enqueued[0]
+    assert response.background is not None
+    await response.background()
+    mock_proxy_logging.post_call_failure_hook.assert_called_once()
     expected_body: Final = f"{'x' * 4096}... (truncated at 4096 chars)"
     assert (
         mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
         == f"Upstream passthrough request failed with status 500: {expected_body}"
     )
-
-
-async def _poll(condition: Callable[[], bool], seconds: float = 5) -> None:
-    deadline: Final = asyncio.get_running_loop().time() + seconds
-    while not condition():
-        assert asyncio.get_running_loop().time() < deadline, "condition not met in time"
-        await asyncio.sleep(0.01)
 
 
 class _GatedUpstreamErrorBodyStream(httpx.AsyncByteStream):
@@ -4625,8 +4590,6 @@ async def test_pass_through_request_streaming_upstream_error_relays_first_chunk_
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[asyncio.Future[None]] = []
-
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         with patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
@@ -4634,31 +4597,27 @@ async def test_pass_through_request_streaming_upstream_error_relays_first_chunk_
             with patch(
                 "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
             ) as mock_success_handler:
-                with patch(
-                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
-                    side_effect=lambda coro: enqueued.append(asyncio.ensure_future(coro)) or enqueued[-1],
-                ):
-                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
-                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
-                    mock_success_handler.return_value = None
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                mock_success_handler.return_value = None
 
-                    async_client: Final = MagicMock()
-                    async_client.build_request = MagicMock(return_value=MagicMock())
-                    async_client.send = AsyncMock(return_value=upstream_response)
-                    mock_get_client.return_value = MagicMock(client=async_client)
+                async_client: Final = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
 
-                    response: Final = await pass_through_request(
-                        request=_upstream_error_request(),
-                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
-                        custom_headers={},
-                        user_api_key_dict=MagicMock(),
-                        stream=True,
-                    )
+                response: Final = await pass_through_request(
+                    request=_upstream_error_request(),
+                    target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
 
-                    assert isinstance(response, StreamingResponse)
-                    assert response.status_code == 429
-                    iterator: Final = response.body_iterator.__aiter__()
+                assert isinstance(response, StreamingResponse)
+                assert response.status_code == 429
+                iterator: Final = response.body_iterator.__aiter__()
                 first: Final = await asyncio.wait_for(iterator.__anext__(), timeout=5)
                 assert not body_stream.gate.is_set()
                 mock_proxy_logging.post_call_failure_hook.assert_not_called()
@@ -4670,8 +4629,9 @@ async def test_pass_through_request_streaming_upstream_error_relays_first_chunk_
                 assert relayed == first_chunk + second_chunk
                 await upstream_response.aclose()
 
-    assert len(enqueued) == 1, enqueued
-    await enqueued[0]
+    mock_proxy_logging.post_call_failure_hook.assert_not_called()
+    assert response.background is not None
+    await response.background()
     mock_proxy_logging.post_call_failure_hook.assert_called_once()
     detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
     assert (
@@ -4680,12 +4640,11 @@ async def test_pass_through_request_streaming_upstream_error_relays_first_chunk_
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_streaming_upstream_error_client_disconnect_enqueues_failure_report():
+async def test_pass_through_request_streaming_upstream_error_client_disconnect_reports_relayed_bytes():
     """
-    Regression: when the client disconnects mid-relay the response task is
-    cancelled, so the preview report cannot be awaited inline; it must be
-    handed to the logging worker, which then fires the failure hook once
-    with the chunks already relayed.
+    Regression: when the client disconnects mid-relay the response ends early,
+    so the report runs as the response background task; it must fire the
+    failure hook once with only the chunks already relayed.
     """
     first_chunk: Final = b'data: {"error":"rate limited"}\n\n'
     second_chunk: Final = b"data: [DONE]\n\n"
@@ -4697,8 +4656,6 @@ async def test_pass_through_request_streaming_upstream_error_client_disconnect_e
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[asyncio.Future[None]] = []
-
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         with patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
@@ -4706,42 +4663,33 @@ async def test_pass_through_request_streaming_upstream_error_client_disconnect_e
             with patch(
                 "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
             ) as mock_success_handler:
-                with patch(
-                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
-                    side_effect=lambda coro: enqueued.append(asyncio.ensure_future(coro)) or enqueued[-1],
-                ):
-                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
-                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
-                    mock_success_handler.return_value = None
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                mock_success_handler.return_value = None
 
-                    async_client: Final = MagicMock()
-                    async_client.build_request = MagicMock(return_value=MagicMock())
-                    async_client.send = AsyncMock(return_value=upstream_response)
-                    mock_get_client.return_value = MagicMock(client=async_client)
+                async_client: Final = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
 
-                    response: Final = await pass_through_request(
-                        request=_upstream_error_request(),
-                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
-                        custom_headers={},
-                        user_api_key_dict=MagicMock(),
-                        stream=True,
-                    )
+                response: Final = await pass_through_request(
+                    request=_upstream_error_request(),
+                    target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
 
-                    assert isinstance(response, StreamingResponse)
-                    iterator = response.body_iterator.__aiter__()
-                    first: Final = await asyncio.wait_for(iterator.__anext__(), timeout=5)
-                    assert first_chunk in (first if isinstance(first, bytes) else first.encode())
-                    await iterator.aclose()
-                    del iterator
-                    gc.collect()
-                    for _ in range(40):
-                        if enqueued:
-                            break
-                        await asyncio.sleep(0.05)
+                assert isinstance(response, StreamingResponse)
+                iterator = response.body_iterator.__aiter__()
+                first: Final = await asyncio.wait_for(iterator.__anext__(), timeout=5)
+                assert first_chunk in (first if isinstance(first, bytes) else first.encode())
+                await iterator.aclose()
 
-    assert len(enqueued) == 1, enqueued
-    await enqueued[0]
+    mock_proxy_logging.post_call_failure_hook.assert_not_called()
+    assert response.background is not None
+    await response.background()
     mock_proxy_logging.post_call_failure_hook.assert_called_once()
     detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
     assert detail == 'Upstream passthrough request failed with status 429: data: {"error":"rate limited"}', detail
@@ -4750,9 +4698,9 @@ async def test_pass_through_request_streaming_upstream_error_client_disconnect_e
 @pytest.mark.asyncio
 async def test_pass_through_request_streaming_upstream_error_yields_over_budget_chunk_before_report_finishes():
     """
-    Regression: the failure report is never awaited inside the relay, so a
+    Regression: the failure report never sits inside the relay, so a
     single chunk that crosses the preview budget reaches the client even
-    while the report coroutine is still running.
+    while the report would still be running.
     """
     first_chunk: Final = b"x" * 6144
     release: Final = asyncio.Event()
@@ -4764,8 +4712,6 @@ async def test_pass_through_request_streaming_upstream_error_yields_over_budget_
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[asyncio.Future[None]] = []
-
     async def _held_hook(**kwargs):
         await release.wait()
 
@@ -4776,43 +4722,40 @@ async def test_pass_through_request_streaming_upstream_error_yields_over_budget_
             with patch(
                 "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
             ) as mock_success_handler:
-                with patch(
-                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
-                    side_effect=lambda coro: enqueued.append(asyncio.ensure_future(coro)) or enqueued[-1],
-                ):
-                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-                    mock_proxy_logging.post_call_failure_hook = AsyncMock(side_effect=_held_hook)
-                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
-                    mock_success_handler.return_value = None
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock(side_effect=_held_hook)
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                mock_success_handler.return_value = None
 
-                    async_client: Final = MagicMock()
-                    async_client.build_request = MagicMock(return_value=MagicMock())
-                    async_client.send = AsyncMock(return_value=upstream_response)
-                    mock_get_client.return_value = MagicMock(client=async_client)
+                async_client: Final = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
 
-                    response: Final = await pass_through_request(
-                        request=_upstream_error_request(),
-                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
-                        custom_headers={},
-                        user_api_key_dict=MagicMock(),
-                        stream=True,
-                    )
+                response: Final = await pass_through_request(
+                    request=_upstream_error_request(),
+                    target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
 
-                    assert isinstance(response, StreamingResponse)
-                    assert response.status_code == 500
-                    iterator: Final = response.body_iterator.__aiter__()
-                    first: Final = await asyncio.wait_for(iterator.__anext__(), timeout=5)
-                    assert not release.is_set()
-                    assert not enqueued[0].done()
-                    release.set()
-                    relayed: Final = b"".join(
-                        [first]
-                        + [chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") async for chunk in iterator]
-                    )
-                    assert relayed == first_chunk
+                assert isinstance(response, StreamingResponse)
+                assert response.status_code == 500
+                iterator: Final = response.body_iterator.__aiter__()
+                first: Final = await asyncio.wait_for(iterator.__anext__(), timeout=5)
+                assert not release.is_set()
+                relayed: Final = b"".join(
+                    [first]
+                    + [chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") async for chunk in iterator]
+                )
+                assert relayed == first_chunk
+                mock_proxy_logging.post_call_failure_hook.assert_not_called()
+                background: Final = asyncio.ensure_future(response.background())
+                assert not background.done()
+                release.set()
+                await background
 
-    assert len(enqueued) == 1, enqueued
-    await enqueued[0]
     mock_proxy_logging.post_call_failure_hook.assert_called_once()
     detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
     assert (
@@ -4821,7 +4764,7 @@ async def test_pass_through_request_streaming_upstream_error_yields_over_budget_
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_streaming_upstream_error_drains_the_report_before_stream_end():
+async def test_pass_through_request_streaming_upstream_error_reports_via_background_task_after_stream_end():
     upstream_response: Final = httpx.Response(
         status_code=500,
         headers={"content-type": "text/plain"},
@@ -4858,6 +4801,9 @@ async def test_pass_through_request_streaming_upstream_error_drains_the_report_b
                 assert response.status_code == 500
                 drained: Final = [chunk async for chunk in response.body_iterator]
                 assert drained == [b"x" * 512]
+                mock_proxy_logging.post_call_failure_hook.assert_not_called()
+                assert response.background is not None
+                await response.background()
                 mock_proxy_logging.post_call_failure_hook.assert_called_once()
 
 
@@ -4924,11 +4870,7 @@ async def test_pass_through_request_streaming_upstream_error_body_read_failure_k
     assert streamed_bytes == b'{"error": "half'
     await upstream_response.aclose()
 
-    await _poll(
-        lambda: any(
-            args and args[0] == "pass_through_endpoint: upstream %s %s returned %s: %s" for args in recorded_warnings
-        )
-    )
+    await response.background()
     rendered: Final = [str(args[0]) for args in recorded_warnings]
     formats: Final = [args[0] for args in recorded_warnings]
     assert any(
@@ -4974,40 +4916,30 @@ async def test_pass_through_request_streaming_upstream_abort_after_preview_budge
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
 
-    enqueued: list[asyncio.Future[None]] = []
-
-    def _recording_spawn(coro):
-        enqueued.append(asyncio.ensure_future(coro))
-        return enqueued[-1]
-
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._spawn_report_task",
-        side_effect=_recording_spawn,
-    ):
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
             with patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
-            ) as mock_get_client:
-                with patch(
-                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
-                ) as mock_success_handler:
-                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
-                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
-                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
-                    mock_success_handler.return_value = None
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+            ) as mock_success_handler:
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+                mock_success_handler.return_value = None
 
-                    async_client: Final = MagicMock()
-                    async_client.build_request = MagicMock(return_value=MagicMock())
-                    async_client.send = AsyncMock(return_value=upstream_response)
-                    mock_get_client.return_value = MagicMock(client=async_client)
+                async_client: Final = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
 
-                    response: Final = await pass_through_request(
-                        request=_upstream_error_request(),
-                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
-                        custom_headers={},
-                        user_api_key_dict=MagicMock(),
-                        stream=True,
-                    )
+                response: Final = await pass_through_request(
+                    request=_upstream_error_request(),
+                    target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
 
     assert isinstance(response, StreamingResponse)
     received: list[bytes] = []
@@ -5020,18 +4952,21 @@ async def test_pass_through_request_streaming_upstream_abort_after_preview_budge
         await consume_response()
     assert b"".join(received) == b"d" * 5000
 
-    assert len(enqueued) == 1, enqueued
-    await enqueued[0]
     mock_proxy_logging.post_call_failure_hook.assert_called_once()
     expected_body: Final = f"{'d' * 4096}... (truncated at 4096 chars)"
     assert (
         mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
         == f"Upstream passthrough request failed with status 500: {expected_body}"
     )
+    assert response.background is not None
+    await response.background()
+    mock_proxy_logging.post_call_failure_hook.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_shutdown_drain_finishes_report_after_consumer_cancelled():
+async def test_preview_report_collected_reports_once_and_warns_on_disconnect():
+    """Closing the relay early leaves the preview partial: report_collected logs the
+    disconnect warning once and reports the collected bytes, and a second call is a no-op."""
     upstream_hold: Final = asyncio.Event()
     chunks: Final = (b"first",)
     upstream_response: Final = httpx.Response(
@@ -5040,189 +4975,171 @@ async def test_shutdown_drain_finishes_report_after_consumer_cancelled():
         stream=_UpstreamErrorBodyStreamHeld(chunks, upstream_hold),
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
-    release: Final = asyncio.Event()
-    hook_done: Final = asyncio.Event()
+    reported: list[bytes] = []
     log_warning: Final = MagicMock()
 
     async def report(preview: bytes) -> None:
-        await release.wait()
-        hook_done.set()
+        reported.append(preview)
 
     relay: Final = _PreviewReportingStream(
         upstream=upstream_response,
         report=report,
         log_warning=log_warning,
-        spawn=_spawn_report_task,
     )
 
-    async def consume() -> None:
-        async for _ in relay.__aiter__():
-            pass
+    iterator: Final = relay.__aiter__()
+    first: Final = await asyncio.wait_for(iterator.__anext__(), timeout=5)
+    assert first == b"first"
+    await iterator.aclose()
 
-    consumer: Final = asyncio.ensure_future(consume())
-    for _ in range(20):
-        await asyncio.sleep(0)
-    consumer.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await consumer
-
-    pending: Final = tuple(_REPORT_TASKS.get(asyncio.get_running_loop(), ()))
-    assert len(pending) == 1, pending
-    assert not pending[0].done()
-    assert not hook_done.is_set()
+    await relay.report_collected()
     log_warning.assert_called_once_with(
         "pass_through_endpoint: client disconnected after %d preview bytes of the upstream error body", 5
     )
+    assert reported == [b"first"], reported
 
-    release.set()
-    await drain_passthrough_upstream_error_reports(timeout=5)
-    assert hook_done.is_set()
-    assert pending[0].done()
-    assert not _REPORT_TASKS.get(asyncio.get_running_loop())
+    await relay.report_collected()
+    assert reported == [b"first"], reported
+    log_warning.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_shutdown_drain_returns_with_report_still_pending_on_timeout():
-    upstream_hold: Final = asyncio.Event()
-    chunks: Final = (b"first",)
+async def test_preview_report_collected_runs_without_disconnect_warning_after_clean_end():
     upstream_response: Final = httpx.Response(
         status_code=500,
         headers={"content-type": "text/event-stream"},
-        stream=_UpstreamErrorBodyStreamHeld(chunks, upstream_hold),
+        stream=_UpstreamErrorBodyStream(b"frame"),
         request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
-    release: Final = asyncio.Event()
+    reported: list[bytes] = []
+    log_warning: Final = MagicMock()
 
     async def report(preview: bytes) -> None:
-        await release.wait()
+        reported.append(preview)
 
     relay: Final = _PreviewReportingStream(
         upstream=upstream_response,
         report=report,
-        log_warning=MagicMock(),
-        spawn=_spawn_report_task,
+        log_warning=log_warning,
     )
-
-    async def consume() -> None:
-        async for _ in relay.__aiter__():
-            pass
-
-    consumer: Final = asyncio.ensure_future(consume())
-    for _ in range(20):
-        await asyncio.sleep(0)
-    consumer.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await consumer
-
-    pending: Final = tuple(_REPORT_TASKS.get(asyncio.get_running_loop(), ()))
-    assert len(pending) == 1, pending
-    warnings: Final = MagicMock()
-    await drain_passthrough_upstream_error_reports(timeout=0.05, log_warning=warnings)
-    warnings.assert_called_once_with(
-        "pass_through_endpoint: shutdown drain timed out with %d upstream error reports still pending", 1
-    )
-    assert not pending[0].done()
-    pending[0].cancel()
-    await asyncio.gather(pending[0], return_exceptions=True)
-
-
-@pytest.mark.asyncio
-async def test_parked_reports_do_not_block_the_error_stream():
-    """A pile of still-running reports must not sit on the response path: a stream whose
-    own report finishes immediately delivers its body without waiting on the others."""
-    hold: Final = asyncio.Event()
-
-    async def parked() -> None:
-        await hold.wait()
-
-    spawned: Final = tuple(_spawn_report_task(parked()) for _ in range(70))
-    assert len(_REPORT_TASKS.get(asyncio.get_running_loop(), ())) == 70
-
-    upstream_response: Final = httpx.Response(
-        status_code=500,
-        headers={"content-type": "text/event-stream"},
-        stream=_UpstreamErrorBodyStream(b"d" * 5000),
-        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
-    )
-    hook_done: Final = asyncio.Event()
-
-    async def report(preview: bytes) -> None:
-        hook_done.set()
-
-    relay: Final = _PreviewReportingStream(
-        upstream=upstream_response,
-        report=report,
-        log_warning=MagicMock(),
-        spawn=_spawn_report_task,
-    )
-
-    started: Final = time.monotonic()
     received: Final = b"".join([chunk async for chunk in relay.__aiter__()])
-    elapsed: Final = time.monotonic() - started
-    assert received == b"d" * 5000
-    assert hook_done.is_set()
-    assert elapsed < 0.5, elapsed
+    assert received == b"frame"
+    assert reported == []
 
-    for task in spawned:
-        task.cancel()
-    await asyncio.gather(*spawned, return_exceptions=True)
-
-
-def test_report_registry_is_scoped_to_each_event_loop():
-    """Two consecutive asyncio.run calls: each loop's reports register and drain on their
-    own loop, so a shared module-level primitive bound to the first loop never breaks the second."""
-
-    async def run_once() -> None:
-        loop: Final = asyncio.get_running_loop()
-        release: Final = asyncio.Event()
-
-        async def parked() -> None:
-            await release.wait()
-
-        spawned: Final = tuple(_spawn_report_task(parked()) for _ in range(70))
-        assert len(_REPORT_TASKS.get(loop, ())) == 70
-
-        release.set()
-        await drain_passthrough_upstream_error_reports()
-        assert all(task.done() for task in spawned)
-        assert not _REPORT_TASKS.get(loop)
-
-    asyncio.run(run_once())
-    asyncio.run(run_once())
-    assert all(len(pending) == 0 for pending in _REPORT_TASKS.values())
+    await relay.report_collected()
+    assert reported == [b"frame"], reported
+    log_warning.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_shutdown_drain_waits_without_a_timeout():
-    finished: Final = asyncio.Event()
-
-    async def report() -> None:
-        await asyncio.sleep(0.3)
-        finished.set()
-
-    task: Final = _spawn_report_task(report())
-    warnings: Final = MagicMock()
-    await drain_passthrough_upstream_error_reports(timeout=None, log_warning=warnings)
-    assert task.done()
-    assert finished.is_set()
-    warnings.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_shutdown_drain_timeout_warns_with_the_pending_count():
-    hold: Final = asyncio.Event()
-
-    async def parked() -> None:
-        await hold.wait()
-
-    task: Final = _spawn_report_task(parked())
-    warnings: Final = MagicMock()
-    await drain_passthrough_upstream_error_reports(timeout=0.05, log_warning=warnings)
-    warnings.assert_called_once_with(
-        "pass_through_endpoint: shutdown drain timed out with %d upstream error reports still pending", 1
+async def test_log_passthrough_upstream_failure_returns_background_task_for_unconsumed_error_stream():
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamErrorBodyStream(b"frame"),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
     )
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj"):
+        relay: Final = await _log_passthrough_upstream_failure(
+            response=upstream_response,
+            user_api_key_dict=MagicMock(),
+            request_payload={},
+            logging_obj=MagicMock(),
+        )
+
+    assert isinstance(relay.background, BackgroundTask)
+    assert relay.background.func == relay.response.stream.report_collected
+
+    ok_response: Final = httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamErrorBodyStream(b"ok"),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+    ok_relay: Final = await _log_passthrough_upstream_failure(
+        response=ok_response,
+        user_api_key_dict=MagicMock(),
+        request_payload={},
+        logging_obj=MagicMock(),
+    )
+    assert ok_relay.response is ok_response
+    assert ok_relay.background is None
+
+
+@pytest.mark.asyncio
+async def test_streamed_error_runs_failure_hook_as_background_after_response_headers_hook():
+    """The streamed error report runs via the response's background task, so the
+    failure hook must fire after the response headers hook and after the last
+    body byte, still exactly once."""
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=_ChunkedUpstreamErrorBodyStream((b"data: one\n\n", b"data: two\n\n")),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+    calls: list[str] = []
+
+    async def _headers_hook(**kwargs):
+        calls.append("post_call_response_headers_hook")
+        return None
+
+    async def _failure_hook(**kwargs):
+        calls.append("post_call_failure_hook")
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+            ) as mock_success_handler:
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock(side_effect=_failure_hook)
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(side_effect=_headers_hook)
+                mock_success_handler.return_value = None
+
+                async_client: Final = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                response: Final = await pass_through_request(
+                    request=_upstream_error_request(),
+                    target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
+
+    assert isinstance(response, StreamingResponse)
+    scope: Final = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [],
+        "client": ("127.0.0.1", 1234),
+        "server": ("127.0.0.1", 80),
+    }
+    sent: list = []
+
+    async def receive():
+        await asyncio.sleep(3600)
+
+    async def send(message):
+        sent.append(message)
+
+    await response(scope, receive, send)
+    assert calls == ["post_call_response_headers_hook", "post_call_failure_hook"], calls
+    body: Final = b"".join(
+        message.get("body", b"") for message in sent if message["type"] == "http.response.body"
+    )
+    assert body == b"data: one\n\ndata: two\n\n"
 
 
 class _UpstreamErrorGzipStreamDropping(httpx.AsyncByteStream):
@@ -5295,11 +5212,7 @@ async def test_pass_through_request_streaming_upstream_error_gzip_read_failure_r
     assert streamed_bytes == plaintext
     await upstream_response.aclose()
 
-    await _poll(
-        lambda: any(
-            args and args[0] == "pass_through_endpoint: upstream %s %s returned %s: %s" for args in recorded_warnings
-        )
-    )
+    await response.background()
     rendered: Final = [str(args[0]) for args in recorded_warnings]
     assert any(
         args[0] == "pass_through_endpoint: upstream %s %s returned %s: %s" and plaintext.decode() in str(args[4])
@@ -5351,12 +5264,7 @@ async def test_pass_through_request_streaming_upstream_error_gzip_body_decoded_f
     )
     assert streamed_bytes == upstream_content
 
-    await _poll(
-        lambda: any(
-            call.args[0] == "pass_through_endpoint: upstream %s %s returned %s: %s"
-            for call in mock_warning.call_args_list
-        )
-    )
+    await response.background()
     upstream_warnings: Final = [
         call
         for call in mock_warning.call_args_list

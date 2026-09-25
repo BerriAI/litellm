@@ -243,6 +243,73 @@ async def test_passthrough_sigterm_drains_reports_parked_on_a_slow_failure_hook(
                 _single_spend_row(call_id)
 
 
+_PARKING_FAILURE_HOOK: Final = """
+import asyncio
+
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class ParkingFailureHook(CustomLogger):
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
+        await asyncio.Event().wait()
+
+
+instance = ParkingFailureHook()
+"""
+
+
+async def test_passthrough_sigterm_with_graceful_timeout_exits_and_flushes_spend(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """A streamed upstream error whose failure report can never finish must not hold
+    the proxy open: uvicorn cancels the stuck request task after the graceful
+    window and the shutdown spend flush still lands rows buffered behind the
+    3600 s batch interval."""
+    gate: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        if "streamGenerateContent" in request.target:
+            return Reply(
+                status=429, content_type="text/event-stream", chunks=_RATE_LIMITED_FRAMES, gate_after_first=gate
+            )
+        return Reply(
+            status=200,
+            body=json.dumps(
+                {
+                    "candidates": [{"content": {"parts": [{"text": "ok"}], "role": "model"}}],
+                    "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2, "totalTokenCount": 5},
+                }
+            ).encode(),
+        )
+
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["litellm_settings"].update({"callbacks": ["park_hook.instance"]})
+    config["general_settings"]["proxy_batch_write_at"] = 3600
+    (tmp_path / "park_hook.py").write_text(_PARKING_FAILURE_HOOK)
+    path: Final = tmp_path / "chaos-graceful-sigterm.yaml"
+    with wire_server(respond) as wire:
+        config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, graceful_shutdown_seconds=3) as owned:
+            candidate: Final = owned.gateway
+            await _first_frame_then_close(str(candidate.client.base_url), candidate.key)
+            gate.set()
+            follow_up: Final = candidate.request(
+                "POST",
+                "/gemini/v1beta/models/claude-nope-9:generateContent",
+                _GENERATE_CONTENT,
+                headers={"x-goog-api-key": candidate.key},
+            )
+            assert follow_up.status_code == 200, follow_up.text
+            call_id: Final = follow_up.headers["x-litellm-call-id"]
+            await asyncio.sleep(1.5)
+            owned.process.send_signal(signal.SIGTERM)
+            owned.process.wait(timeout=20)
+    _single_spend_row(call_id)
+
+
 async def _first_frame_then_close(base_url: str, key: str) -> str:
     async with httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(5, connect=5), trust_env=False) as client:
         async with client.stream(

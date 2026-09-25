@@ -733,7 +733,6 @@ from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
     router as openai_passthrough_router,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-    drain_passthrough_upstream_error_reports,
     initialize_pass_through_endpoints,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -1095,27 +1094,6 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         )
     except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
-
-
-async def _drain_reports_then_flush_spend(
-    drain_reports: Callable[[], Awaitable[None]],
-    drain_spend_events: Callable[[], Awaitable[None]],
-    stop_scheduler_jobs: Callable[[], Awaitable[None]] | None,
-    flush_spend_counters: Callable[[], Awaitable[None]],
-    flush_spend_logs: Callable[[], Awaitable[None]],
-) -> None:
-    try:
-        await drain_reports()
-    except Exception as e:  # noqa: BLE001  # shutdown must continue when a report drain fails
-        verbose_proxy_logger.error("Error draining passthrough upstream error reports: %s", e)
-    await drain_spend_events()
-    if stop_scheduler_jobs is not None:
-        try:
-            await stop_scheduler_jobs()
-        except Exception as e:
-            verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
-    await flush_spend_counters()
-    await flush_spend_logs()
 
 
 async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = None) -> None:
@@ -1606,18 +1584,18 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
+    await _drain_spend_event_producer_on_shutdown()
+
     # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
-    await _drain_reports_then_flush_spend(
-        drain_reports=drain_passthrough_upstream_error_reports,
-        drain_spend_events=_drain_spend_event_producer_on_shutdown,
-        stop_scheduler_jobs=(
-            partial(stop_in_flight_scheduler_jobs, scheduler, scheduler_executor)
-            if scheduler is not None and scheduler_executor is not None
-            else None
-        ),
-        flush_spend_counters=flush_spend_counters_on_shutdown,
-        flush_spend_logs=_flush_spend_logs_queue_on_shutdown,
-    )
+    if scheduler is not None and scheduler_executor is not None:
+        try:
+            await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
+        except Exception as e:
+            verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
+
+    await flush_spend_counters_on_shutdown()
+
+    await _flush_spend_logs_queue_on_shutdown()
 
     await proxy_config.stop_config_sync_subscriber()
 
@@ -6363,6 +6341,11 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+
+        if general_settings.get("mcp_advertised_versions") is not None:
+            from litellm.types.mcp import MCPAdvertisedVersions
+
+            TypeAdapter(MCPAdvertisedVersions).validate_python(general_settings["mcp_advertised_versions"])
 
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))

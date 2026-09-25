@@ -4,7 +4,6 @@ import copy
 import json
 import posixpath
 import traceback
-import weakref
 from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -27,6 +26,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
@@ -43,7 +43,6 @@ from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
-    PASSTHROUGH_UPSTREAM_ERROR_REPORT_DRAIN_SECONDS,
     REDACTED_BY_LITELLM,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
@@ -882,97 +881,51 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         upstream: httpx.Response,
         report: _ReportPreview,
         log_warning: Callable[..., None],
-        spawn: Callable[[Awaitable[None]], asyncio.Future[None]],
     ) -> None:
         self._upstream: Final = upstream
         self._report: Final = report
         self._log_warning: Final = log_warning
-        self._spawn: Final = spawn
         self._collected: Final[list[bytes]] = []  # mutable-ok: preview prefix accumulated while relaying
-        self._dispatched = False
-        self._pending: asyncio.Future[None] | None = None
+        self._budget_crossed = False
         self._completed = False
+        self._aborted = False
+        self._reported = False
 
-    def _dispatch_report(self) -> None:
-        if self._dispatched:
+    async def report_collected(self) -> None:
+        if self._reported:
             return
-        self._dispatched = True
-        self._pending = self._spawn(self._report(b"".join(self._collected)))
-
-    async def _drain_pending_report(self) -> None:
-        pending: Final = self._pending
-        if pending is not None:
-            await asyncio.shield(pending)
-
-    def _dispatch_disconnect_report(self) -> None:
-        if not self._completed and not self._dispatched:
+        self._reported = True
+        if not self._completed and not self._budget_crossed and not self._aborted:
             self._log_warning(
                 "pass_through_endpoint: client disconnected after %d preview bytes of the upstream error body",
                 sum(len(part) for part in self._collected),
             )
-        self._dispatch_report()
+        await self._report(b"".join(self._collected))
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         total = 0  # rebind-ok: running byte count against the preview budget
         try:
             async for chunk in self._upstream.aiter_bytes():
-                if not self._dispatched:
+                if not self._budget_crossed:
                     self._collected.append(chunk)
                     total += len(chunk)
                     if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
-                        self._dispatch_report()
+                        self._budget_crossed = True
                 yield chunk
             self._completed = True
-            self._dispatch_report()
-            await self._drain_pending_report()
         except httpx.HTTPError as err:
-            dispatched_before: Final = self._dispatched
+            self._aborted = True
             self._log_warning(
                 "pass_through_endpoint: upstream error body read failed after %d bytes: %s",
                 sum(len(part) for part in self._collected),
                 type(err).__name__,
             )
-            self._dispatch_report()
-            await self._drain_pending_report()
-            if dispatched_before:
+            if self._budget_crossed:
+                await self.report_collected()
                 raise
-        finally:
-            self._dispatch_disconnect_report()
 
     async def aclose(self) -> None:
-        self._dispatch_disconnect_report()
         await self._upstream.aclose()
-
-
-_REPORT_TASKS: Final[  # mutable-ok: in-flight report registry per loop, drained at shutdown
-    weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, set[asyncio.Future[None]]]
-] = weakref.WeakKeyDictionary()
-
-
-def _spawn_report_task(report: Awaitable[None]) -> asyncio.Future[None]:
-    task: Final = asyncio.ensure_future(report)
-    registry: Final = _REPORT_TASKS.setdefault(
-        asyncio.get_running_loop(),
-        set(),  # mutable-ok: per-loop task set, tasks discard themselves on completion
-    )
-    registry.add(task)
-    task.add_done_callback(registry.discard)
-    return task
-
-
-async def drain_passthrough_upstream_error_reports(
-    timeout: float | None = PASSTHROUGH_UPSTREAM_ERROR_REPORT_DRAIN_SECONDS,
-    log_warning: Callable[..., None] = verbose_proxy_logger.warning,
-) -> None:
-    pending: Final = tuple(_REPORT_TASKS.get(asyncio.get_running_loop(), ()))
-    if not pending:
-        return
-    _, still_pending = await asyncio.wait(pending, timeout=timeout)
-    if still_pending:
-        log_warning(
-            "pass_through_endpoint: shutdown drain timed out with %d upstream error reports still pending",
-            len(still_pending),
-        )
 
 
 def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
@@ -1033,14 +986,20 @@ def _passthrough_upstream_failure_reporter(
     return report
 
 
+@dataclass(frozen=True, slots=True)
+class _UpstreamRelay:
+    response: httpx.Response
+    background: BackgroundTask | None
+
+
 async def _log_passthrough_upstream_failure(
     response: httpx.Response,
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,
     logging_obj: LiteLLMLoggingObj,
-) -> httpx.Response:
+) -> _UpstreamRelay:
     if response.status_code < 400:
-        return response
+        return _UpstreamRelay(response=response, background=None)
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     log_warning: Final = verbose_proxy_logger.warning
@@ -1049,18 +1008,21 @@ async def _log_passthrough_upstream_failure(
     )
     if response.is_stream_consumed:
         await report(response.content)
-        return response
-    return httpx.Response(
-        status_code=response.status_code,
-        headers=_headers_without_body_framing(response.headers),
-        stream=_PreviewReportingStream(
-            upstream=response,
-            report=report,
-            log_warning=log_warning,
-            spawn=_spawn_report_task,
+        return _UpstreamRelay(response=response, background=None)
+    stream: Final = _PreviewReportingStream(
+        upstream=response,
+        report=report,
+        log_warning=log_warning,
+    )
+    return _UpstreamRelay(
+        response=httpx.Response(
+            status_code=response.status_code,
+            headers=_headers_without_body_framing(response.headers),
+            stream=stream,
+            request=response.request,
+            extensions=response.extensions,
         ),
-        request=response.request,
-        extensions=response.extensions,
+        background=BackgroundTask(stream.report_collected),
     )
 
 
@@ -1491,7 +1453,7 @@ async def pass_through_request(
                 headers=response.headers,
             )
 
-            relay_response: Final = await _log_passthrough_upstream_failure(
+            relay: Final = await _log_passthrough_upstream_failure(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
                 request_payload=_build_passthrough_failure_request_payload(
@@ -1506,13 +1468,13 @@ async def pass_through_request(
 
             # Call response headers hook for streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=relay_response.headers,
+                headers=relay.response.headers,
                 litellm_call_id=litellm_call_id,
             )
             callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
-                response=relay_response,
+                response=relay.response,
                 request_headers=dict(request.headers),
             )
             if callback_headers:
@@ -1523,7 +1485,7 @@ async def pass_through_request(
                     stream=_own_streamed_managed_ids(
                         stream=_relay_reporting_failures(
                             stream=PassThroughStreamingHandler.chunk_processor(
-                                response=relay_response,
+                                response=relay.response,
                                 request_body=_parsed_body,
                                 litellm_logging_obj=logging_obj,
                                 endpoint_type=endpoint_type,
@@ -1531,7 +1493,7 @@ async def pass_through_request(
                                 passthrough_success_handler_obj=pass_through_endpoint_logging,
                                 url_route=str(url),
                             ),
-                            upstream_status=relay_response.status_code,
+                            upstream_status=relay.response.status_code,
                             user_api_key_dict=user_api_key_dict,
                             request_payload=_build_passthrough_failure_request_payload(
                                 parsed_body=_parsed_body,
@@ -1545,10 +1507,11 @@ async def pass_through_request(
                         user_api_key_dict=user_api_key_dict,
                     ),
                     ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
-                    upstream_headers=relay_response.headers,
+                    upstream_headers=relay.response.headers,
                 ),
                 headers=_response_headers,
-                status_code=relay_response.status_code,
+                status_code=relay.response.status_code,
+                background=relay.background,
             )
 
         if state_raw_body is not None:
@@ -1583,7 +1546,7 @@ async def pass_through_request(
             logging_obj.stream = True
             logging_obj.model_call_details["stream"] = True
 
-            detected_relay_response: Final = await _log_passthrough_upstream_failure(
+            detected_relay: Final = await _log_passthrough_upstream_failure(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
                 request_payload=_build_passthrough_failure_request_payload(
@@ -1598,13 +1561,13 @@ async def pass_through_request(
 
             # Call response headers hook for detected streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=detected_relay_response.headers,
+                headers=detected_relay.response.headers,
                 litellm_call_id=litellm_call_id,
             )
             callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
-                response=detected_relay_response,
+                response=detected_relay.response,
                 request_headers=dict(request.headers),
             )
             if callback_headers:
@@ -1615,7 +1578,7 @@ async def pass_through_request(
                     stream=_own_streamed_managed_ids(
                         stream=_relay_reporting_failures(
                             stream=PassThroughStreamingHandler.chunk_processor(
-                                response=detected_relay_response,
+                                response=detected_relay.response,
                                 request_body=_parsed_body,
                                 litellm_logging_obj=logging_obj,
                                 endpoint_type=endpoint_type,
@@ -1623,7 +1586,7 @@ async def pass_through_request(
                                 passthrough_success_handler_obj=pass_through_endpoint_logging,
                                 url_route=str(url),
                             ),
-                            upstream_status=detected_relay_response.status_code,
+                            upstream_status=detected_relay.response.status_code,
                             user_api_key_dict=user_api_key_dict,
                             request_payload=_build_passthrough_failure_request_payload(
                                 parsed_body=_parsed_body,
@@ -1637,10 +1600,11 @@ async def pass_through_request(
                         user_api_key_dict=user_api_key_dict,
                     ),
                     ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
-                    upstream_headers=detected_relay_response.headers,
+                    upstream_headers=detected_relay.response.headers,
                 ),
                 headers=_response_headers,
-                status_code=detected_relay_response.status_code,
+                status_code=detected_relay.response.status_code,
+                background=detected_relay.background,
             )
 
         if not _should_buffer_passthrough_response(response):
