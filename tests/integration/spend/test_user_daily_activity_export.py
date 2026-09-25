@@ -98,7 +98,8 @@ def test_user_activity_export_csv_downloads_every_key(gateway: Gateway) -> None:
 def test_user_activity_export_allows_a_non_admin_their_own_scope(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
-        member: Final = scenario.user(user_role="internal_user")
+        member_email: Final = f"member-{uuid.uuid4().hex}@example.com"
+        member: Final = scenario.user(user_role="internal_user", user_email=member_email)
         member_key: Final = scenario.key(user_id=member, models=[model])
         reply: Final = gateway.chat(model, key=member_key, text=f"user export {uuid.uuid4().hex}")
         assert reply["usage"]["total_tokens"] == 40, reply
@@ -118,6 +119,16 @@ def test_user_activity_export_allows_a_non_admin_their_own_scope(gateway: Gatewa
         assert object_value(body["metadata"])["user_id"] == member, response.text
         rows: Final = tuple(object_value(row) for row in body["data"])
         assert len(rows) == 1 and rows[0]["user_id"] == member, response.text
+        assert rows[0]["user_email"] == member_email, response.text
+        csv_response: Final = gateway.request(
+            "GET",
+            "/user/daily/activity/export",
+            params={**_export_range(), "export_type": "daily_with_keys", "format": "csv"},
+            key=member_key,
+        )
+        assert csv_response.status_code == 200, csv_response.text
+        (csv_row,) = tuple(csv.DictReader(io.StringIO(csv_response.text)))
+        assert csv_row["User"] == member_email, csv_response.text
 
 
 def test_user_activity_export_denies_a_non_admin_another_user(gateway: Gateway) -> None:

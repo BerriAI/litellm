@@ -5207,7 +5207,7 @@ def test_user_export_csv_omits_key_columns_for_the_plain_daily_scope():
     )
     assert list(csv.reader(io.StringIO(text)))[1] == [
         "2026-06-01",
-        "-",
+        "user-1",
         "user-1",
         "1.5000",
         "2",
@@ -5241,6 +5241,20 @@ def test_user_export_csv_escapes_formula_aliases_and_keeps_dash_placeholder():
     assert record["Key ID"] == "-"
 
 
+def test_user_export_csv_user_cell_falls_back_to_the_user_id():
+    import csv
+    import io
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _user_export_csv
+
+    labeled: Final = _user_export_row_instance(user_id="user-9", user_email="u@example.com")
+    unlabeled: Final = _user_export_row_instance(user_id="user-10")
+
+    records: Final = list(csv.DictReader(io.StringIO(_user_export_csv("daily", (labeled, unlabeled)))))
+
+    assert [record["User"] for record in records] == ["u@example.com", "user-10"]
+
+
 def test_user_export_csv_adds_flat_cost_columns_only_with_ptu_flat_cost():
     from litellm.proxy.management_endpoints.internal_user_endpoints import _user_export_csv
 
@@ -5261,7 +5275,7 @@ def test_user_export_row_maps_the_entity_column_to_user_id():
         team_id="user-7",
         api_key="key-1",
         key_alias="alias-1",
-        user_email="u@example.com",
+        user_email="key-owner@example.com",
         model="gpt-5",
         spend=2.5,
         flat_cost=1.0,
@@ -5275,7 +5289,7 @@ def test_user_export_row_maps_the_entity_column_to_user_id():
         cache_creation_input_tokens=5,
     )
 
-    user_row: Final = _user_export_row(team_row)
+    user_row: Final = _user_export_row(team_row, {"user-7": "u@example.com"})
 
     assert user_row.user_id == "user-7"
     assert user_row.user_email == "u@example.com"
@@ -5330,25 +5344,59 @@ async def test_get_user_daily_activity_export_admin_global_view(monkeypatch):
     An admin export without user_id forwards a global entity_id to the uncapped
     export query on the user spend table, and answers CSV by default.
     """
+    import csv
+    import io
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         get_user_daily_activity_export,
     )
+    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
 
     mock_prisma_client = MagicMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    mock_export_rows = AsyncMock(return_value=())
+    team_row: Final = TeamDailyActivityExportRow(
+        date="2025-02-01",
+        team_id="user-9",
+        api_key="key-1",
+        key_alias="alias-1",
+        user_email="key-metadata@example.com",
+        spend=1.5,
+        api_requests=1,
+        successful_requests=1,
+        failed_requests=0,
+        total_tokens=10,
+        prompt_tokens=7,
+        completion_tokens=3,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
+    mock_export_rows = AsyncMock(return_value=(team_row,))
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_export_rows",
         mock_export_rows,
     )
 
+    db_user: Final = MagicMock(user_id="user-9", user_email="u-db@example.com", user_alias=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[db_user])
+
     admin_key_dict = UserAPIKeyAuth(
         user_id="admin-user-001",
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
+
+    json_result = await get_user_daily_activity_export(
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        api_key="key-1",
+        timezone_offset=480,
+        format="json",
+        user_api_key_dict=admin_key_dict,
+    )
+
+    json_body: Final = json.loads(json_result.body)
+    assert json_body["data"][0]["user_email"] == "u-db@example.com"
 
     result = await get_user_daily_activity_export(
         start_date="2025-02-01",
@@ -5360,7 +5408,9 @@ async def test_get_user_daily_activity_export_admin_global_view(monkeypatch):
 
     assert result.media_type == "text/csv; charset=utf-8"
     assert 'filename="user_usage_daily_' in result.headers["content-disposition"]
-    mock_export_rows.assert_called_once_with(
+    csv_record: Final = next(csv.DictReader(io.StringIO(result.body.decode())))
+    assert csv_record["User"] == "u-db@example.com"
+    mock_export_rows.assert_called_with(
         prisma_client=mock_prisma_client,
         table_name="litellm_dailyuserspend",
         entity_id_field="user_id",

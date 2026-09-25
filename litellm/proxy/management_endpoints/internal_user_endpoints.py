@@ -3123,11 +3123,18 @@ async def get_user_daily_activity_aggregated(
         )
 
 
-def _user_export_row(row: TeamDailyActivityExportRow) -> UserDailyActivityExportRow:
+async def _resolve_export_user_labels(prisma_client: "PrismaClient", user_ids: frozenset[str]) -> Mapping[str, str]:
+    if not user_ids:
+        return MappingProxyType({})
+    users: Final = await _user_table(prisma_client).find_many(where={"user_id": {"in": list(user_ids)}})
+    return MappingProxyType({user.user_id: label for user in users if (label := user.user_email or user.user_alias)})
+
+
+def _user_export_row(row: TeamDailyActivityExportRow, labels: Mapping[str, str]) -> UserDailyActivityExportRow:
     return UserDailyActivityExportRow(
         date=row.date,
         user_id=row.team_id,
-        user_email=row.user_email,
+        user_email=labels.get(row.team_id),
         api_key=row.api_key,
         key_alias=row.key_alias,
         model=row.model,
@@ -3168,7 +3175,7 @@ def _user_export_csv_headers(export_type: UserDailyActivityExportType) -> tuple[
 def _user_export_csv_record(row: UserDailyActivityExportRow) -> dict[str, object]:
     return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
         "Date": row.date,
-        "User": csv_safe(row.user_email) if row.user_email else "-",
+        "User": csv_safe(row.user_email) if row.user_email else csv_safe(row.user_id),
         "User ID": csv_safe(row.user_id),
         "Key Alias": csv_safe(row.key_alias) if row.key_alias else "-",
         "Key ID": row.api_key or "-",
@@ -3259,6 +3266,10 @@ async def get_user_daily_activity_export(
             timezone_offset_minutes=timezone_offset,
             export_type=export_type,
         )
+        labels: Final = await _resolve_export_user_labels(
+            prisma_client,
+            frozenset(row.team_id for row in rows if row.team_id and row.team_id != "Unassigned"),
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -3268,7 +3279,7 @@ async def get_user_daily_activity_export(
             detail={"error": f"Failed to fetch analytics: {e}"},
         )
 
-    user_rows: Final = tuple(_user_export_row(row) for row in rows)
+    user_rows: Final = tuple(_user_export_row(row, labels) for row in rows)
     now: Final = datetime.now(timezone.utc)
     metadata: Final = UserDailyActivityExportMetadata(
         export_date=now.isoformat(),
