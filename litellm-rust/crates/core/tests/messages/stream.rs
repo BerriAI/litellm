@@ -498,8 +498,7 @@ async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
 async fn the_local_host_refuses_a_stream(call: MessagesCall) {
     let upstream = upstream([sse_response()]).await;
     let host = LocalMessagesHost::new(streaming(call, upstream.uri()));
-    let result =
-        litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), &host).await;
+    let result = litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), &host).await;
     assert!(matches!(
         result,
         Err(Error::Unsupported(
