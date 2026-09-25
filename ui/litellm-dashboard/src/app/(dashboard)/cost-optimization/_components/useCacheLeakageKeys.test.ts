@@ -22,14 +22,15 @@ describe("useCacheLeakageKeys", () => {
     useCacheLeakageKeys("sk-test", range, "user-9");
 
     const [, path, init, options] = lastCall();
-    expect(path).toBe("/user/daily/activity/cache_leakage");
-    expect(init.params.query).toEqual({
+    const expectedQuery = {
       start_date: "2026-07-06",
       end_date: "2026-08-05",
       timezone: new Date().getTimezoneOffset(),
       include_current_utc_day: true,
       user_id: "user-9",
-    });
+    };
+    expect(path).toBe("/user/daily/activity/cache_leakage");
+    expect(init.params.query).toEqual(expectedQuery);
     expect(options.retry).toBe(false);
   });
 

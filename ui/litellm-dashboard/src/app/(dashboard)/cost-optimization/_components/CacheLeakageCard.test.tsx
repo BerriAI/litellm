@@ -53,13 +53,14 @@ const mockKeyQuery = (result: {
   isFetching?: boolean;
   refetch?: () => unknown;
 }) => {
-  useQueryMock.mockReturnValue({
+  const queryResult = {
     data: result.data,
     isPending: result.isPending ?? false,
     isError: result.isError ?? false,
     isFetching: result.isFetching ?? false,
     refetch: result.refetch ?? vi.fn(),
-  });
+  };
+  useQueryMock.mockReturnValue(queryResult);
 };
 
 const baseMetrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
@@ -117,24 +118,25 @@ const renderWith = (results: DailyData[], overrides: Partial<DailyActivityRange>
   );
 };
 
+const leakyOverrides: Partial<ServerKeyRow> = {
+  key_alias: "leaky-key",
+  prompt_tokens: 10000,
+  uncached_prompt_tokens: 10000,
+  cache_hit_ratio: 0,
+};
+
+const cachingOverrides: Partial<ServerKeyRow> = {
+  key_alias: "caching-key",
+  prompt_tokens: 1000,
+  cache_read_input_tokens: 900,
+  uncached_prompt_tokens: 100,
+  cache_hit_ratio: 0.9,
+};
+
 describe("CacheLeakageCard", () => {
   it("ranks leaking keys by the server ordering and shows cache hit ratio", () => {
     mockKeyQuery({
-      data: serverResponse([
-        serverKey("hash-leaky", {
-          key_alias: "leaky-key",
-          prompt_tokens: 10000,
-          uncached_prompt_tokens: 10000,
-          cache_hit_ratio: 0,
-        }),
-        serverKey("hash-caching", {
-          key_alias: "caching-key",
-          prompt_tokens: 1000,
-          cache_read_input_tokens: 900,
-          uncached_prompt_tokens: 100,
-          cache_hit_ratio: 0.9,
-        }),
-      ]),
+      data: serverResponse([serverKey("hash-leaky", leakyOverrides), serverKey("hash-caching", cachingOverrides)]),
     });
     renderWith([]);
 
