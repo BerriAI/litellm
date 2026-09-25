@@ -5766,6 +5766,12 @@ def _strip_mantle_region_prefix(model: str) -> str:
     return split_mantle_region_prefix(model)[1]
 
 
+def _split_bedrock_vendor_model(model: str) -> tuple[str, str] | None:
+    from litellm.llms.bedrock.common_utils import split_bedrock_vendor_model
+
+    return split_bedrock_vendor_model(model)
+
+
 def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> PotentialModelNamesAndCustomLLMProvider:
     if custom_llm_provider is None:
         # Get custom_llm_provider
@@ -5806,11 +5812,8 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         if custom_llm_provider == "bedrock_mantle"
         else combined_stripped_model_name
     )
-    if custom_llm_provider in ("bedrock", "bedrock_converse", "bedrock_mantle"):
-        from litellm.llms.bedrock.common_utils import split_bedrock_vendor_model
-
     vendor_model: Final = (
-        split_bedrock_vendor_model(region_free_split_model)
+        _split_bedrock_vendor_model(region_free_split_model)
         if custom_llm_provider in ("bedrock", "bedrock_converse", "bedrock_mantle")
         else None
     )
