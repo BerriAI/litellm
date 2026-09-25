@@ -91,12 +91,17 @@ const descriptionTokens = (description: string): string[] =>
     .filter((token) => token.length > 0)
     .map((token) => token.toLowerCase());
 
-const stripSuffix = (token: string, suffix: string): string => (token.endsWith(suffix) ? token.slice(0, -suffix.length) : token);
+const stripSuffix = (token: string, suffix: string): string =>
+  token.endsWith(suffix) ? token.slice(0, -suffix.length) : token;
 
 const tokenVariants = (token: string): string[] =>
-  [token, stripSuffix(token, "es"), stripSuffix(token, "s"), stripSuffix(token, "ed"), stripSuffix(token, "ing")].filter(
-    (variant) => variant.length > 0,
-  );
+  [
+    token,
+    stripSuffix(token, "es"),
+    stripSuffix(token, "s"),
+    stripSuffix(token, "ed"),
+    stripSuffix(token, "ing"),
+  ].filter((variant) => variant.length > 0);
 
 const CONJUNCTION_TOKENS = new Set(["and", "then", "or", "n"]);
 

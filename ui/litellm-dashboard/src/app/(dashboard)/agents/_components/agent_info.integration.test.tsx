@@ -179,7 +179,7 @@ describe("AgentInfoView update payload", () => {
       rpm_limit: 222,
       session_tpm_limit: 333,
       session_rpm_limit: 444,
-      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
+      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {}, mcp_tool_overrides: {} },
       access_group_ids: [],
     });
   });
@@ -221,7 +221,7 @@ describe("AgentInfoView update payload", () => {
       rpm_limit: 222,
       session_tpm_limit: 333,
       session_rpm_limit: 444,
-      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
+      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {}, mcp_tool_overrides: {} },
       access_group_ids: [],
     });
   });
@@ -300,7 +300,7 @@ describe("AgentInfoView update payload", () => {
         api_base: "https://other.example.com",
         model: "langgraph/asst_1",
       },
-      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
+      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {}, mcp_tool_overrides: {} },
       access_group_ids: [],
     });
   });
@@ -311,6 +311,7 @@ describe("AgentInfoView update payload", () => {
       mcp_access_groups: ["grp-a"],
       mcp_toolsets: ["toolset-1"],
       mcp_tool_permissions: { "srv-1": ["tool_x"] },
+      mcp_tool_overrides: {},
     };
     vi.mocked(networking.getAgentInfo).mockResolvedValue({
       ...A2A_AGENT,

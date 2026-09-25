@@ -265,11 +265,7 @@ export const resolveEffectiveMcpServers = ({
   );
 };
 
-export const mcpToolState = (
-  entry: EffectiveMcpServer,
-  toolName: string,
-  isDeleteTool: boolean,
-): McpToolState => {
+export const mcpToolState = (entry: EffectiveMcpServer, toolName: string, isDeleteTool: boolean): McpToolState => {
   const denied = (entry.overrides?.deny ?? []).includes(toolName);
   if (denied) {
     if (entry.keyedTools !== undefined) {
@@ -335,7 +331,16 @@ export const applyToolOverrideWrites = ({
   readonly permissionKey: string;
   readonly edits: readonly { toolName: string; isDeleteTool: boolean; checked: boolean }[];
 }): Record<string, McpToolOverrideEntry> =>
-  edits.reduce((overrides, edit) => {
-    const write = { toolOverrides: overrides, permissionKey, toolName: edit.toolName, isDeleteTool: edit.isDeleteTool, checked: edit.checked };
-    return applyToolOverrideWrite(write);
-  }, { ...toolOverrides });
+  edits.reduce(
+    (overrides, edit) => {
+      const write = {
+        toolOverrides: overrides,
+        permissionKey,
+        toolName: edit.toolName,
+        isDeleteTool: edit.isDeleteTool,
+        checked: edit.checked,
+      };
+      return applyToolOverrideWrite(write);
+    },
+    { ...toolOverrides },
+  );

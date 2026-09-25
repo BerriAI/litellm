@@ -350,7 +350,8 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                             permissionKey: entry.permissionKey,
                             edits: tools
                               .filter(
-                                (tool) => allowed.includes(tool.name) !== stateFor(tool).checked && !stateFor(tool).locked,
+                                (tool) =>
+                                  allowed.includes(tool.name) !== stateFor(tool).checked && !stateFor(tool).locked,
                               )
                               .map((tool) => ({
                                 toolName: tool.name,

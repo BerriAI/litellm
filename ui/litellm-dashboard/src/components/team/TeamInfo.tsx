@@ -404,7 +404,9 @@ const teamUpdateFieldsSchema = z.object({
     })
     .optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
-  mcp_tool_overrides: z.record(z.string(), z.object({ allow: z.array(z.string()), deny: z.array(z.string()) })).optional(),
+  mcp_tool_overrides: z
+    .record(z.string(), z.object({ allow: z.array(z.string()), deny: z.array(z.string()) }))
+    .optional(),
   agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
   object_permission_skills: z.array(z.string()).optional(),

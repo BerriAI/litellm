@@ -612,7 +612,11 @@ describe("convention servers and tool overrides", () => {
   });
 
   it("locks toolset tools as granted", () => {
-    const toolset = { toolset_id: "ts-1", toolset_name: "TS", tools: [{ server_id: "srv-1", tool_name: "list_pages" }] };
+    const toolset = {
+      toolset_id: "ts-1",
+      toolset_name: "TS",
+      tools: [{ server_id: "srv-1", tool_name: "list_pages" }],
+    };
     const input: Parameters<typeof resolveEffectiveMcpServers>[0] = {
       ...emptyInput,
       allServers: [srv],
@@ -640,7 +644,13 @@ describe("convention servers and tool overrides", () => {
   it("moves a delete tool in and out of allow on toggle", () => {
     const overrides = { "srv-1": { allow: [], deny: ["list_pages"] } };
 
-    const grant = { toolOverrides: overrides, permissionKey: "srv-1", toolName: "delete_page", isDeleteTool: true, checked: true };
+    const grant = {
+      toolOverrides: overrides,
+      permissionKey: "srv-1",
+      toolName: "delete_page",
+      isDeleteTool: true,
+      checked: true,
+    };
 
     expect(applyToolOverrideWrite(grant)).toEqual({ "srv-1": { allow: ["delete_page"], deny: ["list_pages"] } });
 
@@ -656,7 +666,13 @@ describe("convention servers and tool overrides", () => {
   });
 
   it("moves a non-delete tool in and out of deny on toggle without writing allows", () => {
-    const deny = { toolOverrides: {}, permissionKey: "srv-1", toolName: "list_pages", isDeleteTool: false, checked: false };
+    const deny = {
+      toolOverrides: {},
+      permissionKey: "srv-1",
+      toolName: "list_pages",
+      isDeleteTool: false,
+      checked: false,
+    };
 
     expect(applyToolOverrideWrite(deny)).toEqual({ "srv-1": { allow: [], deny: ["list_pages"] } });
 
@@ -731,14 +747,14 @@ describe("retainedMcpToolOverrides", () => {
   });
 
   it("keeps an override while any server the key names stays granted", () => {
-    expect(
-      retainedMcpToolOverrides({ shared: { allow: [], deny: ["t"] } }, new Set(["srv-2"]), catalog),
-    ).toEqual({ shared: { allow: [], deny: ["t"] } });
+    expect(retainedMcpToolOverrides({ shared: { allow: [], deny: ["t"] } }, new Set(["srv-2"]), catalog)).toEqual({
+      shared: { allow: [], deny: ["t"] },
+    });
   });
 
   it("keeps an override whose key resolves to nothing, so an unloaded catalog prunes nothing", () => {
-    expect(retainedMcpToolOverrides({ "not-yet-loaded": { allow: [], deny: ["t"] } }, new Set(), catalog)).toEqual(
-      { "not-yet-loaded": { allow: [], deny: ["t"] } },
-    );
+    expect(retainedMcpToolOverrides({ "not-yet-loaded": { allow: [], deny: ["t"] } }, new Set(), catalog)).toEqual({
+      "not-yet-loaded": { allow: [], deny: ["t"] },
+    });
   });
 });

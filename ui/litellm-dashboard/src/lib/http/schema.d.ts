@@ -24417,6 +24417,10 @@ export interface components {
             mcp_access_groups?: string[] | null;
             /** Mcp Servers */
             mcp_servers?: string[] | null;
+            /** Mcp Tool Overrides */
+            mcp_tool_overrides?: {
+                [key: string]: components["schemas"]["MCPToolOverrideEntry"];
+            } | null;
             /** Mcp Tool Permissions */
             mcp_tool_permissions?: {
                 [key: string]: string[];
