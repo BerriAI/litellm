@@ -23,9 +23,6 @@ pub fn prepare_document(input: OcrDocumentInput) -> Result<OcrDocument, Error> {
             file_name.as_deref(),
             mime_type.as_deref(),
         )?),
-        OcrDocumentInput::HostReader { .. } => Err(Error::InvalidRequest(
-            "OCR file reader was not read by the host".into(),
-        )),
     }
 }
 
@@ -207,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn byte_documents_are_encoded_and_host_readers_must_be_read_first() {
+    fn byte_documents_are_encoded() {
         assert_eq!(
             prepare_document(OcrDocumentInput::Bytes {
                 bytes: b"abc".as_slice().into(),
@@ -217,7 +214,6 @@ mod tests {
             .unwrap(),
             document("data:application/pdf;base64,YWJj")
         );
-        assert!(prepare_document(OcrDocumentInput::HostReader { mime_type: None }).is_err());
     }
 
     #[test]

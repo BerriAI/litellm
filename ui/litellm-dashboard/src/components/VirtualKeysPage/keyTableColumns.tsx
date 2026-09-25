@@ -295,7 +295,7 @@ export const getKeyTableColumns = ({
     header: () => (
       <InfoHeader
         label="Lifetime Spend"
-        tooltip="Cumulative spend across every budget period. Budget resets do not touch this value. Keys created before this field existed only count spend from then on."
+        tooltip="Cumulative spend across every budget period. Budget resets do not touch this value. Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026, so keys created earlier only count spend since that upgrade."
       />
     ),
     size: 130,

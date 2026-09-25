@@ -17,8 +17,12 @@ pub(super) fn external_error(py: Python<'_>, error: PyErr) -> Error {
     Error::ExternalManager(Box::new(PythonSecretError(error.into_value(py))))
 }
 
+pub(super) fn read_error(py: Python<'_>, error: PyErr) -> Error {
+    Error::ExternalRead(Box::new(PythonSecretError(error.into_value(py))))
+}
+
 pub(crate) fn python_error(py: Python<'_>, error: &Error) -> Option<PyErr> {
-    let Error::ExternalManager(source) = error else {
+    let (Error::ExternalManager(source) | Error::ExternalRead(source)) = error else {
         return None;
     };
     source

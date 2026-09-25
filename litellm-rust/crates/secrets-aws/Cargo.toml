@@ -22,3 +22,4 @@ base64.workspace = true
 rstest.workspace = true
 tokio.workspace = true
 wiremock = "0.6.5"
+tempfile = "3"
