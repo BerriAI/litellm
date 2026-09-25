@@ -2885,3 +2885,84 @@ class TestAnthropicMessagesHandlerAttachmentsDefaultScope:
         assert guardrail.inputs is not None
         assert guardrail.inputs["texts"] == ["summarize this"]
         assert "files" not in guardrail.inputs
+
+
+class _BaseSignatureExtractHandler(AnthropicMessagesHandler):
+    """A subclass written against the pre-attachment-scanning hook signature."""
+
+    @classmethod
+    def _extract_input_text_and_images(
+        cls, message, msg_idx, skip_system_message=False, skip_tool_message=False, scan_only_tool_results=False
+    ):
+        return AnthropicMessagesHandler._extract_input_text_and_images(
+            message=message,
+            msg_idx=msg_idx,
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+        )
+
+
+class _HeadSignatureRecordingHandler(AnthropicMessagesHandler):
+    seen_scan_attachments: Optional[bool] = None
+
+    @classmethod
+    def _extract_input_text_and_images(
+        cls,
+        message,
+        msg_idx,
+        skip_system_message=False,
+        skip_tool_message=False,
+        scan_only_tool_results=False,
+        scan_attachments=False,
+    ):
+        cls.seen_scan_attachments = scan_attachments
+        return AnthropicMessagesHandler._extract_input_text_and_images(
+            message=message,
+            msg_idx=msg_idx,
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+            scan_attachments=scan_attachments,
+        )
+
+
+class TestExtractHookBaseSignatureCompatibility:
+    @pytest.mark.asyncio
+    async def test_legacy_signature_subclass_runs_for_plain_guardrail(self):
+        """A non-attachment guardrail must not force the new kwargs onto old subclasses."""
+        guardrail = MockMaskingGuardrail()
+        data = {"model": "claude-3", "messages": [{"role": "user", "content": "hello"}]}
+
+        await _BaseSignatureExtractHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_attachment_guardrail_still_passes_scan_attachments(self):
+        """With scans_attachments on, the head signature receives the flag and files."""
+        _HeadSignatureRecordingHandler.seen_scan_attachments = None
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "summarize this"},
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                        },
+                    ],
+                }
+            ],
+        }
+
+        await _HeadSignatureRecordingHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert _HeadSignatureRecordingHandler.seen_scan_attachments is True
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"]

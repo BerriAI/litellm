@@ -3317,7 +3317,7 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         assert rewritten_key != ended_key
 
     def test_completed_event_reads_every_output_text_part(self):
-        from litellm.types.responses.main import CustomToolCallOutputItem, GenericResponseOutputItem, OutputText
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 
         item = GenericResponseOutputItem(
             type="message",
@@ -3638,3 +3638,73 @@ async def test_non_string_image_url_value_is_forwarded_to_guardrail():
     assert guardrail.calls == 1
     assert guardrail.inputs is not None
     assert guardrail.inputs["images"] == [5]
+
+
+class _RecordingInputsGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_inputs = inputs
+        return inputs
+
+
+class _AttachmentRecordingGuardrail(_RecordingInputsGuardrail):
+    scans_attachments = True
+
+
+class _BaseSignatureExtractHandler(OpenAIResponsesHandler):
+    """A subclass written against the pre-attachment-scanning hook signature."""
+
+    def _extract_input_text_and_images(self, message, msg_idx, texts_to_check, images_to_check, task_mappings):
+        return super()._extract_input_text_and_images(
+            message=message,
+            msg_idx=msg_idx,
+            texts_to_check=texts_to_check,
+            images_to_check=images_to_check,
+            task_mappings=task_mappings,
+        )
+
+
+class TestExtractHookBaseSignatureCompatibility:
+    @pytest.mark.asyncio
+    async def test_legacy_signature_subclass_runs_for_plain_guardrail(self):
+        """A non-attachment guardrail must not force the new kwargs onto old subclasses."""
+        handler = _BaseSignatureExtractHandler()
+        guardrail = _RecordingInputsGuardrail(guardrail_name="legacy")
+
+        data = {"model": "gpt-4o", "input": [{"role": "user", "content": "hello"}]}
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_inputs is not None
+        assert guardrail.seen_inputs["texts"] == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_attachment_guardrail_still_receives_files(self):
+        """With scans_attachments on, the head signature still collects file refs."""
+        handler = OpenAIResponsesHandler()
+        guardrail = _AttachmentRecordingGuardrail(guardrail_name="scan-attachments")
+
+        data = {
+            "model": "gpt-4o",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "see file"},
+                        {
+                            "type": "input_file",
+                            "filename": "a.pdf",
+                            "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                        },
+                    ],
+                }
+            ],
+        }
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_inputs is not None
+        assert guardrail.seen_inputs["files"] == ["data:application/pdf;base64,JVBERi0xLjQK"]

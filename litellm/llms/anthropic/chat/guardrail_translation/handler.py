@@ -589,7 +589,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
                 scan_only_tool_results=scan_only_tool_results,
-                scan_attachments=scan_attachments,
+                **({"scan_attachments": True} if scan_attachments else {}),
             )
             for msg_idx, message in enumerate(messages)
         )

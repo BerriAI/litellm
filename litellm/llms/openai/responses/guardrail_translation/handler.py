@@ -648,15 +648,24 @@ class OpenAIResponsesHandler(BaseTranslation):
             texts_to_check.append(input_data)
         else:
             for msg_idx, message in enumerate(input_data):
-                self._extract_input_text_and_images(
-                    message=message,
-                    msg_idx=msg_idx,
-                    texts_to_check=texts_to_check,
-                    images_to_check=images_to_check,
-                    files_to_check=files_to_check,
-                    task_mappings=task_mappings,
-                    scan_attachments=scan_attachments,
-                )
+                if scan_attachments:
+                    self._extract_input_text_and_images(
+                        message=message,
+                        msg_idx=msg_idx,
+                        texts_to_check=texts_to_check,
+                        images_to_check=images_to_check,
+                        task_mappings=task_mappings,
+                        files_to_check=files_to_check,
+                        scan_attachments=True,
+                    )
+                else:
+                    self._extract_input_text_and_images(
+                        message=message,
+                        msg_idx=msg_idx,
+                        texts_to_check=texts_to_check,
+                        images_to_check=images_to_check,
+                        task_mappings=task_mappings,
+                    )
                 if scan_attachments:
                     _extract_tool_output_attachments(
                         item=message, images_to_check=images_to_check, files_to_check=files_to_check
@@ -721,8 +730,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         msg_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
-        files_to_check: list[str],
         task_mappings: list[tuple[int, int | None]],
+        files_to_check: list[str] | None = None,
         scan_attachments: bool = False,
     ) -> None:
         """
@@ -749,7 +758,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                         content_idx=int(content_idx),
                         texts_to_check=texts_to_check,
                         images_to_check=images_to_check,
-                        files_to_check=files_to_check,
+                        files_to_check=[] if files_to_check is None else files_to_check,
                         task_mappings=task_mappings,
                         scan_attachments=scan_attachments,
                     )
