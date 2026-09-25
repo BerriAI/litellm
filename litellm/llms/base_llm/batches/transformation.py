@@ -1,5 +1,6 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -9,7 +10,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateBatchRequest,
 )
-from litellm.types.utils import LiteLLMBatch, LlmProviders
+from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, LlmProviders, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -38,6 +39,14 @@ class BaseBatchesConfig(ABC):
     @abstractmethod
     def custom_llm_provider(self) -> LlmProviders:
         """Return the LLM provider type for this configuration."""
+
+    def transform_batch_output_line(
+        self, model_output: Mapping[str, object], model: str
+    ) -> ModelResponse | EmbeddingResponse | None:
+        """Reconstruct one provider batch output line into a litellm response, or
+        None when the line is OpenAI-shaped and the caller can use the generic
+        reconstruction."""
+        return None
 
     @classmethod
     def get_config(cls):

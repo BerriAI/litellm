@@ -33,6 +33,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -4629,6 +4630,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
         """
+        if is_batch_line_item_event(kwargs):
+            return
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )
@@ -4750,6 +4753,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         whose partial usage was recovered settles the reservation at that
         usage instead of refunding it.
         """
+        if is_batch_line_item_event(kwargs):
+            return
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )

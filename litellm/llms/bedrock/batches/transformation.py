@@ -27,7 +27,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateBatchRequest,
 )
-from litellm.types.utils import LiteLLMBatch, LlmProviders, Usage
+from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, LlmProviders, ModelResponse, Usage
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
@@ -96,6 +96,49 @@ def titan_embedding_usage_from_batch_output(model_output: Mapping[str, object]) 
     )
 
 
+def bedrock_batch_line_to_response(
+    model_output: Mapping[str, object], model: str
+) -> ModelResponse | EmbeddingResponse | None:
+    """Reconstruct a Bedrock batch output line (the ``modelOutput`` object) into
+    the litellm response type its shape implies, or None when the shape is
+    unrecognized."""
+    if "embedding" in model_output:
+        embedding: Final = model_output.get("embedding")
+        return EmbeddingResponse(
+            model=model,
+            data=[  # mutable-ok: EmbeddingResponse takes a plain data list
+                {  # mutable-ok: plain row dict for EmbeddingResponse.data
+                    "object": "embedding",
+                    "index": 0,
+                    "embedding": embedding
+                    if isinstance(embedding, list)
+                    else [],  # mutable-ok: empty fallback for the row
+                }
+            ],
+            usage=titan_embedding_usage_from_batch_output(model_output),
+        )
+    if "output" in model_output:
+        from ..chat.converse_transformation import AmazonConverseConfig
+
+        return AmazonConverseConfig()._transform_response(  # pyright: ignore[reportPrivateUsage]  # same reconstruction the converse chat path performs on the live response
+            model=model,
+            response=Response(200, json=dict(model_output)),  # mutable-ok: httpx.Response json= wants a plain dict
+            model_response=ModelResponse(),
+            stream=False,
+            logging_obj=None,
+            optional_params={},  # mutable-ok: the converse transform signature takes a plain dict
+            api_key=None,
+            data="",
+            messages=[],  # mutable-ok: the converse transform signature takes a plain list
+            encoding=None,
+        )
+    if "content" in model_output:
+        from litellm.llms.anthropic.chat.transformation import anthropic_message_to_model_response
+
+        return anthropic_message_to_model_response(model_output, None)
+    return None
+
+
 class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     """
     Config for Bedrock Batches - handles batch job creation and management for Bedrock
@@ -108,6 +151,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK
+
+    def transform_batch_output_line(
+        self, model_output: Mapping[str, object], model: str
+    ) -> ModelResponse | EmbeddingResponse | None:
+        return bedrock_batch_line_to_response(model_output, model)
 
     @classmethod
     def _get_bare_model_name_from_s3_key(cls, object_key: str) -> str | None:

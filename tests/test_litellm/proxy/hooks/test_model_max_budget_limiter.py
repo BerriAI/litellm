@@ -196,3 +196,17 @@ async def test_a_batch_polled_within_every_budget_window_is_never_charged_again(
     await _poll(limiter, finished, BATCH_COST)
 
     assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
+
+
+@pytest.mark.asyncio
+async def test_batch_line_item_events_do_not_charge_the_model_budget():
+    """Line events carry batch_parent_id; the aggregate aretrieve_batch event is
+    the one that already bills the batch, so children must not double-charge."""
+    limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    line_event = _event("acompletion", CHAT_COST)
+    line_event["litellm_params"]["batch_parent_id"] = "batch_first"
+    await limiter.async_log_success_event(line_event, response_obj=None, start_time=None, end_time=None)
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == 0.0
+    assert await _spend(limiter, USER_SPEND_KEY) == 0.0

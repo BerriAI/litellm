@@ -52,6 +52,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesToolChoice,
     AnthropicOutputSchema,
     AnthropicOutputTokensDetails,
+    AnthropicResponse,
     AnthropicSystemMessageContent,
     AnthropicThinkingParam,
     AnthropicWebSearchTool,
@@ -2808,3 +2809,18 @@ def _valid_user_id(user_id: str) -> bool:
         return False
 
     return True
+
+
+def anthropic_message_to_model_response(result: Mapping[str, object], speed: str | None) -> ModelResponse:
+    pydantic_result: Final = AnthropicResponse.model_validate(result)
+    result_id: Final = result.get("id")
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=pydantic_result.model_dump(),
+        raw_response=httpx.Response(
+            status_code=200,
+            headers={},  # mutable-ok: httpx.Response wants a plain dict of headers
+        ),
+        model_response=ModelResponse(id=result_id if isinstance(result_id, str) and result_id else None),
+        json_mode=None,
+        speed=speed,
+    )

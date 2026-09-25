@@ -28456,6 +28456,11 @@ export interface components {
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /**
+             * Store Batch Line Items In Callbacks
+             * @description If True, a completed batch logged via aretrieve_batch also emits one callback event per JSONL line item (request paired with its response or error). The aggregate batch callback is unchanged. Default is False.
+             */
+            store_batch_line_items_in_callbacks?: boolean | null;
+            /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
              */

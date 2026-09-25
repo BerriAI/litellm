@@ -70,7 +70,7 @@ def batch_cost_is_final(batch: Batch) -> bool:
 
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: list[dict],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
 ) -> BatchCostUsageResult:
@@ -97,7 +97,7 @@ async def calculate_batch_cost_and_usage(
 
 async def _handle_completed_batch(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None = None,
     litellm_params: dict | None = None,
     model_info: ModelInfo | None = None,
@@ -434,7 +434,9 @@ def _provider_output_file_id(output_file_id: str) -> str:
 
 async def _fetch_batch_managed_file_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"
+    ] = "openai",
     litellm_params: dict | None = None,
 ) -> bytes:
     """
@@ -464,7 +466,9 @@ async def _fetch_batch_managed_file_content(
 
 async def _fetch_batch_output_file_content(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"
+    ] = "openai",
     litellm_params: dict | None = None,
 ) -> bytes:
     """
@@ -486,7 +490,7 @@ async def _fetch_batch_output_file_content(
 
 async def count_error_file_failed_requests(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     litellm_params: dict | None,
 ) -> int:
     """Count failed requests reported only in the batch's separate error file.

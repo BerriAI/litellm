@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     budget_reservation_from_metadata,
     get_litellm_metadata_from_kwargs,
+    is_batch_line_item_event,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
@@ -107,6 +108,8 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
+        if is_batch_line_item_event(kwargs):
+            return
         if self.spend_event_producer is None or not is_offloadable_success(response_obj):
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return

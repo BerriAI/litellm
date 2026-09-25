@@ -5,7 +5,7 @@ import logging
 import re
 from collections.abc import Collection, Iterable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -765,6 +765,17 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
         RESPONSE_COST_HEADER: cost,
     }
     hidden_params["additional_headers"] = merged
+
+
+def is_batch_line_item_event(kwargs: object) -> bool:
+    if not isinstance(kwargs, Mapping):
+        return False
+    typed_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: isinstance leaves Mapping unparameterized
+    litellm_params: Final = typed_kwargs.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return False
+    typed_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: same narrowing limit
+    return bool(typed_params.get("batch_parent_id"))
 
 
 _HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])

@@ -34,6 +34,7 @@ from litellm.caching.redis_cache import RedisCache, RedisPipelineIncrementOperat
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
+    is_batch_line_item_event,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
@@ -493,6 +494,8 @@ class RouterBudgetLimiting(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
+        if is_batch_line_item_event(kwargs):
+            return
         # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
         if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
             return

@@ -641,6 +641,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.streaming_chunks: list[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
+        self._litellm_internal_model_credentials: Mapping[str, object] | None = None
         self.raw_request_only = raw_request_only
 
         # Initialize dynamic callbacks
@@ -3270,6 +3271,18 @@ class Logging(LiteLLMLoggingBaseClass):
                     cost_for_built_in_tools_cost_usd_dollar=0.0,
                 )
 
+            if litellm.store_batch_line_items_in_callbacks and (has_explicit_batch_data or should_compute_batch_data):
+                from litellm.batches.batch_line_item_logging import log_batch_line_items
+
+                await log_batch_line_items(
+                    batch=result,
+                    custom_llm_provider=self.custom_llm_provider,
+                    parent=self,
+                    model_name=self.get_deployment_model_for_cost(),
+                    litellm_params=self.litellm_params,
+                    model_info=self.get_router_deployment_model_info(),
+                )
+
         self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
             StandardLoggingPayloadSetup.append_system_prompt_messages(
                 kwargs=self.model_call_details, messages=self.model_call_details.get("messages")
@@ -4216,19 +4229,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_params={},
             )
         else:
-            from litellm.types.llms.anthropic import AnthropicResponse
+            from litellm.llms.anthropic.chat.transformation import anthropic_message_to_model_response
 
-            pydantic_result: Final = AnthropicResponse.model_validate(result)
-            import httpx
-
-            result = litellm.AnthropicConfig().transform_parsed_response(
-                completion_response=pydantic_result.model_dump(),
-                raw_response=httpx.Response(
-                    status_code=200,
-                    headers={},
-                ),
-                model_response=litellm.ModelResponse(id=provider_response_id),
-                json_mode=None,
+            result = anthropic_message_to_model_response(
+                cast(Mapping[str, object], result),  # cast-ok: handler result is typed Any upstream
                 speed=self.optional_params.get("speed") if self.optional_params else None,
             )
         return result
@@ -6353,8 +6357,10 @@ def _extract_response_obj_and_hidden_params(
         response_obj = {}
 
     if original_exception is not None and hidden_params is None:
-        response_headers: Final = _get_response_headers(original_exception)
-        if response_headers is not None:
+        exception_hidden_params: Final = getattr(original_exception, "_hidden_params", None)
+        if isinstance(exception_hidden_params, dict) and exception_hidden_params:
+            hidden_params = dict(exception_hidden_params)  # mutable-ok: hidden_params downstream expects a plain dict
+        elif (response_headers := _get_response_headers(original_exception)) is not None:
             hidden_params = dict(
                 StandardLoggingHiddenParams(
                     additional_headers=StandardLoggingPayloadSetup.get_additional_headers(dict(response_headers)),

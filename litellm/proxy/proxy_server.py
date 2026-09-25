@@ -6539,6 +6539,13 @@ class ProxyConfig:
             health_check_interval = general_settings.get("health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL)
             health_check_concurrency = general_settings.get("health_check_concurrency", None)
             health_check_details = general_settings.get("health_check_details", True)
+            ### BATCH LINE ITEM CALLBACKS ###
+            _store_batch_line_items: Final = general_settings.get("store_batch_line_items_in_callbacks")
+            if _store_batch_line_items is not None:
+                if isinstance(_store_batch_line_items, str):
+                    litellm.store_batch_line_items_in_callbacks = _store_batch_line_items.lower() == "true"
+                else:
+                    litellm.store_batch_line_items_in_callbacks = bool(_store_batch_line_items)
             # Health-check-driven routing (opt-in, passes through to Router later)
             _enable_hc_routing = general_settings.get("enable_health_check_routing", False)
             _hc_staleness = general_settings.get("health_check_staleness_threshold", None)
@@ -7550,6 +7557,7 @@ class ProxyConfig:
             self._apply_alerting_settings,
             partial(self._apply_pass_through_settings, previous_endpoints=previous_pass_through_endpoints),
             self._apply_boolean_settings,
+            self._apply_batch_line_items_setting,
             partial(self._apply_cache_size_setting, cache_size_was_db=cache_size_was_db),
             self._apply_store_model_in_db_setting,
             partial(self._apply_retention_settings, previous_retention_values=previous_retention_values),
@@ -7604,6 +7612,11 @@ class ProxyConfig:
                 continue
             if (value := self.settings.get(key)) is not None:
                 self.settings[key] = coerce_bool(value)
+
+    async def _apply_batch_line_items_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        key: Final = "store_batch_line_items_in_callbacks"
+        value: Final = coerce_bool(self.settings.get(key))
+        litellm.store_batch_line_items_in_callbacks = bool(value) if value is not None else False
 
     async def _apply_cache_size_setting(
         self,
