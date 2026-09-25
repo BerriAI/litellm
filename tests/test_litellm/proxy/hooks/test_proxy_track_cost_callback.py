@@ -202,6 +202,50 @@ async def test_async_post_call_failure_hook_carries_used_client_oauth_token_from
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "metadata_buckets, expected",
+    [
+        ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}}, False),
+        ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"user_id": "caller"}}, None),
+        ({"metadata": {"used_client_oauth_token": "yes"}}, None),
+    ],
+)
+async def test_async_post_call_failure_hook_never_lets_caller_metadata_set_used_client_oauth_token(
+    metadata_buckets: dict, expected: bool | None
+):
+    """
+    On /v1/messages and /v1/responses the request's own metadata field belongs to the caller, so a
+    used_client_oauth_token they put there must never outrank the proxy's stamp or stand in for a missing one
+    """
+    logger = _ProxyDBLogger()
+    request_data = {
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **metadata_buckets,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("rate limited"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+    payload = get_logging_payload(
+        kwargs=mock_update_database.call_args[1]["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_bills_guardrail_cost_on_blocked_request():
     """LIT-5651: a request blocked by a guardrail never reaches the LLM, but the
     guardrail invocation itself is billed by the provider. The failure row must

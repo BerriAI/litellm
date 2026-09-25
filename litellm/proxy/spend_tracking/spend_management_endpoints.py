@@ -2429,13 +2429,15 @@ async def ui_view_spend_logs(
         default=None,
         description="Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state",
     ),
-    used_client_oauth_token: bool | None = fastapi.Query(
-        default=None,
-        description=(
-            "Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth token, "
-            "false for the deployment's configured key. Rows written before this flag existed match neither"
+    used_client_oauth_token: Annotated[
+        bool | None,
+        fastapi.Query(
+            description=(
+                "Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth "
+                "token, false for the deployment's configured key. Rows written before this flag existed match neither"
+            ),
         ),
-    ),
+    ] = None,
     span_type: str | None = fastapi.Query(
         default=None,
         description="Filter logs by span type: llm, agent, mcp, or batch",

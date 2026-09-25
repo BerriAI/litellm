@@ -79,7 +79,6 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-from litellm.litellm_core_utils.get_provider_specific_headers import resolve_used_client_oauth_token
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
@@ -5745,6 +5744,9 @@ class StandardLoggingPayloadSetup:
             - If the input metadata is None or not a dictionary, an empty StandardLoggingMetadata object is returned.
             - If 'user_api_key' is present in metadata and is a valid SHA256 hash, it's stored as 'user_api_key_hash'.
         """
+        from litellm.llms.anthropic.common_utils import (  # noqa: PLC0415  # that module imports this one transitively
+            resolve_used_client_oauth_token,
+        )
 
         prompt_management_metadata: StandardLoggingPromptManagementMetadata | None = None
         if litellm_params is not None:

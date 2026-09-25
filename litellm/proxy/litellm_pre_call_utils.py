@@ -34,7 +34,6 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.get_provider_specific_headers import ANTHROPIC_OAUTH_FORWARD_PROVIDERS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
     _request_blocked_callback_params,
@@ -46,6 +45,7 @@ from litellm.litellm_core_utils.url_utils import (
     is_url_destination_allowed_by_host,
     provider_url_destination_candidates,
 )
+from litellm.llms.anthropic.common_utils import ANTHROPIC_OAUTH_FORWARD_PROVIDERS
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,

@@ -39,6 +39,7 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.model_listing import ModelInfoResponse
+from litellm.types.utils import LlmProviders
 
 _MessageT = TypeVar("_MessageT")
 
@@ -223,6 +224,15 @@ def is_anthropic_oauth_key(value: str | None) -> bool:
     # Handle both raw token and "Bearer <token>" format
     value = value.removeprefix("Bearer ")
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
+
+
+ANTHROPIC_OAUTH_FORWARD_PROVIDERS: Final[frozenset[str]] = frozenset((LlmProviders.ANTHROPIC.value,))
+
+
+def resolve_used_client_oauth_token(client_sent_oauth_token: object, custom_llm_provider: str | None) -> bool | None:
+    if not isinstance(client_sent_oauth_token, bool):
+        return None
+    return client_sent_oauth_token and custom_llm_provider in ANTHROPIC_OAUTH_FORWARD_PROVIDERS
 
 
 def _merge_beta_headers(existing: str | None, new_beta: str) -> str:

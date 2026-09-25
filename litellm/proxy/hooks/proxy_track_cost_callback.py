@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     budget_reservation_from_metadata,
     get_litellm_metadata_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
@@ -83,10 +84,12 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
         str(CallTypes.aretrieve_batch),
     )
 )
-_FAILURE_ROW_KEYS_LIFTED_FROM_LITELLM_METADATA: Final[tuple[str, ...]] = (
-    "standard_logging_guardrail_information",
-    "used_client_oauth_token",
-)
+
+
+def _proxy_stamped_used_client_oauth_token(request_data: Mapping[str, object]) -> bool | None:
+    proxy_metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+    stamped: Final = proxy_metadata.get("used_client_oauth_token") if isinstance(proxy_metadata, dict) else None
+    return stamped if isinstance(stamped, bool) else None
 
 
 def _proxy_spend_writer() -> DBSpendUpdateWriter:
@@ -195,17 +198,19 @@ class _ProxyDBLogger(CustomLogger):
             metadata=_metadata, original_exception=original_exception
         )
 
+        _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_data)
+
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
         existing_metadata.update(_metadata)
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
-        existing_metadata.update(
-            (key, litellm_metadata_bucket[key])
-            for key in _FAILURE_ROW_KEYS_LIFTED_FROM_LITELLM_METADATA
-            if isinstance(litellm_metadata_bucket, dict)
-            and key not in existing_metadata
-            and litellm_metadata_bucket.get(key) is not None
-        )
+        if (
+            isinstance(litellm_metadata_bucket, dict)
+            and "standard_logging_guardrail_information" not in existing_metadata
+        ):
+            guardrail_info: Final = litellm_metadata_bucket.get("standard_logging_guardrail_information")
+            if guardrail_info is not None:
+                existing_metadata["standard_logging_guardrail_information"] = guardrail_info
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
