@@ -1,22 +1,22 @@
 import asyncio
 import json
 import random
-from typing import Callable, Coroutine, Iterable, List, Optional, Tuple
+from collections.abc import Callable, Coroutine, Iterable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from redis.asyncio import Redis
 
 import litellm
+from litellm.caching.redis_cache import RedisMessage
 from litellm.proxy.common_utils.config_sync_pubsub import (
+    _CONFIG_SYNCED_TABLE_NAMES,
+    _RESYNC_APPLIED_CONFIG_PARAM_NAMES,
+    _WRITE_ACTION_NAMES,
     CONFIG_SYNC_CHANNEL,
     CONFIG_SYNC_JITTER_MAX_SECONDS,
     CONFIG_SYNC_MIN_RESYNC_INTERVAL_SECONDS,
     ConfigSyncSubscriber,
-    _CONFIG_SYNCED_TABLE_NAMES,
     _PublishOnWriteActions,
-    _RESYNC_APPLIED_CONFIG_PARAM_NAMES,
-    _WRITE_ACTION_NAMES,
     publish_config_change,
     wrap_table_actions_for_config_sync,
 )
@@ -64,60 +64,36 @@ _EXPECTED_RESYNC_APPLIED_CONFIG_PARAM_NAMES = frozenset(
 _STARTUP_ONLY_CONFIG_PARAM_NAMES = ("environment_variables",)
 
 
-class _RecordingRedisClient(Redis):
-    def __init__(self) -> None:
-        self.published: List[Tuple[str, str]] = []
-
-    async def publish(self, channel: str, message: str) -> int:
-        self.published.append((channel, message))
-        return 1
-
-
-class _FailingPublishRedisClient(Redis):
-    def __init__(self) -> None:
-        pass
-
-    async def publish(self, channel: str, message: str) -> int:
-        raise ConnectionError("redis down")
-
-
-class _NotRedisClient:
-    def __init__(self) -> None:
-        self.published: List[Tuple[str, str]] = []
-
-    async def publish(self, channel: str, message: str) -> int:
-        self.published.append((channel, message))
-        return 1
-
-
 class _QueuePubSub:
+    """A subscription fed from a queue of payloads, standing in for RedisSubscription."""
+
     def __init__(self, initial_messages: Iterable[str] = ()) -> None:
-        self.queue: "asyncio.Queue[str]" = asyncio.Queue()
+        self.queue: asyncio.Queue[str] = asyncio.Queue()
         for message in initial_messages:
             self.queue.put_nowait(message)
-        self.subscribed_channels: List[str] = []
+        self.subscribed_channels: list[str] = []
         self.closed = False
 
-    async def subscribe(self, *channels: str) -> None:
-        self.subscribed_channels.extend(channels)
-
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[str]:
+    async def get_message(self, *, timeout: float | None) -> RedisMessage | None:
         if timeout == 0:
             try:
-                return self.queue.get_nowait()
+                return self._message(self.queue.get_nowait())
             except asyncio.QueueEmpty:
                 return None
         try:
-            return await asyncio.wait_for(self.queue.get(), timeout)
+            return self._message(await asyncio.wait_for(self.queue.get(), timeout))
         except asyncio.TimeoutError:
             return None
+
+    def _message(self, payload: str) -> RedisMessage:
+        return RedisMessage(channel=self.subscribed_channels[0], payload=payload.encode())
 
     async def aclose(self) -> None:
         self.closed = True
 
 
 class _BrokenPubSub(_QueuePubSub):
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[str]:
+    async def get_message(self, *, timeout: float | None) -> RedisMessage | None:
         raise ConnectionError("connection lost")
 
 
@@ -131,11 +107,11 @@ class _EmptyPollsThenMessagePubSub(_QueuePubSub):
         super().__init__(initial_messages=initial_messages)
         self.remaining_empty_polls = empty_polls
 
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[str]:
+    async def get_message(self, *, timeout: float | None) -> RedisMessage | None:
         if timeout != 0 and self.remaining_empty_polls > 0:
             self.remaining_empty_polls -= 1
             return None
-        return await super().get_message(ignore_subscribe_messages=ignore_subscribe_messages, timeout=timeout)
+        return await super().get_message(timeout=timeout)
 
 
 class _FakeClock:
@@ -146,32 +122,44 @@ class _FakeClock:
         return self.now
 
 
-class _ScriptedPubSubRedisClient(Redis):
-    def __init__(self, pubsubs: Iterable[_QueuePubSub]) -> None:
-        self._scripted_pubsubs = iter(pubsubs)
-
-    def pubsub(self) -> _QueuePubSub:
-        return next(self._scripted_pubsubs)
-
-
 class _FakeRedisCache:
-    def __init__(self, client: object, namespace: Optional[str] = None) -> None:
-        self._client = client
+    """The slice of RedisCache the module uses: namespace, async_publish and async_subscribe."""
+
+    def __init__(
+        self,
+        subscriptions: Iterable[_QueuePubSub] = (),
+        namespace: str | None = None,
+        publish_error: Exception | None = None,
+    ) -> None:
+        self._subscriptions = iter(subscriptions)
+        self._publish_error = publish_error
         self.namespace = namespace
+        self.published: list[tuple[str, str]] = []
 
-    def init_async_client(self) -> object:
-        return self._client
+    async def async_publish(self, channel: str, message: str) -> int:
+        if self._publish_error is not None:
+            raise self._publish_error
+        self.published.append((channel, message))
+        return 1
+
+    async def async_subscribe(self, *channels: str) -> _QueuePubSub:
+        subscription = next(self._subscriptions)
+        subscription.subscribed_channels.extend(channels)
+        return subscription
 
 
-class _ExplodingRedisCache:
-    namespace: Optional[str] = None
+class _ClusterRedisCache(_FakeRedisCache):
+    """RedisCache over a cluster client raises NotImplementedError for both pub/sub methods."""
 
-    def init_async_client(self) -> object:
-        raise ConnectionError("cannot connect")
+    async def async_publish(self, channel: str, message: str) -> int:
+        raise NotImplementedError("Redis Cluster clients have no pub/sub support")
+
+    async def async_subscribe(self, *channels: str) -> _QueuePubSub:
+        raise NotImplementedError("Redis Cluster clients have no pub/sub support")
 
 
 def _recording_callback(
-    events: List[str], name: str, fired: asyncio.Event
+    events: list[str], name: str, fired: asyncio.Event
 ) -> Callable[[], Coroutine[None, None, None]]:
     async def callback() -> None:
         events.append(name)
@@ -185,49 +173,44 @@ async def test_publish_noops_when_redis_cache_is_none() -> None:
 
 
 async def test_publish_sends_object_type_json_on_channel() -> None:
-    client = _RecordingRedisClient()
-    cache = _FakeRedisCache(client)
+    cache = _FakeRedisCache()
 
     await publish_config_change(redis_cache=cache, object_type="litellm_proxymodeltable")
 
-    assert len(client.published) == 1
-    channel, message = client.published[0]
+    assert len(cache.published) == 1
+    channel, message = cache.published[0]
     assert channel == "litellm_proxy.config_change"
     assert json.loads(message) == {"object_type": "litellm_proxymodeltable"}
 
 
 async def test_publish_uses_namespaced_channel() -> None:
-    client = _RecordingRedisClient()
-    cache = _FakeRedisCache(client, namespace="prod-eu")
+    cache = _FakeRedisCache(namespace="prod-eu")
 
     await publish_config_change(redis_cache=cache, object_type="litellm_credentialstable")
 
-    assert client.published[0][0] == "prod-eu:litellm_proxy.config_change"
+    assert cache.published[0][0] == "prod-eu:litellm_proxy.config_change"
 
 
 async def test_publish_swallows_redis_publish_errors() -> None:
-    cache = _FakeRedisCache(_FailingPublishRedisClient())
+    cache = _FakeRedisCache(publish_error=ConnectionError("redis down"))
 
     await publish_config_change(redis_cache=cache, object_type="litellm_proxymodeltable")
 
-
-async def test_publish_swallows_client_init_errors() -> None:
-    await publish_config_change(redis_cache=_ExplodingRedisCache(), object_type="litellm_proxymodeltable")
+    assert cache.published == []
 
 
 async def test_publish_skips_clients_without_pubsub_support() -> None:
-    client = _NotRedisClient()
-    cache = _FakeRedisCache(client)
+    cache = _ClusterRedisCache()
 
     await publish_config_change(redis_cache=cache, object_type="litellm_proxymodeltable")
 
-    assert client.published == []
+    assert cache.published == []
 
 
 async def test_subscriber_runs_injected_callbacks_in_order_on_message() -> None:
     pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    events: List[str] = []
+    cache = _FakeRedisCache(subscriptions=[pubsub])
+    events: list[str] = []
     fired = asyncio.Event()
     subscriber = ConfigSyncSubscriber(
         redis_cache=cache,
@@ -252,8 +235,8 @@ async def test_subscriber_runs_injected_callbacks_in_order_on_message() -> None:
 async def test_burst_within_debounce_window_coalesces_into_one_resync() -> None:
     burst = [json.dumps({"object_type": "litellm_proxymodeltable"}) for _ in range(5)]
     pubsub = _QueuePubSub(initial_messages=burst)
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    resyncs: List[str] = []
+    cache = _FakeRedisCache(subscriptions=[pubsub])
+    resyncs: list[str] = []
     fired = asyncio.Event()
     subscriber = ConfigSyncSubscriber(
         redis_cache=cache,
@@ -273,8 +256,8 @@ async def test_burst_within_debounce_window_coalesces_into_one_resync() -> None:
 
 async def test_subscriber_subscribes_on_namespaced_channel_and_resyncs() -> None:
     pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]), namespace="prod-eu")
-    resyncs: List[str] = []
+    cache = _FakeRedisCache(subscriptions=[pubsub], namespace="prod-eu")
+    resyncs: list[str] = []
     fired = asyncio.Event()
     subscriber = ConfigSyncSubscriber(
         redis_cache=cache,
@@ -299,8 +282,8 @@ class _MaxJitterRandom(random.Random):
 
 async def test_debounce_sleep_adds_jitter_from_injected_rng() -> None:
     pubsub = _QueuePubSub(initial_messages=[json.dumps({"object_type": "litellm_proxymodeltable"})])
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    sleeps: List[float] = []
+    cache = _FakeRedisCache(subscriptions=[pubsub])
+    sleeps: list[float] = []
     fired = asyncio.Event()
 
     async def recording_sleep(seconds: float) -> None:
@@ -332,7 +315,7 @@ def test_default_min_resync_interval_caps_reload_rate() -> None:
 
 def _throttled_subscriber(
     cache: object,
-    events: List[str],
+    events: list[str],
     fired: asyncio.Event,
     clock: _FakeClock,
     min_resync_interval_seconds: float = 10.0,
@@ -358,8 +341,8 @@ def _throttled_subscriber(
 
 async def test_resync_arriving_inside_min_interval_waits_out_the_remainder() -> None:
     pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    events: List[str] = []
+    cache = _FakeRedisCache(subscriptions=[pubsub])
+    events: list[str] = []
     fired = asyncio.Event()
     clock = _FakeClock()
     subscriber = _throttled_subscriber(cache=cache, events=events, fired=fired, clock=clock)
@@ -378,8 +361,8 @@ async def test_resync_arriving_inside_min_interval_waits_out_the_remainder() -> 
 
 async def test_resync_after_min_interval_elapsed_is_not_throttled() -> None:
     pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    events: List[str] = []
+    cache = _FakeRedisCache(subscriptions=[pubsub])
+    events: list[str] = []
     fired = asyncio.Event()
     clock = _FakeClock()
     subscriber = _throttled_subscriber(cache=cache, events=events, fired=fired, clock=clock)
@@ -398,8 +381,8 @@ async def test_resync_after_min_interval_elapsed_is_not_throttled() -> None:
 
 async def test_writes_during_the_throttle_wait_collapse_into_the_next_resync() -> None:
     pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    events: List[str] = []
+    cache = _FakeRedisCache(subscriptions=[pubsub])
+    events: list[str] = []
     fired = asyncio.Event()
     clock = _FakeClock()
     subscriber = _throttled_subscriber(cache=cache, events=events, fired=fired, clock=clock)
@@ -420,8 +403,8 @@ async def test_writes_during_the_throttle_wait_collapse_into_the_next_resync() -
 
 async def test_polls_without_messages_do_not_trigger_resyncs() -> None:
     pubsub = _EmptyPollsThenMessagePubSub(empty_polls=3, initial_messages=["change"])
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    resyncs: List[str] = []
+    cache = _FakeRedisCache(subscriptions=[pubsub])
+    resyncs: list[str] = []
     fired = asyncio.Event()
     subscriber = ConfigSyncSubscriber(
         redis_cache=cache,
@@ -442,8 +425,8 @@ async def test_polls_without_messages_do_not_trigger_resyncs() -> None:
 async def test_failing_pubsub_close_still_reconnects() -> None:
     broken = _CloseFailingBrokenPubSub()
     healthy = _QueuePubSub(initial_messages=["change"])
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([broken, healthy]))
-    resyncs: List[str] = []
+    cache = _FakeRedisCache(subscriptions=[broken, healthy])
+    resyncs: list[str] = []
     fired = asyncio.Event()
     subscriber = ConfigSyncSubscriber(
         redis_cache=cache,
@@ -464,7 +447,7 @@ async def test_failing_pubsub_close_still_reconnects() -> None:
 
 async def test_second_start_does_not_open_a_second_subscription() -> None:
     pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
+    cache = _FakeRedisCache(subscriptions=[pubsub])
     subscriber = ConfigSyncSubscriber(redis_cache=cache, resync_callbacks=(), debounce_seconds=0.01)
 
     subscriber.start()
@@ -481,8 +464,8 @@ async def test_second_start_does_not_open_a_second_subscription() -> None:
 async def test_redis_error_leads_to_backoff_and_resubscribe() -> None:
     broken = _BrokenPubSub()
     healthy = _QueuePubSub(initial_messages=[json.dumps({"object_type": "litellm_credentialstable"})])
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([broken, healthy]))
-    resyncs: List[str] = []
+    cache = _FakeRedisCache(subscriptions=[broken, healthy])
+    resyncs: list[str] = []
     fired = asyncio.Event()
     subscriber = ConfigSyncSubscriber(
         redis_cache=cache,
@@ -508,8 +491,8 @@ async def test_redis_error_leads_to_backoff_and_resubscribe() -> None:
 
 async def test_failing_resync_callback_does_not_kill_subscriber() -> None:
     pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    resyncs: List[str] = []
+    cache = _FakeRedisCache(subscriptions=[pubsub])
+    resyncs: list[str] = []
     fired = asyncio.Event()
 
     async def failing_callback() -> None:
@@ -536,7 +519,7 @@ async def test_failing_resync_callback_does_not_kill_subscriber() -> None:
 
 async def test_stop_cancels_subscriber_cleanly() -> None:
     pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
+    cache = _FakeRedisCache(subscriptions=[pubsub])
     subscriber = ConfigSyncSubscriber(redis_cache=cache, resync_callbacks=(), debounce_seconds=0.01)
 
     subscriber.start()
@@ -552,15 +535,15 @@ async def test_stop_cancels_subscriber_cleanly() -> None:
 
 
 async def test_stop_before_start_is_a_noop() -> None:
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([]))
+    cache = _FakeRedisCache(subscriptions=[])
     subscriber = ConfigSyncSubscriber(redis_cache=cache, resync_callbacks=())
 
     await subscriber.stop()
 
 
 async def test_subscriber_exits_without_callbacks_when_client_lacks_pubsub() -> None:
-    cache = _FakeRedisCache(_NotRedisClient())
-    resyncs: List[str] = []
+    cache = _ClusterRedisCache()
+    resyncs: list[str] = []
     subscriber = ConfigSyncSubscriber(
         redis_cache=cache,
         resync_callbacks=(_recording_callback(resyncs, "resync", asyncio.Event()),),
@@ -575,7 +558,7 @@ async def test_subscriber_exits_without_callbacks_when_client_lacks_pubsub() -> 
 
 
 class _FakeTableActions:
-    def __init__(self, calls: List[Tuple[str, str]]) -> None:
+    def __init__(self, calls: list[tuple[str, str]]) -> None:
         self._calls = calls
 
     async def create(self, **kwargs: object) -> object:
@@ -588,7 +571,7 @@ class _FakeTableActions:
 
 
 class _AllWritesTableActions:
-    def __init__(self, calls: List[str]) -> None:
+    def __init__(self, calls: list[str]) -> None:
         self._calls = calls
 
     def __getattr__(self, name: str) -> Callable[..., Coroutine[None, None, str]]:
@@ -599,7 +582,7 @@ class _AllWritesTableActions:
         return action
 
 
-def _recording_publish(calls: List[Tuple[str, str]]) -> Callable[[str], Coroutine[None, None, None]]:
+def _recording_publish(calls: list[tuple[str, str]]) -> Callable[[str], Coroutine[None, None, None]]:
     async def publish(object_type: str) -> None:
         calls.append(("publish", object_type))
 
@@ -615,7 +598,7 @@ def test_wrapper_passes_through_unsynced_tables() -> None:
 
 
 async def test_wrapper_publishes_table_name_after_write() -> None:
-    calls: List[Tuple[str, str]] = []
+    calls: list[tuple[str, str]] = []
     wrapped = wrap_table_actions_for_config_sync(
         actions=_FakeTableActions(calls),
         table_name="litellm_proxymodeltable",
@@ -629,7 +612,7 @@ async def test_wrapper_publishes_table_name_after_write() -> None:
 
 
 async def test_wrapper_does_not_publish_on_reads() -> None:
-    calls: List[Tuple[str, str]] = []
+    calls: list[tuple[str, str]] = []
     wrapped = wrap_table_actions_for_config_sync(
         actions=_FakeTableActions(calls),
         table_name="litellm_proxymodeltable",
@@ -660,8 +643,8 @@ def test_tool_telemetry_table_writes_pass_through_unwrapped() -> None:
 
 @pytest.mark.parametrize("action_name", _EXPECTED_WRITE_ACTION_NAMES)
 async def test_wrapper_publishes_for_every_write_action(action_name: str) -> None:
-    write_calls: List[str] = []
-    publish_calls: List[Tuple[str, str]] = []
+    write_calls: list[str] = []
+    publish_calls: list[tuple[str, str]] = []
     wrapped = wrap_table_actions_for_config_sync(
         actions=_AllWritesTableActions(write_calls),
         table_name="litellm_guardrailstable",
@@ -680,7 +663,7 @@ async def test_model_repository_write_publishes_via_live_coordination_cache() ->
     from litellm.proxy.proxy_server import _set_redis_usage_cache
     from litellm.repositories.model_repository import ModelRepository
 
-    client = _RecordingRedisClient()
+    client = _FakeRedisCache()
     prisma_client = MagicMock()
     prisma_client.db.litellm_proxymodeltable.update = AsyncMock(return_value={"model_id": "m-1"})
     repository = ModelRepository(prisma_client)
@@ -688,7 +671,7 @@ async def test_model_repository_write_publishes_via_live_coordination_cache() ->
     assert isinstance(table, _PublishOnWriteActions)
 
     previous_cache = proxy_server.redis_usage_cache
-    _set_redis_usage_cache(_FakeRedisCache(client))
+    _set_redis_usage_cache(client)
     try:
         await table.update(where={"model_id": "m-1"}, data={"model_name": "gpt-5.2"})
     finally:
@@ -708,14 +691,14 @@ async def test_ui_settings_write_publishes_via_live_coordination_cache() -> None
     from litellm.proxy.proxy_server import _set_redis_usage_cache
     from litellm.repositories.table_repositories import UISettingsRepository
 
-    client = _RecordingRedisClient()
+    client = _FakeRedisCache()
     prisma_client = MagicMock()
     prisma_client.db.litellm_uisettings.upsert = AsyncMock(return_value={"id": "ui_settings"})
     table = UISettingsRepository(prisma_client).table
     assert isinstance(table, _PublishOnWriteActions)
 
     previous_cache = proxy_server.redis_usage_cache
-    _set_redis_usage_cache(_FakeRedisCache(client))
+    _set_redis_usage_cache(client)
     try:
         await table.upsert(
             where={"id": "ui_settings"},
@@ -730,14 +713,14 @@ async def test_ui_settings_write_publishes_via_live_coordination_cache() -> None
     assert json.loads(message) == {"object_type": "litellm_uisettings"}
 
 
-async def _publish_calls_for_invalidated_param(param_name: str) -> List[Tuple[str, str]]:
+async def _publish_calls_for_invalidated_param(param_name: str) -> list[tuple[str, str]]:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import _set_redis_usage_cache
     from litellm.proxy.utils import invalidate_config_param
 
-    client = _RecordingRedisClient()
+    client = _FakeRedisCache()
     previous_cache = proxy_server.redis_usage_cache
-    _set_redis_usage_cache(_FakeRedisCache(client))
+    _set_redis_usage_cache(client)
     try:
         await invalidate_config_param(param_name)
     finally:
@@ -771,9 +754,9 @@ async def test_evict_config_param_does_not_publish() -> None:
     from litellm.proxy.proxy_server import _set_redis_usage_cache
     from litellm.proxy.utils import evict_config_param
 
-    client = _RecordingRedisClient()
+    client = _FakeRedisCache()
     previous_cache = proxy_server.redis_usage_cache
-    _set_redis_usage_cache(_FakeRedisCache(client))
+    _set_redis_usage_cache(client)
     try:
         await evict_config_param("model_cost_map_reload_config")
     finally:
@@ -803,10 +786,10 @@ async def test_model_cost_map_reload_does_not_publish_config_change() -> None:
 
     litellm_config_cache.flush_cache()
     prisma_client = _reload_config_prisma_client()
-    client = _RecordingRedisClient()
+    client = _FakeRedisCache()
     previous_cache = proxy_server.redis_usage_cache
     original_model_cost = litellm.model_cost.copy()
-    _set_redis_usage_cache(_FakeRedisCache(client))
+    _set_redis_usage_cache(client)
     try:
         from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 
@@ -833,9 +816,9 @@ async def test_anthropic_beta_headers_reload_does_not_publish_config_change() ->
 
     litellm_config_cache.flush_cache()
     prisma_client = _reload_config_prisma_client()
-    client = _RecordingRedisClient()
+    client = _FakeRedisCache()
     previous_cache = proxy_server.redis_usage_cache
-    _set_redis_usage_cache(_FakeRedisCache(client))
+    _set_redis_usage_cache(client)
     try:
         with patch("litellm.anthropic_beta_headers_manager.reload_beta_headers_config") as mock_reload:
             mock_reload.return_value = {}
@@ -855,11 +838,11 @@ class _StopFailingSubscriber(ConfigSyncSubscriber):
 async def test_proxy_config_subscriber_resyncs_deployments_only() -> None:
     from litellm.proxy.proxy_server import ProxyConfig
 
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([_QueuePubSub()]))
+    cache = _FakeRedisCache(subscriptions=[_QueuePubSub()])
     config = ProxyConfig()
     prisma_client = MagicMock()
     proxy_logging_obj = MagicMock()
-    calls: List[Tuple[str, object, object]] = []
+    calls: list[tuple[str, object, object]] = []
 
     async def fake_add_deployment(prisma_client: object, proxy_logging_obj: object) -> None:
         calls.append(("add_deployment", prisma_client, proxy_logging_obj))
@@ -902,7 +885,7 @@ async def test_proxy_config_does_not_start_subscriber_without_coordination_redis
 async def test_proxy_config_keeps_the_first_subscriber_on_repeat_start() -> None:
     from litellm.proxy.proxy_server import ProxyConfig
 
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([_QueuePubSub()]))
+    cache = _FakeRedisCache(subscriptions=[_QueuePubSub()])
     config = ProxyConfig()
 
     config.start_config_sync_subscriber(prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), redis_cache=cache)
@@ -920,7 +903,7 @@ async def test_proxy_config_shutdown_survives_a_failing_subscriber_stop() -> Non
 
     config = ProxyConfig()
     config.config_sync_subscriber = _StopFailingSubscriber(
-        redis_cache=_FakeRedisCache(_ScriptedPubSubRedisClient([])),
+        redis_cache=_FakeRedisCache(subscriptions=[]),
         resync_callbacks=(),
     )
 

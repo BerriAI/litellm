@@ -23,7 +23,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from prometheus_client import Gauge as _PromGauge
     from redis.asyncio import Redis, RedisCluster
     from redis.asyncio.client import Pipeline
+    from redis.asyncio.client import PubSub as AsyncPubSub
     from redis.asyncio.cluster import ClusterPipeline
 
     pipeline = Pipeline
@@ -577,6 +579,70 @@ def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -
     )
 
 
+class _PubSubFrame(TypedDict):
+    type: ReadOnly[str]
+    channel: ReadOnly[str | bytes]
+    data: ReadOnly[str | bytes | int]
+
+
+_PUBSUB_FRAME: Final = TypeAdapter(_PubSubFrame)
+
+
+class RedisPoolStatus(TypedDict):
+    max_connections: ReadOnly[int | None]
+    connection_class: ReadOnly[str | None]
+
+
+_PUBSUB_WAIT_SLICE_SECONDS: Final = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class RedisMessage:
+    channel: str
+    payload: bytes
+
+
+def _redis_message(frame: object) -> RedisMessage | None:
+    """The published message a pub/sub frame carries; ``None`` for subscribe acks and anything malformed."""
+    try:
+        parsed: Final = _PUBSUB_FRAME.validate_python(frame)
+    except ValidationError:
+        return None
+    channel: Final = parsed["channel"]
+    payload: Final = parsed["data"]
+    if parsed["type"] not in ("message", "pmessage") or isinstance(payload, int):
+        return None
+    return RedisMessage(
+        channel=channel.decode("utf-8", errors="replace") if isinstance(channel, bytes) else channel,
+        payload=payload.encode("utf-8") if isinstance(payload, str) else payload,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RedisSubscription:
+    """One SUBSCRIBE session. ``get_message`` waits up to ``timeout`` seconds (``None`` waits
+    indefinitely) for a published message and skips the acks redis-py interleaves with them."""
+
+    pubsub: "AsyncPubSub"
+
+    async def get_message(self, *, timeout: float | None) -> RedisMessage | None:
+        clock: Final = asyncio.get_running_loop().time
+        deadline: Final = None if timeout is None else clock() + timeout
+        while True:
+            remaining = _PUBSUB_WAIT_SLICE_SECONDS if deadline is None else max(deadline - clock(), 0.0)
+            frame: object = await self.pubsub.get_message(timeout=remaining)
+            if frame is None and deadline is None:
+                continue
+            if frame is None:
+                return None
+            message = _redis_message(frame)
+            if message is not None:
+                return message
+
+    async def aclose(self) -> None:
+        await self.pubsub.aclose()  # pyright: ignore[reportAttributeAccessIssue]  # types-redis 4.6 stubs predate PubSub.aclose
+
+
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
 
@@ -1001,33 +1067,19 @@ class RedisCache(BaseCache):
         executor; see that method for why the binding must be per loop.
         """
         _redis_client: Final[Any] = self.init_async_client()
-        if hasattr(_redis_client, "register_script"):
-            registered_script: Final = _redis_client.register_script(script)
+        if not hasattr(_redis_client, "register_script"):
+            raise ValueError("Redis client does not support Lua script registration")
+        registered_script: Final = _redis_client.register_script(script)
 
-            async def standalone_executor(
-                keys: Sequence[str],
-                args: Sequence[str | bytes | int | float],
-                client: object = None,
-            ) -> object:
-                namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
-                return await registered_script(keys=namespaced_keys, args=args, client=client)
+        async def executor(
+            keys: Sequence[str],
+            args: Sequence[str | bytes | int | float],
+            client: object = None,
+        ) -> object:
+            namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
+            return await registered_script(keys=namespaced_keys, args=args, client=client)
 
-            return standalone_executor
-
-        if hasattr(_redis_client, "script_load"):
-            script_sha: Final = _redis_client.script_load(script)
-
-            async def cluster_executor(
-                keys: Sequence[str],
-                args: Sequence[str | bytes | int | float],
-                client: object = None,
-            ) -> object:
-                namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
-                return await _redis_client.evalsha(script_sha, len(namespaced_keys), *namespaced_keys, *args)
-
-            return cluster_executor
-
-        raise ValueError("Redis client does not support Lua script registration")
+        return executor
 
     @_redis_circuit_breaker_guard
     async def async_set_cache(self, key, value, **kwargs):
@@ -1838,6 +1890,38 @@ class RedisCache(BaseCache):
     def delete_cache(self, key):
         key = self.check_and_fix_namespace(key=key)
         self.redis_client.delete(key)
+
+    def _standalone_async_client(self) -> "Redis[bytes] | Redis[str]":
+        from redis.asyncio import RedisCluster
+
+        client: Final[object] = self.init_async_client()
+        if isinstance(client, RedisCluster):
+            raise NotImplementedError("Redis Cluster clients have no pub/sub support")
+        return cast("Redis[bytes] | Redis[str]", client)  # cast-ok: decode_responses picks the reply type at runtime
+
+    @_redis_circuit_breaker_guard
+    async def async_publish(self, channel: str, message: str | bytes) -> int:
+        return await self._standalone_async_client().publish(channel, message)
+
+    @_redis_circuit_breaker_guard
+    async def async_subscribe(self, *channels: str) -> RedisSubscription:
+        pubsub: Final = self._standalone_async_client().pubsub()
+        try:
+            await pubsub.subscribe(*channels)
+        except BaseException:
+            await pubsub.aclose()  # pyright: ignore[reportAttributeAccessIssue]  # types-redis 4.6 stubs predate PubSub.aclose
+            raise
+        return RedisSubscription(pubsub)
+
+    def connection_pool_status(self) -> "RedisPoolStatus":
+        pool: Final = getattr(self.redis_client, "connection_pool", None)
+        max_connections: Final = getattr(pool, "max_connections", None)
+        connection_class: Final = getattr(getattr(pool, "connection_class", None), "__name__", None)
+        status: Final[RedisPoolStatus] = {
+            "max_connections": max_connections if isinstance(max_connections, int) else None,
+            "connection_class": connection_class if isinstance(connection_class, str) else None,
+        }
+        return status
 
     async def _pipeline_increment_helper(
         self,
