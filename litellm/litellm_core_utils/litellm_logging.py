@@ -211,6 +211,7 @@ from ..integrations.s3 import S3Logger
 from ..integrations.s3_v2 import S3Logger as S3V2Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
+from ..integrations.zerobus import ZerobusLogger
 from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
     get_trusted_callback_params,
@@ -4650,6 +4651,14 @@ def _init_custom_logger_compatible_class(
             _pointfive_logger: Final = PointFiveLogger()
             _in_memory_loggers.append(_pointfive_logger)
             return _pointfive_logger
+        elif logging_integration == "zerobus":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ZerobusLogger):
+                    return callback
+
+            _zerobus_logger: Final = ZerobusLogger()
+            _in_memory_loggers.append(_zerobus_logger)
+            return _zerobus_logger
         elif logging_integration == "aws_sqs":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SQSLogger):
@@ -5341,6 +5350,10 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "pointfive":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PointFiveLogger):
+                    return callback
+        elif logging_integration == "zerobus":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ZerobusLogger):
                     return callback
         elif logging_integration == "aws_sqs":
             for callback in _in_memory_loggers:

@@ -4019,6 +4019,18 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    zerobus: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="zerobus",
+        ui_callback_name="Databricks Zerobus",
+        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+            "ZEROBUS_WORKSPACE_URL",
+            "ZEROBUS_SERVER_ENDPOINT",
+            "ZEROBUS_CLIENT_ID",
+            "ZEROBUS_CLIENT_SECRET",
+            "ZEROBUS_TABLE_NAME",
+        ],
+    )
+
 
 class HTTPExceptionErrorDetail(TypedDict):
     """The `{"error": <message>}` shape most proxy endpoints raise as `HTTPException.detail`."""
