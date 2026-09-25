@@ -192,6 +192,22 @@ def test_disabled_settings_leave_config_file_reservations_alone(
     assert litellm.priority_reservation == {"legacy": 0.5}
 
 
+def test_disabling_fairness_restores_config_file_reservations(
+    isolated_globals: _FakeProxyConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.types.utils import PriorityReservationSettings
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "priority_reservation", {"legacy": 0.5})
+    monkeypatch.setattr(litellm, "priority_reservation_settings", PriorityReservationSettings(saturation_threshold=0.9))
+    apply_fairness_settings(_settings(), internal_usage_cache=None, llm_router=None)
+    assert litellm.priority_reservation == {"production": 0.6, "batch": 0.1}
+    apply_fairness_settings(_settings().model_copy(update={"default_reserved_share": 0.2}), None, None)
+    apply_fairness_settings(FairnessSettings(enabled=False), internal_usage_cache=None, llm_router=None)
+    assert litellm.priority_reservation == {"legacy": 0.5}
+    assert litellm.priority_reservation_settings == PriorityReservationSettings(saturation_threshold=0.9)
+
+
 def test_settings_reject_duplicate_and_reserved_class_names() -> None:
     with pytest.raises(ValidationError, match="unique"):
         FairnessSettings(

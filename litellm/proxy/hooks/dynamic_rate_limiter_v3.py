@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm import ModelResponse, Router
+from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -83,6 +83,9 @@ _REJECT_METRIC: Final[Mapping[FairnessQueueRejectReason, FairnessMetric]] = Mapp
 )
 
 
+_TRACKING_LIMIT_MULTIPLIER: Final = 1_000_000
+
+
 @dataclass(frozen=True, slots=True)
 class _AdmissionPlan:
     model: str
@@ -94,6 +97,59 @@ class _AdmissionPlan:
     @property
     def token_scopes(self) -> frozenset[tuple[str, str]]:
         return _token_scopes(*self.enforced, *self.tracking_only)
+
+    @property
+    def descriptors(self) -> tuple[RateLimitDescriptor, ...]:
+        return (*self.enforced, *(_with_tracking_limits(descriptor) for descriptor in self.tracking_only))
+
+
+def _scaled_limit(limit: int | None) -> int | None:
+    return None if limit is None else max(limit, 1) * _TRACKING_LIMIT_MULTIPLIER
+
+
+def _with_tracking_limits(descriptor: RateLimitDescriptor) -> RateLimitDescriptor:
+    rate_limit: Final = descriptor["rate_limit"]
+    if rate_limit is None:
+        return descriptor
+    return RateLimitDescriptor(
+        key=descriptor["key"],
+        value=descriptor["value"],
+        rate_limit=RateLimitDescriptorRateLimitObject(
+            requests_per_unit=_scaled_limit(rate_limit.get("requests_per_unit")),
+            tokens_per_unit=_scaled_limit(rate_limit.get("tokens_per_unit")),
+            window_size=rate_limit.get("window_size"),
+        ),
+    )
+
+
+def _configured_limit(descriptor: RateLimitDescriptor, rate_limit_type: str) -> int | None:
+    rate_limit: Final = descriptor["rate_limit"]
+    if rate_limit is None:
+        return None
+    return rate_limit.get("requests_per_unit") if rate_limit_type == "requests" else rate_limit.get("tokens_per_unit")
+
+
+def _with_configured_limit(status: RateLimitStatus, tracking_only: Sequence[RateLimitDescriptor]) -> RateLimitStatus:
+    descriptor: Final = next(
+        (
+            candidate
+            for candidate in tracking_only
+            if (candidate["key"], candidate["value"]) == (status["descriptor_key"], status.get("descriptor_value"))
+        ),
+        None,
+    )
+    configured: Final = _configured_limit(descriptor, status["rate_limit_type"]) if descriptor is not None else None
+    if configured is None:
+        return status
+    used: Final = status["current_limit"] - status["limit_remaining"]
+    return RateLimitStatus(
+        code=status["code"],
+        current_limit=configured,
+        limit_remaining=max(0, configured - used),
+        rate_limit_type=status["rate_limit_type"],
+        descriptor_key=status["descriptor_key"],
+        descriptor_value=status.get("descriptor_value", ""),
+    )
 
 
 def _tracks_tokens(descriptor: RateLimitDescriptor) -> bool:
@@ -536,33 +592,22 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         increment: Final[Mapping[Literal["requests", "tokens"], int]] = MappingProxyType(
             {"requests": 1, "tokens": plan.estimated_tokens}
         )
+        descriptors: Final = plan.descriptors
         atomic_response: Final = await self.v3_limiter.atomic_check_and_increment_by_n(
-            descriptors=plan.enforced,
-            increments=tuple(increment for _ in plan.enforced),
+            descriptors=descriptors,
+            increments=tuple(increment for _ in descriptors),
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
         verbose_proxy_logger.debug("Atomic check+increment response: %s", atomic_response)
-        if atomic_response["overall_code"] == "OVER_LIMIT" or not plan.tracking_only:
+        if not plan.tracking_only:
             return atomic_response
-
-        tracking_response: Final = await self.v3_limiter.should_rate_limit(
-            descriptors=plan.tracking_only,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-            read_only=False,
-        )
         return RateLimitResponse(
             overall_code=atomic_response["overall_code"],
-            statuses=atomic_response["statuses"] + tracking_response["statuses"],
-            reservation_windows=atomic_response.get("reservation_windows", frozenset())
-            | tracking_response.get("reservation_windows", frozenset()),
+            statuses=[_with_configured_limit(status, plan.tracking_only) for status in atomic_response["statuses"]],
+            reservation_windows=atomic_response.get("reservation_windows", frozenset()),
         )
 
-    async def _record_reservation(
-        self,
-        plan: _AdmissionPlan,
-        response: RateLimitResponse,
-        user_api_key_dict: UserAPIKeyAuth,
-    ) -> None:
+    def _record_reservation(self, plan: _AdmissionPlan, response: RateLimitResponse) -> None:
         stash: Final = get_or_create_request_stash()
         stash.rate_limit_response = response
         if plan.estimated_tokens <= 0:
@@ -571,18 +616,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         stash.dynamic_token_scopes = plan.token_scopes
         stash.dynamic_reservation_windows = response.get("reservation_windows", frozenset())
         stash.dynamic_reservation_settled = False
-        tracked_scopes: Final = _token_scopes(*plan.tracking_only)
-        if not tracked_scopes:
-            return
-        await self.v3_limiter.async_increment_tokens_with_ttl_preservation(
-            pipeline_operations=self.v3_limiter.build_reservation_aware_tpm_ops(
-                targets=sorted(tracked_scopes),
-                reserved_scopes=frozenset(),
-                actual_tokens=plan.estimated_tokens,
-                reserved_tokens=0,
-            ),
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-        )
 
     async def _settle_reservation(
         self,
@@ -593,16 +626,20 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if stash.dynamic_reserved_tokens <= 0 or stash.dynamic_reservation_settled:
             return False
         stash.dynamic_reservation_settled = True
-        await self.v3_limiter.async_increment_reservation_aware_tokens(
-            pipeline_operations=self.v3_limiter.build_project_reservation_ops(
-                targets=sorted(stash.dynamic_token_scopes),
-                reserved_scopes=stash.dynamic_token_scopes,
-                actual_tokens=actual_tokens,
-                reserved_tokens=stash.dynamic_reserved_tokens,
-                reservation_window_identities=stash.dynamic_reservation_windows,
-            ),
-            parent_otel_span=parent_otel_span,
-        )
+        try:
+            await self.v3_limiter.async_increment_reservation_aware_tokens(
+                pipeline_operations=self.v3_limiter.build_project_reservation_ops(
+                    targets=sorted(stash.dynamic_token_scopes),
+                    reserved_scopes=stash.dynamic_token_scopes,
+                    actual_tokens=actual_tokens,
+                    reserved_tokens=stash.dynamic_reserved_tokens,
+                    reservation_window_identities=stash.dynamic_reservation_windows,
+                ),
+                parent_otel_span=parent_otel_span,
+            )
+        except Exception:
+            stash.dynamic_reservation_settled = False
+            raise
         return True
 
     def _queue_weights(self, model_group_info: ModelGroupInfo, fairness: FairnessSettings) -> Mapping[str, float]:
@@ -725,7 +762,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
         first_response: Final = await self._try_admit(plan, user_api_key_dict)
         if first_response["overall_code"] != "OVER_LIMIT":
-            await self._record_reservation(plan, first_response, user_api_key_dict)
+            self._record_reservation(plan, first_response)
             return
 
         over_limit: Final = self._first_over_limit(first_response)
@@ -748,7 +785,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             response: Final = await self._try_admit(live_plan, user_api_key_dict)
             if response["overall_code"] == "OVER_LIMIT":
                 return False
-            await self._record_reservation(live_plan, response, user_api_key_dict)
+            self._record_reservation(live_plan, response)
             return True
 
         call_id: Final = request.get("litellm_call_id")
@@ -909,7 +946,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
-        from litellm.types.utils import Usage
 
         try:
             verbose_proxy_logger.debug("INSIDE dynamic rate limiter ASYNC SUCCESS LOGGING")
@@ -930,19 +966,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             user_api_key_auth_metadata: Final = standard_logging_metadata.get("user_api_key_auth_metadata") or {}
             key_priority: Final[str | None] = user_api_key_auth_metadata.get("priority")
 
-            # Get total tokens from response
-            total_tokens = 0
-            rate_limit_type: Final = self.v3_limiter.get_rate_limit_type()
-
-            if isinstance(response_obj, ModelResponse):
-                _usage: Final = getattr(response_obj, "usage", None)
-                if _usage and isinstance(_usage, Usage):
-                    if rate_limit_type == "output":
-                        total_tokens = _usage.completion_tokens
-                    elif rate_limit_type == "input":
-                        total_tokens = _usage.prompt_tokens
-                    elif rate_limit_type == "total":
-                        total_tokens = _usage.total_tokens
+            total_tokens: Final = self.v3_limiter.success_usage_tokens(
+                kwargs, response_obj, self.v3_limiter.get_rate_limit_type()
+            )
 
             stash: Final = get_request_stash_for_call(call_id_from_callback_kwargs(kwargs))
             if stash is not None and await self._settle_reservation(stash, total_tokens, litellm_parent_otel_span):

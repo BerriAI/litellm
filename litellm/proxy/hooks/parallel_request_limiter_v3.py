@@ -4530,6 +4530,32 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             is not None
         )
 
+    def success_usage_tokens(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        rate_limit_type: Literal["output", "input", "total"],
+    ) -> int:
+        """Tokens a finished call charges to the TPM window under ``rate_limit_type``.
+
+        Responses LiteLLM does not model (e.g. pass-through, whose usage is reported by the
+        upstream rather than parsed out of the body) carry their usage in ``combined_usage_object``
+        instead, and would otherwise never charge the TPM window.
+        """
+        combined_usage: Final = kwargs.get("combined_usage_object")
+        usage: Final = (
+            getattr(response_obj, "usage", None)
+            if isinstance(
+                response_obj,
+                (ModelResponse, EmbeddingResponse, TextCompletionResponse, BaseLiteLLMOpenAIResponseObject),
+            )
+            else combined_usage
+            if isinstance(combined_usage, Usage)
+            else None
+        )
+        split_tokens: Final = self._get_total_tokens_from_usage(usage=usage, rate_limit_type=rate_limit_type)
+        return split_tokens if split_tokens else self._aggregate_only_total_tokens(usage=usage)
+
     def _build_success_event_pipeline_operations(
         self,
         kwargs: dict[str, Any],
@@ -4554,30 +4580,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
 
         model_group: Final = get_model_group_from_litellm_kwargs(kwargs)
-
-        # Get total tokens from response. Responses LiteLLM does not model
-        # (e.g. pass-through, whose usage is reported by the upstream rather
-        # than parsed out of the body) carry their usage in
-        # ``combined_usage_object`` instead, and would otherwise never charge
-        # the TPM window.
-        _usage: Usage | dict | None = None
-        if isinstance(
-            response_obj,
-            (
-                ModelResponse,
-                EmbeddingResponse,
-                TextCompletionResponse,
-                BaseLiteLLMOpenAIResponseObject,
-            ),
-        ):
-            _usage = getattr(response_obj, "usage", None)
-        else:
-            _combined_usage: Final = kwargs.get("combined_usage_object")
-            if isinstance(_combined_usage, Usage):
-                _usage = _combined_usage
-        total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
-        if total_tokens == 0:
-            total_tokens = self._aggregate_only_total_tokens(usage=_usage)
+        total_tokens: Final = self.success_usage_tokens(kwargs, response_obj, rate_limit_type)
 
         stash: Final = get_request_stash_for_call(call_id_from_callback_kwargs(kwargs))
         reserved_tokens: Final = stash.reserved_tokens if stash is not None else 0
