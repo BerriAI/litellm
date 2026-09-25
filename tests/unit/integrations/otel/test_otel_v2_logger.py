@@ -2087,6 +2087,9 @@ def test_service_call_under_a_remote_parent_is_never_detached():
 
 
 _REDIS_SET_CALLER_CHAIN = "async_set_cache <- async_set_cache <- async_add_cache"
+_PHASE_T0 = datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)
+_PHASE_START = _PHASE_T0.timestamp() - 0.2
+_PHASE_END = _PHASE_T0.timestamp() - 0.1
 
 
 def _assert_linked_root(span, request_span):
@@ -2104,15 +2107,14 @@ def test_cache_write_task_roots_its_redis_span_while_the_server_span_is_still_op
 
     logger, exporter = _logger()
     server = _service_parent(logger)
-    now = datetime.now().timestamp()
 
     async def _write_then_close_server():
         await create_cache_write_task(
             lambda: logger.async_service_success_hook(
                 payload=_ServicePayload("redis", _REDIS_SET_CALLER_CHAIN),
                 parent_otel_span=server,
-                start_time=now - 0.2,
-                end_time=now - 0.1,
+                start_time=_PHASE_START,
+                end_time=_PHASE_END,
             )
         )
         server.end()
@@ -2134,15 +2136,14 @@ def test_success_logging_service_call_roots_its_own_trace_while_the_server_span_
 
     logger, exporter = _logger()
     server = _service_parent(logger)
-    now = datetime.now().timestamp()
 
     class _SpendTracker(CustomLogger):
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
             await logger.async_service_success_hook(
                 payload=_ServicePayload("redis", "async_increment <- async_increment_cache"),
                 parent_otel_span=server,
-                start_time=now - 0.2,
-                end_time=now - 0.1,
+                start_time=_PHASE_START,
+                end_time=_PHASE_END,
             )
 
     monkeypatch.setattr(litellm, "input_callback", [], raising=False)
@@ -2153,7 +2154,7 @@ def test_success_logging_service_call_roots_its_own_trace_while_the_server_span_
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="acompletion",
-        start_time=datetime.now(),
+        start_time=_PHASE_T0,
         litellm_call_id="post_response_phase",
         function_id="fn",
     )
@@ -2161,12 +2162,57 @@ def test_success_logging_service_call_roots_its_own_trace_while_the_server_span_
     logging_obj.model_call_details["standard_logging_object"] = _payload(litellm_call_id="post_response_phase")
 
     async def _log_then_close_server():
-        await logging_obj.async_success_handler(result=None, start_time=datetime.now(), end_time=datetime.now())
+        await logging_obj.async_success_handler(result=None, start_time=_PHASE_T0, end_time=_PHASE_T0)
         server.end()
 
     asyncio.run(_log_then_close_server())
     by_name = {s.name: s for s in exporter.get_finished_spans()}
     _assert_linked_root(by_name["redis async_increment"], server)
+
+
+def test_awaited_failure_logging_service_call_stays_under_the_open_request_span(monkeypatch):
+    """``utils.py`` awaits ``Logging.async_failure_handler`` before the router
+    retries, so a Redis call made by a failure callback is work the caller waited
+    for and keeps its place in the request trace."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logger, exporter = _logger()
+    server = _service_parent(logger)
+
+    class _LimitCleanup(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            await logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "async_increment <- async_increment_cache"),
+                parent_otel_span=server,
+                start_time=_PHASE_START,
+                end_time=_PHASE_END,
+            )
+
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [_LimitCleanup()], raising=False)
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=_PHASE_T0,
+        litellm_call_id="awaited_failure",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={}, model="gpt-4o")
+
+    async def _fail_then_close_server():
+        await logging_obj.async_failure_handler(RuntimeError("boom"), "", start_time=_PHASE_T0, end_time=_PHASE_T0)
+        server.end()
+
+    asyncio.run(_fail_then_close_server())
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    span = by_name["redis async_increment"]
+    assert span.parent is not None and span.parent.span_id == server.get_span_context().span_id
+    assert span.context.trace_id == server.get_span_context().trace_id
+    assert list(span.links) == []
 
 
 def test_post_response_phase_does_not_detach_from_a_remote_parent():

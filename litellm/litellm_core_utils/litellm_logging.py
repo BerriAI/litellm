@@ -3874,13 +3874,12 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with post_response_phase():
-                return await self._async_failure_handler_body(
-                    exception=exception,
-                    traceback_exception=traceback_exception,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
+            return await self._async_failure_handler_body(
+                exception=exception,
+                traceback_exception=traceback_exception,
+                start_time=start_time,
+                end_time=end_time,
+            )
         finally:
             self._restore_correlation_context()
 
