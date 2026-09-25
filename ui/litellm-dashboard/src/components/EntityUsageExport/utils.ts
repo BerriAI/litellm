@@ -39,27 +39,30 @@ const METRIC_KEYS = [
 ] as const;
 
 // When breakdown.entities is empty (aggregated endpoint), reconstruct entities
-// from breakdown.api_keys by grouping on metadata.team_id.
-const aggregateApiKeysIntoEntities = (breakdown: Record<string, any>): Record<string, any> => {
+// from breakdown.api_keys by grouping on metadata.user_id for the user entity,
+// metadata.team_id otherwise.
+const aggregateApiKeysIntoEntities = (breakdown: Record<string, any>, entityType: EntityType): Record<string, any> => {
   const apiKeys = breakdown.api_keys;
   if (!apiKeys || Object.keys(apiKeys).length === 0) return {};
 
   const grouped: Record<string, any> = {};
+  const isUser = entityType === "user";
 
   for (const [keyId, keyData] of Object.entries<any>(apiKeys)) {
-    const teamId = keyData?.metadata?.team_id || "Unassigned";
-    if (!grouped[teamId]) {
-      grouped[teamId] = {
+    const entityId = (isUser ? keyData?.metadata?.user_id : keyData?.metadata?.team_id) || "Unassigned";
+    if (!grouped[entityId]) {
+      grouped[entityId] = {
         metrics: Object.fromEntries(METRIC_KEYS.map((k) => [k, 0])),
         api_key_breakdown: {},
+        ...(isUser ? { metadata: { user_id: entityId } } : {}),
       };
     }
-    const m = grouped[teamId].metrics;
+    const m = grouped[entityId].metrics;
     const km = keyData?.metrics || {};
     for (const k of METRIC_KEYS) {
       m[k] += km[k] || 0;
     }
-    grouped[teamId].api_key_breakdown[keyId] = keyData;
+    grouped[entityId].api_key_breakdown[keyId] = keyData;
   }
 
   return grouped;
@@ -67,20 +70,21 @@ const aggregateApiKeysIntoEntities = (breakdown: Record<string, any>): Record<st
 
 // Returns breakdown.entities if populated, otherwise falls back to
 // reconstructing entities from breakdown.api_keys.
-export const resolveEntities = (breakdown: Record<string, any>): Record<string, any> => {
+export const resolveEntities = (breakdown: Record<string, any>, entityType: EntityType): Record<string, any> => {
   const entities = breakdown.entities;
   if (entities && Object.keys(entities).length > 0) return entities;
-  return aggregateApiKeysIntoEntities(breakdown);
+  return aggregateApiKeysIntoEntities(breakdown, entityType);
 };
 
 export const getEntityBreakdown = (
   spendData: EntitySpendData,
+  entityType: EntityType,
   teamAliasMap: Record<string, string> = {},
 ): EntityBreakdown[] => {
   const entitySpend: { [key: string]: EntityBreakdown } = {};
 
   spendData.results.forEach((day) => {
-    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
+    Object.entries(resolveEntities(day.breakdown, entityType)).forEach(([entity, data]: [string, any]) => {
       const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
 
       if (!entitySpend[entity]) {
@@ -123,6 +127,7 @@ const hasFlatCost = (spendData: EntitySpendData): boolean => (spendData.metadata
 
 export const generateDailyData = (
   spendData: EntitySpendData,
+  entityType: EntityType,
   entityLabel: string,
   teamAliasMap: Record<string, string> = {},
 ): any[] => {
@@ -130,7 +135,7 @@ export const generateDailyData = (
   const includeFlatCost = hasFlatCost(spendData);
 
   spendData.results.forEach((day) => {
-    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
+    Object.entries(resolveEntities(day.breakdown, entityType)).forEach(([entity, data]: [string, any]) => {
       const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
 
       const row: Record<string, any> = {
@@ -161,6 +166,7 @@ export const generateDailyData = (
 
 export const generateDailyWithKeysData = (
   spendData: EntitySpendData,
+  entityType: EntityType,
   entityLabel: string,
   teamAliasMap: Record<string, string> = {},
 ): any[] => {
@@ -189,7 +195,7 @@ export const generateDailyWithKeysData = (
   } = {};
 
   spendData.results.forEach((day) => {
-    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
+    Object.entries(resolveEntities(day.breakdown, entityType)).forEach(([entity, data]: [string, any]) => {
       const { id: entityId, alias: entityAlias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
       const apiKeyBreakdown = data.api_key_breakdown || {};
 
@@ -263,6 +269,7 @@ export const generateDailyWithKeysData = (
 
 export const generateDailyWithUsersData = (
   spendData: EntitySpendData,
+  entityType: EntityType,
   entityLabel: string,
   teamAliasMap: Record<string, string> = {},
 ): any[] => {
@@ -279,7 +286,7 @@ export const generateDailyWithUsersData = (
   } = {};
 
   spendData.results.forEach((day) => {
-    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
+    Object.entries(resolveEntities(day.breakdown, entityType)).forEach(([entity, data]: [string, any]) => {
       const { id: entityId, alias: entityAlias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
       Object.entries(data.api_key_breakdown || {}).forEach(([keyId, keyData]: [string, any]) => {
         const userId = keyData?.metadata?.user_id || "Unassigned";
@@ -328,6 +335,7 @@ export const generateDailyWithUsersData = (
 
 export const generateDailyWithModelsData = (
   spendData: EntitySpendData,
+  entityType: EntityType,
   entityLabel: string,
   teamAliasMap: Record<string, string> = {},
 ): any[] => {
@@ -337,7 +345,7 @@ export const generateDailyWithModelsData = (
     const dailyEntityModels: { [key: string]: { [key: string]: any } } = {};
     const dailyEntityMetadata: { [key: string]: Record<string, any> | undefined } = {};
 
-    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, entityData]: [string, any]) => {
+    Object.entries(resolveEntities(day.breakdown, entityType)).forEach(([entity, entityData]: [string, any]) => {
       if (!dailyEntityModels[entity]) {
         dailyEntityModels[entity] = {};
       }
@@ -407,20 +415,21 @@ export const generateDailyWithModelsData = (
 export const generateExportData = (
   spendData: EntitySpendData,
   exportScope: ExportScope,
-  entityLabel: string,
+  entityType: EntityType,
   teamAliasMap: Record<string, string> = {},
 ): any[] => {
+  const entityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   switch (exportScope) {
     case "daily":
-      return generateDailyData(spendData, entityLabel, teamAliasMap);
+      return generateDailyData(spendData, entityType, entityLabel, teamAliasMap);
     case "daily_with_keys":
-      return generateDailyWithKeysData(spendData, entityLabel, teamAliasMap);
+      return generateDailyWithKeysData(spendData, entityType, entityLabel, teamAliasMap);
     case "daily_with_models":
-      return generateDailyWithModelsData(spendData, entityLabel, teamAliasMap);
+      return generateDailyWithModelsData(spendData, entityType, entityLabel, teamAliasMap);
     case "daily_with_users":
-      return generateDailyWithUsersData(spendData, entityLabel, teamAliasMap);
+      return generateDailyWithUsersData(spendData, entityType, entityLabel, teamAliasMap);
     default:
-      return generateDailyData(spendData, entityLabel, teamAliasMap);
+      return generateDailyData(spendData, entityType, entityLabel, teamAliasMap);
   }
 };
 
@@ -485,7 +494,7 @@ export const handleExportCSV = (
   entityType: EntityType,
   teamAliasMap: Record<string, string> = {},
 ): void => {
-  const data = generateExportData(spendData, exportScope, entityLabel, teamAliasMap);
+  const data = generateExportData(spendData, exportScope, entityType, teamAliasMap);
   const csv = Papa.unparse(data);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.csv`;
@@ -501,7 +510,7 @@ export const handleExportJSON = (
   selectedFilters: string[],
   teamAliasMap: Record<string, string> = {},
 ): void => {
-  const data = generateExportData(spendData, exportScope, entityLabel, teamAliasMap);
+  const data = generateExportData(spendData, exportScope, entityType, teamAliasMap);
   const metadata = generateMetadata(entityType, dateRange, selectedFilters, exportScope, spendData);
   const exportObject = {
     metadata,
