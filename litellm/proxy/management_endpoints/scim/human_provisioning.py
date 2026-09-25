@@ -7,7 +7,13 @@ from uuid import uuid4
 from fastapi import HTTPException
 from prisma import Json
 from prisma.models import LiteLLM_SCIMResource, LiteLLM_SCIMSource
-from prisma.types import LiteLLM_SCIMResourceCreateInput
+from prisma.types import (
+    LiteLLM_SCIMResourceCreateInput,
+    LiteLLM_SCIMResourceUpdateInput,
+    LiteLLM_SCIMResourceWhereUniqueInput,
+    LiteLLM_UserTableWhereInput,
+    LiteLLM_UserTableWhereUniqueInput,
+)
 from pydantic import TypeAdapter
 
 from litellm.proxy._types import LiteLLM_UserTable as UserPolicy
@@ -86,27 +92,25 @@ class SourceHumanProvisioner:
     async def reserve(self, user: SCIMUser) -> LiteLLM_SCIMResource:
         if user.externalId is None or user.userName is None:
             raise HTTPException(400, "externalId and userName are required")
+        resource_filter: Final[LiteLLM_SCIMResourceWhereUniqueInput] = {
+            "source_id_kind_external_id": {
+                "source_id": self.source.source_id,
+                "kind": "Users",
+                "external_id": user.externalId,
+            }
+        }
         async with self.client.tx() as tx:
-            existing: Final = await tx.litellm_scimresource.find_unique(
-                where={
-                    "source_id_kind_external_id": {
-                        "source_id": self.source.source_id,
-                        "kind": "Users",
-                        "external_id": user.externalId,
-                    }
-                }
-            )
+            existing: Final = await tx.litellm_scimresource.find_unique(where=resource_filter)
             if existing is not None:
                 return existing
             email: Final = human_email(user)
-            matches: Final = await tx.litellm_usertable.find_many(
-                where={
-                    "OR": [
-                        {"user_id": user.userName},
-                        {"user_email": {"equals": email, "mode": "insensitive"}},
-                    ]
-                }
-            )
+            user_filter: Final[LiteLLM_UserTableWhereInput] = {
+                "OR": [
+                    {"user_id": user.userName},
+                    {"user_email": {"equals": email, "mode": "insensitive"}},
+                ]
+            }
+            matches: Final = await tx.litellm_usertable.find_many(where=user_filter)
             if matches:
                 raise HTTPException(
                     409, "This local user already exists; automatic directory adoption is not permitted"
@@ -144,8 +148,9 @@ class SourceHumanProvisioner:
             await self.claim_email(row, human_email(change))
         else:
             validate_human_patch(change)
+        local_filter: Final[LiteLLM_UserTableWhereUniqueInput] = {"user_id": row.local_id}
         async with self.client.tx() as tx:
-            existing: Final = await tx.litellm_usertable.find_unique(where={"user_id": row.local_id})
+            existing: Final = await tx.litellm_usertable.find_unique(where=local_filter)
         if existing is None:
             desired: Final = change if isinstance(change, SCIMUser) else user_document(row)
             created: Final = await scim_v2.create_user(
@@ -155,7 +160,7 @@ class SourceHumanProvisioner:
                 raise HTTPException(409, "The human local identity changed during provisioning")
         if isinstance(change, SCIMPatchOp):
             async with self.client.tx() as tx:
-                current: Final = await tx.litellm_usertable.find_unique(where={"user_id": row.local_id})
+                current: Final = await tx.litellm_usertable.find_unique(where=local_filter)
             if current is None:
                 raise HTTPException(409, "The human local identity was removed during provisioning")
             preview, _ = scim_v2.apply_scim_user_patch(UserPolicy.model_validate(current.model_dump()), change)
@@ -168,21 +173,22 @@ class SourceHumanProvisioner:
             else await scim_v2.update_user(user_id=row.local_id, user=change.model_copy(update={"groups": None}))
         )
         document: Final = result.model_copy(update={"id": row.id, "externalId": row.external_id, "userName": username})
+        resource_filter: Final[LiteLLM_SCIMResourceWhereUniqueInput] = {"id": row.id}
+        update_data: Final[LiteLLM_SCIMResourceUpdateInput] = {
+            "document": Json(document.model_dump(by_alias=True, mode="json", exclude_none=True)),
+            "active": document.active,
+            "user_name": document.userName,
+        }
         async with self.client.tx() as tx:
-            await tx.litellm_scimresource.update(
-                where={"id": row.id},
-                data={
-                    "document": Json(document.model_dump(by_alias=True, mode="json", exclude_none=True)),
-                    "active": document.active,
-                    "user_name": document.userName,
-                },
-            )
+            await tx.litellm_scimresource.update(where=resource_filter, data=update_data)
         return document
 
     async def claim_email(self, row: LiteLLM_SCIMResource, email: str) -> None:
+        resource_filter: Final[LiteLLM_SCIMResourceWhereUniqueInput] = {"id": row.id}
+        update_data: Final[LiteLLM_SCIMResourceUpdateInput] = {"human_email": email}
         try:
             async with self.client.tx() as tx:
-                await tx.litellm_scimresource.update(where={"id": row.id}, data={"human_email": email})
+                await tx.litellm_scimresource.update(where=resource_filter, data=update_data)
         except Exception as exc:
             if is_unique_violation(exc):
                 raise HTTPException(409, "This email belongs to another provisioning record") from exc
