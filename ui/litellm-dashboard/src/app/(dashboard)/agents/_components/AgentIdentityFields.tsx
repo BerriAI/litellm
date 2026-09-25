@@ -6,6 +6,20 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AgentFormField, type AgentFormValues } from "./AgentFormKit";
 import { entraTenantFromIssuer, IDENTITY_UUID_PATTERN } from "./agent_identity";
 
+const PROVIDER_OPTIONS = [
+  { value: "none", label: "No explicit identity binding" },
+  { value: "microsoft_entra", label: "Microsoft Entra ID" },
+];
+const EXECUTION_MODE_OPTIONS = [
+  { value: "autonomous", label: "Autonomous" },
+  { value: "delegated", label: "On behalf of a user" },
+  { value: "both", label: "Both" },
+];
+const EXECUTION_OPTIONS = [
+  { value: "enabled", label: "Enabled" },
+  { value: "disabled", label: "Disabled" },
+];
+
 export const AgentIdentityFields = ({ accessToken }: { accessToken: string | null }) => {
   const provider = useWatch<AgentFormValues>({ name: "identity_provider" });
   const provisioningSource = useWatch<AgentFormValues>({ name: "identity_provisioning_source_id" });
@@ -50,6 +64,7 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
           {({ value, onChange, id }) => (
             <Select
               disabled={Boolean(provisioningSource)}
+              items={PROVIDER_OPTIONS}
               value={typeof value === "string" ? value : "none"}
               onValueChange={onChange}
             >
@@ -57,8 +72,11 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">No explicit identity binding</SelectItem>
-                <SelectItem value="microsoft_entra">Microsoft Entra ID</SelectItem>
+                {PROVIDER_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           )}
@@ -138,6 +156,7 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
               {({ value, onChange, id }) => (
                 <Select
                   disabled={Boolean(provisioningSource)}
+                  items={EXECUTION_MODE_OPTIONS}
                   value={typeof value === "string" ? value : "autonomous"}
                   onValueChange={onChange}
                 >
@@ -145,9 +164,11 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="autonomous">Autonomous</SelectItem>
-                    <SelectItem value="delegated">On behalf of a user</SelectItem>
-                    <SelectItem value="both">Both</SelectItem>
+                    {EXECUTION_MODE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               )}
@@ -226,6 +247,7 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
             <AgentFormField name="enabled" label="Execution" defaultValue={true}>
               {({ value, onChange, id }) => (
                 <Select
+                  items={EXECUTION_OPTIONS}
                   value={value === false ? "disabled" : "enabled"}
                   onValueChange={(next) => onChange(next === "enabled")}
                 >
@@ -233,8 +255,11 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="enabled">Enabled</SelectItem>
-                    <SelectItem value="disabled">Disabled</SelectItem>
+                    {EXECUTION_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               )}
