@@ -10,7 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
-from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, overload
+from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, overload
 
 from fastapi import (
     APIRouter,
@@ -76,8 +76,6 @@ from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
-
-    from litellm.proxy.management_endpoints.scim.agent_provisioning import AgentProvisioningService
 
 
 class _UserTableClient(Protocol):
@@ -266,21 +264,6 @@ scim_router: Final = APIRouter(
     tags=["✨ SCIM v2 (Enterprise Only)"],
     dependencies=[Depends(_premium_user_check)],
 )
-
-from litellm.proxy.management_endpoints.scim.source_endpoints import router as scim_source_router
-
-scim_router.include_router(scim_source_router)
-
-
-async def _agent_provisioning_service(auth: UserAPIKeyAuth | None) -> "AgentProvisioningService | None":
-    from litellm.proxy.management_endpoints.scim.agent_provisioning import AgentProvisioningService, source_for_auth
-
-    if not isinstance(auth, UserAPIKeyAuth):
-        return None
-    client: Final = await _get_prisma_client_or_raise_exception()
-    source: Final = await source_for_auth(auth, client)
-    return AgentProvisioningService(client, source) if source is not None else None
-
 
 SCIM_MAX_PAGE_SIZE: Final = 100
 
@@ -1193,7 +1176,6 @@ def _get_resource_types(base_url: str = "/scim/v2") -> Sequence[SCIMResourceType
             name="User",
             description="User Account",
             endpoint="/Users",
-            schemaExtensions=[SCIMSchemaExtension(schema_=SCIM_AGENT_USER_SCHEMA, required=False)],
             schema_="urn:ietf:params:scim:schemas:core:2.0:User",
             meta={
                 "location": f"{base_url}/ResourceTypes/User",
@@ -1419,14 +1401,6 @@ def _get_schemas() -> Sequence[SCIMSchema]:
                 "resourceType": "Schema",
             },
         ),
-        SCIMSchema(
-            id=SCIM_AGENT_USER_SCHEMA,
-            name="LiteLLMAgentUser",
-            description="Entra agent-user identity, enabled through a trusted provisioning source",
-            attributes=[
-                SCIMSchemaAttribute(name="identityParentId", type="string", required=True, mutability="immutable")
-            ],
-        ),
     ]
 
 
@@ -1579,7 +1553,7 @@ async def get_service_provider_config(request: Request):
     return SCIMServiceProviderConfig(meta=meta)
 
 
-def parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
+def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
     """Parse the SCIM equality filters Okta uses before user lifecycle changes."""
     match: Final = re.match(
         r"""\s*([\w.]+)\s+eq\s+(['"]?)(.*?)\2\s*$""",
@@ -1602,14 +1576,10 @@ async def get_users(
     startIndex: int = Query(1, ge=1),
     count: int = Query(10, ge=0),
     filter: str | None = Query(None),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Get a list of users according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        return await service.list("Users", startIndex, count, filter)
     page_size: Final = min(count, SCIM_MAX_PAGE_SIZE)
     verbose_proxy_logger.debug(
         "SCIM GET USERS request: startIndex=%s count=%s filter=%s",
@@ -1625,7 +1595,7 @@ async def get_users(
             # Okta locates users by userName before deprovisioning. LiteLLM
             # exposes SCIM userName from user_email, while older SCIM-created
             # users may still have user_id == userName, so support both.
-            parsed_filter: Final = parse_scim_eq_filter(filter)
+            parsed_filter: Final = _parse_scim_eq_filter(filter)
             if parsed_filter:
                 filter_attribute, filter_value = parsed_filter
                 if filter_attribute == "username":
@@ -1672,14 +1642,10 @@ async def get_users(
 )
 async def get_user(
     user_id: str = Path(..., title="User ID"),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Get a single user by ID according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        return await service.get("Users", user_id)
     verbose_proxy_logger.debug("SCIM GET USER request for user_id=%s", user_id)
     try:
         user: Final = await _check_user_exists(user_id)
@@ -1700,16 +1666,10 @@ async def get_user(
 )
 async def create_user(
     user: SCIMUser = Body(...),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Create a user according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        return await service.create_user(user)
-    if user.agent_user is not None:
-        raise HTTPException(400, "Configure an Entra provisioning source before provisioning agent-users")
     try:
         verbose_proxy_logger.debug("SCIM CREATE USER request: %s", user.model_dump())
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
@@ -1782,16 +1742,10 @@ async def create_user(
 async def update_user(
     user_id: str = Path(..., title="User ID"),
     user: SCIMUser = Body(...),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Update a user according to SCIM v2 protocol (full replacement)
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        return await service.update_user(user_id, user)
-    if user.agent_user is not None:
-        raise HTTPException(400, "Configure an Entra provisioning source before provisioning agent-users")
     verbose_proxy_logger.debug(
         "SCIM PUT USER request for user_id=%s: %s",
         user_id,
@@ -1875,15 +1829,10 @@ async def update_user(
 )
 async def delete_user(
     user_id: str = Path(..., title="User ID"),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Delete a user according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        await service.delete("Users", user_id)
-        return Response(status_code=204)
     verbose_proxy_logger.debug("SCIM DELETE USER request for user_id=%s", user_id)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
@@ -2184,7 +2133,7 @@ def _handle_generic_metadata(path: str, op_type: str, value: object, metadata: d
         metadata[path] = value
 
 
-def apply_scim_user_patch(
+def _apply_patch_ops(
     existing_user: LiteLLM_UserTable,
     patch_ops: SCIMPatchOp,
 ) -> tuple[dict[str, object], set[str]]:
@@ -2382,18 +2331,10 @@ async def patch_team_membership(
 async def patch_user(
     user_id: str = Path(..., title="User ID"),
     patch_ops: SCIMPatchOp = Body(...),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Patch a user according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        return await service.update_user(user_id, patch_ops)
-    from litellm.proxy.management_endpoints.scim.agent_provisioning import patch_changes_identity
-
-    if patch_changes_identity(patch_ops):
-        raise HTTPException(400, "SCIM PATCH cannot change a subject's identity classification")
     verbose_proxy_logger.debug(
         "SCIM PATCH USER request for user_id=%s: %s",
         user_id,
@@ -2406,7 +2347,7 @@ async def patch_user(
 
         prev_active: Final = _user_scim_active(existing_user)
 
-        update_data, final_team_set = apply_scim_user_patch(
+        update_data, final_team_set = _apply_patch_ops(
             existing_user=existing_user,
             patch_ops=patch_ops,
         )
@@ -2473,14 +2414,10 @@ async def get_groups(
     startIndex: int = Query(1, ge=1),
     count: int = Query(10, ge=0),
     filter: str | None = Query(None),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Get a list of groups according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        return await service.list("Groups", startIndex, count, filter)
     page_size: Final = min(count, SCIM_MAX_PAGE_SIZE)
     verbose_proxy_logger.debug(
         "SCIM GET GROUPS request: startIndex=%s count=%s filter=%s",
@@ -2555,14 +2492,10 @@ async def get_groups(
 )
 async def get_group(
     group_id: str = Path(..., title="Group ID"),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Get a single group by ID according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        return await service.get("Groups", group_id)
     verbose_proxy_logger.debug("SCIM GET GROUP request for group_id=%s", group_id)
     try:
         team: Final = await _check_team_exists(group_id)
@@ -2614,14 +2547,10 @@ def _new_team_request_with_defaults(
 )
 async def create_group(
     group: SCIMGroup = Body(...),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Create a group according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        return await service.create_group(group)
     verbose_proxy_logger.debug(
         "SCIM CREATE GROUP request: %s",
         group.model_dump(),
@@ -2673,14 +2602,10 @@ async def create_group(
 async def update_group(
     group_id: str = Path(..., title="Group ID"),
     group: SCIMGroup = Body(...),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Update a group according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        return await service.update_group(group_id, group)
     verbose_proxy_logger.debug(
         "SCIM PUT GROUP request for group_id=%s: %s",
         group_id,
@@ -2750,15 +2675,10 @@ async def update_group(
 )
 async def delete_group(
     group_id: str = Path(..., title="Group ID"),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Delete a group according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        await service.delete("Groups", group_id)
-        return Response(status_code=204)
     verbose_proxy_logger.debug("SCIM DELETE GROUP request for group_id=%s", group_id)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
@@ -2953,14 +2873,10 @@ async def _handle_group_membership_changes(group_id: str, current_members: set[s
 async def patch_group(
     group_id: str = Path(..., title="Group ID"),
     patch_ops: SCIMPatchOp = Body(...),
-    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Patch a group according to SCIM v2 protocol
     """
-    service: Final = await _agent_provisioning_service(auth)
-    if service is not None:
-        return await service.update_group(group_id, patch_ops)
     verbose_proxy_logger.debug(
         "SCIM PATCH GROUP request for group_id=%s: %s",
         group_id,

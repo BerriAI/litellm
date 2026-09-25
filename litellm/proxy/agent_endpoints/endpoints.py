@@ -504,8 +504,6 @@ async def get_agent_identity_status(
     return ManagedAgentIdentityStatus(
         identity=agent.identity,
         identity_managed=agent.identity_managed,
-        directory_active=agent.directory_active,
-        directory_access_group_ids=agent.directory_access_group_ids,
         enabled=agent.enabled,
         execution_mode=agent.execution_mode,
         last_authenticated_at=agent.identity.last_authenticated_at if agent.identity else None,

@@ -8,9 +8,8 @@ import { entraTenantFromIssuer, IDENTITY_UUID_PATTERN } from "./agent_identity";
 
 export const AgentIdentityFields = ({ accessToken }: { accessToken: string | null }) => {
   const provider = useWatch<AgentFormValues>({ name: "identity_provider" });
-  const provisioningSource = useWatch<AgentFormValues>({ name: "identity_provisioning_source_id" });
   const mode = useWatch<AgentFormValues>({ name: "execution_mode" });
-  const showScopes = Boolean(provisioningSource) || (mode !== "autonomous" && mode !== undefined);
+  const showScopes = mode !== "autonomous" && mode !== undefined;
   const [tenants, setTenants] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,11 +47,7 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
         </div>
         <AgentFormField name="identity_provider" label="Identity Provider" defaultValue="none">
           {({ value, onChange, id }) => (
-            <Select
-              disabled={Boolean(provisioningSource)}
-              value={typeof value === "string" ? value : "none"}
-              onValueChange={onChange}
-            >
+            <Select value={typeof value === "string" ? value : "none"} onValueChange={onChange}>
               <SelectTrigger id={id}>
                 <SelectValue />
               </SelectTrigger>
@@ -71,11 +66,7 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
               rules={{ required: "Select a trusted tenant" }}
             >
               {({ value, onChange, id }) => (
-                <Select
-                  disabled={Boolean(provisioningSource)}
-                  value={typeof value === "string" ? value : ""}
-                  onValueChange={onChange}
-                >
+                <Select value={typeof value === "string" ? value : ""} onValueChange={onChange}>
                   <SelectTrigger id={id}>
                     <SelectValue placeholder="Select the gateway's trusted tenant" />
                   </SelectTrigger>
@@ -102,7 +93,7 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
             )}
             <AgentFormField
               name="identity_client_id"
-              label={provisioningSource ? "Entra Parent Identity ID" : "Application (Client) ID"}
+              label="Application (Client) ID"
               rules={{
                 required: "Enter the Entra application client ID",
                 pattern: { value: IDENTITY_UUID_PATTERN, message: "Enter a valid application client UUID" },
@@ -123,24 +114,13 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                   ref={ref}
                   value={typeof value === "string" ? value : ""}
                   onChange={onChange}
-                  disabled={Boolean(provisioningSource)}
                   placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
                 />
               )}
             </AgentFormField>
-            {provisioningSource && (
-              <p className="text-sm text-muted-foreground">
-                Provisioned Entra agent-user. Identity fields are owned by your directory. Configure permissions and
-                enable this agent when ready.
-              </p>
-            )}
             <AgentFormField name="execution_mode" label="Execution Mode" defaultValue="autonomous">
               {({ value, onChange, id }) => (
-                <Select
-                  disabled={Boolean(provisioningSource)}
-                  value={typeof value === "string" ? value : "autonomous"}
-                  onValueChange={onChange}
-                >
+                <Select value={typeof value === "string" ? value : "autonomous"} onValueChange={onChange}>
                   <SelectTrigger id={id}>
                     <SelectValue />
                   </SelectTrigger>
@@ -152,57 +132,55 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                 </Select>
               )}
             </AgentFormField>
-            {!provisioningSource && (
-              <AgentFormField
-                name="identity_service_principal_id"
-                label="Enterprise Application Object ID"
-                rules={{
-                  required: mode !== "delegated" ? "Enter the service principal Object ID" : false,
-                  pattern: { value: IDENTITY_UUID_PATTERN, message: "Enter a valid service principal UUID" },
-                }}
-                description={
-                  <>
-                    Open{" "}
-                    <a
-                      className="underline"
-                      href="https://entra.microsoft.com/#view/Microsoft_AAD_IAM/StartboardApplicationsMenuBlade/~/AppAppsPreview"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Entra Enterprise applications
-                    </a>
-                    , select this application, and copy its Object ID. The App registrations Object ID is a different
-                    value.
-                  </>
-                }
-              >
-                {({ value, onChange, ref, ...control }) => (
-                  <Input {...control} ref={ref} value={typeof value === "string" ? value : ""} onChange={onChange} />
-                )}
-              </AgentFormField>
-            )}
-            {!provisioningSource && (
-              <AgentFormField
-                name="identity_required_roles"
-                label="Required Application Roles"
-                description="Comma-separated role values required on autonomous application tokens"
-              >
-                {({ value, onChange, ref, ...control }) => (
-                  <Input
-                    {...control}
-                    ref={ref}
-                    value={typeof value === "string" ? value : ""}
-                    onChange={onChange}
-                    placeholder="Agent.Invoke"
-                  />
-                )}
-              </AgentFormField>
-            )}
+            <AgentFormField
+              name="identity_service_principal_id"
+              label="Enterprise Application Object ID"
+              rules={{
+                required: mode !== "delegated" ? "Enter the service principal Object ID" : false,
+                pattern: { value: IDENTITY_UUID_PATTERN, message: "Enter a valid service principal UUID" },
+              }}
+              description={
+                <>
+                  Open{" "}
+                  <a
+                    className="underline"
+                    href="https://entra.microsoft.com/#view/Microsoft_AAD_IAM/StartboardApplicationsMenuBlade/~/AppAppsPreview"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Entra Enterprise applications
+                  </a>
+                  , select this application, and copy its Object ID. The App registrations Object ID is a different
+                  value.
+                </>
+              }
+            >
+              {({ value, onChange, ref, ...control }) => (
+                <Input {...control} ref={ref} value={typeof value === "string" ? value : ""} onChange={onChange} />
+              )}
+            </AgentFormField>
+
+            <AgentFormField
+              name="identity_required_roles"
+              label="Required Application Roles"
+              description="Comma-separated role values required on autonomous application tokens"
+            >
+              {({ value, onChange, ref, ...control }) => (
+                <Input
+                  {...control}
+                  ref={ref}
+                  value={typeof value === "string" ? value : ""}
+                  onChange={onChange}
+                  placeholder="Agent.Invoke"
+                />
+              )}
+            </AgentFormField>
+
             {showScopes && (
               <>
                 <AgentFormField
                   name="identity_required_scopes"
-                  label={provisioningSource ? "Required Token Scopes" : "Required Delegated Scopes"}
+                  label="Required Delegated Scopes"
                   defaultValue="user_impersonation"
                   rules={{ required: "Enter a delegated scope" }}
                 >
@@ -215,12 +193,10 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                     />
                   )}
                 </AgentFormField>
-                {!provisioningSource && (
-                  <p className="text-sm text-muted-foreground">
-                    Users must first sign in through this gateway&apos;s Microsoft SSO. Subsequent delegated calls must
-                    satisfy both user and agent permissions.
-                  </p>
-                )}
+                <p className="text-sm text-muted-foreground">
+                  Users must first sign in through this gateway&apos;s Microsoft SSO. Subsequent delegated calls must
+                  satisfy both user and agent permissions.
+                </p>
               </>
             )}
             <AgentFormField name="enabled" label="Execution" defaultValue={true}>

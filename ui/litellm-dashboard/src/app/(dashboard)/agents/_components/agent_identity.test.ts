@@ -75,22 +75,7 @@ describe("agent identity configuration", () => {
     };
     expect(() => buildIdentityParams(values)).toThrow("Enterprise application Object ID");
   });
-  it("preserves directory ownership while editing a native agent without an app-only principal", () => {
-    const native = { ...identity, service_principal_id: null, provisioning_source_id: "source-one" };
-    const values = parseIdentityForForm({
-      identity: {
-        ...native,
-        agent_id: "native-agent",
-        active: true,
-        revision: "rev",
-        issuer: "https://issuer.example",
-      },
-      execution_mode: "autonomous",
-      enabled: false,
-    });
-    expect(values.identity_provisioning_source_id).toBe("source-one");
-    expect(buildIdentityParams(values, native)).toEqual({ identity: native });
-  });
+
   it("only offers tenant-specific Microsoft issuers", () => {
     expect(entraTenantFromIssuer(`https://login.microsoftonline.com/${identity.tenant_id}/v2.0`)).toBe(
       identity.tenant_id,

@@ -16,7 +16,6 @@ from litellm.types.proxy.agent_identity import (
     AgentIdentityFailure,
     AgentSubject,
     EntraIdentityConfig,
-    VerifiedAgentSubject,
 )
 
 _MODE: Final = TypeAdapter(AgentExecutionMode)
@@ -28,7 +27,6 @@ class IdentityFields(TypedDict, total=False):
     client_id: ReadOnly[str]
     issuer: ReadOnly[str]
     service_principal_id: ReadOnly[str | None]
-    provisioning_source_id: ReadOnly[str | None]
     required_roles: ReadOnly[tuple[str, ...]]
     required_scopes: ReadOnly[tuple[str, ...]]
     active: ReadOnly[bool]
@@ -102,15 +100,7 @@ def _configuration_failure(
     mode: AgentExecutionMode,
     enabling_without_binding: bool,
 ) -> AgentIdentityFailure | None:
-    if identity is not None and identity.provisioning_source_id is not None:
-        if mode != "autonomous" or not identity.required_scopes:
-            return AgentIdentityFailure(message="Provisioned native agent-users require autonomous mode and scopes")
-    if (
-        identity is not None
-        and mode != "delegated"
-        and not identity.service_principal_id
-        and not identity.provisioning_source_id
-    ):
+    if identity is not None and mode != "delegated" and not identity.service_principal_id:
         return AgentIdentityFailure(
             message="Autonomous mode requires the Enterprise application service-principal object ID"
         )
@@ -166,16 +156,6 @@ def managed_write_fields(
 def _identity_write(
     identity: EntraIdentityConfig | None, existing: AgentResponse | None
 ) -> ManagedWriteFields | AgentIdentityFailure:
-    source_id: Final = existing.identity.provisioning_source_id if existing and existing.identity else None
-    if existing is not None and existing.identity is not None and source_id is not None:
-        if identity is None or (identity.tenant_id, identity.client_id, identity.provisioning_source_id) != (
-            existing.identity.tenant_id,
-            existing.identity.client_id,
-            source_id,
-        ):
-            return AgentIdentityFailure(message="A directory-owned identity cannot be rebound through agent settings")
-    elif identity is not None and identity.provisioning_source_id is not None:
-        return AgentIdentityFailure(message="Only SCIM provisioning can create a directory-owned identity")
     if identity is None:
         unbind: Final[ManagedWriteFields] = {
             **(
@@ -199,7 +179,6 @@ def _identity_write(
         "tenant_id": identity.tenant_id,
         "client_id": identity.client_id,
         "service_principal_id": identity.service_principal_id,
-        "provisioning_source_id": identity.provisioning_source_id,
         "required_roles": identity.required_roles,
         "required_scopes": identity.required_scopes,
         "issuer": identity.issuer,
@@ -265,8 +244,6 @@ def classify_agent_subject(
     binding: AgentIdentityBinding,
     claims: Mapping[str, object],
     allowed_mode: AgentExecutionMode,
-    *,
-    native_subject: VerifiedAgentSubject | None = None,
 ) -> AgentSubject | AgentIdentityFailure:
     if (claims.get("iss"), claims.get("tid"), claims.get("azp")) != (
         binding.issuer,
@@ -278,26 +255,6 @@ def classify_agent_subject(
     if not isinstance(oid, str) or not oid:
         return AgentIdentityFailure(message="Entra token must identify its object subject")
     scope: Final = claims.get("scp")
-    if native_subject is not None:
-        if (
-            (
-                native_subject.issuer,
-                native_subject.tenant_id,
-                native_subject.parent_client_id,
-                native_subject.agent_id,
-                native_subject.oid,
-            )
-            != (binding.issuer, binding.tenant_id, binding.client_id, binding.agent_id, oid)
-            or allowed_mode == "delegated"
-            or claims.get("idtyp") == "app"
-            or not isinstance(scope, str)
-            or not binding.required_scopes
-            or not frozenset(binding.required_scopes).issubset(scope.split())
-        ):
-            return AgentIdentityFailure(message="Token does not match the provisioned native agent-user")
-        return AgentSubject(kind="agent_user", oid=oid, mode="autonomous")
-    if binding.provisioning_source_id is not None:
-        return AgentIdentityFailure(message="A verified provisioned agent-user token is required")
     facets: Final = claims.get("xms_sub_fct")
     if facets is not None and (not isinstance(facets, str) or "13" in facets.split()):
         return AgentIdentityFailure(message="Native agent-user authentication is not supported by this binding")

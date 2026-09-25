@@ -2662,17 +2662,6 @@
               "title": "Provider",
               "type": "string"
             },
-            "provisioning_source_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Provisioning Source Id"
-            },
             "required_roles": {
               "default": [],
               "items": {
@@ -3183,25 +3172,6 @@
                 }
               ],
               "title": "Created By"
-            },
-            "directory_access_group_ids": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Directory Access Group Ids"
-            },
-            "directory_active": {
-              "default": true,
-              "title": "Directory Active",
-              "type": "boolean"
             },
             "enabled": {
               "default": true,
@@ -3729,17 +3699,6 @@
               "title": "Provider",
               "type": "string"
             },
-            "provisioning_source_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Provisioning Source Id"
-            },
             "required_roles": {
               "default": [],
               "items": {
@@ -3933,25 +3892,6 @@
         },
         "ManagedAgentIdentityStatus": {
           "properties": {
-            "directory_access_group_ids": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Directory Access Group Ids"
-            },
-            "directory_active": {
-              "default": true,
-              "title": "Directory Active",
-              "type": "boolean"
-            },
             "enabled": {
               "default": true,
               "title": "Enabled",
@@ -47193,21 +47133,6 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
-        "SCIMAgentUser": {
-          "additionalProperties": false,
-          "properties": {
-            "identityParentId": {
-              "format": "uuid",
-              "title": "Identityparentid",
-              "type": "string"
-            }
-          },
-          "required": [
-            "identityParentId"
-          ],
-          "title": "SCIMAgentUser",
-          "type": "object"
-        },
         "SCIMEnterpriseUser": {
           "properties": {
             "costCenter": {
@@ -47392,30 +47317,6 @@
             "displayName"
           ],
           "title": "SCIMGroup",
-          "type": "object"
-        },
-        "SCIMGroupMapping": {
-          "additionalProperties": false,
-          "properties": {
-            "access_group_ids": {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "title": "Access Group Ids",
-              "type": "array"
-            },
-            "external_group_id": {
-              "format": "uuid",
-              "title": "External Group Id",
-              "type": "string"
-            }
-          },
-          "required": [
-            "external_group_id",
-            "access_group_ids"
-          ],
-          "title": "SCIMGroupMapping",
           "type": "object"
         },
         "SCIMListResponse": {
@@ -47763,120 +47664,6 @@
           "title": "SCIMServiceProviderConfig",
           "type": "object"
         },
-        "SCIMSourceConfig": {
-          "additionalProperties": false,
-          "properties": {
-            "display_name": {
-              "minLength": 1,
-              "title": "Display Name",
-              "type": "string"
-            },
-            "enabled": {
-              "default": true,
-              "title": "Enabled",
-              "type": "boolean"
-            },
-            "group_mappings": {
-              "default": [],
-              "items": {
-                "$ref": "#/components/schemas/SCIMGroupMapping"
-              },
-              "title": "Group Mappings",
-              "type": "array"
-            },
-            "tenant_id": {
-              "format": "uuid",
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          "required": [
-            "display_name",
-            "tenant_id"
-          ],
-          "title": "SCIMSourceConfig",
-          "type": "object"
-        },
-        "SCIMSourceCreate": {
-          "additionalProperties": false,
-          "properties": {
-            "display_name": {
-              "minLength": 1,
-              "title": "Display Name",
-              "type": "string"
-            },
-            "enabled": {
-              "default": true,
-              "title": "Enabled",
-              "type": "boolean"
-            },
-            "group_mappings": {
-              "default": [],
-              "items": {
-                "$ref": "#/components/schemas/SCIMGroupMapping"
-              },
-              "title": "Group Mappings",
-              "type": "array"
-            },
-            "provisioning_token": {
-              "format": "password",
-              "title": "Provisioning Token",
-              "type": "string",
-              "writeOnly": true
-            },
-            "tenant_id": {
-              "format": "uuid",
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          "required": [
-            "display_name",
-            "tenant_id",
-            "provisioning_token"
-          ],
-          "title": "SCIMSourceCreate",
-          "type": "object"
-        },
-        "SCIMSourceResponse": {
-          "additionalProperties": false,
-          "properties": {
-            "display_name": {
-              "minLength": 1,
-              "title": "Display Name",
-              "type": "string"
-            },
-            "enabled": {
-              "default": true,
-              "title": "Enabled",
-              "type": "boolean"
-            },
-            "group_mappings": {
-              "default": [],
-              "items": {
-                "$ref": "#/components/schemas/SCIMGroupMapping"
-              },
-              "title": "Group Mappings",
-              "type": "array"
-            },
-            "source_id": {
-              "title": "Source Id",
-              "type": "string"
-            },
-            "tenant_id": {
-              "format": "uuid",
-              "title": "Tenant Id",
-              "type": "string"
-            }
-          },
-          "required": [
-            "display_name",
-            "tenant_id",
-            "source_id"
-          ],
-          "title": "SCIMSourceResponse",
-          "type": "object"
-        },
         "SCIMUser-Input": {
           "properties": {
             "active": {
@@ -48006,16 +47793,6 @@
               "anyOf": [
                 {
                   "$ref": "#/components/schemas/SCIMEnterpriseUser"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "urn:ietf:params:scim:schemas:extension:litellmAgent:2.0:User": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/SCIMAgentUser"
                 },
                 {
                   "type": "null"
@@ -49564,199 +49341,6 @@
             }
           ],
           "summary": "Merge Placeholder",
-          "tags": [
-            "scim"
-          ]
-        }
-      },
-      "/scim/v2/sources": {
-        "get": {
-          "operationId": "list_sources_scim_v2_sources_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "feature",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Feature"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "items": {
-                      "$ref": "#/components/schemas/SCIMSourceResponse"
-                    },
-                    "title": "Response List Sources Scim V2 Sources Get",
-                    "type": "array"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "List Sources",
-          "tags": [
-            "scim"
-          ]
-        },
-        "post": {
-          "operationId": "create_source_scim_v2_sources_post",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "feature",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Feature"
-              }
-            }
-          ],
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SCIMSourceCreate"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "201": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/SCIMSourceResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Create Source",
-          "tags": [
-            "scim"
-          ]
-        }
-      },
-      "/scim/v2/sources/{source_id}": {
-        "put": {
-          "operationId": "update_source_scim_v2_sources__source_id__put",
-          "parameters": [
-            {
-              "in": "path",
-              "name": "source_id",
-              "required": true,
-              "schema": {
-                "title": "Source Id",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "feature",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Feature"
-              }
-            }
-          ],
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SCIMSourceConfig"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/SCIMSourceResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Update Source",
           "tags": [
             "scim"
           ]

@@ -22,7 +22,6 @@ const identityShape = {
   tenant_id: z.string().regex(IDENTITY_UUID_PATTERN),
   client_id: z.string().regex(IDENTITY_UUID_PATTERN),
   service_principal_id: z.string().regex(IDENTITY_UUID_PATTERN).nullable().default(null),
-  provisioning_source_id: z.string().nullable().optional(),
   required_roles: stringGrants([]),
   required_scopes: stringGrants(["user_impersonation"]),
 };
@@ -38,7 +37,6 @@ const identityFormFields = (identity: EntraAgentIdentity | null): AgentFormValue
   identity_tenant_id: identity?.tenant_id ?? "",
   identity_client_id: identity?.client_id ?? "",
   identity_service_principal_id: identity?.service_principal_id ?? "",
-  identity_provisioning_source_id: identity?.provisioning_source_id ?? "",
   identity_required_roles: identity?.required_roles?.join(", ") ?? "",
   identity_required_scopes: identity?.required_scopes?.join(", ") ?? "user_impersonation",
 });
@@ -69,9 +67,7 @@ export const buildIdentityParams = (
   if (values.identity_provider === undefined) return {};
   if (values.identity_provider !== "microsoft_entra")
     return readAgentIdentity(existingIdentity) ? { identity: null } : {};
-  const provisioningSource = readAgentIdentity(existingIdentity)?.provisioning_source_id;
   const candidate: EntraAgentIdentity = {
-    ...(provisioningSource ? { provisioning_source_id: provisioningSource } : {}),
     provider: "microsoft_entra",
     tenant_id: typeof values.identity_tenant_id === "string" ? values.identity_tenant_id.trim().toLowerCase() : "",
     client_id: typeof values.identity_client_id === "string" ? values.identity_client_id.trim().toLowerCase() : "",
@@ -84,7 +80,7 @@ export const buildIdentityParams = (
   };
   const identity = readAgentIdentity(candidate);
   if (!identity) throw new Error("Enter valid Entra tenant, application client and service principal IDs");
-  if (values.execution_mode !== "delegated" && !identity.service_principal_id && !identity.provisioning_source_id)
+  if (values.execution_mode !== "delegated" && !identity.service_principal_id)
     throw new Error("Autonomous agents require the Enterprise application Object ID");
   return { identity };
 };

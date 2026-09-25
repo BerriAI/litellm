@@ -1,4 +1,3 @@
-import { SCIMAgentProvisioning } from "./SCIMAgentProvisioning";
 import React, { useState, useEffect } from "react";
 import { z } from "zod/v4";
 import { keyCreateCall } from "./networking";
@@ -185,7 +184,6 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
               )}
             </div>
           </div>
-          <SCIMAgentProvisioning accessToken={accessToken} />
         </CardContent>
       </Card>
     </div>

@@ -314,15 +314,6 @@ async def test_invocation_cannot_bypass_missing_policy_permission_or_invalid_pri
     assert auth.agent_invocation_cost is None
 
 
-def test_native_directory_agent_cannot_authenticate_with_a_virtual_key() -> None:
-    policy: Final = agent(
-        identity=BINDING.model_copy(update={"provisioning_source_id": "source"}), execution_mode="autonomous"
-    )
-    failure: Final = actor_admission_failure(policy, None)
-    assert isinstance(failure, AgentIdentityFailure)
-    assert "require their Entra token" in failure.message
-
-
 @pytest.mark.asyncio
 async def test_legacy_jwt_cannot_adopt_an_agent_bound_on_another_worker() -> None:
     database: Final = MagicMock()
@@ -463,4 +454,6 @@ def test_managed_inference_query_model_takes_precedence_over_body(route: str):
 def test_managed_inference_ignores_unsupported_query_model():
     from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
 
-    assert managed_inference_request("/v1/messages", {"model": "body"}, {}, None, query_model="query")["model"] == "body"
+    assert (
+        managed_inference_request("/v1/messages", {"model": "body"}, {}, None, query_model="query")["model"] == "body"
+    )

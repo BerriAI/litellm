@@ -78,11 +78,10 @@ class TestGetResourceTypes:
 class TestGetSchemas:
     def test_returns_user_and_group_schemas(self):
         schemas = _get_schemas()
-        assert len(schemas) == 3
+        assert len(schemas) == 2
         ids = [s.id for s in schemas]
         assert "urn:ietf:params:scim:schemas:core:2.0:User" in ids
         assert "urn:ietf:params:scim:schemas:core:2.0:Group" in ids
-        assert "urn:ietf:params:scim:schemas:extension:litellmAgent:2.0:User" in ids
 
     def test_user_schema_has_required_attributes(self):
         schemas = _get_schemas()
@@ -215,7 +214,7 @@ class TestGetSchemasEndpoint:
         result = await get_schemas(request)
 
         assert result["schemas"] == ["urn:ietf:params:scim:api:messages:2.0:ListResponse"]
-        assert result["totalResults"] == 3
+        assert result["totalResults"] == 2
 
     @pytest.mark.asyncio
     async def test_resources_have_correct_ids(self):
