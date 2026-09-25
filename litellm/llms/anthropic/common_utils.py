@@ -1321,7 +1321,7 @@ def strip_empty_content_blocks_from_anthropic_messages(
 ) -> list[Any]:
     """
     Return a new message list with empty or whitespace-only ``{"type": "text"}``
-    and ``{"type": "thinking"}`` content blocks removed.
+    content blocks and empty *unsigned* ``{"type": "thinking"}`` blocks removed.
 
     Anthropic's API rejects requests containing such blocks with
     ``"messages: text content blocks must be non-empty"`` and
@@ -1337,8 +1337,13 @@ def strip_empty_content_blocks_from_anthropic_messages(
     on the unified ``/v1/messages`` path.  ``/v1/chat/completions`` already
     handles this in ``anthropic_messages_pt``; this helper provides the
     equivalent guarantee for the native Anthropic Messages path.
-    ``redacted_thinking`` blocks are never touched: they carry opaque
-    ``data`` instead of thinking text.
+
+    A thinking block with empty text but a non-empty ``signature`` is kept:
+    it is the default response shape of Claude Opus 4.8 / Fable 5 / Fable 5.1
+    (``thinking.display`` omitted), the signature is the model's preserved
+    reasoning, and Anthropic accepts it on input.  ``redacted_thinking``
+    blocks are never touched: they carry opaque ``data`` instead of thinking
+    text.
 
     Messages whose content is a list and becomes empty after stripping are
     omitted, matching :func:`strip_thinking_blocks_from_anthropic_messages`.
@@ -1351,7 +1356,7 @@ def strip_empty_content_blocks_from_anthropic_messages(
             out.append(m)
             continue
         content = m["content"]
-        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_thinking_block(b)]
+        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_unsigned_thinking_block(b)]
         if len(filtered) == len(content):
             out.append(m)
         elif filtered:
@@ -1369,11 +1374,11 @@ def _is_empty_text_block(block: object) -> bool:
 def is_empty_thinking_block(block: object) -> bool:
     """
     True for a ``{"type": "thinking"}`` content block whose thinking text is
-    missing, not a string, or empty/whitespace-only after ``.strip()``.
-    Anthropic rejects such blocks with ``"each thinking block must contain
-    thinking"`` (whitespace-only included, verified live), regardless of any
-    signature they carry.  ``redacted_thinking`` blocks are a different type
-    and always return False.
+    missing, not a string, or empty/whitespace-only after ``.strip()``,
+    whatever its signature.  This is a shape check only; whether such a block
+    may be sent to Anthropic depends on the signature, see
+    :func:`is_empty_unsigned_thinking_block`.  ``redacted_thinking`` blocks are
+    a different type and always return False.
     """
     if not isinstance(block, dict) or block.get("type") != "thinking":
         return False
@@ -1385,15 +1390,16 @@ def is_empty_unsigned_thinking_block(block: object) -> bool:
     """
     True for an empty ``{"type": "thinking"}`` block carrying no signature.
 
-    The emit-side predicate: response paths drop a thinking block only when it
-    holds nothing the client could need.  A signature-only block is a real
-    provider response (Bedrock Converse under adaptive thinking emits a
-    reasoning block with empty text and only a signature) and the client needs
-    the signature to replay reasoning across tool-use turns, so it must be
-    emitted.  Request paths keep using :func:`is_empty_thinking_block`:
-    Anthropic rejects empty thinking blocks in request history regardless of
-    signature, and the inbound strip self-heals a replayed signature-only
-    block.
+    Used on both the emit and the request side: a thinking block is dropped
+    only when it holds nothing the provider or the client could use.  A
+    signature-only block is a real provider response (Claude Opus 4.8 /
+    Fable 5 / Fable 5.1 return it by default, and Bedrock Converse under
+    adaptive thinking emits a reasoning block with empty text and only a
+    signature); the client needs the signature to replay reasoning across
+    tool-use turns, and Anthropic accepts the replayed block and binds it to
+    its prefix.  Only an empty block with no signature (a turn a
+    non-Anthropic reasoning model served through the bridge) is rejected
+    with ``"each thinking block must contain thinking"`` and must go.
     """
     if not isinstance(block, dict) or not is_empty_thinking_block(block):
         return False
